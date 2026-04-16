@@ -5,9 +5,8 @@ expression or has a trailing expression after statements), and returns the
 last value so the kernel can bind it to `_` / `_N`.
 """
 
-from __future__ import annotations
-
 import ast
+import asyncio
 import inspect
 import sys
 import traceback
@@ -71,9 +70,32 @@ async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
             await _maybe_await(eval(code, ns))  # noqa: S307
         if tag in ("eval", "exec_eval") and result is not None:
             print(repr(result))
+            # Shift history: _ → __, __ → ___. Matches IPython convention.
+            ns["___"] = ns.get("__")
+            ns["__"] = ns.get("_")
             ns["_"] = result
             ns[f"_{n}"] = result
         return result
-    except BaseException:
-        sys.stderr.write(traceback.format_exc())
+    except asyncio.CancelledError:
+        # Expected control flow via the cancel tool — don't traceback-spam.
         raise
+    except BaseException as exc:
+        sys.stderr.write(_format_user_traceback(exc))
+        raise
+
+
+def _format_user_traceback(exc: BaseException) -> str:
+    """Format a traceback with repld-internal frames trimmed off the top.
+
+    Walks the tb until the first frame whose filename is `<repld:...>`
+    (user cell code) and formats from there. Falls back to the full
+    traceback if no user frame is present.
+    """
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename.startswith("<repld:"):
+            break
+        tb = tb.tb_next
+    if tb is None:
+        return traceback.format_exc()
+    return "".join(traceback.format_exception(type(exc), exc, tb))

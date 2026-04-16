@@ -7,8 +7,6 @@ human-gate input.
 Falls back to plain ANSI coloring when `rich` is not installed.
 """
 
-from __future__ import annotations
-
 import queue
 import sys
 import threading
@@ -132,7 +130,16 @@ def _render_cell_start(ev: CellStart) -> None:
             _out(f"  {line}\n")
 
 
-def _write_styled(text: str, task_id: str | None, *, is_stderr: bool) -> None:
+def _write_styled(
+    text: str, task_id: str | None, *, is_stderr: bool, line_continues: bool = False
+) -> None:
+    """Write `text` to the terminal with the right prefix/color.
+
+    `line_continues=True` means the previous emit for this task didn't end
+    with a newline, so the first line of this chunk should NOT get a fresh
+    prefix (it's continuing an existing line). Subsequent lines after a
+    newline within this chunk still get the prefix.
+    """
     if not text:
         return
     if task_id is None or task_id == _foreground_task_id:
@@ -142,15 +149,17 @@ def _write_styled(text: str, task_id: str | None, *, is_stderr: bool) -> None:
             _out(text)
         return
     short_id = task_id[:8]
+    color = _RED if is_stderr else ""
+    prefix = f"{_DIM}[{short_id}]{_RESET}{color} "
+    parts = []
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        if i == 0 and line_continues:
+            parts.append(f"{color}{line}")
+        else:
+            parts.append(prefix + line)
     if is_stderr:
-        prefix = f"{_DIM}[{short_id}]{_RESET}{_RED} "
-        for line in text.splitlines(keepends=True):
-            _out(prefix + line)
-        _out(_RESET)
-    else:
-        prefix = f"{_DIM}[{short_id}]{_RESET} "
-        for line in text.splitlines(keepends=True):
-            _out(prefix + line)
+        parts.append(_RESET)
+    _out("".join(parts))
 
 
 def _emit_elision_notice(task_id: str, last_was_nl: bool) -> None:
@@ -182,12 +191,12 @@ def _render_chunk(text: str, task_id: str | None, *, is_stderr: bool) -> None:
         _emit_elision_notice(task_id, last_nl)
         return
     if len(text) <= remaining:
-        _write_styled(text, task_id, is_stderr=is_stderr)
+        _write_styled(text, task_id, is_stderr=is_stderr, line_continues=not last_nl)
         _viewer_state[task_id] = (cur_bytes + len(text), text.endswith("\n"))
         return
     head = text[:remaining]
     if head:
-        _write_styled(head, task_id, is_stderr=is_stderr)
+        _write_styled(head, task_id, is_stderr=is_stderr, line_continues=not last_nl)
     _viewer_state[task_id] = (VIEWER_MAX_BYTES, head.endswith("\n"))
     _truncated_tasks.add(task_id)
     _emit_elision_notice(task_id, head.endswith("\n"))
@@ -205,13 +214,17 @@ def _render_cell_done(ev: CellDone) -> None:
     global _foreground_task_id
     short_id = ev.task_id[:8]
     ms = f"{ev.elapsed_ms:.0f}ms"
+    # If the last output didn't end with a newline, pad so the done marker
+    # lands on its own line instead of gluing onto mid-line text.
+    _, last_nl = _viewer_state.get(ev.task_id, (0, True))
+    pad = "" if last_nl else "\n"
     if ev.error:
         marker = f"{_RED}✗{_RESET}"
         line = f"{marker} {_DIM}{short_id} · err({ev.error}) · {ms}{_RESET}"
     else:
         marker = f"{_GREEN}✓{_RESET}"
         line = f"{marker} {_DIM}{short_id} · done · {ms}{_RESET}"
-    _out(line + "\n")
+    _out(pad + line + "\n")
     if ev.task_id == _foreground_task_id:
         _foreground_task_id = None
     _viewer_state.pop(ev.task_id, None)
@@ -221,12 +234,16 @@ def _render_cell_done(ev: CellDone) -> None:
 def _render_channel_push(ev: ChannelPush) -> None:
     if _HAS_RICH:
         from rich.panel import Panel
+        from rich.text import Text
 
         console = _get_console()
+        # Use Text() so `[repld]`-style prefixes in content don't get eaten
+        # by rich markup parsing.
+        body = Text(ev.content.rstrip())
         meta_line = "  ".join(f"{k}={v}" for k, v in ev.meta.items())
-        body = ev.content.rstrip()
         if meta_line:
-            body += f"\n[dim]{meta_line}[/dim]"
+            body.append("\n")
+            body.append(meta_line, style="dim")
         console.print(Panel(body, title="[cyan]channel[/cyan]", border_style="cyan"))
     else:
         _out(f"{_CYAN}┌─ channel ─\n")
@@ -242,13 +259,13 @@ def _render_prompt_open(ev: HumanPromptOpen) -> None:
     global _awaiting_gate, _awaiting_gate_kind
     _awaiting_gate = ev.gate_id
     _awaiting_gate_kind = ev.kind
-    _out(f"\n{_BOLD}{_CYAN}❓ {ev.prompt}{_RESET}")
+    _out(f"{_BOLD}{_CYAN}? {ev.prompt}{_RESET}")
     if ev.kind == "confirm":
         _out(f" {_DIM}[y/n]{_RESET}")
     elif ev.kind == "choose" and ev.options:
         opts = ", ".join(f"{i + 1}={o}" for i, o in enumerate(ev.options))
         _out(f" {_DIM}[{opts}]{_RESET}")
-    _out(f" {_DIM}(gate={ev.gate_id}){_RESET}: ")
+    _out(": ")
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:

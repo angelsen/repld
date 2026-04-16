@@ -6,8 +6,6 @@ before anything else). `emit()` is safe to call before init — events are
 buffered in `_pre_init_buf` and flushed on first init.
 """
 
-from __future__ import annotations
-
 import queue
 import threading
 import time
@@ -117,8 +115,6 @@ def emit(ev: Event) -> None:
     and flushed when the queue is created. After init, if the queue is full
     the oldest event is dropped and a drop-count warning is scheduled.
     """
-    global _drop_count, _last_drop_warn
-
     q = _queue
     if q is None:
         with _pre_init_lock:

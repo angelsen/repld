@@ -7,10 +7,8 @@ Architecture:
   - IPC accept thread (started by ipc.start_server) handles connections;
     per-conn reader threads call Dispatcher.handle.
 
-No IPython, no prompt_toolkit. Pure stdlib + optional rich.
+Pure stdlib; rich is an optional rendering backend.
 """
-
-from __future__ import annotations
 
 import __main__
 import asyncio
@@ -27,6 +25,7 @@ from pathlib import Path
 
 from . import events, ipc, tasks
 from .events import CellDone, CellStart
+from .help import _pid_alive
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
@@ -37,18 +36,6 @@ DEFAULT_SOCKET_PATH = Path.cwd() / ".pyrepl.sock"
 # ---------------------------------------------------------------------------
 # Lock file
 # ---------------------------------------------------------------------------
-
-
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
 
 
 def _check_existing_kernel() -> None:
@@ -89,9 +76,11 @@ def _cleanup_lockfile() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _banner(socket_path: Path) -> str:
+def _banner(socket_path: Path, watchdog_threshold: float) -> str:
     return (
         f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {LOCK_PATH.name})\n"
+        f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
+        f"(REPLD_LOOP_BLOCK_THRESHOLD)\n"
         f"  register:  claude mcp add -s project repld -- repld bridge\n"
         f"  launch:    claude --dangerously-load-development-channels server:repld\033[0m"
     )
@@ -103,22 +92,49 @@ def _banner(socket_path: Path) -> str:
 
 
 def push_channel(content: str, meta: dict | None = None) -> None:
-    """Broadcast a notifications/claude/channel notification to all sessions."""
+    """Broadcast a notifications/claude/channel notification to all sessions
+    AND emit a local ChannelPush event so the pane mirrors what the MCP agent
+    receives. Single source of truth for every channel push."""
+    meta = meta or {}
     ipc.broadcast_channel(
         {
             "jsonrpc": "2.0",
             "method": "notifications/claude/channel",
-            "params": {"content": content, "meta": meta or {}},
+            "params": {"content": content, "meta": meta},
         }
     )
+    from .events import ChannelPush
+
+    events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
 
 
 def _notify(content, **meta) -> None:
     push_channel(str(content), meta)
-    # Also emit to the display queue so the local log shows it.
-    from .events import ChannelPush
 
-    events.emit(ChannelPush(str(content), {k: str(v) for k, v in meta.items()}))
+
+def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Route otherwise-unretrieved asyncio task exceptions to a channel push.
+
+    Without this, user code like `asyncio.create_task(broken())` would only
+    log a `Task exception was never retrieved` warning to stderr. Here we
+    surface it ambient-style so the agent can react.
+    """
+    exc = context.get("exception")
+    msg = context.get("message", "") or ""
+    task = context.get("task")
+    task_name = getattr(task, "get_name", lambda: "?")() if task else "?"
+    if exc is not None:
+        summary = f"{type(exc).__name__}: {exc}"
+    else:
+        summary = msg
+    push_channel(
+        f"[repld] bg asyncio task error in {task_name}: {summary}",
+        {
+            "kind": "bg_task_error",
+            "task_name": str(task_name),
+            "exception": type(exc).__name__ if exc else "",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +157,8 @@ def _loop_watchdog(
     knows what's stuck.
     """
     while not stop.is_set():
-        if stop.wait(interval):
-            return
+        # Probe first so `threshold` is the actual hang-detection time
+        # (not threshold + interval).
         future = asyncio.run_coroutine_threadsafe(asyncio.sleep(0), loop)
         try:
             future.result(timeout=threshold)
@@ -167,6 +183,8 @@ def _loop_watchdog(
                 future.result(timeout=300)
             except Exception:
                 pass
+        if stop.wait(interval):
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +244,10 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
 
     _current_task.set(task_id)
     task = tasks._tasks[task_id]
+    # Stash the asyncio.Task handle so cancel_task can call .cancel() on it
+    # directly (cf.Future.cancel() on a running threadsafe-launched task
+    # doesn't propagate reliably).
+    task["asyncio_task"] = asyncio.current_task()
     t_start = time.monotonic()
 
     try:
@@ -243,10 +265,7 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
     try:
         await runtime.run_cell(compiled, __main__.__dict__, n)
     except BaseException as exc:
-        if not isinstance(exc, SystemExit):
-            task["exception"] = type(exc).__name__
-        else:
-            raise
+        task["exception"] = type(exc).__name__
     finally:
         elapsed = (time.monotonic() - t_start) * 1000
         events.emit(CellDone(task_id, elapsed, task.get("exception")))
@@ -278,6 +297,19 @@ class _Context:
     def mark_nudged(self, task_id: str) -> None:
         tasks.mark_nudged(task_id)
 
+    def cancel_task(self, task_id: str) -> bool:
+        """Attempt to cancel a running cell. Returns True if the cancellation
+        request was scheduled. Cannot preempt tight sync loops — only
+        await-yielding code is cancellable."""
+        task = tasks._tasks.get(task_id)
+        if task is None:
+            return False
+        asyncio_task = task.get("asyncio_task")
+        if asyncio_task is None or asyncio_task.done():
+            return False
+        self.loop.call_soon_threadsafe(asyncio_task.cancel)
+        return True
+
 
 # ---------------------------------------------------------------------------
 # Init file
@@ -287,6 +319,10 @@ class _Context:
 def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     if not path.exists():
         sys.stderr.write(f"\033[31m[repld] --init file not found: {path}\033[0m\n")
+        push_channel(
+            f"[repld] --init file not found: {path}",
+            {"kind": "init_error", "file": str(path), "reason": "not_found"},
+        )
         return
     global _exec_count
     _exec_count += 1
@@ -303,8 +339,11 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     try:
         future.result(timeout=30)
     except Exception:
-        sys.stderr.write(
-            f"\033[31m[repld] --init {path.name} raised:\n{traceback.format_exc()}\033[0m\n"
+        tb = traceback.format_exc()
+        sys.stderr.write(f"\033[31m[repld] --init {path.name} raised:\n{tb}\033[0m\n")
+        push_channel(
+            f"[repld] --init {path.name} raised: {tb.rstrip()}",
+            {"kind": "init_error", "file": str(path)},
         )
 
 
@@ -333,6 +372,7 @@ def run_kernel(
 
     # 1. Start the asyncio loop on a daemon thread.
     loop = asyncio.new_event_loop()
+    loop.set_exception_handler(_asyncio_exception_handler)
     threading.Thread(target=loop.run_forever, daemon=True, name="repld-asyncio").start()
 
     # 2. Init event queue and tee (must happen before any user code runs).
@@ -360,18 +400,19 @@ def run_kernel(
     atexit.register(_cleanup_lockfile)
     atexit.register(ipc.stop_server)
 
-    # 5. Print banner (goes to sys.__stderr__ directly so it's visible even
-    #    in --no-display mode before the tee is fully wired).
-    stderr = sys.__stderr__
-    if stderr is not None:
-        stderr.write(_banner(sock_path) + "\n")
-        stderr.flush()
-
-    # 6. Loop watchdog — channel-push if the bg loop wedges (typically a
+    # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
     stop = threading.Event()
     threshold = float(os.environ.get("REPLD_LOOP_BLOCK_THRESHOLD", "5.0"))
+
+    # 6. Print banner (goes to sys.__stderr__ directly so it's visible even
+    #    in --no-display mode before the tee is fully wired). Includes the
+    #    active watchdog threshold so users know what to expect.
+    stderr = sys.__stderr__
+    if stderr is not None:
+        stderr.write(_banner(sock_path, threshold) + "\n")
+        stderr.flush()
     threading.Thread(
         target=_loop_watchdog,
         args=(loop, stop, threshold, 1.0),

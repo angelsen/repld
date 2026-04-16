@@ -6,8 +6,6 @@ The MCP `exec` / `get_task` responses return a small head+tail preview
 sliced from that file; `read_spill` exposes arbitrary byte ranges.
 """
 
-from __future__ import annotations
-
 import contextvars
 import io
 import os
@@ -102,6 +100,7 @@ def new_task() -> tuple[str, dict]:
         "spill_path": None,
         "nudged": False,
         "nudge_cutoff": 0,
+        "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
     }
     _tasks[task_id] = task
     return task_id, task
@@ -189,10 +188,13 @@ def finalize(task_id: str) -> None:
     task = _tasks.get(task_id)
     if task is None:
         return
+    # Don't close spill_file: background asyncio tasks spawned by this cell
+    # may keep printing after the cell returns (and they inherit task_id via
+    # the ContextVar). The OS reaps the fd at process exit.
     fp = task.get("spill_file")
     if fp is not None:
         try:
-            fp.close()
+            fp.flush()
         except Exception:
             pass
     task["done_event"].set()

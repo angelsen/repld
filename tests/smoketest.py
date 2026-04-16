@@ -7,8 +7,6 @@ implementation.
 Usage:  uv run python tests/smoketest.py [--phase N]
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -202,7 +200,7 @@ def phase_3(kernel: Kernel) -> None:
 
         resp = b.call("tools/list")
         tool_names = [t["name"] for t in resp["result"]["tools"]]
-        assert_eq(sorted(tool_names), ["exec", "get_task"], "tools/list")
+        assert_eq(sorted(tool_names), ["cancel", "exec", "get_task"], "tools/list")
         print(f"  ✓ tools/list: {tool_names}")
 
         # Sync exec

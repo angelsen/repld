@@ -8,10 +8,20 @@ def main() -> None:
         from .bridge import run_bridge
 
         raise SystemExit(run_bridge(argv[1:]))
+    if argv and argv[0] == "init":
+        from .scaffold import run_init
+
+        raise SystemExit(run_init(argv[1:]))
+    if argv and argv[0] == "help":
+        from .help import run_help
+
+        raise SystemExit(run_help(argv[1:]))
 
     parser = argparse.ArgumentParser(
         prog="repld",
-        description="Persistent Python runtime with MCP channel push.",
+        description="Persistent Python runtime with MCP channel push. "
+        "Run `repld help` for the substrate-level overview, "
+        "`repld init` to scaffold a project.",
     )
     parser.add_argument(
         "--socket",

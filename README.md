@@ -1,10 +1,10 @@
 # repld
 
-A persistent Python runtime the agent can actually work in. IPython kernel + MCP channel push + stdlib primitives. Substrate, not a library.
+A persistent Python runtime the agent can actually work in. Stdlib REPL + MCP channel push + browser/file/event primitives. Substrate, not a library.
 
 ```bash
-pip install repld
-repld                    # starts an IPython kernel + MCP bridge in the project
+uv tool install repld
+repld                    # starts a kernel + MCP bridge in the project
 ```
 
 Point Claude Code at it and long-running tasks complete *into* your conversation. Webhooks, file changes, and scheduled jobs arrive as `<channel>` injections. The agent doesn't poll — the world pushes.
@@ -23,7 +23,7 @@ Two things happened at once:
 - **Async-native** — top-level `await`, fire-and-forget `asyncio.create_task`, `await asyncio.to_thread(slow)` for blocking work. Long jobs never block the turn.
 - **Shared namespace** — human and agent operate on the same `__main__.__dict__`. Stage data in one, use it in the other. Live debugging, not isolated sandboxes.
 - **Channel push** — `notifications/claude/channel` on task completion, webhook arrival, file change, timer fire. Agent becomes ambient rather than turn-based.
-- **Substrate, not library** — stdlib + IPython + small helpers. The agent generates the integration code against live pages/APIs/DBs. No per-service MCP server to write.
+- **Substrate, not library** — stdlib + small helpers. The agent generates the integration code against live pages/APIs/DBs. No per-service MCP server to write.
 
 ## Two modes
 
@@ -31,27 +31,33 @@ Two things happened at once:
 
 **Autonomous agent runtime.** Set up watchers (`@every`, `@watch`, `@webhook`), give the agent the clients it needs (captured via CDP from your logged-in browser tabs), and the agent processes inbound events on its own between turns. PowerOffice overdue-invoice reminders, GitHub PR auto-review, email triage, build-failure remediation — all the same shape, ~10 lines of setup each. The kernel is the cron + systemd + webhook receiver; the agent is the action layer.
 
-One pip install, one entrypoint, one `.mcp.json`. Either mode, or both.
+One `uv tool install`, one entrypoint, one `.mcp.json`. Either mode, or both.
 
 ## Quickstart
 
 ```bash
-# install
-pip install repld        # or: uv pip install repld
+# install once, globally available as a CLI
+uv tool install repld
 
-# in your project's cwd:
-repld                    # starts the kernel
+# in any project where you want repld:
+cd path/to/project
+repld init               # writes .mcp.json + updates .gitignore
+repld                    # starts the kernel (or `repld --init repl.py` if you wrote one)
 ```
 
-Project-level integration (`.mcp.json` at the repo root):
+Project-local install (alternative): `uv add --dev repld`, then point `.mcp.json` at `uv run repld bridge`.
+
+`repld init` produces this `.mcp.json` at the project root:
 
 ```json
 {
   "mcpServers": {
-    "repld": { "command": "repld", "args": ["bridge"] }
+    "repld": { "type": "stdio", "command": "repld", "args": ["bridge"], "env": {} }
   }
 }
 ```
+
+Anywhere: `repld help` for the substrate-level overview, `repld help <topic>` for details (`exec`, `channel`, `notify`, `init`, `gists`, `browser`). The agent can call `!repld help` from inside Claude Code at any time — the docs ship with the binary, no separate file to keep in sync.
 
 Launch Claude Code from that directory:
 
@@ -136,7 +142,7 @@ Project cwd
  └─ .mcp.json                   → tells Claude Code to spawn `repld bridge`
  └─ .pyrepl.lock                → {pid, socket_path} of the running kernel
 
-Terminal 1: `repld`             IPython kernel + IPC server (unix socket in cwd)
+Terminal 1: `repld`             Kernel (asyncio loop) + IPC server (unix socket in cwd)
 Terminal 2: `claude …`          spawns `repld bridge` via stdio MCP
                                 bridge proxies stdio ↔ IPC socket
                                 channel notifications flow through
@@ -144,7 +150,7 @@ Terminal 2: `claude …`          spawns `repld bridge` via stdio MCP
 
 - **Stdio MCP subprocess** — canonical shape per channel docs. Claude Code spawns it; no always-on daemon, no port management, no gateway.
 - **Per-cwd lockfile** — the kernel's IPC path lives in `./.pyrepl.lock`. Stdio bridge inherits `cwd` from Claude Code, reads the lockfile, connects.
-- **Stdlib REPL** — `compile()` + `eval()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT`. Last-expression auto-display binds to `_` and `_N`. AST split lets `x = 1; "last"` still display the trailing expression. No IPython, no `prompt_toolkit` — the asyncio loop owns the main process and a separate display thread renders events.
+- **Stdlib REPL** — `compile()` + `eval()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT`. Last-expression auto-display binds to `_` and `_N`. AST split lets `x = 1; "last"` still display the trailing expression. The asyncio loop owns the main process and a separate display thread renders events.
 - **Shared asyncio loop** — one process-wide loop on a daemon thread. `asyncio.create_task(...)` works from anywhere, tasks survive the exec return. A watchdog channel-pushes if the loop wedges (default >5s, tunable via `REPLD_LOOP_BLOCK_THRESHOLD`).
 - **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[web]` (FastAPI/uvicorn for the example).
 

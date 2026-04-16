@@ -1,25 +1,15 @@
 """MCP JSON-RPC tool schemas + dispatch.
 
 Shared by the kernel; the bridge is a dumb byte-pipe and never touches this.
-Ported from pyrepl-channel prototype (bootstrap.py:196-309).
 """
 
 import json
 import threading
 from typing import Protocol
 
-PROTOCOL_VERSION = "2024-11-05"
+from .help import INSTRUCTIONS as _INSTRUCTIONS
 
-_INSTRUCTIONS = (
-    "Persistent Python runtime with a shared __main__ namespace. Use `exec` "
-    "to run code; long tasks exceeding `timeout` return {task_id, done:false} "
-    'and their completion arrives as <channel source="repld" kind="task_done" '
-    'task_id="...">...</channel>. Inline output is a small head+tail preview; '
-    "when truncated, the full output path is appended as `[full output: "
-    "/path/to/spill.out]` — use the standard Read/Grep tools on that file. "
-    "`get_task` polls a running task. Top-level await is supported. The last "
-    "expression auto-displays and binds to `_` and `_N` (N = execution count)."
-)
+PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS = [
     {
@@ -51,6 +41,19 @@ TOOLS = [
             "required": ["task_id"],
         },
     },
+    {
+        "name": "cancel",
+        "description": (
+            "Attempt to cancel a running task. Returns whether cancellation "
+            "was accepted. Cannot preempt tight sync loops (`while True: pass`) "
+            "— only await-yielding code is cancellable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
 ]
 
 
@@ -58,6 +61,7 @@ class KernelContext(Protocol):
     def start_task(self, src: str) -> tuple[str, threading.Event]: ...
     def snapshot(self, task_id: str) -> dict: ...
     def mark_nudged(self, task_id: str) -> None: ...
+    def cancel_task(self, task_id: str) -> bool: ...
 
 
 class Dispatcher:
@@ -116,6 +120,8 @@ class Dispatcher:
             return self._exec(rid, args)
         if name == "get_task":
             return self._get_task(rid, args)
+        if name == "cancel":
+            return self._cancel(rid, args)
         return _error(rid, -32602, f"unknown tool: {name}")
 
     def _exec(self, rid, args: dict) -> dict:
@@ -167,6 +173,19 @@ class Dispatcher:
             "result": {
                 "content": [{"type": "text", "text": json.dumps(snap, indent=2)}],
                 "_meta": snap,
+            },
+        }
+
+    def _cancel(self, rid, args: dict) -> dict:
+        tid = args["task_id"]
+        accepted = self.ctx.cancel_task(tid)
+        status = "accepted" if accepted else "no-op"
+        return {
+            "jsonrpc": "2.0",
+            "id": rid,
+            "result": {
+                "content": [{"type": "text", "text": f"cancel task={tid}: {status}"}],
+                "_meta": {"task_id": tid, "cancelled": accepted},
             },
         }
 

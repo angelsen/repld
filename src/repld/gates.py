@@ -1,48 +1,45 @@
 """Human-gate primitives: ask, confirm, choose.
 
-Gates pause user code (running on the bg asyncio loop) until a human answers
-via the terminal stdin reader. They work by parking on a concurrent.futures.Future
-with `await loop.run_in_executor(None, fut.result, timeout)` — so the loop
-stays responsive for other tasks while waiting.
-
-The gate registry maps gate_id → Future. The display thread's stdin reader
-calls `resolve_gate()` when the human types a response.
+Gates are async coroutines — `await ask("name?")` yields to the asyncio loop
+while waiting on the human, so uvicorn / watchdog / other bg tasks keep
+running. The display thread's stdin reader calls `resolve_gate(gate_id, ...)`
+when the human types a response; that resolves the underlying future and
+the awaiting cell resumes.
 """
 
-from __future__ import annotations
-
+import asyncio
 import concurrent.futures
 import threading
 import uuid
 
-from .events import ChannelPush, HumanPromptOpen, HumanPromptResponse, emit
+from .events import HumanPromptOpen, emit
 
 _gates: dict[str, concurrent.futures.Future] = {}
 _gates_lock = threading.Lock()
 
 
-def ask(
+async def ask(
     prompt: str,
     *,
     default: str | None = None,
     timeout: float | None = None,
 ) -> str:
     """Prompt the human for a free-form string response."""
-    return _gate("ask", prompt, None, default, timeout)  # type: ignore[return-value]
+    return await _gate("ask", prompt, None, default, timeout)  # type: ignore[return-value]
 
 
-def confirm(
+async def confirm(
     prompt: str,
     *,
     default: bool | None = None,
     timeout: float | None = None,
 ) -> bool:
     """Prompt the human for a yes/no response. Returns bool."""
-    value = _gate("confirm", prompt, None, default, timeout)
+    value = await _gate("confirm", prompt, None, default, timeout)
     return bool(value)
 
 
-def choose(
+async def choose(
     prompt: str,
     options: list[str],
     *,
@@ -50,30 +47,33 @@ def choose(
     timeout: float | None = None,
 ) -> str:
     """Prompt the human to choose one of the given options."""
-    return _gate("choose", prompt, options, default, timeout)  # type: ignore[return-value]
+    return await _gate("choose", prompt, options, default, timeout)  # type: ignore[return-value]
 
 
-def _gate(kind, prompt, options, default, timeout):
+async def _gate(kind, prompt, options, default, timeout):
+    # Lazy import to avoid a gates↔kernel cycle.
+    from .kernel import push_channel
+
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
         _gates[gate_id] = fut
 
+    # Channel push first, then prompt — so the panel renders on a fresh
+    # line in the viewer before the prompt text (which ends with `: ` and
+    # waits on stdin, so it mustn't be followed by panel borders).
+    meta = {"kind": "awaiting_human", "gate_id": gate_id, "prompt_kind": kind}
+    if options:
+        meta["options"] = ",".join(options)
+    push_channel(f"awaiting human: {prompt}", meta)
     emit(HumanPromptOpen(gate_id, kind, prompt, options))
-    emit(
-        ChannelPush(
-            content=f"awaiting human: {prompt}",
-            meta={
-                "kind": "awaiting_human",
-                "gate_id": gate_id,
-                "prompt_kind": kind,
-            },
-        )
-    )
 
     try:
-        return fut.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
+        wrapped = asyncio.wrap_future(fut)
+        if timeout is not None:
+            return await asyncio.wait_for(wrapped, timeout=timeout)
+        return await wrapped
+    except asyncio.TimeoutError:
         if default is not None:
             return default
         raise TimeoutError(f"no response to {prompt!r} within {timeout}s")
@@ -84,6 +84,8 @@ def _gate(kind, prompt, options, default, timeout):
 
 def resolve_gate(gate_id: str, value) -> None:
     """Called by the stdin reader when the human responds to a gate."""
+    from .events import HumanPromptResponse
+
     with _gates_lock:
         fut = _gates.get(gate_id)
     if fut is not None and not fut.done():
