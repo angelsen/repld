@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "repld": {
+      "type": "stdio",
+      "command": "repld",
+      "args": [
+        "bridge"
+      ],
+      "env": {}
+    }
+  }
+}
