@@ -98,6 +98,7 @@ A runnable end-to-end version lives at [`examples/fastapi/`](examples/fastapi/).
 | ------------ | ---------------------------------------------------------------------------------------------------- |
 | `exec`       | Execute Python in the kernel. Returns inline if it finishes within `timeout` (default 2s); otherwise returns `{task_id, done:false}` and the completion arrives as a channel notification. |
 | `get_task`   | Current status + head/tail preview of a task's output.                                               |
+| `cancel`     | Cancel a running task by id. Works on await-yielding code; cannot preempt tight sync loops.          |
 
 Every cell with output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1; the inline response carries a head+tail preview plus the absolute spill path. For full output, the agent uses the standard `Read`/`Grep` tools on that path — no dedicated MCP tool needed.
 
@@ -112,15 +113,20 @@ confirm(prompt, *, default=None, timeout=None)    # block on yes/no
 choose(prompt, options, *, default=None, timeout=None)  # block on pick-one
 ```
 
-Planned:
+Planned (priority order — smallest first):
 
 ```python
-defer(coro, label=None)                 # run on shared loop, channel-push on finish
+notify_on_logs(level, logger=None)      # route stdlib logging to channel
 @every(seconds)                         # periodic channel emission
+defer(coro, label=None)                 # run on shared loop, channel-push on finish
+browser.find(url_pattern)               # attach to chrome via CDP (remote-debug port)
 @watch("/path")                         # file changes → channel (needs watchdog)
 @webhook("/path")                       # http route → channel
-browser.find(url_pattern)               # attach to chrome via CDP (remote-debug port)
 ```
+
+Also planned: a remote-ask variant of the human gates that routes through the
+MCP client (Claude Code) instead of the kernel's terminal pane, for when the
+human lives in the chat rather than next to the kernel.
 
 Minimal autonomous worker — five lines:
 
@@ -172,15 +178,23 @@ Channels are a research-preview feature of Claude Code. The current integration 
 
 Research preview. The thesis is validated — full MCP-over-stdio with channel push and top-level await works end-to-end. Productization in progress:
 
-- [x] Stdlib REPL with top-level await, `_` / `_N` history, AST-split last-expression display
+- [x] Stdlib REPL with top-level await, `_` / `__` / `___` / `_N` history, AST-split last-expression display
 - [x] Stdio MCP bridge + unix-socket IPC
-- [x] `repld` and `repld bridge` CLI entrypoints
-- [x] Lazy spill-to-disk for all cell output + head/tail inline preview
-- [x] Loop watchdog (channel-pushes when the bg loop wedges)
-- [x] Human gates (`ask`, `confirm`, `choose`) and `notify`
-- [ ] Background-task helpers (`defer`, `@every`, `@watch`, `@webhook`)
-- [ ] Browser helpers (`browser.find` via CDP)
+- [x] `repld`, `repld bridge`, `repld init`, `repld help` CLI subcommands
+- [x] MCP tools: `exec`, `get_task`, `cancel` (await-yielding cancellation)
+- [x] Always-spill to disk for all cell output + head/tail inline preview
+- [x] Human gates (`ask`, `confirm`, `choose`, async) and `notify`
+- [x] Loop watchdog (`loop_blocked` channel, env-tunable threshold)
+- [x] Asyncio exception handler (`bg_task_error` channel) and `init_error` channel
+- [ ] `notify_on_logs` — stdlib logging → channel
+- [ ] `@every(seconds)` — periodic channel emission on the shared loop
+- [ ] `defer(coro, label=None)` — fire-and-forget with channel push on completion
+- [ ] Browser helpers (`browser.find` via CDP) and the `gists/` convention
+- [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)
+- [ ] Remote-ask variant of human gates (route via MCP client)
+- [ ] Multi-gate concurrency (queue stdin routing across simultaneous gates)
 - [ ] Framework presets (`--preset fastapi`, `--preset django`)
+- [ ] CI + lint pass
 - [ ] Optional Claude Code plugin distribution
 
 ## License

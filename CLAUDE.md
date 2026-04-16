@@ -4,26 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Early scaffolding. `src/repld/__init__.py` is a stub `main()`; the README is the design document and roadmap. When implementing, treat README.md as the spec — especially the **Architecture**, **Tools**, **Helpers**, and **Status** (checklist) sections. Don't drift from the shape described there without discussion.
+Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), human gates, channel infrastructure, and scaffolding commands are live; the README is the design document and roadmap. When implementing, treat README.md as the spec — especially the **Architecture**, **Tools**, **Helpers**, and **Status** (checklist) sections. Don't drift from the shape described there without discussion.
 
 ## Build & run
 
 Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
 
 ```bash
-uv sync                 # install deps into .venv
-uv run repld            # runs the `repld:main` entrypoint
-uv build                # wheel + sdist via uv_build
+uv sync                                 # install deps into .venv
+uv run repld                            # runs the `repld:main` entrypoint
+uv build                                # wheel + sdist via uv_build
+uv run python tests/smoketest.py --phase 5   # end-to-end smoketest
+ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 ```
 
-There are no tests, linters, or CI configured yet. If you add any, update this file.
+No CI configured yet. If you add any, update this file.
 
 ## Architecture (target shape)
 
-Two CLI entrypoints are planned, both dispatched from `repld:main`:
+Four CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
 - `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
+- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
+- `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
 
 Key invariants to preserve when building this out:
 
