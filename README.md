@@ -15,7 +15,7 @@ Two things happened at once:
 
 **1. Traditional REPL → agent integration is miserable.** PTY transport means fake keystrokes and prompt parsing. State disappears between script runs. Long jobs block the whole turn. Most "agent does thing in Python" setups work around this by writing files and running them — losing all the iteration speed a REPL is supposed to provide.
 
-**2. The agent collapses the library moat.** Selenium, Puppeteer, BeautifulSoup, ORMs, form-filling kits, OpenAPI client generators — these existed because writing orchestration code used to be expensive. An LLM with access to CDP + `httpx` + a live SQL connection writes the equivalent code on demand, tuned to the exact task, against the exact page/API/schema. The library becomes overhead.
+**2. The agent collapses the library moat.** Selenium, Puppeteer, BeautifulSoup, ORMs, form-filling kits, OpenAPI client generators — these existed because writing orchestration code used to be expensive. An LLM with access to CDP + `httpx` + a live SQL connection writes the equivalent code on demand, tuned to the exact task, against the exact page/API/schema. The library becomes overhead. Per-service MCP servers scale linearly — one per service, maintained forever. repld replaces them all: attach to your logged-in browser, discover the API surface from the traffic, synthesize a client.
 
 `repld` is what falls out when you take both seriously:
 
@@ -94,11 +94,30 @@ A runnable end-to-end version lives at [`examples/fastapi/`](examples/fastapi/).
 
 ## Tools (exposed to the agent over MCP)
 
+**Core tools:**
+
 | Tool         | Behavior                                                                                             |
 | ------------ | ---------------------------------------------------------------------------------------------------- |
 | `exec`       | Execute Python in the kernel. Returns inline if it finishes within `timeout` (default 2s); otherwise returns `{task_id, done:false}` and the completion arrives as a channel notification. |
 | `get_task`   | Current status + head/tail preview of a task's output.                                               |
 | `cancel`     | Cancel a running task by id. Works on await-yielding code; cannot preempt tight sync loops.          |
+
+**Browser tools** (requires `repld[browser]`):
+
+| Tool              | Behavior                                                    |
+| ----------------- | ----------------------------------------------------------- |
+| `browser_attach`  | Add URL watch pattern, attach matching tabs now + auto-attach future matches. |
+| `browser_tabs`    | List currently attached tabs.                               |
+| `browser_pages`   | List all Chrome targets (attached or not).                  |
+| `browser_js`      | Evaluate JavaScript in a tab (`Runtime.evaluate` with auto-await). |
+| `browser_network` | Query captured network traffic (HAR-style, DuckDB-backed). |
+| `browser_body`    | Fetch response body for a captured request.                 |
+| `browser_click`   | Click an element (trusted `Input.dispatchMouseEvent`).      |
+| `browser_type`    | Type into an element (trusted `Input.dispatchKeyEvent`).    |
+| `browser_console` | Query console logs and exceptions.                          |
+| `browser_screenshot` | Capture page screenshot.                                 |
+| `browser_cdp`     | Raw CDP passthrough (escape hatch).                         |
+| `browser_detach`  | Remove watch pattern, detach tabs.                          |
 
 Every cell with output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1; the inline response carries a head+tail preview plus the absolute spill path. For full output, the agent uses the standard `Read`/`Grep` tools on that path — no dedicated MCP tool needed.
 
@@ -119,9 +138,29 @@ Planned (priority order — smallest first):
 notify_on_logs(level, logger=None)      # route stdlib logging to channel
 @every(seconds)                         # periodic channel emission
 defer(coro, label=None)                 # run on shared loop, channel-push on finish
-browser.find(url_pattern)               # attach to chrome via CDP (remote-debug port)
 @watch("/path")                         # file changes → channel (needs watchdog)
 @webhook("/path")                       # http route → channel
+```
+
+Browser builtins (requires `repld[browser]`):
+
+```python
+browser.attach("*pattern*")             # watch pattern, auto-attach matching tabs
+browser.find("*pattern*")               # resolve one Tab by URL pattern
+browser.tabs                            # list attached tabs
+browser.pages                           # list all Chrome targets
+browser.detach("*pattern*")             # remove watch + detach
+
+tab = browser.find("*gmail*")
+tab.js("document.title")                # eval JS (auto-await, trusted gestures)
+tab.click("#search-btn")                # trusted click (Input.dispatchMouseEvent)
+tab.type_text("#search", "query")       # trusted typing (Input.dispatchKeyEvent)
+tab.network(url="*api*", status=200)    # query captured traffic (DuckDB HAR view)
+tab.console(level="error")              # query console logs + exceptions
+tab.body(request_id)                    # fetch response body (Fetch-captured)
+tab.cookies                             # browser cookie jar
+tab.events.query(sql)                   # raw DuckDB escape hatch
+tab.cdp("Page.navigate", url="...")     # raw CDP passthrough
 ```
 
 Also planned: a remote-ask variant of the human gates that routes through the
@@ -141,6 +180,77 @@ def check_overdue():
 
 Kernel runs the watcher, agent reacts to each `<channel>` injection, calls `po.send_reminder(...)` via `exec`. You do nothing after setup.
 
+## Browser — authenticated access to any SaaS
+
+`repld[browser]` attaches to your Chrome tabs via CDP. You log in normally; the agent sees your traffic, discovers the API surface, and works with authenticated sessions — no API keys, no OAuth dance, no per-service MCP server.
+
+```bash
+repld exec 'browser.attach("*salesforce*")'    # watch pattern, auto-attach
+repld exec 'browser.find("*salesforce*").network(url="*/api/*")'   # discover API calls
+```
+
+The agent sees every request your browser makes: URLs, headers, auth tokens, request/response bodies. From one captured request it can synthesize an `httpx` client with the right headers pre-filled, and start calling the API directly.
+
+```python
+tab = browser.find("*salesforce*")
+r = tab.network(url="*/api/records*")[0]       # find the API call
+r.curl()                                       # copy as curl
+r.request_headers["Authorization"]             # extract the bearer token
+```
+
+Body capture via Fetch interception means login flows, redirects, and CSRF token exchanges are never lost — even when Chrome would normally evict response bodies across navigation.
+
+The browser exposes its own MCP tools alongside `exec`, so agents discover browser capabilities via the tool list without needing to know Python:
+
+| Tool              | Behavior                                                    |
+| ----------------- | ----------------------------------------------------------- |
+| `browser_attach`  | Add URL watch pattern, attach matching tabs                 |
+| `browser_tabs`    | List currently attached tabs                                |
+| `browser_pages`   | List all Chrome targets (attached or not)                   |
+| `browser_js`      | Evaluate JavaScript in a tab                                |
+| `browser_network` | Query captured network traffic (HAR-style, DuckDB-backed)   |
+| `browser_body`    | Fetch response body for a captured request                  |
+| `browser_click`   | Click an element (trusted `Input.dispatchMouseEvent`)       |
+| `browser_type`    | Type into an element (trusted `Input.dispatchKeyEvent`)     |
+| `browser_console` | Query console logs and exceptions                           |
+| `browser_screenshot` | Capture page screenshot                                  |
+| `browser_cdp`     | Raw CDP passthrough (escape hatch)                          |
+| `browser_detach`  | Remove watch pattern, detach tabs                           |
+
+Requires Chrome running with `--remote-debugging-port=9222`. See `docs/browser.md` for the full design.
+
+## Gists — reusable recipes for any service
+
+`gists/` are small Python modules that capture the *pattern* for talking to a service. The browser supplies fresh credentials each session; the gist captures which endpoints, which headers, which auth shape.
+
+```python
+# gists/dnb.py — reusable bank client, 10 lines
+"""DNB bank. Attach to logged-in DNB tab first."""
+
+async def client():
+    tab = browser.find("*dnb*")
+    headers = tab.network(url="*/api/*")[0].request_headers
+    return httpx.Client(base_url="https://www.dnb.no/api", headers=headers)
+
+async def accounts(c):
+    return c.get("/accounts").json()
+
+async def transactions(c, account_id, since="2026-01-01"):
+    return c.get(f"/accounts/{account_id}/transactions", params={"from": since}).json()
+```
+
+Usage, every session:
+
+```python
+import gists.dnb
+c = await gists.dnb.client()           # auth captured from browser
+txns = await gists.dnb.transactions(c, "1234")
+```
+
+Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both on `sys.path`. The agent writes the gist once by observing your traffic. Someone else with a DNB login does `browser.attach("*dnb*")` + `import gists.dnb` and it works — the gist is the recipe, the browser is the auth.
+
+Same shape for Salesforce, PowerOffice, Gmail, internal admin tools, any bank. Per-service MCP servers scale linearly (one per service, maintained forever). Gists scale with whatever's in your browser.
+
 ## Architecture
 
 ```
@@ -152,13 +262,24 @@ Terminal 1: `repld`             Kernel (asyncio loop) + IPC server (unix socket 
 Terminal 2: `claude …`          spawns `repld bridge` via stdio MCP
                                 bridge proxies stdio ↔ IPC socket
                                 channel notifications flow through
+Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 ```
 
+Five CLI subcommands, all dispatched from `repld:main`:
+
+- `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
+- `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
+- `repld exec [CODE]` — execute Python in a running kernel via IPC. With no args, drops into a minimal interactive REPL (readline history at `~/.repld/history`). With a string arg, runs one-shot and prints the result. Human-facing counterpart to the MCP `exec` tool — same kernel, same namespace, same state.
+- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
+- `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
+
+Key design properties:
+
 - **Stdio MCP subprocess** — canonical shape per channel docs. Claude Code spawns it; no always-on daemon, no port management, no gateway.
-- **Per-cwd lockfile** — the kernel's IPC path lives in `./.pyrepl.lock`. Stdio bridge inherits `cwd` from Claude Code, reads the lockfile, connects.
+- **Per-cwd lockfile** — the kernel's IPC path lives in `./.pyrepl.lock`. Both the bridge and `repld exec` inherit `cwd`, read the lockfile, connect.
 - **Stdlib REPL** — `compile()` + `eval()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT`. Last-expression auto-display binds to `_` and `_N`. AST split lets `x = 1; "last"` still display the trailing expression. The asyncio loop owns the main process and a separate display thread renders events.
 - **Shared asyncio loop** — one process-wide loop on a daemon thread. `asyncio.create_task(...)` works from anywhere, tasks survive the exec return. A watchdog channel-pushes if the loop wedges (default >5s, tunable via `REPLD_LOOP_BLOCK_THRESHOLD`).
-- **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[web]` (FastAPI/uvicorn for the example).
+- **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[web]` (FastAPI/uvicorn for the example), `repld[browser]` (CDP + DuckDB for browser integration).
 
 ## Design principles
 
@@ -186,10 +307,12 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Human gates (`ask`, `confirm`, `choose`, async) and `notify`
 - [x] Loop watchdog (`loop_blocked` channel, env-tunable threshold)
 - [x] Asyncio exception handler (`bg_task_error` channel) and `init_error` channel
+- [ ] `repld exec` — human CLI + interactive REPL over IPC
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@every(seconds)` — periodic channel emission on the shared loop
 - [ ] `defer(coro, label=None)` — fire-and-forget with channel push on completion
-- [ ] Browser helpers (`browser.find` via CDP) and the `gists/` convention
+- [ ] Gists layer — `~/.repld/gists/` + `./gists/` on `sys.path`, lazy namespace helper
+- [ ] `repld[browser]` — CDP integration (async BrowserSession, DuckDB event store, HAR view, Fetch body capture, MCP tools). See `docs/browser.md`.
 - [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)
 - [ ] Remote-ask variant of human gates (route via MCP client)
 - [ ] Multi-gate concurrency (queue stdin routing across simultaneous gates)

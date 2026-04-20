@@ -11,12 +11,14 @@ import queue
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING
-
+from . import tasks
 from .events import (
+    BrowserTabAttached,
+    BrowserTabDetached,
     CellDone,
     CellStart,
     ChannelPush,
+    Event,
     HumanPromptOpen,
     HumanPromptResponse,
     StderrChunk,
@@ -24,9 +26,6 @@ from .events import (
     get_queue,
 )
 from .gates import resolve_gate
-
-if TYPE_CHECKING:
-    from .events import Event
 
 # ---------------------------------------------------------------------------
 # Optional rich
@@ -163,8 +162,6 @@ def _write_styled(
 
 
 def _emit_elision_notice(task_id: str, last_was_nl: bool) -> None:
-    from . import tasks
-
     path = tasks._tasks.get(task_id, {}).get("spill_path") or f"task={task_id}"
     prefix = "" if last_was_nl else "\n"
     _out(
@@ -275,7 +272,18 @@ def _render_prompt_response(ev: HumanPromptResponse) -> None:
     _out(f"\n{_DIM}↳ response recorded: {ev.value}{_RESET}\n")
 
 
-def _render(ev: "Event") -> None:
+def _render_browser_attached(ev: BrowserTabAttached) -> None:
+    short = ev.target[:12]
+    title = f" ({ev.title})" if ev.title else ""
+    _out(f"{_DIM}[browser] attached {short} {ev.url}{title}{_RESET}\n")
+
+
+def _render_browser_detached(ev: BrowserTabDetached) -> None:
+    short = ev.target[:12]
+    _out(f"{_DIM}[browser] detached {short}{_RESET}\n")
+
+
+def _render(ev: Event) -> None:
     if isinstance(ev, CellStart):
         _render_cell_start(ev)
     elif isinstance(ev, StdoutChunk):
@@ -290,6 +298,10 @@ def _render(ev: "Event") -> None:
         _render_prompt_open(ev)
     elif isinstance(ev, HumanPromptResponse):
         _render_prompt_response(ev)
+    elif isinstance(ev, BrowserTabAttached):
+        _render_browser_attached(ev)
+    elif isinstance(ev, BrowserTabDetached):
+        _render_browser_detached(ev)
 
 
 # ---------------------------------------------------------------------------

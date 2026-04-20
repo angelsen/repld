@@ -63,6 +63,18 @@ class HumanPromptResponse:
     value: str | bool
 
 
+@dataclass(frozen=True, slots=True)
+class BrowserTabAttached:
+    target: str
+    url: str
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserTabDetached:
+    target: str
+
+
 Event = (
     CellStart
     | StdoutChunk
@@ -71,6 +83,8 @@ Event = (
     | ChannelPush
     | HumanPromptOpen
     | HumanPromptResponse
+    | BrowserTabAttached
+    | BrowserTabDetached
 )
 
 # ---------------------------------------------------------------------------

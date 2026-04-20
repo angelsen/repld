@@ -12,6 +12,10 @@ def main() -> None:
         from .scaffold import run_init
 
         raise SystemExit(run_init(argv[1:]))
+    if argv and argv[0] == "exec":
+        from .exec_cmd import run_exec
+
+        raise SystemExit(run_exec(argv[1:]))
     if argv and argv[0] == "help":
         from .help import run_help
 

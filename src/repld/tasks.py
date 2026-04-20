@@ -151,6 +151,28 @@ def _make_preview(full: str) -> tuple[str, bool]:
     return "".join(_clip_line(ln) for ln in lines), True
 
 
+def spill_text(text: str, label: str = "output") -> dict:
+    """Write text to a spill file, return preview + path.
+
+    Reusable by tools, resources, and exec. Same preview budget as exec.
+    Returns {"text": preview, "spill_path": path_or_None, "truncated": bool}.
+    """
+    if not text:
+        return {"text": "", "spill_path": None, "truncated": False}
+    preview, truncated = _make_preview(text)
+    spill_path = None
+    if len(text) > PREVIEW_MAX_BYTES:
+        _ensure_spill_dir()
+        tid = uuid.uuid4().hex[:12]
+        path = SPILL_DIR / f"{os.getpid()}-{label}-{tid}.out"
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            f.write(text)
+        tmp.rename(path)  # atomic on same filesystem
+        spill_path = str(path)
+    return {"text": preview, "spill_path": spill_path, "truncated": truncated}
+
+
 def snapshot(task_id: str) -> dict:
     task = _tasks.get(task_id)
     if task is None:

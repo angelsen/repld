@@ -200,7 +200,11 @@ def phase_3(kernel: Kernel) -> None:
 
         resp = b.call("tools/list")
         tool_names = [t["name"] for t in resp["result"]["tools"]]
-        assert_eq(sorted(tool_names), ["cancel", "exec", "get_task"], "tools/list")
+        core_tools = {"cancel", "exec", "get_task"}
+        assert_true(
+            core_tools.issubset(set(tool_names)),
+            f"tools/list contains core tools (got {tool_names!r})",
+        )
         print(f"  ✓ tools/list: {tool_names}")
 
         # Sync exec
@@ -490,10 +494,138 @@ def phase_5_init(_kernel: Kernel) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def phase_6(kernel: Kernel) -> None:
+    """Browser integration — requires Chrome with --remote-debugging-port=9222.
+
+    Skips gracefully if Chrome is not reachable.
+    """
+    import urllib.request as _urlreq
+
+    try:
+        with _urlreq.urlopen("http://localhost:9222/json/version", timeout=2) as r:
+            r.read()
+    except Exception:
+        print("  - phase 6: Chrome not available on port 9222, skipping")
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        # Verify browser tools are in the list
+        resp = b.call("tools/list")
+        tool_names = [t["name"] for t in resp["result"]["tools"]]
+        browser_tools = {
+            "browser_attach",
+            "browser_detach",
+            "browser_tabs",
+            "browser_pages",
+            "browser_js",
+            "browser_network",
+            "browser_body",
+            "browser_click",
+            "browser_type",
+            "browser_console",
+            "browser_screenshot",
+            "browser_cdp",
+            "browser_clear",
+        }
+        assert_true(
+            browser_tools.issubset(set(tool_names)),
+            f"tools/list contains all 13 browser tools (got {tool_names!r})",
+        )
+        print("  ✓ all 13 browser tools in tools/list")
+
+        # Attach any open tab
+        resp = b.call(
+            "tools/call",
+            {"name": "browser_attach", "arguments": {"pattern": "*"}},
+            timeout=10.0,
+        )
+        result_text = resp["result"]["content"][0]["text"]
+        assert_true(
+            "result" in result_text,
+            f"browser_attach returned result (got {result_text!r})",
+        )
+        print(f"  ✓ browser_attach: {result_text[:80]!r}")
+
+        # List attached tabs
+        resp = b.call(
+            "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
+        )
+        tabs_json = resp["result"]["content"][0]["text"]
+        tabs = json.loads(tabs_json)
+        if not tabs:
+            print(
+                "  - browser_tabs: no tabs attached (Chrome may have no open tabs), skipping js/network"
+            )
+            return
+        tab_target = tabs[0]["target"]
+        tab_url = tabs[0]["url"]
+        print(
+            f"  ✓ browser_tabs: {len(tabs)} tab(s), first target={tab_target!r} url={tab_url!r}"
+        )
+
+        # browser_js: evaluate 1+1
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "browser_js",
+                "arguments": {"target": tab_target, "code": "1+1"},
+            },
+            timeout=10.0,
+        )
+        js_text = resp["result"]["content"][0]["text"]
+        js_result = json.loads(js_text)
+        assert_true(
+            js_result.get("result") == 2,
+            f"browser_js 1+1 == 2 (got {js_result!r})",
+        )
+        print(f"  ✓ browser_js: 1+1 = {js_result['result']!r}")
+
+        # browser_network: returns a list (may be empty)
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "browser_network",
+                "arguments": {"target": tab_target},
+            },
+            timeout=5.0,
+        )
+        net_text = resp["result"]["content"][0]["text"]
+        net_rows = json.loads(net_text)
+        assert_true(
+            isinstance(net_rows, list),
+            f"browser_network returns list (got {net_text[:80]!r})",
+        )
+        print(f"  ✓ browser_network: {len(net_rows)} row(s)")
+
+        # browser_detach all
+        resp = b.call(
+            "tools/call",
+            {"name": "browser_detach", "arguments": {}},
+            timeout=5.0,
+        )
+        detach_text = resp["result"]["content"][0]["text"]
+        print(f"  ✓ browser_detach: {detach_text[:80]!r}")
+
+        # Verify tabs now empty
+        resp = b.call(
+            "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
+        )
+        tabs_after = json.loads(resp["result"]["content"][0]["text"])
+        assert_eq(tabs_after, [], "browser_tabs after detach is empty")
+        print("  ✓ browser_tabs empty after detach")
+    finally:
+        b.close()
+
+
 PHASES = {
     3: phase_3,
     4: lambda k: (phase_4(k), phase_4b_pregate(k)),
     5: lambda k: (phase_5(k), phase_5_init(k)),
+    6: phase_6,
 }
 
 

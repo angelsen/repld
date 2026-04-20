@@ -19,6 +19,49 @@ from typing import Callable
 Handler = Callable[[dict, "Session"], dict | None]
 
 
+def _pid_alive(pid) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but isn't ours — still alive.
+        return True
+
+
+def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
+    """Read lockfile, validate kernel pid, connect unix socket.
+
+    Returns (sock, lock_info) on success, or an error message string on failure.
+    Used by both ``bridge`` and ``exec`` subcommands.
+    """
+    if not lock_path.exists():
+        return (
+            f"no kernel found (missing {lock_path.name}); "
+            f"start `repld` in this cwd first"
+        )
+    try:
+        lock = json.loads(lock_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        return f"cannot read {lock_path.name}: {e}"
+    if not _pid_alive(lock.get("pid", -1)):
+        return f"kernel pid {lock.get('pid')} is not running (stale {lock_path.name})"
+    sock_path = lock.get("socket_path")
+    if not sock_path:
+        return f"{lock_path.name} missing socket_path"
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(sock_path)
+    except OSError as e:
+        return f"cannot connect to kernel socket {sock_path}: {e}"
+
+    return sock, lock
+
+
 class Session:
     def __init__(self, sock: socket.socket):
         self.sock = sock

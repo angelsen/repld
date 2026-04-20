@@ -6,8 +6,9 @@ re-exports INSTRUCTIONS so MCP clients and `!repld help` can never drift.
 """
 
 import json
-import os
 from pathlib import Path
+
+from .ipc import _pid_alive
 
 INSTRUCTIONS = (
     "Persistent Python runtime with a shared __main__ namespace. Use `exec` "
@@ -20,7 +21,16 @@ INSTRUCTIONS = (
     "Top-level await is supported. The last expression auto-displays and "
     "binds to `_` / `__` / `___` (last three) and `_N` (N = execution count). "
     "`await ask(...)` / `await confirm(...)` / `await choose(...)` block the "
-    "cell on human input in the kernel's pane."
+    "cell on human input in the kernel's pane. "
+    "Browser CDP: `browser_attach` watches a URL pattern and attaches matching "
+    "Chrome tabs. `browser_tabs` lists attached tabs with short target IDs "
+    "(e.g. '9222:887d3d'). All other browser_* tools take a `target` parameter "
+    "which is this short ID — it stays stable across page navigation. "
+    "Network workflow: `browser_network` to scan requests → `browser_request` "
+    "to inspect headers/auth/postData → `browser_body` for response content. "
+    "The `browser` object is also available in exec for chaining operations in "
+    "a single cell (e.g. `tab = browser.find(...); tab.network(url='api')`) — "
+    "call `browser.help()` for the full Python API."
 )
 
 
@@ -38,17 +48,20 @@ when work completes, files change, webhooks fire, or human gates resolve.
 Commands:
   repld                    Start a kernel in cwd
   repld --init FILE        Start a kernel, exec FILE first (project bootstrap)
+  repld exec CODE          One-shot: run code in kernel, print result, exit
+  repld exec               Interactive REPL (state persists in kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld init               Scaffold .mcp.json + .gitignore in cwd
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:
   exec      How exec runs cells; timeout / nudge / channel push
+  exec-cli  repld exec: one-shot and interactive REPL
   channel   Channel push notifications
   notify    notify(), ask(), confirm(), choose() helpers
   init      What `repld init` writes
   gists     Personal SDK convention (planned)
-  browser   CDP browser attach (planned)
+  browser   CDP browser integration
 """
 
 
@@ -80,6 +93,29 @@ State:
   __main__ namespace persists across cells. Helpers (notify, ask, confirm,
   choose) are pre-injected. Use `repld --init FILE` to pre-load project
   state (clients, sessions, app instances).
+""",
+    "exec-cli": """\
+repld exec — human-facing CLI for the running kernel.
+
+Usage:
+  repld exec 'CODE'          one-shot: run code, print result, exit
+  repld exec                 interactive REPL (Ctrl-D to exit)
+  repld exec --json 'CODE'   JSON output for scripting (pipe to jq)
+
+State persists in the kernel. Two successive one-shot calls share __main__:
+  repld exec 'x = 42'
+  repld exec 'print(x)'     # → 42
+
+Interactive REPL:
+  Multi-line blocks (def/class/if) work — incomplete input triggers a
+  continuation prompt. Readline history saved to ~/.repld/history.
+  Ctrl-C cancels an in-flight deferred task; Ctrl-D exits the client
+  (kernel keeps running).
+
+Long-running code:
+  If the kernel defers (code takes > 30s), the CLI waits for the task_done
+  channel notification and then prints the final output. Ctrl-C sends a
+  cancel request.
 """,
     "channel": """\
 Channel push: server-initiated notifications/claude/channel sent over the
@@ -146,9 +182,9 @@ Service-specific code lives in gists, not in repld core:
   ./gists/*.py            per-project, versioned with the repo
 
 Workflow:
-  1. Attach a logged-in browser tab via CDP (planned: browser.find)
-  2. Agent reads the page's network traffic via HAR capture
-  3. Agent runs Runtime.evaluate against the live page with your session
+  1. Attach a logged-in browser tab: await browser.attach("*elhub.no*")
+  2. Agent reads the page's network traffic via tab.network()
+  3. Agent runs tab.js() against the live page with your session
   4. Once endpoints work, agent writes gists/<service>.py with a class
   5. Reuse: `from gists.elhub import Elhub`
 
@@ -159,34 +195,59 @@ diff baseline.
 Not implemented yet. See README "Status" section.
 """,
     "browser": """\
-browser (planned) — CDP attach to logged-in tabs.
-
-browser.find(url_pattern)                  attach one tab matching pattern
-browser.auto_attach(pattern, as_="name")   auto-attach matching tabs as
-                                            they appear in Chrome
+browser — CDP integration for Chrome DevTools Protocol.
 
 Requires Chrome launched with --remote-debugging-port=9222.
 
-Tabs land in __main__ as named handles:
-  await tabs.elhub.eval("await fetch('/api/...').then(r => r.json())")
-  tabs.elhub.har.last(50)                  query recent network traffic
+Workflow:
+  1. browser_attach(pattern="*example.com*")   watch + attach matching tabs
+  2. browser_tabs                              list attached tabs with short IDs
+  3. browser_js(target="9222:a1b2c3", ...)     use short ID for all operations
 
-Not implemented yet. See README "Status" section.
+Target IDs:
+  Format: "{port}:{6-char-hex}" (e.g. "9222:887d3d"). Derived from Chrome's
+  internal target ID. Stable across page navigation — the ID doesn't change
+  when the page redirects or reloads.
+
+MCP tools:
+  browser_attach(pattern)                  attach tabs matching URL glob
+  browser_detach(pattern?)                 detach by pattern, or all
+  browser_tabs                             list attached tabs
+  browser_pages                            list all Chrome targets
+  browser_js(target, code)                 eval JS in tab
+  browser_click(target, selector)          click element by CSS selector
+  browser_type(target, selector, text)     type into element
+  browser_network(target, url?, method?)   scan requests (compact list)
+  browser_request(target, request_id)      inspect headers/auth/postData
+  browser_body(target, request_id)         fetch response body
+  browser_console(target, level?)          query console messages
+  browser_screenshot(target)               capture PNG screenshot
+  browser_cdp(target, method, params?)     raw CDP passthrough
+
+From exec (Python API — `await` is optional, auto-detected):
+  browser.attach("*example.com*")          returns summary string
+  tab = browser.find("9222:a1b2c3")        resolve Tab by short ID
+  tab.js("document.title")                 eval JS
+  tab.network(url="api")                   scan requests (sync, returns Rows)
+  tab.request(request_id)                  inspect full HAR entry (dict)
+  tab.console(level="error")               query console (sync)
+  row.body()                               fetch response body for a Row
+  tab.cookies()                            get cookies via CDP
+  tab.cdp("Page.navigate", url=...)        raw CDP passthrough
+  browser.tabs                             list attached Tab objects
+  browser.pages()                          list all Chrome targets
+  browser.detach("*pattern*")              detach by pattern
+  browser.disconnect()                     close WS connection
+
+Network workflow (progressive disclosure):
+  1. Scan:    browser_network / tab.network()   → compact list, pick by rid
+  2. Inspect: browser_request / tab.request(rid) → headers, auth, postData
+  3. Content: browser_body / row.body()          → response body
+
+  Network events are stored per-tab in DuckDB. Fetch interception captures
+  request POST bodies and response bodies automatically.
 """,
 }
-
-
-def _pid_alive(pid) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but isn't ours — still alive.
-        return True
 
 
 def _check_state(cwd: Path) -> dict:

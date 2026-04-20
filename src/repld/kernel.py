@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import events, ipc, tasks
 from .events import CellDone, CellStart
-from .help import _pid_alive
+from .ipc import _pid_alive
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
@@ -82,7 +82,8 @@ def _banner(socket_path: Path, watchdog_threshold: float) -> str:
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
         f"(REPLD_LOOP_BLOCK_THRESHOLD)\n"
         f"  register:  claude mcp add -s project repld -- repld bridge\n"
-        f"  launch:    claude --dangerously-load-development-channels server:repld\033[0m"
+        f"  launch:    claude --dangerously-load-development-channels server:repld\n"
+        f"  human:     repld exec   # interactive REPL (state shared with agent)\033[0m"
     )
 
 
@@ -109,6 +110,7 @@ def push_channel(content: str, meta: dict | None = None) -> None:
 
 
 def _notify(content, **meta) -> None:
+    """Push a channel notification to all connected MCP sessions. meta keys become XML attributes."""
     push_channel(str(content), meta)
 
 
@@ -381,11 +383,39 @@ def run_kernel(
 
     # 3. Inject helpers into __main__.
     from . import gates
+    import pydoc
 
     setattr(__main__, "notify", _notify)
     setattr(__main__, "ask", gates.ask)
     setattr(__main__, "confirm", gates.confirm)
     setattr(__main__, "choose", gates.choose)
+    # Pager-free help — pydoc's default pager forks less(1) on the kernel tty,
+    # bypassing _Tee and deadlocking the asyncio loop. Helper(output=...) writes
+    # directly through sys.stdout (the _Tee) so output flows to exec clients.
+    setattr(__main__, "help", pydoc.Helper(output=sys.stdout))
+
+    # Inject lazy browser builtin (zero import cost until first browser.attach()).
+    try:
+        from .browser import LazyBrowser
+
+        _lazy_browser = LazyBrowser(loop)
+        setattr(__main__, "browser", _lazy_browser)
+
+        def _browser_cleanup() -> None:
+            b = getattr(__main__, "browser", None)
+            real = getattr(b, "_real", None) if hasattr(b, "_real") else b
+            if real is not None and hasattr(real, "_session"):
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        real._session.disconnect(), loop
+                    )
+                    fut.result(timeout=5)
+                except Exception:
+                    pass
+
+        atexit.register(_browser_cleanup)
+    except ImportError:
+        pass  # repld[browser] not installed — no browser builtin
 
     # 4. Wire IPC.
     sock_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH

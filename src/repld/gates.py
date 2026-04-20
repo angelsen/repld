@@ -12,7 +12,7 @@ import concurrent.futures
 import threading
 import uuid
 
-from .events import HumanPromptOpen, emit
+from .events import HumanPromptOpen, HumanPromptResponse, emit
 
 _gates: dict[str, concurrent.futures.Future] = {}
 _gates_lock = threading.Lock()
@@ -84,8 +84,6 @@ async def _gate(kind, prompt, options, default, timeout):
 
 def resolve_gate(gate_id: str, value) -> None:
     """Called by the stdin reader when the human responds to a gate."""
-    from .events import HumanPromptResponse
-
     with _gates_lock:
         fut = _gates.get(gate_id)
     if fut is not None and not fut.done():

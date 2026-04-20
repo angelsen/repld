@@ -20,6 +20,23 @@ ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 
 No CI configured yet. If you add any, update this file.
 
+## Testing
+
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. Phases grow with implementation; `--phase N` runs phases 1..N (default 3, current ceiling 5). When you add a feature, extend a phase rather than introducing a separate harness.
+
+## Source layout
+
+- `cli.py` — arg parsing + subcommand dispatch for `repld:main`.
+- `kernel.py` — long-running process: asyncio loop, IPC server, display thread, watchdog.
+- `bridge.py` — stdio MCP subprocess; reads `.pyrepl.lock`, proxies to the kernel socket, relays channel notifications.
+- `ipc.py` / `protocol.py` — unix-socket framing and MCP JSON-RPC shapes.
+- `runtime.py` — `compile()` + `eval()` with top-level await, AST-split last-expression display, `_`/`_N` history.
+- `tasks.py` — task registry, spill files, head/tail previews, `get_task`/`cancel`.
+- `gates.py` — `ask` / `confirm` / `choose` (human input routed through the kernel pane).
+- `events.py` / `display.py` — channel event plumbing and terminal rendering.
+- `help.py` — `INSTRUCTIONS` constant; same text served as MCP `initialize.instructions` and via `repld help`. Edit once, not twice.
+- `scaffold.py` — `repld init` logic (`.mcp.json` merge + `.gitignore` append).
+
 ## Architecture (target shape)
 
 Four CLI subcommands, all dispatched from `repld:main`:
