@@ -101,6 +101,7 @@ def new_task() -> tuple[str, dict]:
         "nudged": False,
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
+        "label": None,
     }
     _tasks[task_id] = task
     return task_id, task
@@ -187,6 +188,7 @@ def snapshot(task_id: str) -> dict:
         "spill_path": task["spill_path"],
         "exception": task["exception"],
         "done": task["done_event"].is_set(),
+        "label": task.get("label"),
     }
 
 

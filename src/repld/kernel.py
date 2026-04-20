@@ -218,21 +218,23 @@ def _maybe_push_done(task_id: str) -> None:
         except Exception:
             delta = ""
     delta_preview, _truncated = tasks._make_preview(delta)
-    parts = [f"[repld] task {task_id} done"]
+    label = task.get("label")
+    label_str = f' "{label}"' if label else ""
+    parts = [f"[repld] task {task_id}{label_str} done"]
     if delta_preview.strip():
         parts.append(delta_preview.rstrip())
     if path is not None:
         parts.append(f"[full output: {path}]")
     if task["exception"]:
         parts.append(str(task["exception"]).rstrip())
-    push_channel(
-        "\n".join(parts),
-        {
-            "kind": "task_done",
-            "task_id": task_id,
-            "error": "1" if task["exception"] else "0",
-        },
-    )
+    meta_dict: dict[str, str] = {
+        "kind": "task_done",
+        "task_id": task_id,
+        "error": "1" if task["exception"] else "0",
+    }
+    if label:
+        meta_dict["label"] = label
+    push_channel("\n".join(parts), meta_dict)
 
 
 async def _run_cell(task_id: str, src: str, n: int) -> None:
@@ -273,6 +275,60 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
         events.emit(CellDone(task_id, elapsed, task.get("exception")))
         tasks.finalize(task_id)
         _maybe_push_done(task_id)
+
+
+async def _run_deferred(task_id: str, coro) -> None:
+    """Await a user-supplied coroutine within the task lifecycle.
+
+    Like _run_cell but skips compile/eval — just awaits the coroutine directly.
+    Sets _current_task so stdout/stderr attribution works via _Tee.
+    """
+    _current_task.set(task_id)
+    task = tasks._tasks[task_id]
+    task["asyncio_task"] = asyncio.current_task()
+    t_start = time.monotonic()
+
+    try:
+        await coro
+    except asyncio.CancelledError:
+        task["exception"] = "CancelledError"
+    except BaseException as exc:
+        task["exception"] = type(exc).__name__
+        sys.stderr.write(traceback.format_exc())
+    finally:
+        elapsed = (time.monotonic() - t_start) * 1000
+        events.emit(CellDone(task_id, elapsed, task.get("exception")))
+        tasks.finalize(task_id)
+        _maybe_push_done(task_id)
+
+
+def _make_defer(loop: asyncio.AbstractEventLoop):
+    """Return a defer(coro, label=None) function bound to the kernel's loop."""
+
+    def defer(coro, label: str | None = None) -> str:
+        """Schedule a coroutine as a tracked task. Returns task_id immediately.
+
+        The task is visible to get_task and cancel. On completion, a task_done
+        channel notification is pushed.
+        """
+        import inspect
+
+        if not inspect.iscoroutine(coro):
+            raise TypeError(
+                f"defer() expects a coroutine object, got {type(coro).__name__}. "
+                "Call it as: defer(my_async_fn())"
+            )
+        task_id, task = tasks.new_task()
+        task["nudged"] = True
+        task["nudge_cutoff"] = 0
+        if label is not None:
+            task["label"] = label
+        src_label = label or "..."
+        events.emit(CellStart(task_id, f"defer({src_label})", time.time()))
+        asyncio.run_coroutine_threadsafe(_run_deferred(task_id, coro), loop)
+        return task_id
+
+    return defer
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +442,7 @@ def run_kernel(
     import pydoc
 
     setattr(__main__, "notify", _notify)
+    setattr(__main__, "defer", _make_defer(loop))
     setattr(__main__, "ask", gates.ask)
     setattr(__main__, "confirm", gates.confirm)
     setattr(__main__, "choose", gates.choose)

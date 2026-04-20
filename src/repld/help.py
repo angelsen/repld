@@ -18,6 +18,9 @@ INSTRUCTIONS = (
     "when truncated, the full output path is appended as `[full output: "
     "/path/to/spill.out]` — use the standard Read/Grep tools on that file. "
     "`get_task` polls a running task; `cancel` cancels an await-yielding task. "
+    "`defer(coro, label=None)` schedules a coroutine as a tracked task, returns "
+    "task_id immediately, and pushes task_done on completion. Visible to "
+    "get_task and cancel. "
     "Top-level await is supported. The last expression auto-displays and "
     "binds to `_` / `__` / `___` (last three) and `_N` (N = execution count). "
     "`await ask(...)` / `await confirm(...)` / `await choose(...)` block the "
@@ -58,6 +61,7 @@ Topics:
   exec      How exec runs cells; timeout / nudge / channel push
   exec-cli  repld exec: one-shot and interactive REPL
   channel   Channel push notifications
+  defer     defer(coro, label) — fire-and-forget with channel push
   notify    notify(), ask(), confirm(), choose() helpers
   init      What `repld init` writes
   gists     Personal SDK convention (planned)
@@ -116,6 +120,27 @@ Long-running code:
   If the kernel defers (code takes > 30s), the CLI waits for the task_done
   channel notification and then prints the final output. Ctrl-C sends a
   cancel request.
+""",
+    "defer": """\
+defer(coro, label=None) → task_id
+
+Schedule an async coroutine as a tracked background task. Returns the task_id
+synchronously. On completion (or failure), a task_done channel notification is
+pushed to all connected MCP sessions.
+
+  task_id = defer(scrape_all_pages(), label="scrape")
+
+The task is immediately visible to get_task (for polling/snapshots) and cancel
+(for cancellation). Stdout/stderr produced by the coroutine is captured to the
+same spill files as exec cells.
+
+Works from both sync and async contexts. The label appears in the channel
+notification content and meta for easy identification.
+
+Difference from exec with timeout:
+  - exec blocks the MCP response for up to `timeout` seconds before deferring
+  - defer returns immediately — zero blocking
+  - exec takes source code (string); defer takes a coroutine object
 """,
     "channel": """\
 Channel push: server-initiated notifications/claude/channel sent over the

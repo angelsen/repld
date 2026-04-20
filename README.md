@@ -307,12 +307,12 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Human gates (`ask`, `confirm`, `choose`, async) and `notify`
 - [x] Loop watchdog (`loop_blocked` channel, env-tunable threshold)
 - [x] Asyncio exception handler (`bg_task_error` channel) and `init_error` channel
-- [ ] `repld exec` — human CLI + interactive REPL over IPC
+- [x] `repld exec` — human CLI + interactive REPL over IPC
+- [x] `repld[browser]` — CDP integration (async BrowserSession, DuckDB event store, HAR view, Fetch body capture, MCP tools). See `docs/browser.md`.
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@every(seconds)` — periodic channel emission on the shared loop
-- [ ] `defer(coro, label=None)` — fire-and-forget with channel push on completion
+- [x] `defer(coro, label=None)` — fire-and-forget with channel push on completion
 - [ ] Gists layer — `~/.repld/gists/` + `./gists/` on `sys.path`, lazy namespace helper
-- [ ] `repld[browser]` — CDP integration (async BrowserSession, DuckDB event store, HAR view, Fetch body capture, MCP tools). See `docs/browser.md`.
 - [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)
 - [ ] Remote-ask variant of human gates (route via MCP client)
 - [ ] Multi-gate concurrency (queue stdin routing across simultaneous gates)
