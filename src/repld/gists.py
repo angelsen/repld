@@ -10,7 +10,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-__all__ = ["install", "scan"]
+__all__ = ["install", "scan", "signature"]
 
 # Module names managed by the gist finder (populated by _GistFinder)
 _managed: dict[str, Path] = {}  # fullname → source .py path
@@ -226,6 +226,26 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
         parts.append(s)
 
     return ", ".join(parts)
+
+
+def signature(name: str) -> str:
+    """Return 'ClassName(args)' for a gist's first public class, or ''."""
+    path = _find_gist(name)
+    if not path:
+        return ""
+    try:
+        tree = ast.parse(path.read_text("utf-8"))
+    except Exception:
+        return ""
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+            init_args = ""
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    init_args = _format_args(item.args, skip_self=True)
+                    break
+            return f"{node.name}({init_args})"
+    return ""
 
 
 def install(dirs: list[Path]) -> None:
