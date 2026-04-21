@@ -41,7 +41,9 @@ _BROWSER_MODEL = (
 )
 
 _GISTS_MODEL = (
-    "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import."
+    "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import.\n"
+    "Before using a gist, read repld://gists/{name} for the full API — constructor args, "
+    "method signatures, and usage patterns."
 )
 
 _REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates"
@@ -59,13 +61,17 @@ def build_instructions() -> str:
     if "browser" in __main__.__dict__:
         parts.append(_BROWSER_MODEL)
 
-    # Gists base + available gists
+    # Gists base + available gists (with constructor signatures)
     parts.append(_GISTS_MODEL)
     available = gists.scan()
     if available:
         lines = ["Available gists:"]
         for name, doc in available:
-            lines.append(f"  {name:<20s} {doc}")
+            sig = gists.signature(name)
+            if sig:
+                lines.append(f"  {sig:<35s} {doc}")
+            else:
+                lines.append(f"  {name:<35s} {doc}")
         parts.append("\n".join(lines))
 
     parts.append(_REFERENCE)

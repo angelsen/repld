@@ -22,30 +22,30 @@ No CI configured yet. If you add any, update this file.
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. Phases grow with implementation; `--phase N` runs phases 1..N (default 3, current ceiling 8). When you add a feature, extend a phase rather than introducing a separate harness.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 8). When you add a feature, extend a phase rather than introducing a separate harness.
 
-## Source layout
+Phases:
+- **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
+- **4:** Channel notifications — task_done push, notify() from user code, pre-gate queuing.
+- **5:** Lockfile conflict detection, `--init` file execution.
+- **6:** Tool registration, gist auto-reload, browser integration (requires Chrome with `--remote-debugging-port=9222`).
+- **7:** `defer()` — fire-and-forget with channel push on completion.
+- **8:** Gist resource templates — `resources/templates/list` + `resources/read repld://gists/{name}`.
 
-- `cli.py` — arg parsing + subcommand dispatch for `repld:main`.
-- `kernel.py` — long-running process: asyncio loop, IPC server, display thread, watchdog.
-- `bridge.py` — stdio MCP subprocess; reads `.pyrepl.lock`, proxies to the kernel socket, relays channel notifications.
-- `ipc.py` / `protocol.py` — unix-socket framing and MCP JSON-RPC shapes + tool dispatch.
-- `runtime.py` — `compile()` + `eval()` with top-level await, AST-split last-expression display, `_`/`_N` history.
-- `tasks.py` — task registry, spill files, head/tail previews, `get_task`/`cancel`.
-- `gates.py` — `ask` / `confirm` / `choose` (human input routed through the kernel pane).
-- `events.py` / `display.py` — channel event plumbing and terminal rendering.
-- `help.py` — `build_instructions()` composes dynamic MCP instructions at init time (exec model + browser model if active + available gists). Also serves `repld help <topic>`.
-- `gists.py` — gist discovery (`scan`), AST introspection (`introspect`), auto-reload import hook.
-- `scaffold.py` — `repld init` logic (`.mcp.json` merge + `.gitignore` append).
-- `exec_cmd.py` — `repld exec` interactive REPL + one-shot CLI over IPC.
-- `browser/` — CDP integration package:
-  - `__init__.py` — `Browser` class, `LazyBrowser` descriptor, `make_target()`.
-  - `session.py` — WebSocket multiplexer, target discovery, pattern-based auto-attach.
-  - `tab.py` — `Tab` facade (js, click, type_text, fetch, navigate, network, console queries).
-  - `cdp.py` — `CDPSession` per-target command router + DuckDB event store.
-  - `observe.py` — observation pipeline (pre/post_observe, accessibility tree, settle, deltas, parent dialog detection).
-  - `capture.py` — Fetch domain interception for request/response body capture.
-  - `har.py` — DuckDB schema + HAR/console views.
+## Key subsystems
+
+All source lives under `src/repld/`. Individual files are self-describing; what matters is how they connect:
+
+**Request flow:** Claude Code spawns `bridge.py` (stdio MCP) → bridge reads `.pyrepl.lock` → proxies JSON-RPC over unix socket (`ipc.py`) → `protocol.py` dispatches to `exec`, `get_task`, `cancel`, or browser tools → `runtime.py` runs code in `__main__` → results (or `task_id` for deferred work) flow back. Channel notifications (`events.py`) flow kernel → bridge → Claude Code.
+
+**Three-surface doc system (`help.py`):** Agent-facing docs are split across three non-overlapping surfaces. Keep them in sync:
+1. **INSTRUCTIONS** (dynamic) — behavioral model composed at MCP init by `build_instructions()`. Includes exec model always; browser model only when `browser` exists in `__main__`; gist signatures extracted via AST from available gists. This is what the agent reasons with.
+2. **Tool descriptions** — per-tool what + gotchas, defined in `protocol.py`.
+3. **Topics** — pure API reference for `repld help <topic>`, defined as `_TOPICS` in `help.py`.
+
+**Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. See `docs/browser.md` for full design rationale.
+
+**Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description.
 
 ## Architecture (target shape)
 
