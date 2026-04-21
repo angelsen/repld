@@ -437,6 +437,16 @@ def run_kernel(
     events.init_event_queue()
     install_tee()
 
+    # 2b. Set up gist directories on sys.path with auto-reload.
+    from . import gists as _gists
+
+    _gists.install(
+        [
+            Path.home() / ".repld" / "gists",
+            Path.cwd() / "gists",
+        ]
+    )
+
     # 3. Inject helpers into __main__.
     from . import gates
     import pydoc

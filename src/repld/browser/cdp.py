@@ -102,7 +102,13 @@ class CDPSession:
         """Enable required CDP domains on attach."""
         from .capture import enable as fetch_enable
 
-        for method in ("Page.enable", "Network.enable", "Runtime.enable", "Log.enable"):
+        for method in (
+            "Page.enable",
+            "Network.enable",
+            "Runtime.enable",
+            "Log.enable",
+            "Accessibility.enable",
+        ):
             try:
                 await self.execute(method)
             except Exception as exc:

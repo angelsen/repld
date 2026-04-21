@@ -129,6 +129,17 @@ class Browser:
         ]
         raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
 
+    async def open(self, url: str) -> "Tab":
+        """Create a new tab and attach to it.
+
+        Target.createTarget → attach → return Tab.
+        """
+        await self._ensure_connected()
+        result = await self._session.execute("Target.createTarget", {"url": url})
+        tid = result["targetId"]
+        await self._session.attach(tid)
+        return self.find(make_target(self.port, tid))
+
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""
         if not self._connected:

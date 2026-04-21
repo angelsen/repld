@@ -1,8 +1,13 @@
 """Canonical user-facing docs for repld.
 
-`INSTRUCTIONS` is the terse string MCP sends on `initialize`. `OVERVIEW` and
-`_TOPICS` back the `repld help` command. One source of truth — `protocol.py`
-re-exports INSTRUCTIONS so MCP clients and `!repld help` can never drift.
+`build_instructions()` composes the MCP `initialize.instructions` dynamically
+based on kernel state (browser connected? which gists available?). `OVERVIEW`
+and `_TOPICS` back the `repld help` command / `browser.help()`. Three surfaces,
+no overlap:
+
+  INSTRUCTIONS (dynamic)  → behavioral model for the agent
+  Tool descriptions       → per-tool what + gotchas (lives in protocol.py)
+  Topics                  → pure API reference for the human user
 """
 
 import json
@@ -10,32 +15,66 @@ from pathlib import Path
 
 from .ipc import _pid_alive
 
-INSTRUCTIONS = (
-    "Persistent Python runtime with a shared __main__ namespace. Use `exec` "
-    "to run code; long tasks exceeding `timeout` return {task_id, done:false} "
-    'and their completion arrives as <channel source="repld" kind="task_done" '
-    'task_id="...">...</channel>. Inline output is a small head+tail preview; '
-    "when truncated, the full output path is appended as `[full output: "
-    "/path/to/spill.out]` — use the standard Read/Grep tools on that file. "
-    "`get_task` polls a running task; `cancel` cancels an await-yielding task. "
-    "`defer(coro, label=None)` schedules a coroutine as a tracked task, returns "
-    "task_id immediately, and pushes task_done on completion. Visible to "
-    "get_task and cancel. "
-    "Top-level await is supported. The last expression auto-displays and "
-    "binds to `_` / `__` / `___` (last three) and `_N` (N = execution count). "
-    "`await ask(...)` / `await confirm(...)` / `await choose(...)` block the "
-    "cell on human input in the kernel's pane. "
-    "Browser CDP: `browser_attach` watches a URL pattern and attaches matching "
-    "Chrome tabs. `browser_tabs` lists attached tabs with short target IDs "
-    "(e.g. '9222:887d3d'). All other browser_* tools take a `target` parameter "
-    "which is this short ID — it stays stable across page navigation. "
-    "Network workflow: `browser_network` to scan requests → `browser_request` "
-    "to inspect headers/auth/postData → `browser_body` for response content. "
-    "The `browser` object is also available in exec for chaining operations in "
-    "a single cell (e.g. `tab = browser.find(...); tab.network(url='api')`) — "
-    "call `browser.help()` for the full Python API."
+# ---------------------------------------------------------------------------
+# Composable instruction blocks (agent-facing, behavioral model only)
+# ---------------------------------------------------------------------------
+
+_EXEC_MODEL = (
+    "Execution model: "
+    "exec runs code in shared __main__. If it exceeds timeout, returns "
+    "{task_id, done:false} and pushes channel on completion. "
+    "Output: head+tail preview; full at [full output: /path] — use Read/Grep. "
+    "_ / _N history. Top-level await. "
+    "defer(coro, label) schedules a background task, returns task_id immediately, "
+    "pushes channel on completion. "
+    "ask()/confirm()/choose() block on human input in the kernel pane."
 )
 
+_BROWSER_MODEL = (
+    "Browser model: "
+    "Attach by URL pattern. Short target IDs (9222:a1b2c3). "
+    "Mutations (click/type/navigate/key/open) settle then return "
+    "tree + network delta + console delta. "
+    "Tree crosses iframes. Network separates API calls from assets. "
+    "Read workflow: network → request → body. "
+    "browser object available in exec for chaining."
+)
+
+_GISTS_MODEL = (
+    "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import."
+)
+
+_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates"
+
+
+def build_instructions() -> str:
+    """Compose INSTRUCTIONS dynamically based on kernel state."""
+    import __main__
+
+    from . import gists
+
+    parts = [_EXEC_MODEL]
+
+    # Browser section — only if browser object exists in namespace
+    if "browser" in __main__.__dict__:
+        parts.append(_BROWSER_MODEL)
+
+    # Gists base + available gists
+    parts.append(_GISTS_MODEL)
+    available = gists.scan()
+    if available:
+        lines = ["Available gists:"]
+        for name, doc in available:
+            lines.append(f"  {name:<20s} {doc}")
+        parts.append("\n".join(lines))
+
+    parts.append(_REFERENCE)
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# OVERVIEW (repld help, no topic arg)
+# ---------------------------------------------------------------------------
 
 OVERVIEW = """\
 repld — persistent Python kernel exposed to LLM agents over MCP.
@@ -58,221 +97,117 @@ Commands:
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:
-  exec      How exec runs cells; timeout / nudge / channel push
-  exec-cli  repld exec: one-shot and interactive REPL
-  channel   Channel push notifications
-  defer     defer(coro, label) — fire-and-forget with channel push
-  notify    notify(), ask(), confirm(), choose() helpers
-  init      What `repld init` writes
-  gists     Personal SDK convention (planned)
-  browser   CDP browser integration
+  exec      exec / defer / get_task / cancel + channel kinds
+  browser   Tab and Browser Python API
+  gists     Auto-reloading module directories
+  gates     ask / confirm / choose + notify
 """
 
+
+# ---------------------------------------------------------------------------
+# Topics (pure API reference for user — no behavioral explanations)
+# ---------------------------------------------------------------------------
 
 _TOPICS: dict[str, str] = {
     "exec": """\
 exec(code, timeout=2.0)
+  Inline within timeout; else {task_id, done:false} + channel push.
+  Spill: $XDG_RUNTIME_DIR/repld/{pid}-{tid}.out
+  Preview: head+tail + [full output: /path]
 
-Compiles `code` with PyCF_ALLOW_TOP_LEVEL_AWAIT and runs it on the kernel's
-shared asyncio loop. Returns inline if the cell finishes within `timeout`
-seconds; otherwise returns {task_id, done:false} and the completion arrives
-later as a channel notification.
+  _ / __ / ___          last three results
+  _N                    result of cell N
+  Top-level await       supported
 
-Output:
-  - Last expression auto-displays and binds to `_`, `__`, `___` (last three
-    results) plus `_N` (N = exec count, keyed per cell)
-  - All stdout/stderr spills lazily to $XDG_RUNTIME_DIR/repld/{pid}-{tid}.out
-    from byte 1 (no inline-vs-spill cutoff)
-  - Inline response carries a head+tail preview + the absolute spill path
-  - Use Read/Grep on spill_path for full output
-
-Cancel a deferred task via the MCP `cancel` tool (takes task_id). Cancels
-await-yielding code — cannot preempt tight sync loops.
-
-Top-level await:
-  await asyncio.sleep(0.1)             # works directly
-  asyncio.create_task(coro())          # fire-and-forget; outlives the cell
-
-State:
-  __main__ namespace persists across cells. Helpers (notify, ask, confirm,
-  choose) are pre-injected. Use `repld --init FILE` to pre-load project
-  state (clients, sessions, app instances).
-""",
-    "exec-cli": """\
-repld exec — human-facing CLI for the running kernel.
-
-Usage:
-  repld exec 'CODE'          one-shot: run code, print result, exit
-  repld exec                 interactive REPL (Ctrl-D to exit)
-  repld exec --json 'CODE'   JSON output for scripting (pipe to jq)
-
-State persists in the kernel. Two successive one-shot calls share __main__:
-  repld exec 'x = 42'
-  repld exec 'print(x)'     # → 42
-
-Interactive REPL:
-  Multi-line blocks (def/class/if) work — incomplete input triggers a
-  continuation prompt. Readline history saved to ~/.repld/history.
-  Ctrl-C cancels an in-flight deferred task; Ctrl-D exits the client
-  (kernel keeps running).
-
-Long-running code:
-  If the kernel defers (code takes > 30s), the CLI waits for the task_done
-  channel notification and then prints the final output. Ctrl-C sends a
-  cancel request.
-""",
-    "defer": """\
 defer(coro, label=None) → task_id
+  Fire-and-forget. Channel push on done. Visible to get_task/cancel.
 
-Schedule an async coroutine as a tracked background task. Returns the task_id
-synchronously. On completion (or failure), a task_done channel notification is
-pushed to all connected MCP sessions.
+get_task(task_id)       → {done, text, spill_path, ...}
+cancel(task_id)         → {cancelled: bool}
 
-  task_id = defer(scrape_all_pages(), label="scrape")
-
-The task is immediately visible to get_task (for polling/snapshots) and cancel
-(for cancellation). Stdout/stderr produced by the coroutine is captured to the
-same spill files as exec cells.
-
-Works from both sync and async contexts. The label appears in the channel
-notification content and meta for easy identification.
-
-Difference from exec with timeout:
-  - exec blocks the MCP response for up to `timeout` seconds before deferring
-  - defer returns immediately — zero blocking
-  - exec takes source code (string); defer takes a coroutine object
-""",
-    "channel": """\
-Channel push: server-initiated notifications/claude/channel sent over the
-MCP session. The agent receives them as <channel source="repld" ...>...
-</channel> injections in the next turn — no polling.
-
-repld emits channels for:
-  task_done        a deferred exec finished (success or error)
-  user             user code called notify() with custom meta
-  loop_blocked     bg asyncio loop blocked > REPLD_LOOP_BLOCK_THRESHOLD (5s)
-  awaiting_human   user code awaited ask()/confirm()/choose()
-  bg_task_error    unretrieved exception from asyncio.create_task()
-  init_error       --init file failed to load
-
-From user code:
-  notify("hello", kind="info", color="blue")     # meta = XML attrs
-
-Buffering:
-  Channels emitted before the client sends notifications/initialized are
-  queued in repld and flushed on initialize.
-""",
-    "notify": """\
-notify(content, **meta)              # one-off channel push to all sessions
-
-await ask(prompt, *, default=None, timeout=None)               # free-form
-await confirm(prompt, *, default=None, timeout=None)           # yes/no
-await choose(prompt, options, *, default=None, timeout=None)   # pick one
-
-ask/confirm/choose are async — `await` them. The awaiting cell yields the
-loop (uvicorn / bg tasks keep running) until the human answers in the
-kernel's pane, or `timeout` elapses (raising TimeoutError if no `default`).
-While waiting, kernel emits an awaiting_human channel push so the agent
-sees the gate.
-
-These helpers are pre-injected into __main__ — call them directly without
-import.
-""",
-    "init": """\
-repld init — scaffold a project for repld.
-
-Writes:
-  .mcp.json     MCP config so Claude Code spawns `repld bridge`
-  .gitignore    appends .pyrepl.lock + .pyrepl.sock (creates if missing)
-
-Idempotent. Won't overwrite an existing .mcp.json — adds a repld entry if
-the file is present without one, or warns if the file isn't valid JSON.
-
-Doesn't create repl.py — that's project-specific. Write your own to pre-load
-state (clients, sessions, app handles). See examples/fastapi/repl.py for the
-shape.
-
-Suggested CLAUDE.md addition for the project:
-
-  ## repld
-  This project uses repld. Bring up the kernel with `repld --init repl.py`.
-  Long cells return done:false; channel push on completion.
-  For agent docs: `!repld help`.
-""",
-    "gists": """\
-gists (planned) — the personal SDK convention.
-
-Service-specific code lives in gists, not in repld core:
-  ~/.repld/gists/*.py     global, available everywhere
-  ./gists/*.py            per-project, versioned with the repo
-
-Workflow:
-  1. Attach a logged-in browser tab: await browser.attach("*elhub.no*")
-  2. Agent reads the page's network traffic via tab.network()
-  3. Agent runs tab.js() against the live page with your session
-  4. Once endpoints work, agent writes gists/<service>.py with a class
-  5. Reuse: `from gists.elhub import Elhub`
-
-The gist is the cached, named version of a reverse-engineering session. If
-the site changes, the agent reruns the loop with the existing class as the
-diff baseline.
-
-Not implemented yet. See README "Status" section.
+Channel kinds:
+  task_done             exec or defer finished
+  user                  notify() from user code
+  awaiting_human        ask/confirm/choose pending
+  bg_task_error         uncaught exception in background task
+  loop_blocked          asyncio loop blocked > 5s
+  init_error            --init file failed
 """,
     "browser": """\
-browser — CDP integration for Chrome DevTools Protocol.
+Tab (async unless noted):
+  tab.js(code, await_promise=)           → any
+  tab.tree()                             → list[str]
+  tab.click(selector)                    → None (auto-waits 2s)
+  tab.type_text(selector, text, enter=)  → None (clears first, auto-waits)
+  tab.fetch(url, method=, body=, headers=) → {status, ok, body}
+  tab.navigate(url)                      → None
+  tab.screenshot(full_page=)             → bytes
+  tab.cookies()                          → list[dict]
+  tab.cdp(method, **params)              → dict
 
-Requires Chrome launched with --remote-debugging-port=9222.
+Tab (sync — DuckDB queries):
+  tab.network(url=, method=, status=, type=, include_assets=) → Rows
+  tab.request(request_id)                → dict
+  tab.body(request_id)                   → dict
+  tab.console(level=, source=)           → Rows
+  tab.clear()                            → None
+
+  row.body()                             → dict (response body for a Row)
+
+Browser:
+  browser.attach(pattern)                → str
+  browser.open(url)                      → Tab
+  browser.find(target_id)                → Tab
+  browser.tabs                           → list[Tab]
+  browser.pages()                        → list[dict]
+  browser.detach(pattern=)               → str
+  browser.clear(target=)                 → str
+  browser.disconnect()                   → None
+
+Selectors (click/type_text):
+  .css-class, #id, [attr]               CSS
+  text=Submit                            visible text match
+  role=button[name="Save"]              ARIA role + name
+  label=Username                        input by label
+  button:has-text('OK')                 CSS + text filter
+
+Target IDs: "{port}:{6-hex}" (e.g. 9222:887d3d). Stable across navigation.
+Requires: Chrome --remote-debugging-port=9222
+""",
+    "gists": """\
+Paths:
+  ~/.repld/gists/      global (all projects)
+  ./gists/             per-project
+
+Both on sys.path at kernel startup. Auto-reload: edit file, re-import → fresh module.
+
+Discovery:
+  Module docstring first line → shown in MCP instructions automatically.
+  Override: set __repld_help__ = "..." in module for custom description.
 
 Workflow:
-  1. browser_attach(pattern="*example.com*")   watch + attach matching tabs
-  2. browser_tabs                              list attached tabs with short IDs
-  3. browser_js(target="9222:a1b2c3", ...)     use short ID for all operations
+  1. Write gists/foo.py (with docstring)
+  2. import foo
+  3. Edit → re-import → fresh module
+""",
+    "gates": """\
+await ask(prompt, *, default=None, timeout=None)       → str
+await confirm(prompt, *, default=None, timeout=None)   → bool
+await choose(prompt, options, *, default=None, timeout=None) → str
 
-Target IDs:
-  Format: "{port}:{6-char-hex}" (e.g. "9222:887d3d"). Derived from Chrome's
-  internal target ID. Stable across page navigation — the ID doesn't change
-  when the page redirects or reloads.
+Blocks cell on human input in kernel pane.
+TimeoutError if no default and timeout expires.
+Emits awaiting_human channel while blocked.
 
-MCP tools:
-  browser_attach(pattern)                  attach tabs matching URL glob
-  browser_detach(pattern?)                 detach by pattern, or all
-  browser_tabs                             list attached tabs
-  browser_pages                            list all Chrome targets
-  browser_js(target, code)                 eval JS in tab
-  browser_click(target, selector)          click element by CSS selector
-  browser_type(target, selector, text)     type into element
-  browser_network(target, url?, method?)   scan requests (compact list)
-  browser_request(target, request_id)      inspect headers/auth/postData
-  browser_body(target, request_id)         fetch response body
-  browser_console(target, level?)          query console messages
-  browser_screenshot(target)               capture PNG screenshot
-  browser_cdp(target, method, params?)     raw CDP passthrough
-
-From exec (Python API — `await` is optional, auto-detected):
-  browser.attach("*example.com*")          returns summary string
-  tab = browser.find("9222:a1b2c3")        resolve Tab by short ID
-  tab.js("document.title")                 eval JS
-  tab.network(url="api")                   scan requests (sync, returns Rows)
-  tab.request(request_id)                  inspect full HAR entry (dict)
-  tab.console(level="error")               query console (sync)
-  row.body()                               fetch response body for a Row
-  tab.cookies()                            get cookies via CDP
-  tab.cdp("Page.navigate", url=...)        raw CDP passthrough
-  browser.tabs                             list attached Tab objects
-  browser.pages()                          list all Chrome targets
-  browser.detach("*pattern*")              detach by pattern
-  browser.disconnect()                     close WS connection
-
-Network workflow (progressive disclosure):
-  1. Scan:    browser_network / tab.network()   → compact list, pick by rid
-  2. Inspect: browser_request / tab.request(rid) → headers, auth, postData
-  3. Content: browser_body / row.body()          → response body
-
-  Network events are stored per-tab in DuckDB. Fetch interception captures
-  request POST bodies and response bodies automatically.
+notify(content, **meta)
+  One-shot channel push to all MCP sessions.
 """,
 }
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers (repld help)
+# ---------------------------------------------------------------------------
 
 
 def _check_state(cwd: Path) -> dict:

@@ -14,7 +14,7 @@ Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.t
 uv sync                                 # install deps into .venv
 uv run repld                            # runs the `repld:main` entrypoint
 uv build                                # wheel + sdist via uv_build
-uv run python tests/smoketest.py --phase 5   # end-to-end smoketest
+uv run python tests/smoketest.py --phase 8   # end-to-end smoketest
 ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 ```
 
@@ -22,29 +22,40 @@ No CI configured yet. If you add any, update this file.
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. Phases grow with implementation; `--phase N` runs phases 1..N (default 3, current ceiling 5). When you add a feature, extend a phase rather than introducing a separate harness.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. Phases grow with implementation; `--phase N` runs phases 1..N (default 3, current ceiling 8). When you add a feature, extend a phase rather than introducing a separate harness.
 
 ## Source layout
 
 - `cli.py` — arg parsing + subcommand dispatch for `repld:main`.
 - `kernel.py` — long-running process: asyncio loop, IPC server, display thread, watchdog.
 - `bridge.py` — stdio MCP subprocess; reads `.pyrepl.lock`, proxies to the kernel socket, relays channel notifications.
-- `ipc.py` / `protocol.py` — unix-socket framing and MCP JSON-RPC shapes.
+- `ipc.py` / `protocol.py` — unix-socket framing and MCP JSON-RPC shapes + tool dispatch.
 - `runtime.py` — `compile()` + `eval()` with top-level await, AST-split last-expression display, `_`/`_N` history.
 - `tasks.py` — task registry, spill files, head/tail previews, `get_task`/`cancel`.
 - `gates.py` — `ask` / `confirm` / `choose` (human input routed through the kernel pane).
 - `events.py` / `display.py` — channel event plumbing and terminal rendering.
-- `help.py` — `INSTRUCTIONS` constant; same text served as MCP `initialize.instructions` and via `repld help`. Edit once, not twice.
+- `help.py` — `build_instructions()` composes dynamic MCP instructions at init time (exec model + browser model if active + available gists). Also serves `repld help <topic>`.
+- `gists.py` — gist discovery (`scan`), AST introspection (`introspect`), auto-reload import hook.
 - `scaffold.py` — `repld init` logic (`.mcp.json` merge + `.gitignore` append).
+- `exec_cmd.py` — `repld exec` interactive REPL + one-shot CLI over IPC.
+- `browser/` — CDP integration package:
+  - `__init__.py` — `Browser` class, `LazyBrowser` descriptor, `make_target()`.
+  - `session.py` — WebSocket multiplexer, target discovery, pattern-based auto-attach.
+  - `tab.py` — `Tab` facade (js, click, type_text, fetch, navigate, network, console queries).
+  - `cdp.py` — `CDPSession` per-target command router + DuckDB event store.
+  - `observe.py` — observation pipeline (pre/post_observe, accessibility tree, settle, deltas, parent dialog detection).
+  - `capture.py` — Fetch domain interception for request/response body capture.
+  - `har.py` — DuckDB schema + HAR/console views.
 
 ## Architecture (target shape)
 
-Four CLI subcommands, all dispatched from `repld:main`:
+Five CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
 - `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
+- `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
 
 Key invariants to preserve when building this out:
 

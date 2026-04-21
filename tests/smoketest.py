@@ -494,6 +494,75 @@ def phase_5_init(_kernel: Kernel) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def phase_6_tools_and_gists(kernel: Kernel) -> None:
+    """Verify new tool registrations and gist auto-reload machinery."""
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        # Verify new tools appear in tool list
+        resp = b.call("tools/list")
+        tool_names = set(t["name"] for t in resp["result"]["tools"])
+        new_tools = {
+            "browser_navigate",
+            "browser_key",
+            "browser_open",
+            "browser_tree",
+            "browser_fetch",
+        }
+        assert_true(
+            new_tools.issubset(tool_names),
+            f"new browser tools in tools/list (missing: {new_tools - tool_names})",
+        )
+        print(f"  ✓ new tools registered: {sorted(new_tools)}")
+
+        # Gist auto-reload test
+        # Write a gist module to the project-local gists/ dir
+        gists_dir = kernel.cwd / "gists"
+        gists_dir.mkdir(exist_ok=True)
+        gist_file = gists_dir / "smoke_gist.py"
+        gist_file.write_text("VALUE = 1\n")
+
+        # Import it via exec
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {"code": "import smoke_gist; print(smoke_gist.VALUE)"},
+            },
+            timeout=5.0,
+        )
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "1" in content,
+            f"initial gist import VALUE=1 (got {content!r})",
+        )
+        print("  ✓ gist imported, VALUE=1")
+
+        # Edit the file
+        time.sleep(0.01)  # ensure mtime changes
+        gist_file.write_text("VALUE = 42\n")
+
+        # Re-import — auto-reload should detect mtime change
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {"code": "import smoke_gist; print(smoke_gist.VALUE)"},
+            },
+            timeout=5.0,
+        )
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "42" in content,
+            f"gist auto-reload VALUE=42 after edit (got {content!r})",
+        )
+        print("  ✓ gist auto-reload: VALUE=42 after edit")
+    finally:
+        b.close()
+
+
 def phase_6(kernel: Kernel) -> None:
     """Browser integration — requires Chrome with --remote-debugging-port=9222.
 
@@ -530,12 +599,17 @@ def phase_6(kernel: Kernel) -> None:
             "browser_screenshot",
             "browser_cdp",
             "browser_clear",
+            "browser_navigate",
+            "browser_key",
+            "browser_open",
+            "browser_tree",
+            "browser_fetch",
         }
         assert_true(
             browser_tools.issubset(set(tool_names)),
-            f"tools/list contains all 13 browser tools (got {tool_names!r})",
+            f"tools/list contains all 18 browser tools (got {tool_names!r})",
         )
-        print("  ✓ all 13 browser tools in tools/list")
+        print("  ✓ all 18 browser tools in tools/list")
 
         # Attach any open tab
         resp = b.call(
@@ -550,21 +624,24 @@ def phase_6(kernel: Kernel) -> None:
         )
         print(f"  ✓ browser_attach: {result_text[:80]!r}")
 
-        # List attached tabs
+        # List attached tabs (plain text, nested format)
         resp = b.call(
             "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
         )
-        tabs_json = resp["result"]["content"][0]["text"]
-        tabs = json.loads(tabs_json)
-        if not tabs:
+        tabs_text = resp["result"]["content"][0]["text"]
+        tabs_text = tabs_text.split("\n[full output:")[0].strip()
+        if not tabs_text or tabs_text == "(no attached tabs)":
             print(
                 "  - browser_tabs: no tabs attached (Chrome may have no open tabs), skipping js/network"
             )
             return
-        tab_target = tabs[0]["target"]
-        tab_url = tabs[0]["url"]
+        tab_lines = [line for line in tabs_text.splitlines() if line.strip()]
+        # First non-indented line: "9222:abc123  page  https://..."
+        first_line = tab_lines[0].strip()
+        tab_target = first_line.split()[0]  # e.g. "9222:abc123"
+        tab_url = first_line.split()[-1]  # last token is URL
         print(
-            f"  ✓ browser_tabs: {len(tabs)} tab(s), first target={tab_target!r} url={tab_url!r}"
+            f"  ✓ browser_tabs: {len(tab_lines)} tab(s), first target={tab_target!r} url={tab_url!r}"
         )
 
         # browser_js: evaluate 1+1
@@ -594,12 +671,22 @@ def phase_6(kernel: Kernel) -> None:
             timeout=5.0,
         )
         net_text = resp["result"]["content"][0]["text"]
-        net_rows = json.loads(net_text)
-        assert_true(
-            isinstance(net_rows, list),
-            f"browser_network returns list (got {net_text[:80]!r})",
-        )
-        print(f"  ✓ browser_network: {len(net_rows)} row(s)")
+        # May be spilled — just verify it contains list-like content
+        net_text_raw = net_text.split("\n[full output:")[0].strip()
+        try:
+            net_rows = json.loads(net_text_raw)
+            assert_true(
+                isinstance(net_rows, list),
+                f"browser_network returns list (got {net_text_raw[:80]!r})",
+            )
+            print(f"  ✓ browser_network: {len(net_rows)} row(s)")
+        except json.JSONDecodeError:
+            # Large response was spilled — that's fine, just verify it starts with [
+            assert_true(
+                net_text_raw.startswith("["),
+                f"browser_network starts with [ (got {net_text_raw[:80]!r})",
+            )
+            print("  ✓ browser_network: (large response, spilled)")
 
         # browser_detach all
         resp = b.call(
@@ -614,8 +701,12 @@ def phase_6(kernel: Kernel) -> None:
         resp = b.call(
             "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
         )
-        tabs_after = json.loads(resp["result"]["content"][0]["text"])
-        assert_eq(tabs_after, [], "browser_tabs after detach is empty")
+        tabs_after_text = (
+            resp["result"]["content"][0]["text"].split("\n[full output:")[0].strip()
+        )
+        assert_eq(
+            tabs_after_text, "(no attached tabs)", "browser_tabs after detach is empty"
+        )
         print("  ✓ browser_tabs empty after detach")
     finally:
         b.close()
@@ -715,12 +806,76 @@ def phase_7_defer(kernel: Kernel) -> None:
         b.close()
 
 
+def phase_8_gist_resources(kernel: Kernel) -> None:
+    """resources/templates/list + resources/read repld://gists/{name}."""
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        # resources/templates/list
+        resp = b.call("resources/templates/list")
+        templates = resp["result"]["resourceTemplates"]
+        uri_templates = [t["uriTemplate"] for t in templates]
+        assert_true(
+            "repld://gists/{name}" in uri_templates,
+            f"resources/templates/list contains repld://gists/{{name}} (got {uri_templates!r})",
+        )
+        print(f"  ✓ resources/templates/list: {uri_templates}")
+
+        # Write a gist with a class so introspect() has something to parse
+        gists_dir = kernel.cwd / "gists"
+        gists_dir.mkdir(exist_ok=True)
+        gist_file = gists_dir / "test_api.py"
+        gist_file.write_text(
+            '"""Test API gist for smoketest."""\n\n'
+            "class Widget:\n"
+            '    """A simple widget."""\n\n'
+            "    def __init__(self, name: str) -> None:\n"
+            '        """Init."""\n'
+            "        self.name = name\n\n"
+            "    def ping(self) -> str:\n"
+            '        """Return pong."""\n'
+            "        return 'pong'\n"
+        )
+
+        # resources/read for the gist
+        resp = b.call(
+            "resources/read",
+            {"uri": "repld://gists/test_api"},
+        )
+        contents = resp["result"]["contents"]
+        assert_true(
+            len(contents) == 1,
+            f"resources/read returns 1 content item (got {len(contents)})",
+        )
+        text = contents[0]["text"]
+        assert_true(
+            "Widget" in text, f"introspect output contains class name (got {text!r})"
+        )
+        assert_true("ping" in text, f"introspect output contains method (got {text!r})")
+        assert_true(contents[0]["mimeType"] == "text/plain", "mimeType is text/plain")
+        print(f"  ✓ resources/read repld://gists/test_api:\n{text}")
+
+        # Unknown gist → MCP error
+        resp = b.call(
+            "resources/read",
+            {"uri": "repld://gists/nonexistent_xyz"},
+        )
+        assert_true("error" in resp, f"unknown gist returns error (got {resp!r})")
+        print("  ✓ unknown gist → MCP error")
+
+    finally:
+        b.close()
+
+
 PHASES = {
     3: phase_3,
     4: lambda k: (phase_4(k), phase_4b_pregate(k)),
     5: lambda k: (phase_5(k), phase_5_init(k)),
-    6: phase_6,
+    6: lambda k: (phase_6_tools_and_gists(k), phase_6(k)),
     7: phase_7_defer,
+    8: phase_8_gist_resources,
 }
 
 

@@ -10,7 +10,7 @@ import json
 import threading
 from typing import Protocol
 
-from .help import INSTRUCTIONS as _INSTRUCTIONS
+from .help import build_instructions as _build_instructions
 from .tasks import spill_text as _spill_text
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -19,10 +19,8 @@ TOOLS = [
     {
         "name": "exec",
         "description": (
-            "Execute Python in the running kernel. Returns inline if it "
-            "finishes within `timeout` seconds; otherwise returns "
-            "{task_id, done:false} and the completion arrives as a channel "
-            "notification."
+            "Run Python in shared __main__. Returns inline within timeout; "
+            "otherwise {task_id, done:false} with channel push on completion."
         ),
         "inputSchema": {
             "type": "object",
@@ -92,9 +90,7 @@ TOOLS = [
     {
         "name": "browser_js",
         "description": (
-            "Evaluate JavaScript in a browser tab. "
-            "`target` is the Chrome target_id (from browser_tabs). "
-            "Top-level await is auto-detected."
+            "Evaluate JavaScript in a browser tab. Top-level await is auto-detected."
         ),
         "inputSchema": {
             "type": "object",
@@ -118,8 +114,8 @@ TOOLS = [
     {
         "name": "browser_network",
         "description": (
-            "Query captured network requests for a tab. "
-            "Returns a list of request entries (method, url, status, size, time_ms, state)."
+            "Query captured network requests. Returns compact list. "
+            "Use browser_request for headers/postData."
         ),
         "inputSchema": {
             "type": "object",
@@ -175,8 +171,101 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_navigate",
+        "description": (
+            "Navigate a tab to a URL. Returns observation (tree + network + console delta). "
+            "Blocked on iframe targets (would destroy embedded app session) — use click/fetch instead. "
+            "Pass force=true to override."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "url": {"type": "string"},
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Override iframe navigation block",
+                },
+            },
+            "required": ["target", "url"],
+        },
+    },
+    {
+        "name": "browser_open",
+        "description": (
+            "Open new tab and navigate. "
+            "Returns observation with target: header for the new tab ID."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_key",
+        "description": (
+            "Send a key press (Enter, Escape, Tab, ArrowDown, etc). "
+            "Returns accessibility tree + network/console delta."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "key": {
+                    "type": "string",
+                    "description": "Key name: Enter, Escape, Tab, ArrowDown, etc.",
+                },
+            },
+            "required": ["target", "key"],
+        },
+    },
+    {
+        "name": "browser_tree",
+        "description": (
+            "Get the page's accessibility tree as compact text. "
+            "Crosses iframe boundaries for attached child targets."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "browser_fetch",
+        "description": (
+            "Execute a fetch() in the page's context (inherits cookies/session). "
+            "Returns {status, ok, body}."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "url": {"type": "string"},
+                "method": {"type": "string", "default": "GET"},
+                "body": {
+                    "description": "Request body (dict for JSON, string for raw)",
+                },
+                "headers": {
+                    "type": "object",
+                    "description": "Additional headers",
+                },
+            },
+            "required": ["target", "url"],
+        },
+    },
+    {
         "name": "browser_click",
-        "description": "Click an element in a tab by CSS selector, dispatching trusted mouse events.",
+        "description": (
+            "Click element. Auto-waits 2s. "
+            "Returns observation (tree + network + console delta after settle)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -184,14 +273,20 @@ TOOLS = [
                     "type": "string",
                     "description": "Chrome target_id from browser_tabs",
                 },
-                "selector": {"type": "string"},
+                "selector": {
+                    "type": "string",
+                    "description": "CSS, text=Label, role=button[name='OK'], label=Name, or tag:has-text('...')",
+                },
             },
             "required": ["target", "selector"],
         },
     },
     {
         "name": "browser_type",
-        "description": "Type text into an element in a tab by CSS selector.",
+        "description": (
+            "Clear field and type text. Auto-waits 2s. "
+            "Returns observation (tree + network + console delta after settle)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -275,6 +370,15 @@ TOOLS = [
     },
 ]
 
+RESOURCE_TEMPLATES = [
+    {
+        "uriTemplate": "repld://gists/{name}",
+        "name": "gist-api",
+        "description": "Introspected API reference for a gist module (classes, methods, signatures).",
+        "mimeType": "text/plain",
+    },
+]
+
 RESOURCES = [
     {
         "uri": "repld://browser/tabs",
@@ -332,6 +436,12 @@ class Dispatcher:
             return self._tools_call(rid, req.get("params", {}))
         if method == "resources/list":
             return {"jsonrpc": "2.0", "id": rid, "result": {"resources": RESOURCES}}
+        if method == "resources/templates/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {"resourceTemplates": RESOURCE_TEMPLATES},
+            }
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
         if rid is None:
@@ -356,7 +466,7 @@ class Dispatcher:
                     "name": self.server_name,
                     "version": self.server_version,
                 },
-                "instructions": _INSTRUCTIONS,
+                "instructions": _build_instructions(),
             },
         }
 
@@ -446,6 +556,9 @@ class Dispatcher:
         """Dispatch a browser_* tool call."""
         try:
             result = self._browser_dispatch(name, args)
+            if isinstance(result, str):
+                # Observation text — pass directly to spill pipeline
+                return self._spill_response(rid, result, label=name)
             text = json.dumps(result, default=str, indent=2)
             return self._spill_response(rid, text, label=name)
         except Exception as exc:
@@ -483,8 +596,69 @@ class Dispatcher:
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
         return fut.result(timeout=timeout)
 
+    def _format_tabs_nested(self, browser) -> str:
+        """Format attached tabs as nested text showing target hierarchy."""
+        from .browser import make_target
+
+        # Collect all attached sessions with metadata
+        entries: list[dict] = []
+        for cdp in browser._session._sessions.values():
+            info = cdp.target_info
+            entries.append(
+                {
+                    "target": make_target(browser.port, info.get("targetId", "")),
+                    "type": info.get("type", "unknown"),
+                    "url": info.get("url", ""),
+                    "title": info.get("title", ""),
+                    "parent_frame_id": info.get("parentFrameId", ""),
+                    "opener_id": info.get("openerId", ""),
+                }
+            )
+
+        # Build parent lookup: full chrome ID → short target ID
+        id_to_short: dict[str, str] = {}
+        for cdp in browser._session._sessions.values():
+            info = cdp.target_info
+            full_id = info.get("targetId", "")
+            id_to_short[full_id] = make_target(browser.port, full_id)
+
+        # Separate top-level vs children
+        children: dict[str, list[dict]] = {}  # parent_short → [child entries]
+        top_level: list[dict] = []
+
+        for e in entries:
+            parent_id = e["parent_frame_id"] or e["opener_id"]
+            parent_short = id_to_short.get(parent_id)
+            if parent_short:
+                children.setdefault(parent_short, []).append(e)
+            else:
+                top_level.append(e)
+
+        # Format output
+        lines: list[str] = []
+        for e in top_level:
+            lines.append(f"{e['target']}  {e['type']}  {e['url']}")
+            for child in children.get(e["target"], []):
+                lines.append(f"  {child['target']}  {child['type']}  {child['url']}")
+
+        # Orphaned children (parent not attached)
+        shown = {e["target"] for e in top_level}
+        for parent_short, kids in children.items():
+            if parent_short not in shown:
+                for child in kids:
+                    lines.append(
+                        f"{child['target']}  {child['type']} → {parent_short}  {child['url']}"
+                    )
+
+        return "\n".join(lines) if lines else "(no attached tabs)"
+
     def _browser_dispatch(self, name: str, args: dict):
-        """Route to individual browser tool handler. Returns JSON-serializable result."""
+        """Route to individual browser tool handler.
+
+        Returns JSON-serializable result, OR a plain str for observation text.
+        """
+        from .browser.observe import compose_tree, pre_observe, post_observe
+
         browser = self._get_browser()
 
         if name == "browser_attach":
@@ -494,10 +668,7 @@ class Dispatcher:
             return {"result": self._run_async(browser.detach(args.get("pattern")))}
 
         if name == "browser_tabs":
-            tabs = browser.tabs
-            return [
-                {"target": t.target_id, "url": t.url, "title": t.title} for t in tabs
-            ]
+            return self._format_tabs_nested(browser)
 
         if name == "browser_pages":
             return self._run_async(browser.pages())
@@ -527,13 +698,96 @@ class Dispatcher:
             tab = browser.find(args["target"])
             return tab.body(args["request_id"])
 
+        if name == "browser_navigate":
+            tab = browser.find(args["target"])
+            if tab._session.target_info.get("type") == "iframe" and not args.get(
+                "force"
+            ):
+                parent_id = tab._session.target_info.get("parentFrameId", "")
+                from .browser import make_target
+
+                parent_short = (
+                    make_target(tab._port, parent_id) if parent_id else "unknown"
+                )
+                return {
+                    "error": (
+                        f"Cannot navigate iframe target {tab.target_id} — "
+                        f"this would destroy the embedded app session. "
+                        f"Use click/fetch on the iframe for in-app navigation, "
+                        f"or navigate the parent ({parent_short}). "
+                        f"Pass force=true to override."
+                    )
+                }
+            pre = self._run_async(pre_observe(tab, browser._session))
+            self._run_async(tab.navigate(args["url"]))
+            return self._run_async(
+                post_observe(tab, browser._session, pre, timeout=8.0)
+            )
+
+        if name == "browser_open":
+            tab = self._run_async(browser.open(args["url"]))
+            from .browser.observe import PreObservation
+
+            # New tab — all activity is the delta, so snapshot at 0.
+            # Calling pre_observe here would race: by the time it queries
+            # MAX(id), early navigation events may already be in DuckDB.
+            key = tab.target_id
+            pre = PreObservation(
+                iframe_children=[],
+                har_snapshots={key: 0},
+                console_snapshots={key: 0},
+            )
+            return self._run_async(
+                post_observe(
+                    tab,
+                    browser._session,
+                    pre,
+                    timeout=8.0,
+                    extra_header=f"target: {tab.target_id}",
+                )
+            )
+
+        if name == "browser_key":
+            tab = browser.find(args["target"])
+            key = args["key"]
+            pre = self._run_async(pre_observe(tab, browser._session))
+            self._run_async(
+                tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
+            )
+            self._run_async(
+                tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
+            )
+            return self._run_async(
+                post_observe(tab, browser._session, pre, timeout=5.0)
+            )
+
+        if name == "browser_tree":
+            tab = browser.find(args["target"])
+            lines, _ = self._run_async(compose_tree(tab, browser._session))
+            return "\n".join(lines)
+
+        if name == "browser_fetch":
+            tab = browser.find(args["target"])
+            return self._run_async(
+                tab.fetch(
+                    args["url"],
+                    method=args.get("method", "GET"),
+                    body=args.get("body"),
+                    headers=args.get("headers"),
+                )
+            )
+
         if name == "browser_click":
             tab = browser.find(args["target"])
+            pre = self._run_async(pre_observe(tab, browser._session))
             self._run_async(tab.click(args["selector"]))
-            return {"result": "ok"}
+            return self._run_async(
+                post_observe(tab, browser._session, pre, timeout=5.0)
+            )
 
         if name == "browser_type":
             tab = browser.find(args["target"])
+            pre = self._run_async(pre_observe(tab, browser._session))
             self._run_async(
                 tab.type_text(
                     args["selector"],
@@ -541,7 +795,11 @@ class Dispatcher:
                     press_enter=bool(args.get("press_enter", False)),
                 )
             )
-            return {"result": "ok"}
+            # Debounce: wait 300ms after last keystroke before settle check
+            self._run_async(asyncio.sleep(0.3))
+            return self._run_async(
+                post_observe(tab, browser._session, pre, timeout=5.0)
+            )
 
         if name == "browser_console":
             tab = browser.find(args["target"])
@@ -582,6 +840,9 @@ class Dispatcher:
                 text = self._resource_network()
             elif uri == "repld://browser/console":
                 text = self._resource_console()
+            elif uri.startswith("repld://gists/"):
+                name = uri.removeprefix("repld://gists/")
+                text = self._resource_gist(name)
             else:
                 return _error(rid, -32602, f"unknown resource: {uri}")
             sp = _spill_text(text, label=uri.split("/")[-1])
@@ -627,6 +888,11 @@ class Dispatcher:
             for r in rows:
                 lines.append(repr(r))
         return "\n".join(lines) if lines else "(no console events captured)"
+
+    def _resource_gist(self, name: str) -> str:
+        from . import gists
+
+        return gists.introspect(name)
 
 
 def _error(rid, code: int, message: str) -> dict:

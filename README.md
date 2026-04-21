@@ -117,6 +117,12 @@ A runnable end-to-end version lives at [`examples/fastapi/`](examples/fastapi/).
 | `browser_console` | Query console logs and exceptions.                          |
 | `browser_screenshot` | Capture page screenshot.                                 |
 | `browser_cdp`     | Raw CDP passthrough (escape hatch).                         |
+| `browser_navigate` | Navigate a tab to a URL. Blocked on iframe targets.        |
+| `browser_open`    | Open new tab and navigate.                                  |
+| `browser_key`     | Send a key press (Enter, Escape, etc).                      |
+| `browser_fetch`   | In-page fetch (inherits page auth/cookies).                 |
+| `browser_request` | Inspect captured request headers/postData.                  |
+| `browser_clear`   | Reset captured network/console for a tab.                   |
 | `browser_detach`  | Remove watch pattern, detach tabs.                          |
 
 Every cell with output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1; the inline response carries a head+tail preview plus the absolute spill path. For full output, the agent uses the standard `Read`/`Grep` tools on that path — no dedicated MCP tool needed.
@@ -130,6 +136,7 @@ notify(content, **meta)                 # one-off channel push; meta → XML att
 ask(prompt, *, default=None, timeout=None)        # block on free-form human input
 confirm(prompt, *, default=None, timeout=None)    # block on yes/no
 choose(prompt, options, *, default=None, timeout=None)  # block on pick-one
+defer(coro, label=None)                 # run on shared loop, channel-push on finish
 ```
 
 Planned (priority order — smallest first):
@@ -137,7 +144,6 @@ Planned (priority order — smallest first):
 ```python
 notify_on_logs(level, logger=None)      # route stdlib logging to channel
 @every(seconds)                         # periodic channel emission
-defer(coro, label=None)                 # run on shared loop, channel-push on finish
 @watch("/path")                         # file changes → channel (needs watchdog)
 @webhook("/path")                       # http route → channel
 ```
@@ -146,20 +152,20 @@ Browser builtins (requires `repld[browser]`):
 
 ```python
 browser.attach("*pattern*")             # watch pattern, auto-attach matching tabs
-browser.find("*pattern*")               # resolve one Tab by URL pattern
+browser.find("9222:abc123")             # resolve one Tab by target ID
 browser.tabs                            # list attached tabs
 browser.pages                           # list all Chrome targets
 browser.detach("*pattern*")             # remove watch + detach
 
-tab = browser.find("*gmail*")
+tab = browser.find("9222:abc123")
 tab.js("document.title")                # eval JS (auto-await, trusted gestures)
 tab.click("#search-btn")                # trusted click (Input.dispatchMouseEvent)
 tab.type_text("#search", "query")       # trusted typing (Input.dispatchKeyEvent)
+tab.fetch("https://api.example.com/v1") # in-page fetch (inherits auth/cookies)
+tab.navigate("https://example.com")     # navigate tab to URL
 tab.network(url="*api*", status=200)    # query captured traffic (DuckDB HAR view)
 tab.console(level="error")              # query console logs + exceptions
 tab.body(request_id)                    # fetch response body (Fetch-captured)
-tab.cookies                             # browser cookie jar
-tab.events.query(sql)                   # raw DuckDB escape hatch
 tab.cdp("Page.navigate", url="...")     # raw CDP passthrough
 ```
 
@@ -215,13 +221,19 @@ The browser exposes its own MCP tools alongside `exec`, so agents discover brows
 | `browser_console` | Query console logs and exceptions                           |
 | `browser_screenshot` | Capture page screenshot                                  |
 | `browser_cdp`     | Raw CDP passthrough (escape hatch)                          |
+| `browser_navigate` | Navigate a tab to a URL. Blocked on iframe targets         |
+| `browser_open`    | Open new tab and navigate                                   |
+| `browser_key`     | Send a key press (Enter, Escape, etc)                       |
+| `browser_fetch`   | In-page fetch (inherits page auth/cookies)                  |
+| `browser_request` | Inspect captured request headers/postData                   |
+| `browser_clear`   | Reset captured network/console for a tab                    |
 | `browser_detach`  | Remove watch pattern, detach tabs                           |
 
 Requires Chrome running with `--remote-debugging-port=9222`. See `docs/browser.md` for the full design.
 
 ## Gists — reusable recipes for any service
 
-`gists/` are small Python modules that capture the *pattern* for talking to a service. The browser supplies fresh credentials each session; the gist captures which endpoints, which headers, which auth shape.
+`gists/` are small Python modules that capture the *pattern* for talking to a service. The browser supplies fresh credentials each session; the gist captures which endpoints, which headers, which auth shape. Agents leave breadcrumbs as they go — each successful integration becomes a gist for next time.
 
 ```python
 # gists/dnb.py — reusable bank client, 10 lines
@@ -242,12 +254,14 @@ async def transactions(c, account_id, since="2026-01-01"):
 Usage, every session:
 
 ```python
-import gists.dnb
-c = await gists.dnb.client()           # auth captured from browser
-txns = await gists.dnb.transactions(c, "1234")
+import dnb
+c = await dnb.client()                 # auth captured from browser
+txns = await dnb.transactions(c, "1234")
 ```
 
-Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both on `sys.path`. The agent writes the gist once by observing your traffic. Someone else with a DNB login does `browser.attach("*dnb*")` + `import gists.dnb` and it works — the gist is the recipe, the browser is the auth.
+Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both directly on `sys.path` — import by module name, not `gists.name`. The agent writes the gist once by observing your traffic. Someone else with a DNB login does `browser.attach("*dnb*")` + `import dnb` and it works — the gist is the recipe, the browser is the auth.
+
+The bridge exposes `repld://gists/{name}` resource templates so agents can discover available gists at init time. Re-importing a gist after edits auto-reloads it — no kernel restart needed.
 
 Same shape for Salesforce, PowerOffice, Gmail, internal admin tools, any bank. Per-service MCP servers scale linearly (one per service, maintained forever). Gists scale with whatever's in your browser.
 
@@ -312,7 +326,9 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@every(seconds)` — periodic channel emission on the shared loop
 - [x] `defer(coro, label=None)` — fire-and-forget with channel push on completion
-- [ ] Gists layer — `~/.repld/gists/` + `./gists/` on `sys.path`, lazy namespace helper
+- [x] Gists layer — `./gists/` + `~/.repld/gists/` on sys.path, auto-reload import hook, `scan()` discovery, `introspect()` AST parsing, `repld://gists/{name}` resource templates
+- [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
+- [x] Browser target hierarchy — nested tabs output, iframe navigate guard (blocked with override)
 - [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)
 - [ ] Remote-ask variant of human gates (route via MCP client)
 - [ ] Multi-gate concurrency (queue stdin routing across simultaneous gates)

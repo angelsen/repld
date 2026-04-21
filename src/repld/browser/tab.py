@@ -235,6 +235,23 @@ def _dict_from_har_entry(cols: tuple) -> dict:
     return d
 
 
+# Shared role → CSS selector mapping (used by _resolve_selector for both
+# role= and :has-text() patterns).
+_ROLE_CSS: dict[str, str] = {
+    "button": 'button, [role="button"], input[type="button"], input[type="submit"]',
+    "link": 'a[href], [role="link"]',
+    "textbox": 'input:not([type]), input[type="text"], input[type="email"], input[type="search"], input[type="url"], input[type="password"], textarea, [role="textbox"]',
+    "checkbox": 'input[type="checkbox"], [role="checkbox"]',
+    "radio": 'input[type="radio"], [role="radio"]',
+    "heading": 'h1, h2, h3, h4, h5, h6, [role="heading"]',
+    "listitem": 'li, [role="listitem"]',
+    "tab": '[role="tab"]',
+    "tabpanel": '[role="tabpanel"]',
+    "option": 'option, [role="option"]',
+    "combobox": 'select, [role="combobox"]',
+}
+
+
 class Tab:
     """User-facing facade over a CDPSession.
 
@@ -327,6 +344,116 @@ class Tab:
 
         return rv.get("value")
 
+    @staticmethod
+    def _resolve_selector(selector: str) -> str:
+        """Convert Playwright-style selectors to a JS expression returning an element.
+
+        Supported patterns:
+          text=Submit                       → text content match
+          button:has-text('OK')            → CSS base + text filter
+          role=button[name="Save"]         → ARIA role + accessible name
+          label=Username                   → input by associated label
+          .css-selector                    → document.querySelector(...)
+        """
+        import json as _json
+        import re
+
+        # text=... → exact text content or aria-label match (prefer smallest element)
+        if selector.startswith("text="):
+            text = selector[5:]
+            return (
+                f"(function() {{"
+                f" const text = {_json.dumps(text)};"
+                f" const all = Array.from(document.querySelectorAll('*'));"
+                f" const exact = all.filter(el => el.offsetWidth > 0 && ("
+                f"   el.textContent.trim() === text || el.getAttribute('aria-label') === text));"
+                f" return exact.sort((a,b) => a.textContent.length - b.textContent.length)[0] || null;"
+                f"}})()"
+            )
+
+        # role=button[name="Save"] → ARIA role + accessible name
+        # Supports = (exact), *= (contains), ^= (starts-with)
+        m = re.match(r'^role=(\w+)(?:\[name([*^]?=)["\']?(.+?)["\']?\])?$', selector)
+        if m:
+            role, op, name = m.group(1), m.group(2), m.group(3)
+            css = _ROLE_CSS.get(role, f'[role="{role}"]')
+            if name:
+                n = _json.dumps(name)
+                if op == "*=":
+                    cmp = (
+                        f"el.textContent.trim().includes({n})"
+                        f" || (el.getAttribute('aria-label') || '').includes({n})"
+                        f" || (el.getAttribute('title') || '').includes({n})"
+                    )
+                elif op == "^=":
+                    cmp = (
+                        f"el.textContent.trim().startsWith({n})"
+                        f" || (el.getAttribute('aria-label') || '').startsWith({n})"
+                        f" || (el.getAttribute('title') || '').startsWith({n})"
+                    )
+                else:
+                    cmp = (
+                        f"el.textContent.trim() === {n}"
+                        f" || el.getAttribute('aria-label') === {n}"
+                        f" || el.getAttribute('title') === {n}"
+                        f" || el.value === {n}"
+                        f" || (el.labels && Array.from(el.labels).some(l => l.textContent.trim() === {n}))"
+                    )
+                return (
+                    f"Array.from(document.querySelectorAll({_json.dumps(css)}))"
+                    f".find(el => {cmp})"
+                )
+            return f"document.querySelector({_json.dumps(css)})"
+
+        # label=Username → input by associated label text
+        if selector.startswith("label="):
+            label_text = selector[6:]
+            return (
+                f"(function() {{"
+                f" const lbl = Array.from(document.querySelectorAll('label'))"
+                f"   .find(l => l.textContent.trim() === {_json.dumps(label_text)});"
+                f" if (!lbl) return null;"
+                f" if (lbl.htmlFor) return document.getElementById(lbl.htmlFor);"
+                f" return lbl.querySelector('input, textarea, select');"
+                f"}})()"
+            )
+
+        # :has-text('...') → split into CSS base + JS text filter
+        # Expands known role names (button → includes [role="button"])
+        m = re.match(r"^(.+?):has-text\(['\"](.+?)['\"]\)$", selector)
+        if m:
+            css_base, text = m.group(1), m.group(2)
+            css_expanded = _ROLE_CSS.get(css_base, css_base)
+            return (
+                f"Array.from(document.querySelectorAll({_json.dumps(css_expanded)}))"
+                f".find(el => el.textContent.trim().includes({_json.dumps(text)})"
+                f" || (el.getAttribute('aria-label') || '').includes({_json.dumps(text)}))"
+            )
+
+        # Plain CSS selector
+        return f"document.querySelector({_json.dumps(selector)})"
+
+    async def _find_element(self, selector: str, timeout: float = 2.0) -> str:
+        """Resolve selector to element with auto-wait. Returns the JS find expression.
+
+        Retries for up to `timeout` seconds before raising RuntimeError.
+        """
+        find_expr = self._resolve_selector(selector)
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            result = await self._session.execute(
+                "Runtime.evaluate",
+                {
+                    "expression": f"!!({find_expr})",
+                    "returnByValue": True,
+                },
+            )
+            if result.get("result", {}).get("value"):
+                return find_expr
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"Element not found: {selector}")
+            await asyncio.sleep(0.1)
+
     async def click(
         self,
         selector: str,
@@ -334,14 +461,17 @@ class Tab:
         button: str = "left",
         click_count: int = 1,
     ) -> None:
-        """Click an element by CSS selector using trusted mouse events."""
-        # Get element center coordinates via JS
+        """Click an element. Auto-waits up to 2s for the element to appear.
+
+        Selector: CSS, text=Label, role=button[name='OK'], or tag:has-text('...')
+        """
+        find_expr = await self._find_element(selector)
         coords = await self._session.execute(
             "Runtime.evaluate",
             {
                 "expression": f"""
 (function() {{
-    const el = document.querySelector({repr(selector)});
+    const el = {find_expr};
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return {{x: r.left + r.width/2, y: r.top + r.height/2}};
@@ -376,16 +506,26 @@ class Tab:
         delay_ms: int = 0,
         press_enter: bool = False,
     ) -> None:
-        """Type text into an element by CSS selector."""
-        # Focus the element
+        """Clear field and type text. Auto-waits up to 2s for the element.
+
+        Selects all existing content then types over it.
+        Selector: CSS, text=Label, role=textbox, label=Name, or tag:has-text('...')
+        """
+        find_expr = await self._find_element(selector)
+
+        # Focus + select all existing content so first keystroke replaces it
         await self._session.execute(
             "Runtime.evaluate",
             {
-                "expression": f"document.querySelector({repr(selector)}).focus()",
+                "expression": (
+                    f"(function() {{ const el = {find_expr};"
+                    f" if (el) {{ el.focus(); if (el.select) el.select(); }} }})()"
+                ),
                 "returnByValue": True,
             },
         )
 
+        # Type new text via key events
         for char in text:
             for event_type in ("keyDown", "keyUp"):
                 await self._session.execute(
@@ -404,6 +544,68 @@ class Tab:
                     "Input.dispatchKeyEvent",
                     {"type": event_type, "key": "Enter", "code": "Enter"},
                 )
+
+    async def tree(self) -> list[str]:
+        """Compact accessibility tree as text lines.
+
+        Standalone read — no settle, no observation bundle.
+        """
+        from .observe import build_tree
+
+        return await build_tree(self)
+
+    async def fetch(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        body: "dict | str | None" = None,
+        headers: "dict[str, str] | None" = None,
+    ) -> dict:
+        """In-page JS fetch with Python-ergonomic args.
+
+        Returns {status: int, ok: bool, body: Any}.
+        Body is auto-parsed as JSON when content-type is json.
+        """
+        import json as _json
+
+        body_js = "undefined"
+        if body is not None:
+            if isinstance(body, dict):
+                body_js = _json.dumps(_json.dumps(body))  # JSON-encode the string
+            else:
+                body_js = _json.dumps(str(body))
+
+        h: dict[str, str] = {}
+        if body is not None and isinstance(body, dict):
+            h["Content-Type"] = "application/json"
+        if headers:
+            h.update(headers)  # caller's headers win (including Content-Type override)
+        headers_js = _json.dumps(h) if h else "undefined"
+
+        code = f"""
+(async function() {{
+  const opts = {{
+    method: {_json.dumps(method)},
+    body: {body_js},
+    headers: {headers_js},
+  }};
+  const r = await fetch({_json.dumps(url)}, opts);
+  const ct = r.headers.get('content-type') || '';
+  let body;
+  if (ct.includes('json')) {{
+    try {{ body = await r.json(); }} catch(e) {{ body = await r.text(); }}
+  }} else {{
+    body = await r.text();
+  }}
+  return {{status: r.status, ok: r.ok, body: body}};
+}})()
+"""
+        return await self.js(code, await_promise=True)
+
+    async def navigate(self, url: str) -> None:
+        """Page.navigate CDP command. Caller handles settle separately."""
+        await self._session.execute("Page.navigate", {"url": url})
 
     async def screenshot(self, *, full_page: bool = False) -> bytes:
         """Capture a screenshot; returns PNG bytes."""
@@ -433,8 +635,13 @@ class Tab:
         bind_params: list[Any] = []
 
         if url:
+            like_pattern = url.replace("*", "%")
+            if not like_pattern.startswith("%"):
+                like_pattern = "%" + like_pattern
+            if not like_pattern.endswith("%"):
+                like_pattern = like_pattern + "%"
             conditions.append("url LIKE ?")
-            bind_params.append(f"%{url.strip('%')}%")
+            bind_params.append(like_pattern)
         if method:
             conditions.append("method = ?")
             bind_params.append(method.upper())
