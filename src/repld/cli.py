@@ -20,6 +20,10 @@ def main() -> None:
         from .help import run_help
 
         raise SystemExit(run_help(argv[1:]))
+    if argv and argv[0] == "gist":
+        from .scaffold import run_gist
+
+        raise SystemExit(run_gist(argv[1:]))
 
     parser = argparse.ArgumentParser(
         prog="repld",

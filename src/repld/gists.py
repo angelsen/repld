@@ -10,7 +10,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-__all__ = ["install", "scan", "signature"]
+__all__ = ["install", "scan", "scan_tools", "resolve_tool", "signature"]
 
 # Module names managed by the gist finder (populated by _GistFinder)
 _managed: dict[str, Path] = {}  # fullname → source .py path
@@ -246,6 +246,69 @@ def signature(name: str) -> str:
                     break
             return f"{node.name}({init_args})"
     return ""
+
+
+def _extract_tools(path: Path) -> list[dict]:
+    """Extract __repld_tools__ list from a gist file via ast.literal_eval."""
+    try:
+        tree = ast.parse(path.read_text("utf-8"))
+    except Exception:
+        return []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__repld_tools__":
+                    try:
+                        return ast.literal_eval(ast.unparse(node.value))
+                    except Exception:
+                        return []
+    return []
+
+
+def _iter_gist_files():
+    """Yield non-private .py paths from installed gist directories."""
+    for d in _installed_dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.py")):
+            if not p.name.startswith("_"):
+                yield p
+
+
+def scan_tools() -> list[dict]:
+    """Scan gist files for __repld_tools__ declarations. Returns tool schemas."""
+    results: list[dict] = []
+    seen: set[str] = set()
+    for p in _iter_gist_files():
+        for tool in _extract_tools(p):
+            name = tool.get("name")
+            if name and name not in seen:
+                seen.add(name)
+                results.append(tool)
+    return results
+
+
+def resolve_tool(name: str):
+    """Import the gist that declares *name* and return its ``_tool_*`` handler.
+
+    Returns ``None`` if no gist claims the tool.  Raises ``AttributeError``
+    if the gist declares the tool but has no matching handler function.
+    """
+    for p in _iter_gist_files():
+        tool_names = {t.get("name") for t in _extract_tools(p)}
+        if name in tool_names:
+            mod_name = p.stem
+            _check_reload(mod_name)
+            mod = importlib.import_module(mod_name)
+            handler_name = f"_tool_{name}"
+            handler = getattr(mod, handler_name, None)
+            if handler is None:
+                raise AttributeError(
+                    f"gist '{mod_name}' declares tool '{name}' "
+                    f"but has no {handler_name}() handler"
+                )
+            return handler
+    return None
 
 
 def install(dirs: list[Path]) -> None:

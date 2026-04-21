@@ -75,6 +75,16 @@ def build_instructions() -> str:
                 lines.append(f"  {name:<35s} {doc}")
         parts.append("\n".join(lines))
 
+    # Gist-registered tools
+    gist_tools = gists.scan_tools()
+    if gist_tools:
+        names = [t["name"] for t in gist_tools]
+        parts.append(
+            "Gist tools: "
+            + ", ".join(names)
+            + " — call directly as MCP tools (no exec needed)."
+        )
+
     parts.append(_REFERENCE)
     return "\n\n".join(parts)
 
@@ -197,6 +207,20 @@ Workflow:
   1. Write gists/foo.py (with docstring)
   2. import foo
   3. Edit → re-import → fresh module
+
+Tool registration:
+  Set __repld_tools__ = [...] in module for MCP tool schemas.
+  Name handlers _tool_{name}(args: dict) → str | dict.
+  Tools appear in tools/list automatically; no exec round-trip needed.
+  Scaffold: repld gist <name>
+
+  Example:
+    __repld_tools__ = [
+        {"name": "foo_query", "description": "...",
+         "inputSchema": {"type": "object", "properties": {...}, "required": [...]}},
+    ]
+    async def _tool_foo_query(args: dict) -> str:
+        return json.dumps({"result": ...})
 """,
     "gates": """\
 await ask(prompt, *, default=None, timeout=None)       → str

@@ -263,6 +263,8 @@ Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both dir
 
 The bridge exposes `repld://gists/{name}` resource templates so agents can discover available gists at init time. Re-importing a gist after edits auto-reloads it — no kernel restart needed.
 
+Gists can also register MCP tools directly — set `__repld_tools__` to a list of tool schemas and name handlers `_tool_{name}(args)`. Tools appear in `tools/list` alongside built-in tools, callable without an `exec` round-trip. Scaffold with `repld gist <name>`.
+
 Same shape for Salesforce, PowerOffice, Gmail, internal admin tools, any bank. Per-service MCP servers scale linearly (one per service, maintained forever). Gists scale with whatever's in your browser.
 
 ## Architecture
@@ -279,13 +281,14 @@ Terminal 2: `claude …`          spawns `repld bridge` via stdio MCP
 Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 ```
 
-Five CLI subcommands, all dispatched from `repld:main`:
+Six CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
 - `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld exec [CODE]` — execute Python in a running kernel via IPC. With no args, drops into a minimal interactive REPL (readline history at `~/.repld/history`). With a string arg, runs one-shot and prints the result. Human-facing counterpart to the MCP `exec` tool — same kernel, same namespace, same state.
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
+- `repld gist <name>` — scaffold a tool gist in `./gists/<name>.py` with `__repld_tools__` declaration and `_tool_*` handler skeleton.
 
 Key design properties:
 
@@ -327,6 +330,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [ ] `@every(seconds)` — periodic channel emission on the shared loop
 - [x] `defer(coro, label=None)` — fire-and-forget with channel push on completion
 - [x] Gists layer — `./gists/` + `~/.repld/gists/` on sys.path, auto-reload import hook, `scan()` discovery, `introspect()` AST parsing, `repld://gists/{name}` resource templates
+- [x] Gist tools — `__repld_tools__` declaration + `_tool_*` handlers, auto-discovery in `tools/list`, `repld gist` scaffolding
 - [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard (blocked with override)
 - [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)

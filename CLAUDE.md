@@ -14,7 +14,7 @@ Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.t
 uv sync                                 # install deps into .venv
 uv run repld                            # runs the `repld:main` entrypoint
 uv build                                # wheel + sdist via uv_build
-uv run python tests/smoketest.py --phase 8   # end-to-end smoketest
+uv run python tests/smoketest.py --phase 9   # end-to-end smoketest
 ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 ```
 
@@ -22,7 +22,7 @@ No CI configured yet. If you add any, update this file.
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 8). When you add a feature, extend a phase rather than introducing a separate harness.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 9). When you add a feature, extend a phase rather than introducing a separate harness.
 
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
@@ -31,6 +31,7 @@ Phases:
 - **6:** Tool registration, gist auto-reload, browser integration (requires Chrome with `--remote-debugging-port=9222`).
 - **7:** `defer()` — fire-and-forget with channel push on completion.
 - **8:** Gist resource templates — `resources/templates/list` + `resources/read repld://gists/{name}`.
+- **9:** Gist-registered MCP tools — `__repld_tools__` discovery, dispatch, auto-reload, error handling.
 
 ## Key subsystems
 
@@ -45,17 +46,18 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 
 **Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. See `docs/browser.md` for full design rationale.
 
-**Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description.
+**Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description. Gists can also register MCP tools via `__repld_tools__` — `scan_tools()` discovers tool schemas across all gist files, `resolve_tool(name)` imports the owning gist and returns its `_tool_{name}` handler. Tools appear in `tools/list` automatically alongside built-in tools.
 
 ## Architecture (target shape)
 
-Five CLI subcommands, all dispatched from `repld:main`:
+Six CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
 - `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
+- `repld gist <name>` — scaffold a tool gist in `./gists/<name>.py` with `__repld_tools__` and handler skeleton.
 
 Key invariants to preserve when building this out:
 
