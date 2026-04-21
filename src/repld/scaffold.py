@@ -77,6 +77,57 @@ Suggested CLAUDE.md addition:
 """
 
 
+_GIST_TEMPLATE = '''\
+"""{name} — TODO: one-line description."""
+
+import json
+
+__repld_tools__ = [
+    {{
+        "name": "{name}_example",
+        "description": "TODO: what this tool does",
+        "inputSchema": {{
+            "type": "object",
+            "properties": {{
+                "id": {{"type": "integer", "description": "TODO: describe"}},
+            }},
+            "required": ["id"],
+        }},
+    }},
+]
+
+
+async def _tool_{name}_example(args: dict) -> str:
+    """TODO: implement."""
+    return json.dumps({{"id": args["id"]}})
+'''
+
+
+def run_gist(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print("repld gist <name> — scaffold a tool gist in ./gists/<name>.py")
+        return 0 if argv else 2
+    name = argv[0]
+    if not name.isidentifier():
+        print(f"error: '{name}' is not a valid Python identifier")
+        return 2
+    cwd = Path.cwd()
+    gists_dir = cwd / "gists"
+    gists_dir.mkdir(exist_ok=True)
+    path = gists_dir / f"{name}.py"
+    if path.exists():
+        print(f"error: {path} already exists")
+        return 1
+    path.write_text(_GIST_TEMPLATE.format(name=name))
+    print(f"created: {path}")
+    print()
+    print("Next steps:")
+    print(f"  1. Edit {path} — rename the example tool, add your own")
+    print("  2. Tools appear in tools/list automatically on next MCP call")
+    print("  3. Handler convention: _tool_{tool_name}(args: dict) -> str | dict")
+    return 0
+
+
 def run_init(argv: list[str]) -> int:
     if argv and argv[0] in ("-h", "--help"):
         print("repld init — scaffold .mcp.json + .gitignore in cwd")

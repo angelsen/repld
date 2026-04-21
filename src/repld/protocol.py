@@ -6,6 +6,7 @@ Shared by the kernel; the bridge is a dumb byte-pipe and never touches this.
 import __main__
 import asyncio
 import base64
+import inspect
 import json
 import threading
 from typing import Protocol
@@ -431,7 +432,7 @@ class Dispatcher:
             session.set_initialized()
             return None
         if method == "tools/list":
-            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
+            return self._tools_list(rid)
         if method == "tools/call":
             return self._tools_call(rid, req.get("params", {}))
         if method == "resources/list":
@@ -470,6 +471,12 @@ class Dispatcher:
             },
         }
 
+    def _tools_list(self, rid) -> dict:
+        from . import gists
+
+        all_tools = list(TOOLS) + gists.scan_tools()
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": all_tools}}
+
     def _tools_call(self, rid, params: dict) -> dict:
         name = params.get("name")
         args = params.get("arguments") or {}
@@ -481,7 +488,9 @@ class Dispatcher:
             return self._cancel(rid, args)
         if name and name.startswith("browser_"):
             return self._browser_tool(rid, name, args)
-        return _error(rid, -32602, f"unknown tool: {name}")
+        if not name:
+            return _error(rid, -32602, "missing tool name")
+        return self._gist_tool(rid, name, args)
 
     def _exec(self, rid, args: dict) -> dict:
         src = args.get("code", "")
@@ -547,6 +556,40 @@ class Dispatcher:
                 "_meta": {"task_id": tid, "cancelled": accepted},
             },
         }
+
+    # ------------------------------------------------------------------
+    # Gist tool dispatch
+    # ------------------------------------------------------------------
+
+    def _gist_tool(self, rid, name: str, args: dict) -> dict:
+        """Dispatch to a gist-registered tool handler.
+
+        Handlers return str or JSON-serializable data.  No spill pipeline —
+        the handler controls output size.
+        """
+        from . import gists
+
+        try:
+            handler = gists.resolve_tool(name)
+        except AttributeError as exc:
+            return _error(rid, -32602, str(exc))
+        if handler is None:
+            return _error(rid, -32602, f"unknown tool: {name}")
+        try:
+            result = handler(args)
+            if inspect.iscoroutine(result):
+                result = self._run_async(result)
+            if not isinstance(result, str):
+                result = json.dumps(result, indent=2)
+            return {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {
+                    "content": [{"type": "text", "text": result}],
+                },
+            }
+        except Exception as exc:
+            return _error(rid, -32000, f"{name}: {exc}")
 
     # ------------------------------------------------------------------
     # Browser tool dispatch
