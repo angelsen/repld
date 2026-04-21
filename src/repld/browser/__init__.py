@@ -8,7 +8,8 @@ Usage in kernel:
     setattr(__main__, "browser", LazyBrowser(loop))
 
 Then in user code:
-    await browser.attach("*github.com*")
+    tab = await browser.get("*github.com*")   # find one tab
+    await browser.attach("*github.com*")       # watch all matching
     tab = browser.find("9222:887d3d")
     await tab.js("document.title")
 """
@@ -73,6 +74,32 @@ class Browser:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def get(self, pattern: str) -> Tab:
+        """Find one tab matching a URL glob. Searches attached first, then all targets.
+
+        Unlike attach(), does NOT register a watch pattern — finds exactly one
+        match and returns it. Skips service workers. Raises RuntimeError if none.
+        """
+        # 1. Check already-attached tabs
+        for cdp in self._session._sessions.values():
+            url = cdp.target_info.get("url", "")
+            if fnmatch.fnmatch(url, pattern):
+                return Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+
+        # 2. Search all Chrome targets, attach first match (skip workers)
+        await self._ensure_connected()
+        for t in await self._session.list_targets():
+            if t.get("type") in ("service_worker", "worker"):
+                continue
+            url = t.get("url", "")
+            tid = t.get("targetId", "")
+            if fnmatch.fnmatch(url, pattern) and tid:
+                cdp = await self._session.attach(tid)
+                if cdp is not None:
+                    return Tab(cdp, tid, self.port)
+
+        raise RuntimeError(f"No tab matching '{pattern}'")
 
     async def attach(self, pattern: str) -> str:
         """Add a URL glob pattern and attach currently-matching tabs.
@@ -183,8 +210,7 @@ class Browser:
 
     async def pages(self) -> list[dict]:
         """List all Chrome targets (attached or not)."""
-        if not self._connected:
-            await self._ensure_connected()
+        await self._ensure_connected()
         return await self._session.list_targets()
 
     @property

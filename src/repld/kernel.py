@@ -122,7 +122,7 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
     surface it ambient-style so the agent can react.
     """
     exc = context.get("exception")
-    msg = context.get("message", "") or ""
+    msg = context.get("message", "")
     task = context.get("task")
     task_name = getattr(task, "get_name", lambda: "?")() if task else "?"
     if exc is not None:

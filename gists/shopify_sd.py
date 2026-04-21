@@ -4,21 +4,22 @@ from __future__ import annotations
 
 
 class SD:
-    """Wrapper for the S&D embedded app's Remix data API.
-
-    Requires an attached browser tab on the S&D iframe
-    (search-and-discovery.shopifyapps.com). Auth is inherited
-    from the page's App Bridge session — no tokens to manage.
+    """Shopify Search & Discovery app — synonyms, boosts, filters, recommendations, settings.
 
     Usage:
-        sd = SD(tab)
-        sd.synonyms()
-        sd.filters()
-        sd.settings()
+        sd = await SD.connect()
+        await sd.synonyms()
     """
 
     def __init__(self, tab) -> None:
         self._tab = tab
+
+    @classmethod
+    async def connect(cls) -> "SD":
+        """Attach to S&D iframe and return ready instance."""
+        from __main__ import browser
+
+        return cls(await browser.get("*search-and-discovery*"))
 
     async def _get(self, path: str, route: str) -> dict:
         """GET a Remix loader route. Returns parsed JSON body."""

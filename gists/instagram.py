@@ -4,21 +4,24 @@ from __future__ import annotations
 
 
 class IG:
-    """Instagram API via browser session.
-
-    Reads use v1 REST (stable). Writes use REST or GraphQL (doc_id dependent).
-    Auth inherited from logged-in browser tab — no tokens to manage.
+    """Instagram — profiles, DMs, search, likes, comments, follows.
 
     Usage:
-        ig = IG(tab)
+        ig = await IG.connect()
         await ig.inbox()
-        await ig.send_message(thread_v2_id, "hello")
     """
 
     _APP_ID = "936619743392459"
 
     def __init__(self, tab) -> None:
         self._tab = tab
+
+    @classmethod
+    async def connect(cls) -> "IG":
+        """Attach to Instagram tab and return ready instance."""
+        from __main__ import browser
+
+        return cls(await browser.get("*://www.instagram.com/*"))
 
     @staticmethod
     def _parse(body) -> dict:
@@ -31,9 +34,10 @@ class IG:
 
     async def _csrf(self) -> str:
         """Extract csrftoken from cookies."""
-        return await self._tab.js(
-            "document.cookie.match(/csrftoken=([^;]+)/)?.[1] || ''"
-        )
+        token = await self._tab.js("document.cookie.match(/csrftoken=([^;]+)/)?.[1]")
+        if not token:
+            raise RuntimeError("No csrftoken cookie — not logged in?")
+        return token
 
     async def _rest(self, path: str, *, params: dict | None = None) -> dict:
         """v1 REST GET. Returns parsed JSON body."""
@@ -72,14 +76,17 @@ class IG:
     async def _gql(self, doc_id: str, friendly_name: str, variables: dict) -> dict:
         """GraphQL mutation via /api/graphql."""
         import json
+        from urllib.parse import quote
 
         csrf = await self._csrf()
         fb_dtsg = await self._tab.js(
             "window.require('DTSGInitialData')?.token || "
-            "document.querySelector('[name=\"fb_dtsg\"]')?.value || ''"
+            "document.querySelector('[name=\"fb_dtsg\"]')?.value"
         )
+        if not fb_dtsg:
+            raise RuntimeError("fb_dtsg not found — page not fully loaded?")
         body_str = "&".join(
-            f"{k}={v}"
+            f"{k}={quote(str(v), safe='')}"
             for k, v in {
                 "doc_id": doc_id,
                 "fb_api_req_friendly_name": friendly_name,
