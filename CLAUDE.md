@@ -14,7 +14,7 @@ Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.t
 uv sync                                 # install deps into .venv
 uv run repld                            # runs the `repld:main` entrypoint
 uv build                                # wheel + sdist via uv_build
-uv run python tests/smoketest.py --phase 9   # end-to-end smoketest
+uv run tests/smoketest.py --phase 9           # end-to-end smoketest
 ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 ```
 
