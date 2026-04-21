@@ -37,7 +37,8 @@ _BROWSER_MODEL = (
     "tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
     "Read workflow: network → request → body. "
-    "browser object available in exec for chaining."
+    "browser object available in exec for chaining. "
+    "Run `repld help browser` for the full Python API (Tab, network queries, fetch)."
 )
 
 _GISTS_MODEL = (
@@ -161,7 +162,8 @@ Tab (sync — DuckDB queries):
   row.body()                             → dict (response body for a Row)
 
 Browser:
-  browser.attach(pattern)                → str
+  browser.get(pattern)                   → Tab  (find one, no watch)
+  browser.attach(pattern)                → str  (watch all matching)
   browser.open(url)                      → Tab
   browser.find(target_id)                → Tab
   browser.tabs                           → list[Tab]

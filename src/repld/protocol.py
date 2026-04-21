@@ -472,7 +472,7 @@ class Dispatcher:
 
     def _tools_call(self, rid, params: dict) -> dict:
         name = params.get("name")
-        args = params.get("arguments", {}) or {}
+        args = params.get("arguments") or {}
         if name == "exec":
             return self._exec(rid, args)
         if name == "get_task":
