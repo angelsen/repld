@@ -16,10 +16,6 @@ repld = "repld:main"
 pretty = [
     "rich>=15.0.0",
 ]
-web = [
-    "fastapi>=0.135.3",
-    "uvicorn>=0.44.0",
-]
 browser = [
     "duckdb>=1.5.2",
     "websockets>=16.0",

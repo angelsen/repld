@@ -41,10 +41,23 @@ def compile_cell(src: str, task_id: str) -> CompiledCell:
     return ("exec", code)
 
 
-async def _maybe_await(result: Any) -> Any:
-    if inspect.iscoroutine(result):
-        return await result
-    return result
+_CO_COROUTINE = inspect.CO_COROUTINE
+
+
+async def _eval(code, ns: dict) -> Any:
+    """Eval a code object. Threads sync code to keep the event loop responsive.
+
+    Cells compiled with PyCF_ALLOW_TOP_LEVEL_AWAIT that contain ``await``
+    have the CO_COROUTINE flag set — those must run on the event loop.
+    Pure-sync cells run in a thread via ``asyncio.to_thread`` so they
+    don't block the loop (e.g. sync HTTP, time.sleep, heavy computation).
+    """
+    if code.co_flags & _CO_COROUTINE:
+        return await eval(code, ns)  # noqa: S307
+    raw = await asyncio.to_thread(eval, code, ns)  # noqa: S307
+    if inspect.iscoroutine(raw):
+        return await raw
+    return raw
 
 
 async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
@@ -52,6 +65,7 @@ async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
 
     On success, binds `_` and `_{n}` in `ns` to the returned result (when
     not None). Coroutines from PyCF_ALLOW_TOP_LEVEL_AWAIT are awaited.
+    Sync cells run in a background thread to keep the event loop responsive.
     Exceptions are formatted to stderr and re-raised so the caller can
     record CellDone.error.
     """
@@ -60,14 +74,14 @@ async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
         result: Any = None
         if tag == "eval":
             _, code = compiled
-            result = await _maybe_await(eval(code, ns))  # noqa: S307
+            result = await _eval(code, ns)
         elif tag == "exec_eval":
             _, head_code, tail_code = compiled
-            await _maybe_await(eval(head_code, ns))  # noqa: S307
-            result = await _maybe_await(eval(tail_code, ns))  # noqa: S307
+            await _eval(head_code, ns)
+            result = await _eval(tail_code, ns)
         else:  # "exec"
             _, code = compiled
-            await _maybe_await(eval(code, ns))  # noqa: S307
+            await _eval(code, ns)
         if tag in ("eval", "exec_eval") and result is not None:
             print(repr(result))
             # Shift history: _ → __, __ → ___. Matches IPython convention.
@@ -97,5 +111,21 @@ def _format_user_traceback(exc: BaseException) -> str:
             break
         tb = tb.tb_next
     if tb is None:
-        return traceback.format_exc()
-    return "".join(traceback.format_exception(type(exc), exc, tb))
+        formatted = traceback.format_exc()
+    else:
+        formatted = "".join(traceback.format_exception(type(exc), exc, tb))
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if "cannot be called from a running event loop" in msg:
+            formatted += (
+                "\nHint: repld already runs an event loop. "
+                "Use 'await' directly:\n"
+                "  result = await some_async_fn()\n"
+            )
+        elif "no current event loop" in msg or "no running event loop" in msg:
+            formatted += (
+                "\nHint: this cell ran in a background thread "
+                "(no 'await' detected). Use defer() to schedule async work:\n"
+                "  defer(some_coroutine())\n"
+            )
+    return formatted

@@ -75,29 +75,65 @@ class Browser:
     # Public API
     # ------------------------------------------------------------------
 
-    async def get(self, pattern: str) -> Tab:
+    async def get(
+        self,
+        pattern: str,
+        *,
+        timeout: float | None = None,
+        fresh: bool = False,
+    ) -> Tab:
         """Find one tab matching a URL glob. Searches attached first, then all targets.
 
         Unlike attach(), does NOT register a watch pattern — finds exactly one
-        match and returns it. Skips service workers. Raises RuntimeError if none.
-        """
-        # 1. Check already-attached tabs
-        for cdp in self._session._sessions.values():
-            url = cdp.target_info.get("url", "")
-            if fnmatch.fnmatch(url, pattern):
-                return Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+        match and returns it. Skips service workers.
 
-        # 2. Search all Chrome targets, attach first match (skip workers)
-        await self._ensure_connected()
-        for t in await self._session.list_targets():
-            if t.get("type") in ("service_worker", "worker"):
-                continue
-            url = t.get("url", "")
-            tid = t.get("targetId", "")
-            if fnmatch.fnmatch(url, pattern) and tid:
-                cdp = await self._session.attach(tid)
-                if cdp is not None:
+        With ``timeout``, polls until a match appears (useful after navigation
+        when an iframe hasn't loaded yet). Without it, raises immediately.
+
+        With ``fresh=True``, skips tabs that already matched at call time —
+        only returns a tab that appeared after the call. Use after navigating
+        a parent page to wait for a newly-created iframe.
+        """
+        # Snapshot existing matches so fresh=True can exclude them.
+        exclude: set[str] = set()
+        if fresh:
+            for cdp in self._session._sessions.values():
+                url = cdp.target_info.get("url", "")
+                if fnmatch.fnmatch(url, pattern):
+                    exclude.add(cdp.target_info.get("targetId", ""))
+            await self._ensure_connected()
+            for t in await self._session.list_targets():
+                url = t.get("url", "")
+                tid = t.get("targetId", "")
+                if fnmatch.fnmatch(url, pattern) and tid:
+                    exclude.add(tid)
+
+        deadline = (
+            asyncio.get_running_loop().time() + timeout if timeout is not None else None
+        )
+        while True:
+            # 1. Check already-attached tabs
+            for cdp in self._session._sessions.values():
+                url = cdp.target_info.get("url", "")
+                tid = cdp.target_info.get("targetId", "")
+                if fnmatch.fnmatch(url, pattern) and tid not in exclude:
                     return Tab(cdp, tid, self.port)
+
+            # 2. Search all Chrome targets, attach first match (skip workers)
+            await self._ensure_connected()
+            for t in await self._session.list_targets():
+                if t.get("type") in ("service_worker", "worker"):
+                    continue
+                url = t.get("url", "")
+                tid = t.get("targetId", "")
+                if fnmatch.fnmatch(url, pattern) and tid and tid not in exclude:
+                    cdp = await self._session.attach(tid)
+                    if cdp is not None:
+                        return Tab(cdp, tid, self.port)
+
+            if deadline is None or asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.3)
 
         raise RuntimeError(f"No tab matching '{pattern}'")
 
@@ -144,6 +180,10 @@ class Browser:
 
         Raises RuntimeError if no attached tab matches.
         """
+        if ":" not in target:
+            raise RuntimeError(
+                f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
+            )
         _, prefix = target.split(":", 1)
         for cdp in self._session._sessions.values():
             chrome_id = cdp.target_info.get("targetId", "")
