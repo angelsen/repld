@@ -2,24 +2,57 @@
 
 from __future__ import annotations
 
+import re
+
 
 class SD:
     """Shopify Search & Discovery app — synonyms, boosts, filters, recommendations, settings.
 
+    Two-tab model: navigates on the admin tab, fetches from the S&D iframe.
+
     Usage:
         sd = await SD.connect()
-        await sd.synonyms()
+        await sd.filters()
     """
 
-    def __init__(self, tab) -> None:
-        self._tab = tab
+    __repld_usage__ = "sd = await SD.connect()"
+
+    def __init__(self, admin_tab, iframe_tab) -> None:
+        self._admin = admin_tab
+        self._tab = iframe_tab
+        self._store = self._extract_store(admin_tab.url)
+
+    @staticmethod
+    def _extract_store(url: str) -> str:
+        """Extract store handle from admin URL."""
+        m = re.search(r"/store/([^/]+)", url)
+        if not m:
+            raise RuntimeError(f"Cannot extract store from URL: {url}")
+        return m.group(1)
 
     @classmethod
     async def connect(cls) -> "SD":
-        """Attach to S&D iframe and return ready instance."""
+        """Find or open S&D in admin, attach to iframe, return ready instance."""
         from __main__ import browser
 
-        return cls(await browser.get("*search-and-discovery*"))
+        try:
+            admin = await browser.get("*admin.shopify*search-and-discovery*")
+        except RuntimeError:
+            admin = await browser.open(
+                "https://admin.shopify.com/store/mym-shop-7ai85jfe/apps/search-and-discovery"
+            )
+        iframe = await browser.get("*search-and-discovery.shopifyapps*", timeout=10)
+        return cls(admin, iframe)
+
+    async def _navigate(self, path: str) -> None:
+        """Navigate admin tab to an S&D sub-page, wait for new iframe."""
+        from __main__ import browser
+
+        url = f"https://admin.shopify.com/store/{self._store}/apps/search-and-discovery/{path}"
+        await self._admin.navigate(url)
+        self._tab = await browser.get(
+            "*search-and-discovery.shopifyapps*", timeout=10, fresh=True
+        )
 
     async def _get(self, path: str, route: str) -> dict:
         """GET a Remix loader route. Returns parsed JSON body."""
@@ -154,6 +187,50 @@ class SD:
     async def filter(self, id: str) -> dict:
         """Get a single filter by ID."""
         return await self._get(f"filters/{id}", "routes%2Ffilters.%24id")
+
+    async def create_filter(
+        self,
+        name: str,
+        label: str | None = None,
+        category: str = "VARIANT",
+        filter_type: str = "LIST",
+        sort_order: str = "AUTOMATIC",
+    ) -> dict:
+        """Add a filter. Navigates to filters/new, then creates.
+
+        Common filters:
+            create_filter("availability", "Tilgjengelighet")
+            create_filter("price", "Pris", filter_type="PRICE_RANGE")
+            create_filter("vendor", "Merke", category="PRODUCT")
+            create_filter("product_type", "Produkttype", category="PRODUCT")
+            create_filter("tag", "Tagger", category="PRODUCT")
+        """
+        return await self._post(
+            "filters/new",
+            "routes%2Ffilters.%24id",
+            {
+                "action": "create",
+                "payload": {
+                    "input": {
+                        "label": label or name.replace("_", " ").title(),
+                        "category": category,
+                        "filterType": filter_type,
+                        "name": name,
+                        "sortOrder": sort_order,
+                        "displaySettings": None,
+                    }
+                },
+            },
+        )
+
+    async def delete_filter(self, id: str) -> dict:
+        """Delete a filter by ID (full GID or numeric)."""
+        numeric = id.split("/")[-1] if "/" in id else id
+        return await self._post(
+            f"filters/{numeric}",
+            "routes%2Ffilters.%24id",
+            {"action": "delete", "payload": {"id": id}},
+        )
 
     async def reorder_filters(self, filter_ids: list[str]) -> dict:
         """Reorder filters. Pass filter IDs in desired order."""

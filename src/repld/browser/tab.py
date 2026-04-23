@@ -603,6 +603,19 @@ class Tab:
 """
         return await self.js(code, await_promise=True)
 
+    async def wait_for(self, selector: str, *, timeout: float = 5.0) -> None:
+        """Wait for an element matching *selector* to appear in the DOM.
+
+        Uses the same selector syntax as click/type_text (CSS, text=, role=,
+        label=, :has-text).  Polls every 0.1s up to *timeout* seconds.
+        Raises RuntimeError if the element never appears.
+        """
+        await self._find_element(selector, timeout=timeout)
+
+    async def reload(self) -> None:
+        """Reload the page via Page.reload CDP command."""
+        await self._session.execute("Page.reload")
+
     async def navigate(self, url: str) -> None:
         """Page.navigate CDP command. Caller handles settle separately."""
         await self._session.execute("Page.navigate", {"url": url})
@@ -709,7 +722,7 @@ class Tab:
             [str(request_id)],
         )
         if not rows:
-            raise KeyError(f"No request found for id: {request_id}")
+            raise RuntimeError(f"No request found for id: {request_id}")
         return _dict_from_har_entry(rows[0])
 
     async def cookies(self) -> list[dict]:

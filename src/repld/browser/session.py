@@ -293,7 +293,10 @@ class BrowserSession:
                     cdp._handle_event(data)
             else:
                 # Browser-level event
-                self._handle_browser_event(data)
+                try:
+                    self._handle_browser_event(data)
+                except Exception as exc:
+                    logger.exception("_handle_browser_event error: %s", exc)
 
     def _handle_browser_event(self, data: dict) -> None:
         """Handle browser-level CDP events (target lifecycle)."""

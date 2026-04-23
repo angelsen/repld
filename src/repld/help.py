@@ -156,23 +156,25 @@ Tab (async unless noted):
   tab.tree()                             → list[str]
   tab.click(selector)                    → None (auto-waits 2s)
   tab.type_text(selector, text, enter=)  → None (clears first, auto-waits)
+  tab.wait_for(selector, timeout=5)      → None (wait for element to appear)
   tab.fetch(url, method=, body=, headers=) → {status, ok, body}
   tab.navigate(url)                      → None
+  tab.reload()                           → None
   tab.screenshot(full_page=)             → bytes
   tab.cookies()                          → list[dict]
   tab.cdp(method, **params)              → dict
 
 Tab (sync — DuckDB queries):
-  tab.network(url=, method=, status=, type=, include_assets=) → Rows
+  tab.network(url=, method=, status=, type=, since=, include_assets=) → Rows
   tab.request(request_id)                → dict
   tab.body(request_id)                   → dict
-  tab.console(level=, source=)           → Rows
+  tab.console(level=, source=, since=)   → Rows
   tab.clear()                            → None
 
   row.body()                             → dict (response body for a Row)
 
 Browser:
-  browser.get(pattern)                   → Tab  (find one, no watch)
+  browser.get(pattern, timeout=, fresh=)  → Tab  (find one; fresh=True waits for new tab)
   browser.attach(pattern)                → str  (watch all matching)
   browser.open(url)                      → Tab
   browser.find(target_id)                → Tab
@@ -221,6 +223,13 @@ Tool registration:
     ]
     async def _tool_foo_query(args: dict) -> str:
         return json.dumps({"result": ...})
+
+Writing gists:
+  Prefer async — use httpx.AsyncClient, async def methods, await tab.fetch().
+  Async gists yield to the event loop between calls: browser stays responsive,
+  multiple tasks can interleave, no "loop blocked" warnings.
+  Sync gists work (auto-threaded) but can't interleave with async work.
+  Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
 """,
     "gates": """\
 await ask(prompt, *, default=None, timeout=None)       → str

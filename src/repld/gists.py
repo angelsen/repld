@@ -87,7 +87,18 @@ class _GistImportHook:
         _check_reload(base)
         _check_reload(top)
 
-        return self._original(name, globals, locals, fromlist, level)
+        result = self._original(name, globals, locals, fromlist, level)
+
+        # Auto-inject API summary on gist import.
+        if top in _managed:
+            try:
+                summary = introspect(top)
+                if summary:
+                    print(summary)
+            except Exception:
+                pass
+
+        return result
 
 
 def _extract_doc(path: Path) -> str:
@@ -229,7 +240,16 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
 
 
 def signature(name: str) -> str:
-    """Return 'ClassName(args)' for a gist's first public class, or ''."""
+    """Return 'ClassName(args)' for a gist's first public class, or ''.
+
+    If the module defines ``__repld_usage__``, return that instead (opt-in
+    happy-path override).  Appends ``[async]`` when the class has async methods.
+    """
+    # __repld_usage__ takes precedence — gist author controls the listing.
+    mod = sys.modules.get(name)
+    if mod and hasattr(mod, "__repld_usage__"):
+        return str(mod.__repld_usage__)
+
     path = _find_gist(name)
     if not path:
         return ""
@@ -240,11 +260,16 @@ def signature(name: str) -> str:
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             init_args = ""
+            has_async = False
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) and item.name == "__init__":
                     init_args = _format_args(item.args, skip_self=True)
-                    break
-            return f"{node.name}({init_args})"
+                if isinstance(item, ast.AsyncFunctionDef):
+                    has_async = True
+            sig = f"{node.name}({init_args})"
+            if has_async:
+                sig += " [async]"
+            return sig
     return ""
 
 

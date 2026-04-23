@@ -144,8 +144,8 @@ Planned (priority order — smallest first):
 ```python
 notify_on_logs(level, logger=None)      # route stdlib logging to channel
 @every(seconds)                         # periodic channel emission
-@watch("/path")                         # file changes → channel (needs watchdog)
-@webhook("/path")                       # http route → channel
+@watch("/path")                         # file changes → channel (poll-based, stdlib)
+@webhook("/path")                       # http route → channel (stdlib asyncio server)
 ```
 
 Browser builtins (requires `repld[browser]`):
@@ -296,7 +296,7 @@ Key design properties:
 - **Per-cwd lockfile** — the kernel's IPC path lives in `./.pyrepl.lock`. Both the bridge and `repld exec` inherit `cwd`, read the lockfile, connect.
 - **Stdlib REPL** — `compile()` + `eval()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT`. Last-expression auto-display binds to `_` and `_N`. AST split lets `x = 1; "last"` still display the trailing expression. The asyncio loop owns the main process and a separate display thread renders events.
 - **Shared asyncio loop** — one process-wide loop on a daemon thread. `asyncio.create_task(...)` works from anywhere, tasks survive the exec return. A watchdog channel-pushes if the loop wedges (default >5s, tunable via `REPLD_LOOP_BLOCK_THRESHOLD`).
-- **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[web]` (FastAPI/uvicorn for the example), `repld[browser]` (CDP + DuckDB for browser integration).
+- **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[browser]` (CDP + DuckDB for browser integration).
 
 ## Design principles
 
@@ -333,9 +333,9 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Gist tools — `__repld_tools__` declaration + `_tool_*` handlers, auto-discovery in `tools/list`, `repld gist` scaffolding
 - [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard (blocked with override)
-- [ ] `@watch("/path")` (watchdog) and `@webhook("/path")` (FastAPI)
-- [ ] Remote-ask variant of human gates (route via MCP client)
-- [ ] Multi-gate concurrency (queue stdin routing across simultaneous gates)
+- [ ] `@watch("/path")` — poll-based file watcher → channel (stdlib only)
+- [ ] `@webhook("/path")` — stdlib asyncio HTTP server → channel
+- [ ] Pluggable gate resolution (queue + first-resolver-wins)
 - [ ] Framework presets (`--preset fastapi`, `--preset django`)
 - [ ] CI + lint pass
 - [ ] Optional Claude Code plugin distribution
