@@ -8,6 +8,7 @@ network() and console().
 import asyncio
 import base64
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -285,6 +286,14 @@ class Tab:
         return self._session.target_info.get("title", "")
 
     @property
+    def type(self) -> str:
+        return self._session.target_info.get("type", "page")
+
+    @property
+    def parent_frame_id(self) -> str:
+        return self._session.target_info.get("parentFrameId", "")
+
+    @property
     def capture_bodies(self) -> bool:
         return self._session.capture_bodies
 
@@ -355,15 +364,12 @@ class Tab:
           label=Username                   → input by associated label
           .css-selector                    → document.querySelector(...)
         """
-        import json as _json
-        import re
-
         # text=... → exact text content or aria-label match (prefer smallest element)
         if selector.startswith("text="):
             text = selector[5:]
             return (
                 f"(function() {{"
-                f" const text = {_json.dumps(text)};"
+                f" const text = {json.dumps(text)};"
                 f" const all = Array.from(document.querySelectorAll('*'));"
                 f" const exact = all.filter(el => el.offsetWidth > 0 && ("
                 f"   el.textContent.trim() === text || el.getAttribute('aria-label') === text));"
@@ -378,7 +384,7 @@ class Tab:
             role, op, name = m.group(1), m.group(2), m.group(3)
             css = _ROLE_CSS.get(role, f'[role="{role}"]')
             if name:
-                n = _json.dumps(name)
+                n = json.dumps(name)
                 if op == "*=":
                     cmp = (
                         f"el.textContent.trim().includes({n})"
@@ -400,10 +406,10 @@ class Tab:
                         f" || (el.labels && Array.from(el.labels).some(l => l.textContent.trim() === {n}))"
                     )
                 return (
-                    f"Array.from(document.querySelectorAll({_json.dumps(css)}))"
+                    f"Array.from(document.querySelectorAll({json.dumps(css)}))"
                     f".find(el => {cmp})"
                 )
-            return f"document.querySelector({_json.dumps(css)})"
+            return f"document.querySelector({json.dumps(css)})"
 
         # label=Username → input by associated label text
         if selector.startswith("label="):
@@ -411,7 +417,7 @@ class Tab:
             return (
                 f"(function() {{"
                 f" const lbl = Array.from(document.querySelectorAll('label'))"
-                f"   .find(l => l.textContent.trim() === {_json.dumps(label_text)});"
+                f"   .find(l => l.textContent.trim() === {json.dumps(label_text)});"
                 f" if (!lbl) return null;"
                 f" if (lbl.htmlFor) return document.getElementById(lbl.htmlFor);"
                 f" return lbl.querySelector('input, textarea, select');"
@@ -425,13 +431,13 @@ class Tab:
             css_base, text = m.group(1), m.group(2)
             css_expanded = _ROLE_CSS.get(css_base, css_base)
             return (
-                f"Array.from(document.querySelectorAll({_json.dumps(css_expanded)}))"
-                f".find(el => el.textContent.trim().includes({_json.dumps(text)})"
-                f" || (el.getAttribute('aria-label') || '').includes({_json.dumps(text)}))"
+                f"Array.from(document.querySelectorAll({json.dumps(css_expanded)}))"
+                f".find(el => el.textContent.trim().includes({json.dumps(text)})"
+                f" || (el.getAttribute('aria-label') || '').includes({json.dumps(text)}))"
             )
 
         # Plain CSS selector
-        return f"document.querySelector({_json.dumps(selector)})"
+        return f"document.querySelector({json.dumps(selector)})"
 
     async def _find_element(self, selector: str, timeout: float = 2.0) -> str:
         """Resolve selector to element with auto-wait. Returns the JS find expression.
@@ -567,30 +573,28 @@ class Tab:
         Returns {status: int, ok: bool, body: Any}.
         Body is auto-parsed as JSON when content-type is json.
         """
-        import json as _json
-
         body_js = "undefined"
         if body is not None:
             if isinstance(body, dict):
-                body_js = _json.dumps(_json.dumps(body))  # JSON-encode the string
+                body_js = json.dumps(json.dumps(body))  # JSON-encode the string
             else:
-                body_js = _json.dumps(str(body))
+                body_js = json.dumps(str(body))
 
         h: dict[str, str] = {}
         if body is not None and isinstance(body, dict):
             h["Content-Type"] = "application/json"
         if headers:
             h.update(headers)  # caller's headers win (including Content-Type override)
-        headers_js = _json.dumps(h) if h else "undefined"
+        headers_js = json.dumps(h) if h else "undefined"
 
         code = f"""
 (async function() {{
   const opts = {{
-    method: {_json.dumps(method)},
+    method: {json.dumps(method)},
     body: {body_js},
     headers: {headers_js},
   }};
-  const r = await fetch({_json.dumps(url)}, opts);
+  const r = await fetch({json.dumps(url)}, opts);
   const ct = r.headers.get('content-type') || '';
   let body;
   if (ct.includes('json')) {{

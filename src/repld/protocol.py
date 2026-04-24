@@ -639,62 +639,6 @@ class Dispatcher:
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
         return fut.result(timeout=timeout)
 
-    def _format_tabs_nested(self, browser) -> str:
-        """Format attached tabs as nested text showing target hierarchy."""
-        from .browser import make_target
-
-        # Collect all attached sessions with metadata
-        entries: list[dict] = []
-        for cdp in browser._session._sessions.values():
-            info = cdp.target_info
-            entries.append(
-                {
-                    "target": make_target(browser.port, info.get("targetId", "")),
-                    "type": info.get("type", "unknown"),
-                    "url": info.get("url", ""),
-                    "title": info.get("title", ""),
-                    "parent_frame_id": info.get("parentFrameId", ""),
-                    "opener_id": info.get("openerId", ""),
-                }
-            )
-
-        # Build parent lookup: full chrome ID → short target ID
-        id_to_short: dict[str, str] = {}
-        for cdp in browser._session._sessions.values():
-            info = cdp.target_info
-            full_id = info.get("targetId", "")
-            id_to_short[full_id] = make_target(browser.port, full_id)
-
-        # Separate top-level vs children
-        children: dict[str, list[dict]] = {}  # parent_short → [child entries]
-        top_level: list[dict] = []
-
-        for e in entries:
-            parent_id = e["parent_frame_id"] or e["opener_id"]
-            parent_short = id_to_short.get(parent_id)
-            if parent_short:
-                children.setdefault(parent_short, []).append(e)
-            else:
-                top_level.append(e)
-
-        # Format output
-        lines: list[str] = []
-        for e in top_level:
-            lines.append(f"{e['target']}  {e['type']}  {e['url']}")
-            for child in children.get(e["target"], []):
-                lines.append(f"  {child['target']}  {child['type']}  {child['url']}")
-
-        # Orphaned children (parent not attached)
-        shown = {e["target"] for e in top_level}
-        for parent_short, kids in children.items():
-            if parent_short not in shown:
-                for child in kids:
-                    lines.append(
-                        f"{child['target']}  {child['type']} → {parent_short}  {child['url']}"
-                    )
-
-        return "\n".join(lines) if lines else "(no attached tabs)"
-
     def _browser_dispatch(self, name: str, args: dict):
         """Route to individual browser tool handler.
 
@@ -711,7 +655,7 @@ class Dispatcher:
             return {"result": self._run_async(browser.detach(args.get("pattern")))}
 
         if name == "browser_tabs":
-            return self._format_tabs_nested(browser)
+            return browser.format_tabs_nested()
 
         if name == "browser_pages":
             return self._run_async(browser.pages())
@@ -743,14 +687,13 @@ class Dispatcher:
 
         if name == "browser_navigate":
             tab = browser.find(args["target"])
-            if tab._session.target_info.get("type") == "iframe" and not args.get(
-                "force"
-            ):
-                parent_id = tab._session.target_info.get("parentFrameId", "")
+            if tab.type == "iframe" and not args.get("force"):
                 from .browser import make_target
 
                 parent_short = (
-                    make_target(tab._port, parent_id) if parent_id else "unknown"
+                    make_target(tab._port, tab.parent_frame_id)
+                    if tab.parent_frame_id
+                    else "unknown"
                 )
                 return {
                     "error": (

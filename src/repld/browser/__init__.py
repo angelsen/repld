@@ -279,6 +279,59 @@ class Browser:
                 pass
             self._connected = False
 
+    def format_tabs_nested(self) -> str:
+        """Format attached tabs as nested text showing target hierarchy."""
+        entries: list[dict] = []
+        for cdp in self._session._sessions.values():
+            info = cdp.target_info
+            entries.append(
+                {
+                    "target": make_target(self.port, info.get("targetId", "")),
+                    "type": info.get("type", "unknown"),
+                    "url": info.get("url", ""),
+                    "title": info.get("title", ""),
+                    "parent_frame_id": info.get("parentFrameId", ""),
+                    "opener_id": info.get("openerId", ""),
+                }
+            )
+
+        # Build parent lookup: full chrome ID → short target ID
+        id_to_short: dict[str, str] = {}
+        for cdp in self._session._sessions.values():
+            info = cdp.target_info
+            full_id = info.get("targetId", "")
+            id_to_short[full_id] = make_target(self.port, full_id)
+
+        # Separate top-level vs children
+        children: dict[str, list[dict]] = {}
+        top_level: list[dict] = []
+
+        for e in entries:
+            parent_id = e["parent_frame_id"] or e["opener_id"]
+            parent_short = id_to_short.get(parent_id)
+            if parent_short:
+                children.setdefault(parent_short, []).append(e)
+            else:
+                top_level.append(e)
+
+        # Format output
+        lines: list[str] = []
+        for e in top_level:
+            lines.append(f"{e['target']}  {e['type']}  {e['url']}")
+            for child in children.get(e["target"], []):
+                lines.append(f"  {child['target']}  {child['type']}  {child['url']}")
+
+        # Orphaned children (parent not attached)
+        shown = {e["target"] for e in top_level}
+        for parent_short, kids in children.items():
+            if parent_short not in shown:
+                for child in kids:
+                    lines.append(
+                        f"{child['target']}  {child['type']} → {parent_short}  {child['url']}"
+                    )
+
+        return "\n".join(lines) if lines else "(no attached tabs)"
+
     def help(self) -> None:
         """Print the Python API reference for the browser object."""
         from ..help import _TOPICS
