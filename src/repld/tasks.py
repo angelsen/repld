@@ -11,6 +11,7 @@ import io
 import os
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -30,6 +31,10 @@ _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None
 )
 _tasks: dict[str, dict] = {}
+_CLOSED = object()  # sentinel: spill file was open, now closed by pruning
+_PRUNE_AGE = 300.0  # seconds after done_event before closing spill handle
+_PRUNE_EVERY = 50  # run pruning every N finalize() calls
+_finalize_count = 0
 
 
 def _ensure_spill_dir() -> None:
@@ -66,10 +71,16 @@ class _Tee(io.TextIOBase):
         task_id = _current_task.get()
         task = _tasks.get(task_id) if task_id is not None else None
         if task_id is not None and task is not None:
-            if task["spill_file"] is None:
+            fp = task["spill_file"]
+            if fp is None:
                 _open_spill(task, task_id)
-            task["spill_file"].write(s)
-            task["spill_file"].flush()
+                fp = task["spill_file"]
+            if fp is not _CLOSED:
+                try:
+                    fp.write(s)
+                    fp.flush()
+                except (ValueError, OSError):
+                    pass  # pruned between check and write
         cls = StdoutChunk if self.stream == "stdout" else StderrChunk
         emit(cls(task_id, s))
         return len(s)
@@ -209,16 +220,39 @@ def mark_nudged(task_id: str) -> None:
 
 
 def finalize(task_id: str) -> None:
+    global _finalize_count
     task = _tasks.get(task_id)
     if task is None:
         return
-    # Don't close spill_file: background asyncio tasks spawned by this cell
-    # may keep printing after the cell returns (and they inherit task_id via
-    # the ContextVar). The OS reaps the fd at process exit.
+    # Don't close spill_file immediately: background asyncio tasks spawned by
+    # this cell may keep printing after the cell returns (they inherit task_id
+    # via the ContextVar). Handles are closed by _prune_spill_files after
+    # _PRUNE_AGE seconds.
     fp = task.get("spill_file")
-    if fp is not None:
+    if fp is not None and fp is not _CLOSED:
         try:
             fp.flush()
         except Exception:
             pass
     task["done_event"].set()
+    task["done_at"] = time.monotonic()
+    _finalize_count += 1
+    if _finalize_count % _PRUNE_EVERY == 0:
+        _prune_spill_files()
+
+
+def _prune_spill_files() -> None:
+    """Close spill file handles on tasks completed more than _PRUNE_AGE ago."""
+    now = time.monotonic()
+    for task in _tasks.values():
+        done_at = task.get("done_at")
+        if done_at is None or now - done_at < _PRUNE_AGE:
+            continue
+        fp = task.get("spill_file")
+        if fp is None or fp is _CLOSED:
+            continue
+        try:
+            fp.close()
+        except Exception:
+            pass
+        task["spill_file"] = _CLOSED
