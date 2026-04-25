@@ -31,11 +31,12 @@ async def ask(
 async def confirm(
     prompt: str,
     *,
+    tab=None,
     default: bool | None = None,
     timeout: float | None = None,
 ) -> bool:
     """Prompt the human for a yes/no response. Returns bool."""
-    value = await _gate("confirm", prompt, None, default, timeout)
+    value = await _gate("confirm", prompt, None, default, timeout, tab=tab)
     return bool(value)
 
 
@@ -43,14 +44,15 @@ async def choose(
     prompt: str,
     options: list[str],
     *,
+    tab=None,
     default: str | None = None,
     timeout: float | None = None,
 ) -> str:
     """Prompt the human to choose one of the given options."""
-    return await _gate("choose", prompt, options, default, timeout)  # type: ignore[return-value]
+    return await _gate("choose", prompt, options, default, timeout, tab=tab)  # type: ignore[return-value]
 
 
-async def _gate(kind, prompt, options, default, timeout):
+async def _gate(kind, prompt, options, default, timeout, *, tab=None):
     # Lazy import to avoid a gates↔kernel cycle.
     from .kernel import push_channel
 
@@ -67,6 +69,13 @@ async def _gate(kind, prompt, options, default, timeout):
         meta["options"] = ",".join(options)
     push_channel(f"awaiting human: {prompt}", meta)
     emit(HumanPromptOpen(gate_id, kind, prompt, options))
+
+    # Route to pill UI if tab is pinned
+    if tab is not None and getattr(tab, "_pinned", False):
+        asyncio.create_task(
+            tab._show_gate(gate_id, kind, prompt, options),
+            name=f"repld-gate-show-{gate_id}",
+        )
 
     try:
         wrapped = asyncio.wrap_future(fut)

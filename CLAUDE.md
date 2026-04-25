@@ -44,7 +44,7 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 2. **Tool descriptions** — per-tool what + gotchas, defined in `protocol.py`.
 3. **Topics** — pure API reference for `repld help <topic>`, defined as `_TOPICS` in `help.py`.
 
-**Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. See `docs/browser.md` for full design rationale.
+**Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. Pin/gate bridge: `tab.pin(reason)` injects a floating pill via `Runtime.evaluate` + `beforeunload` guard; `tab.confirm()`/`tab.choose()` route human gates to the pill UI; button clicks flow back via `Runtime.bindingCalled` → `resolve_gate()`. Terminal and browser resolve the same Future — first wins. See `docs/browser.md` for full design rationale.
 
 **Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description. Gists can also register MCP tools via `__repld_tools__` — `scan_tools()` discovers tool schemas across all gist files, `resolve_tool(name)` imports the owning gist and returns its `_tool_{name}` handler. Tools appear in `tools/list` automatically alongside built-in tools.
 
@@ -68,6 +68,6 @@ Key invariants to preserve when building this out:
 
 ## Design principles (from README)
 
-- **Substrate, not library.** Expose small composable primitives (`notify`, `defer`, `@every`, `@watch`, `@webhook`, `browser.find`) and let the LLM write integration code against live pages/APIs/DBs. Resist adding per-service helpers.
+- **Substrate, not library.** Expose small composable primitives (`notify`, `defer`, `@every`, `@watch`, `@webhook`, `browser.get`) and let the LLM write integration code against live pages/APIs/DBs. Resist adding per-service helpers.
 - **Channel push over polling.** Long jobs, file watchers, webhooks, and timers all surface as `<channel>` injections rather than requiring the agent to poll.
 - **Shared `__main__` namespace.** Human and agent operate on the same module dict — don't sandbox the agent into an isolated scope.

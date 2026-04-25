@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+__repld_usage__ = "sd = await SD.connect()"
+
 
 class SD:
     """Shopify Search & Discovery app — synonyms, boosts, filters, recommendations, settings.
@@ -14,8 +16,6 @@ class SD:
         sd = await SD.connect()
         await sd.filters()
     """
-
-    __repld_usage__ = "sd = await SD.connect()"
 
     def __init__(self, admin_tab, iframe_tab) -> None:
         self._admin = admin_tab
@@ -42,6 +42,7 @@ class SD:
                 "https://admin.shopify.com/store/mym-shop-7ai85jfe/apps/search-and-discovery"
             )
         iframe = await browser.get("*search-and-discovery.shopifyapps*", timeout=10)
+        await iframe.pin("Shopify S&D — synonyms, boosts, filters, recommendations")
         return cls(admin, iframe)
 
     async def _navigate(self, path: str) -> None:
@@ -132,6 +133,8 @@ class SD:
 
     async def delete_synonym(self, id: str) -> dict:
         """Delete a synonym group. Accepts numeric ID or full GID."""
+        if not await self._tab.confirm(f"Delete synonym group {id}?"):
+            raise RuntimeError("Delete cancelled by user")
         gid = f"gid://shopify/Metaobject/{id}" if not id.startswith("gid://") else id
         numeric = gid.split("/")[-1]
         return await self._post(
@@ -142,6 +145,8 @@ class SD:
 
     async def delete_synonyms(self, ids: list[str]) -> dict:
         """Bulk delete synonym groups."""
+        if not await self._tab.confirm(f"Delete {len(ids)} synonym group(s)?"):
+            raise RuntimeError("Delete cancelled by user")
         return await self._post(
             "search/synonyms",
             "routes%2Fsearch.synonyms._index",
@@ -172,6 +177,8 @@ class SD:
 
     async def delete_boost(self, product_id: str, metafields: list[dict]) -> dict:
         """Delete a product boost rule."""
+        if not await self._tab.confirm(f"Delete boost for product {product_id}?"):
+            raise RuntimeError("Delete cancelled by user")
         return await self._post(
             f"search/product-boosts/{product_id}",
             "routes%2Fsearch.product-boosts.%24id",
@@ -225,6 +232,8 @@ class SD:
 
     async def delete_filter(self, id: str) -> dict:
         """Delete a filter by ID (full GID or numeric)."""
+        if not await self._tab.confirm(f"Delete filter {id}?"):
+            raise RuntimeError("Delete cancelled by user")
         numeric = id.split("/")[-1] if "/" in id else id
         return await self._post(
             f"filters/{numeric}",
@@ -273,6 +282,10 @@ class SD:
         self, product_id: str, metafield_ids: list[str]
     ) -> dict:
         """Delete product recommendations."""
+        if not await self._tab.confirm(
+            f"Delete recommendations for product {product_id}?"
+        ):
+            raise RuntimeError("Delete cancelled by user")
         return await self._post(
             f"product-recommendations/{product_id}",
             "routes%2Fproduct-recommendations.%24id",

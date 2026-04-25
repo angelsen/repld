@@ -21,7 +21,8 @@ TOOLS = [
         "name": "exec",
         "description": (
             "Run Python in shared __main__. Returns inline within timeout; "
-            "otherwise {task_id, done:false} with channel push on completion."
+            "otherwise {task_id, done:false} with channel push on completion. "
+            "Use defer() for background work that should outlive the response."
         ),
         "inputSchema": {
             "type": "object",
@@ -58,10 +59,11 @@ TOOLS = [
         },
     },
     {
-        "name": "browser_attach",
+        "name": "browser_watch",
         "description": (
-            "Attach to Chrome tabs matching a URL glob pattern (e.g. '*github.com*'). "
-            "Currently-matching tabs attach immediately; future matching tabs auto-attach."
+            "Watch Chrome tabs matching a URL glob pattern (e.g. '*github.com*'). "
+            "Currently-matching tabs attach immediately; future matching tabs auto-attach. "
+            "Gists call this in connect() to establish persistent tab access."
         ),
         "inputSchema": {
             "type": "object",
@@ -648,8 +650,8 @@ class Dispatcher:
 
         browser = self._get_browser()
 
-        if name == "browser_attach":
-            return {"result": self._run_async(browser.attach(args["pattern"]))}
+        if name == "browser_watch":
+            return {"result": self._run_async(browser.watch(args["pattern"]))}
 
         if name == "browser_detach":
             return {"result": self._run_async(browser.detach(args.get("pattern")))}
@@ -661,13 +663,13 @@ class Dispatcher:
             return self._run_async(browser.pages())
 
         if name == "browser_js":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             ap = args.get("await_promise", "auto")
             result = self._run_async(tab.js(args["code"], await_promise=ap))
             return {"result": result}
 
         if name == "browser_network":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             rows = tab.network(
                 url=args.get("url"),
                 method=args.get("method"),
@@ -678,15 +680,15 @@ class Dispatcher:
             return [repr(r) for r in rows]
 
         if name == "browser_request":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             return tab.request(args["request_id"])
 
         if name == "browser_body":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             return tab.body(args["request_id"])
 
         if name == "browser_navigate":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             if tab.type == "iframe" and not args.get("force"):
                 from .browser import make_target
 
@@ -734,7 +736,7 @@ class Dispatcher:
             )
 
         if name == "browser_key":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             key = args["key"]
             pre = self._run_async(pre_observe(tab, browser._session))
             self._run_async(
@@ -748,12 +750,12 @@ class Dispatcher:
             )
 
         if name == "browser_tree":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             lines, _ = self._run_async(compose_tree(tab, browser._session))
             return "\n".join(lines)
 
         if name == "browser_fetch":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             return self._run_async(
                 tab.fetch(
                     args["url"],
@@ -764,7 +766,7 @@ class Dispatcher:
             )
 
         if name == "browser_click":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             pre = self._run_async(pre_observe(tab, browser._session))
             self._run_async(tab.click(args["selector"]))
             return self._run_async(
@@ -772,7 +774,7 @@ class Dispatcher:
             )
 
         if name == "browser_type":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             pre = self._run_async(pre_observe(tab, browser._session))
             self._run_async(
                 tab.type_text(
@@ -788,7 +790,7 @@ class Dispatcher:
             )
 
         if name == "browser_console":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             rows = tab.console(
                 level=args.get("level"),
                 source=args.get("source"),
@@ -796,7 +798,7 @@ class Dispatcher:
             return [repr(r) for r in rows]
 
         if name == "browser_screenshot":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
 
             png_bytes = self._run_async(
                 tab.screenshot(full_page=bool(args.get("full_page", False)))
@@ -804,7 +806,7 @@ class Dispatcher:
             return {"base64_png": base64.b64encode(png_bytes).decode()}
 
         if name == "browser_cdp":
-            tab = browser.find(args["target"])
+            tab = self._run_async(browser.get(args["target"]))
             params = args.get("params") or {}
             return self._run_async(tab.cdp(args["method"], **params))
 

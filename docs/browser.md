@@ -38,7 +38,7 @@ Project cwd
 ```
 
 - **Extra**: `repld[browser]` pulls `websockets` + `duckdb`. Base install stays stdlib-only.
-- **Lazy import.** `browser` doesn't load CDP until first `browser.find(...)` / `browser.attach(...)`. No cost for repld users who never touch it.
+- **Lazy import.** `browser` doesn't load CDP until first `browser.get(...)` / `browser.watch(...)`. No cost for repld users who never touch it.
 - **One WS per port.** Not one per tab. sessionId multiplexing keeps socket count bounded.
 - **Per-session DuckDB.** Each tab has its own in-memory DB. Cross-tab queries are a deliberate non-goal; if needed, the agent unions manually.
 
@@ -144,7 +144,7 @@ Wraps `Runtime.evaluate` with:
 - Auto `Runtime.enable` on first use per session.
 - Exception unwrap: `exceptionDetails` → Python `BrowserJSError(text, stack, url, line)` with preserved stack trace.
 
-Cross-site iframes reach us as separate OOPIF targets (own `Tab` via `browser.attach`); same-site nested iframes can be reached via `document.querySelector('iframe').contentDocument.*` on the parent's session. No dedicated `context_id` kwarg in v1 — if someone needs same-site frame isolation, `tab.cdp("Runtime.evaluate", contextId=N, expression=...)` is the escape hatch.
+Cross-site iframes reach us as separate OOPIF targets (own `Tab` via `browser.watch`); same-site nested iframes can be reached via `document.querySelector('iframe').contentDocument.*` on the parent's session. No dedicated `context_id` kwarg in v1 — if someone needs same-site frame isolation, `tab.cdp("Runtime.evaluate", contextId=N, expression=...)` is the escape hatch.
 
 ```python
 tab.js("document.title")                            # str
@@ -168,23 +168,24 @@ Everything the browser feature injects into `__main__`. Three levels: browser (d
 
 ```python
 # watch patterns (persistent — auto-attach future matching tabs)
-browser.attach("*gmail*")           # add pattern, attach current matches
+browser.watch("*gmail*")            # add pattern, attach current matches
 browser.patterns                    # list active watch patterns
 browser.detach("*gmail*")           # remove pattern, detach its tabs
 browser.detach()                    # clear all patterns, detach everything
 
-# resolve a handle (the one true way to get a Tab)
-browser.find("*gmail*")             # → Tab  (errors if 0 or >1 match)
+# resolve a handle
+browser.get("*gmail*")              # → Tab  (glob — skips workers)
+browser.get("9222:a81998")          # → Tab  (target ID — any type, attach on demand)
 
 # inspect
-browser.tabs                        # list[Tab] — currently attached tabs (display, not handle source)
+browser.tabs                        # list[Tab] — currently attached tabs
 browser.pages                       # list[TargetInfo] — ALL targets Chrome knows about
 
 # config
 browser.port = 9222                 # default from REPLD_CHROME_PORT env
 ```
 
-`browser.tabs` is for display (`repld exec 'browser.tabs'`). Don't index into it — use `browser.find(pattern)` to get a stable handle. Index order is undefined and shifts on detach/reattach.
+`browser.tabs` is for display (`repld exec 'browser.tabs'`). Use `browser.get(pattern)` to get a stable handle. Index order is undefined and shifts on detach/reattach.
 
 ### `Tab` — per-page interaction + query
 
@@ -225,7 +226,7 @@ tab.cdp(method, **params)
 Dataclass-like, not dict. Compact `repr`; attribute access for full fields; on-demand methods for body + curl.
 
 ```python
->>> r = browser.find("*app*").network(url="*login*")[0]
+>>> r = browser.get("*app*").network(url="*login*")[0]
 >>> r
 <Request POST https://app/api/login → 302 (312ms, 2.1KB)>
 >>> r.request_headers
@@ -245,18 +246,18 @@ Dataclass-like, not dict. Compact `repr`; attribute access for full fields; on-d
 ### `repld exec` — human CLI access to all builtins
 
 ```bash
-$ repld exec 'browser.attach("*gmail*")'
+$ repld exec 'browser.watch("*gmail*")'
 → watching "*gmail*" (1 tab attached)
 
 $ repld exec 'browser.tabs'
 target       type  title  url
 9222:988492  page  Gmail  https://mail.google.com/...
 
-$ repld exec 'browser.find("*gmail*").network(url="*search*")'
+$ repld exec 'browser.get("*gmail*").network(url="*search*")'
 id  method  url                          status  time_ms  size
 41  GET     /mail/u/0/s/?view=tl&...     200     142      8.2K
 
-$ repld exec 'browser.find("*gmail*").body(41)'
+$ repld exec 'browser.get("*gmail*").body(41)'
 {"threads": [...]}
 
 $ repld exec 'browser.patterns'
@@ -323,7 +324,7 @@ Total: ~1–2 days of focused work.
 
 ## Open questions
 
-- **`browser.find(...)` when multiple tabs match.** Raise with the match list, or return last-used? I lean raise — ambiguity in API is worse than explicit disambiguation. Agent either tightens the filter or calls `browser.tabs[i]`.
+- **`browser.get(...)` when multiple tabs match.** Returns the first match — attach order, not alphabetical. Agent tightens the filter or calls `browser.tabs[i]` for explicit disambiguation.
 - **Default `tab` when only one is attached.** Useful sugar for single-tab workflows — `tab.js(...)` as a module-level function that delegates. Probably worth it; easy to remove if it's confusing.
 - **`since=` semantics for `tab.network(...)`.** Timestamp, row_id, or `last_seen` sentinel? Row_id is cheapest and monotonic; timestamp is more intuitive. Probably row_id with a `tab.network.latest_id` cursor accessor.
 - **Redirect entry ID.** Composite `(request_id, redirect_index)`, synthetic `row_id`, or `request_id.N` string? Synthetic row_id is simplest for SQL; composite is more meaningful for agents reading results.

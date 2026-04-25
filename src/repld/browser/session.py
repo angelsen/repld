@@ -14,6 +14,10 @@ from typing import Any, Callable
 
 from .cdp import CDPSession
 
+# Target types that are infrastructure, not user-visible pages/iframes.
+# Excluded from glob-based resolution in get()/watch()/_resolve_target().
+WORKER_TYPES = frozenset({"service_worker", "shared_worker", "worker"})
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["BrowserSession"]
@@ -225,10 +229,14 @@ class BrowserSession:
         """Dual-key resolution: target_id → URL exact → opener → pattern.
 
         Returns the Chrome targetId string if it should be auto-attached,
-        or None if it doesn't match any watch.
+        or None if it doesn't match any watch. Workers are never auto-attached.
         """
         target_id = target_info.get("targetId", "")
         url = target_info.get("url", "")
+
+        # 0. Workers are infrastructure — never auto-attach via pattern.
+        if target_info.get("type", "") in WORKER_TYPES:
+            return None
 
         # 1. Already have a session or attach in flight for this target_id?
         if target_id in self._attaching:

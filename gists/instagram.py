@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__repld_usage__ = "ig = await IG.connect()"
+
 
 class IG:
     """Instagram — profiles, DMs, search, likes, comments, follows.
@@ -21,7 +23,9 @@ class IG:
         """Attach to Instagram tab and return ready instance."""
         from __main__ import browser
 
-        return cls(await browser.get("*://www.instagram.com/*"))
+        tab = await browser.get("*://www.instagram.com/*")
+        await tab.pin("Instagram — profiles, DMs, search, likes, comments, follows")
+        return cls(tab)
 
     @staticmethod
     def _parse(body) -> dict:
@@ -190,6 +194,9 @@ class IG:
         """Send a DM. Pass reply_to=message_id to reply to a specific message."""
         import time
 
+        preview = text[:80] + ("…" if len(text) > 80 else "")
+        if not await self._tab.confirm(f'Send DM: "{preview}"?'):
+            raise RuntimeError("Send cancelled by user")
         return await self._gql(
             "27313801781553196",
             "IGDirectTextSendMutation",
@@ -225,12 +232,17 @@ class IG:
 
     async def add_comment(self, media_pk: str, text: str) -> dict:
         """Add a comment on a post."""
+        preview = text[:80] + ("…" if len(text) > 80 else "")
+        if not await self._tab.confirm(f'Post comment: "{preview}"?'):
+            raise RuntimeError("Comment cancelled by user")
         return await self._rest_post(
             f"web/comments/{media_pk}/add/", {"comment_text": text}
         )
 
     async def delete_comment(self, media_pk: str, comment_pk: str) -> dict:
         """Delete a comment."""
+        if not await self._tab.confirm(f"Delete comment {comment_pk}?"):
+            raise RuntimeError("Delete cancelled by user")
         return await self._rest_post(f"web/comments/{media_pk}/delete/{comment_pk}/")
 
     # -- Notifications --

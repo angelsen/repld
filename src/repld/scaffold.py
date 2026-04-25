@@ -1,11 +1,12 @@
 """Project scaffolding (`repld init`).
 
-Writes the per-project files repld needs (.mcp.json, .gitignore additions)
-without touching anything project-specific. Idempotent: re-running surfaces
-existing state instead of overwriting it.
+Writes the per-project files repld needs (.mcp.json, .gitignore additions,
+CLAUDE.md block) without touching anything project-specific. Idempotent:
+re-running surfaces existing state instead of overwriting it.
 """
 
 import json
+import re
 from pathlib import Path
 
 _REPLD_MCP_ENTRY = {
@@ -16,6 +17,19 @@ _REPLD_MCP_ENTRY = {
 }
 
 _GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock"]
+
+_CLAUDE_MD_BLOCK = """\
+<!-- repld:start -->
+A repld kernel is running in this project — a persistent Python environment
+with shared state, background tasks, reactive primitives (@every, defer,
+notify), and browser-authenticated access to any web app the user is logged
+into. When you see a repetitive task — checking statuses, polling APIs,
+processing data on a schedule, monitoring for changes — suggest wiring it up.
+One-shot work can become continuous. Manual checks can become notifications.
+Run `!repld help` for the full API.
+<!-- repld:end -->"""
+
+_REPLD_BLOCK_RE = re.compile(r"<!-- repld:start -->.*?<!-- repld:end -->", re.DOTALL)
 
 
 def _write_mcp_json(cwd: Path) -> str:
@@ -57,6 +71,43 @@ def _update_gitignore(cwd: Path) -> str:
     return f"{verb}: {path.name} (added {', '.join(missing)})"
 
 
+def _update_claude_md(cwd: Path, *, force: bool = False) -> str:
+    path = cwd / "CLAUDE.md"
+    if not path.exists():
+        path.write_text(_CLAUDE_MD_BLOCK + "\n")
+        return f"created: {path.name} (repld block)"
+
+    text = path.read_text()
+    m = _REPLD_BLOCK_RE.search(text)
+    if m is None:
+        # No markers — append
+        sep = "" if not text or text.endswith("\n") else "\n"
+        with open(path, "a") as f:
+            f.write(sep + "\n" + _CLAUDE_MD_BLOCK + "\n")
+        return f"updated: {path.name} (appended repld block)"
+
+    # Markers found — check if content matches
+    if m.group(0) == _CLAUDE_MD_BLOCK:
+        return f"ok:      {path.name} repld block is current"
+
+    # Content differs
+    if not force:
+        old = m.group(0).splitlines()
+        new = _CLAUDE_MD_BLOCK.splitlines()
+        print(f"  {path.name}: repld block differs from current version:")
+        for line in old:
+            if line not in new:
+                print(f"    - {line}")
+        for line in new:
+            if line not in old:
+                print(f"    + {line}")
+        return f"skipped: {path.name} (use --force to overwrite)"
+
+    updated = text[: m.start()] + _CLAUDE_MD_BLOCK + text[m.end() :]
+    path.write_text(updated)
+    return f"updated: {path.name} (repld block overwritten)"
+
+
 _NEXT_STEPS = """\
 Next:
   1. (Optional) Write repl.py to pre-load project state (clients, sessions,
@@ -67,13 +118,6 @@ Next:
   3. Open Claude Code in this directory:
        claude
      The MCP bridge connects automatically via .mcp.json.
-
-Suggested CLAUDE.md addition:
-
-  ## repld
-  This project uses repld. Bring up the kernel with `repld --init repl.py`.
-  Long cells return done:false; channel push on completion.
-  For agent docs: `!repld help`.
 """
 
 
@@ -130,16 +174,20 @@ def run_gist(argv: list[str]) -> int:
 
 def run_init(argv: list[str]) -> int:
     if argv and argv[0] in ("-h", "--help"):
-        print("repld init — scaffold .mcp.json + .gitignore in cwd")
+        print("repld init — scaffold .mcp.json + .gitignore + CLAUDE.md block")
         print()
         print("Run with no arguments. Idempotent.")
+        print("  --force    Overwrite existing repld block in CLAUDE.md")
         return 0
-    if argv:
-        print(f"unknown argument: {argv[0]}")
+    force = "--force" in argv
+    rest = [a for a in argv if a != "--force"]
+    if rest:
+        print(f"unknown argument: {rest[0]}")
         return 2
     cwd = Path.cwd()
     print(_write_mcp_json(cwd))
     print(_update_gitignore(cwd))
+    print(_update_claude_md(cwd, force=force))
     print()
     print(_NEXT_STEPS)
     return 0
