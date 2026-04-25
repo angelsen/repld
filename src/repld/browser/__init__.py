@@ -8,9 +8,9 @@ Usage in kernel:
     setattr(__main__, "browser", LazyBrowser(loop))
 
 Then in user code:
-    tab = await browser.get("*github.com*")   # find one tab
-    await browser.attach("*github.com*")       # watch all matching
-    tab = browser.find("9222:887d3d")
+    tab = await browser.get("*github.com*")   # find one tab by glob
+    tab = await browser.get("9222:887d3d")    # find one tab by target ID
+    await browser.watch("*github.com*")       # watch all matching
     await tab.js("document.title")
 """
 
@@ -18,14 +18,24 @@ import asyncio
 import fnmatch
 import logging
 import os
+import re
 from typing import Any
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
+from .session import WORKER_TYPES
 from .tab import Rows, Tab
 
 __all__ = ["Browser", "LazyBrowser"]
 
 logger = logging.getLogger(__name__)
+
+
+_TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$")
+
+
+def _is_target_id(s: str) -> bool:
+    """True if s looks like a short target ID (e.g. '9222:a81998')."""
+    return bool(_TARGET_ID_RE.match(s))
 
 
 def make_target(port: int, chrome_id: str) -> str:
@@ -77,23 +87,57 @@ class Browser:
 
     async def get(
         self,
+        target: str,
+        *,
+        timeout: float | None = None,
+        fresh: bool = False,
+    ) -> Tab:
+        """Find one tab by URL glob or target ID. Attach on demand.
+
+        **Glob** (e.g. ``"*github.com*"``): searches pages and iframes,
+        skips workers. ``timeout`` polls until a match appears. ``fresh``
+        skips tabs that already matched at call time.
+
+        **Target ID** (e.g. ``"9222:a81998"``): resolves any type including
+        workers. Attaches if not already attached. ``timeout``/``fresh``
+        are ignored.
+        """
+        if _is_target_id(target):
+            return await self._get_by_id(target)
+        return await self._get_by_glob(target, timeout=timeout, fresh=fresh)
+
+    async def _get_by_id(self, target: str) -> Tab:
+        """Resolve a target ID, attaching on demand if needed."""
+        # Fast path: already attached
+        _, prefix = target.split(":", 1)
+        for cdp in self._session._sessions.values():
+            chrome_id = cdp.target_info.get("targetId", "")
+            if chrome_id[:6].lower() == prefix:
+                return Tab(cdp, chrome_id, self.port)
+
+        # Slow path: find in all targets and attach
+        await self._ensure_connected()
+        for t in await self._session.list_targets():
+            tid = t.get("targetId", "")
+            if tid and tid[:6].lower() == prefix:
+                cdp = await self._session.attach(tid)
+                if cdp is not None:
+                    return Tab(cdp, tid, self.port)
+
+        attached = [
+            make_target(self.port, cdp.target_info.get("targetId", ""))
+            for cdp in self._session._sessions.values()
+        ]
+        raise RuntimeError(f"No tab '{target}'. Attached: {attached}")
+
+    async def _get_by_glob(
+        self,
         pattern: str,
         *,
         timeout: float | None = None,
         fresh: bool = False,
     ) -> Tab:
-        """Find one tab matching a URL glob. Searches attached first, then all targets.
-
-        Unlike attach(), does NOT register a watch pattern — finds exactly one
-        match and returns it. Skips service workers.
-
-        With ``timeout``, polls until a match appears (useful after navigation
-        when an iframe hasn't loaded yet). Without it, raises immediately.
-
-        With ``fresh=True``, skips tabs that already matched at call time —
-        only returns a tab that appeared after the call. Use after navigating
-        a parent page to wait for a newly-created iframe.
-        """
+        """Find one tab matching a URL glob. Skips workers."""
         # Snapshot existing matches so fresh=True can exclude them.
         exclude: set[str] = set()
         if fresh:
@@ -112,8 +156,10 @@ class Browser:
             asyncio.get_running_loop().time() + timeout if timeout is not None else None
         )
         while True:
-            # 1. Check already-attached tabs
+            # 1. Check already-attached tabs (skip workers)
             for cdp in self._session._sessions.values():
+                if cdp.target_info.get("type", "") in WORKER_TYPES:
+                    continue
                 url = cdp.target_info.get("url", "")
                 tid = cdp.target_info.get("targetId", "")
                 if fnmatch.fnmatch(url, pattern) and tid not in exclude:
@@ -122,7 +168,7 @@ class Browser:
             # 2. Search all Chrome targets, attach first match (skip workers)
             await self._ensure_connected()
             for t in await self._session.list_targets():
-                if t.get("type") in ("service_worker", "worker"):
+                if t.get("type", "") in WORKER_TYPES:
                     continue
                 url = t.get("url", "")
                 tid = t.get("targetId", "")
@@ -137,10 +183,32 @@ class Browser:
 
         raise RuntimeError(f"No tab matching '{pattern}'")
 
-    async def attach(self, pattern: str) -> str:
-        """Add a URL glob pattern and attach currently-matching tabs.
+    def _resolve_attached(self, target: str) -> Tab:
+        """Sync lookup of an already-attached tab by short target ID.
 
-        Returns a summary string describing what was attached.
+        Used by clear() and open() where the tab is guaranteed attached.
+        """
+        if ":" not in target:
+            raise RuntimeError(
+                f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
+            )
+        _, prefix = target.split(":", 1)
+        for cdp in self._session._sessions.values():
+            chrome_id = cdp.target_info.get("targetId", "")
+            if chrome_id[:6].lower() == prefix:
+                return Tab(cdp, chrome_id, self.port)
+
+        attached = [
+            make_target(self.port, cdp.target_info.get("targetId", ""))
+            for cdp in self._session._sessions.values()
+        ]
+        raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
+
+    async def watch(self, pattern: str) -> str:
+        """Register a URL glob pattern and attach currently-matching tabs.
+
+        Future tabs matching the pattern auto-attach. Workers are skipped.
+        Returns a summary string.
         """
         await self._ensure_connected()
 
@@ -151,6 +219,8 @@ class Browser:
         newly_attached: list[str] = []
         targets = await self._session.list_targets()
         for t in targets:
+            if t.get("type", "") in WORKER_TYPES:
+                continue
             tid = t.get("targetId", "")
             url = t.get("url", "")
             if fnmatch.fnmatch(url, pattern) and tid:
@@ -175,27 +245,6 @@ class Browser:
             f"Total attached: {total}."
         )
 
-    def find(self, target: str) -> Tab:
-        """Resolve a Tab by short target ID (e.g. '9222:887d3d').
-
-        Raises RuntimeError if no attached tab matches.
-        """
-        if ":" not in target:
-            raise RuntimeError(
-                f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
-            )
-        _, prefix = target.split(":", 1)
-        for cdp in self._session._sessions.values():
-            chrome_id = cdp.target_info.get("targetId", "")
-            if chrome_id[:6].lower() == prefix:
-                return Tab(cdp, chrome_id, self.port)
-
-        attached = [
-            make_target(self.port, cdp.target_info.get("targetId", ""))
-            for cdp in self._session._sessions.values()
-        ]
-        raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
-
     async def open(self, url: str) -> "Tab":
         """Create a new tab and attach to it.
 
@@ -205,7 +254,7 @@ class Browser:
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
         await self._session.attach(tid)
-        return self.find(make_target(self.port, tid))
+        return self._resolve_attached(make_target(self.port, tid))
 
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""
@@ -261,7 +310,7 @@ class Browser:
     def clear(self, target: str | None = None) -> str:
         """Clear captured events. Specify target for one tab, or None for all."""
         if target is not None:
-            tab = self.find(target)
+            tab = self._resolve_attached(target)
             tab.clear()
             return f"Cleared events for {target}."
         count = 0
@@ -371,7 +420,7 @@ class LazyBrowser:
     def __repr__(self) -> str:
         if self._real is not None:
             return repr(self._real)
-        return "<Browser (lazy — call browser.attach() to connect)>"
+        return "<Browser (lazy — call browser.watch() to connect)>"
 
     def __reduce__(self):  # type: ignore[override]
         raise TypeError("LazyBrowser is not serializable")

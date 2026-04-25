@@ -80,6 +80,9 @@ class CDPSession:
         # Fetch handler (set by FetchCapture.enable)
         self._fetch_handler: Any | None = None
 
+        # Binding handler (set by Tab._setup_binding)
+        self._binding_handler: Any | None = None
+
     def _setup_schema(self) -> None:
         """Create events table, indexes, and HAR views."""
         self.db.execute(
@@ -161,6 +164,13 @@ class CDPSession:
                     asyncio.create_task(
                         self._fetch_handler(self, params),
                         name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
+                    )
+
+            if method == "Runtime.bindingCalled":
+                if self._binding_handler is not None:
+                    asyncio.create_task(
+                        self._binding_handler(self, params),
+                        name=f"repld-binding-{params.get('name', '?')}",
                     )
 
             # Periodic pruning

@@ -98,7 +98,7 @@ def phase_6(kernel: Kernel) -> None:
         resp = b.call("tools/list")
         tool_names = [t["name"] for t in resp["result"]["tools"]]
         browser_tools = {
-            "browser_attach",
+            "browser_watch",
             "browser_detach",
             "browser_tabs",
             "browser_pages",
@@ -126,15 +126,15 @@ def phase_6(kernel: Kernel) -> None:
         # Attach any open tab
         resp = b.call(
             "tools/call",
-            {"name": "browser_attach", "arguments": {"pattern": "*"}},
+            {"name": "browser_watch", "arguments": {"pattern": "*"}},
             timeout=10.0,
         )
         result_text = resp["result"]["content"][0]["text"]
         assert_true(
             "result" in result_text,
-            f"browser_attach returned result (got {result_text!r})",
+            f"browser_watch returned result (got {result_text!r})",
         )
-        print(f"  ✓ browser_attach: {result_text[:80]!r}")
+        print(f"  ✓ browser_watch: {result_text[:80]!r}")
 
         # List attached tabs (plain text, nested format)
         resp = b.call(

@@ -151,13 +151,14 @@ notify_on_logs(level, logger=None)      # route stdlib logging to channel
 Browser builtins (requires `repld[browser]`):
 
 ```python
-browser.attach("*pattern*")             # watch pattern, auto-attach matching tabs
-browser.find("9222:abc123")             # resolve one Tab by target ID
+browser.watch("*pattern*")              # watch pattern, auto-attach matching tabs
+browser.get("*pattern*")               # find one tab by glob (skips workers)
+browser.get("9222:abc123")             # find one tab by target ID (any type)
 browser.tabs                            # list attached tabs
 browser.pages                           # list all Chrome targets
 browser.detach("*pattern*")             # remove watch + detach
 
-tab = browser.find("9222:abc123")
+tab = await browser.get("9222:abc123")
 tab.js("document.title")                # eval JS (auto-await, trusted gestures)
 tab.click("#search-btn")                # trusted click (Input.dispatchMouseEvent)
 tab.type_text("#search", "query")       # trusted typing (Input.dispatchKeyEvent)
@@ -191,14 +192,14 @@ Kernel runs the watcher, agent reacts to each `<channel>` injection, calls `po.s
 `repld[browser]` attaches to your Chrome tabs via CDP. You log in normally; the agent sees your traffic, discovers the API surface, and works with authenticated sessions — no API keys, no OAuth dance, no per-service MCP server.
 
 ```bash
-repld exec 'browser.attach("*salesforce*")'    # watch pattern, auto-attach
-repld exec 'browser.find("*salesforce*").network(url="*/api/*")'   # discover API calls
+repld exec 'await browser.watch("*salesforce*")'    # watch pattern, auto-attach
+repld exec '(await browser.get("*salesforce*")).network(url="*/api/*")'   # discover API calls
 ```
 
 The agent sees every request your browser makes: URLs, headers, auth tokens, request/response bodies. From one captured request it can synthesize an `httpx` client with the right headers pre-filled, and start calling the API directly.
 
 ```python
-tab = browser.find("*salesforce*")
+tab = await browser.get("*salesforce*")
 r = tab.network(url="*/api/records*")[0]       # find the API call
 r.curl()                                       # copy as curl
 r.request_headers["Authorization"]             # extract the bearer token
@@ -240,7 +241,7 @@ Requires Chrome running with `--remote-debugging-port=9222`. See `docs/browser.m
 """DNB bank. Attach to logged-in DNB tab first."""
 
 async def client():
-    tab = browser.find("*dnb*")
+    tab = await browser.get("*dnb*")
     headers = tab.network(url="*/api/*")[0].request_headers
     return httpx.Client(base_url="https://www.dnb.no/api", headers=headers)
 
@@ -259,7 +260,7 @@ c = await dnb.client()                 # auth captured from browser
 txns = await dnb.transactions(c, "1234")
 ```
 
-Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both directly on `sys.path` — import by module name, not `gists.name`. The agent writes the gist once by observing your traffic. Someone else with a DNB login does `browser.attach("*dnb*")` + `import dnb` and it works — the gist is the recipe, the browser is the auth.
+Gists live in `~/.repld/gists/` (global) or `./gists/` (project-local), both directly on `sys.path` — import by module name, not `gists.name`. The agent writes the gist once by observing your traffic. Someone else with a DNB login does `browser.watch("*dnb*")` + `import dnb` and it works — the gist is the recipe, the browser is the auth.
 
 The bridge exposes `repld://gists/{name}` resource templates so agents can discover available gists at init time. Re-importing a gist after edits auto-reloads it — no kernel restart needed.
 

@@ -461,7 +461,7 @@ def run_kernel(
     # directly through sys.stdout (the _Tee) so output flows to exec clients.
     setattr(__main__, "help", pydoc.Helper(output=sys.stdout))
 
-    # Inject lazy browser builtin (zero import cost until first browser.attach()).
+    # Inject lazy browser builtin (zero import cost until first browser.watch()).
     try:
         from .browser import LazyBrowser
 

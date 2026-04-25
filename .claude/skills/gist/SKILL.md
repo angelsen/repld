@@ -27,8 +27,8 @@ You're turning a GUI into an API. The browser is your auth layer — the user is
 
 ```
 # Discovery
-browser.get(pattern, timeout=)    → Tab  (find one; timeout= polls for match)
-browser.attach(pattern)           → str  (watch all matching, auto-attach new)
+browser.get(target, timeout=)     → Tab  (glob or target ID; timeout= polls for match)
+browser.watch(pattern)            → str  (watch all matching, auto-attach new)
 browser.tabs                      → list[Tab]
 tab.tree()                        → accessibility tree (what's on screen)
 tab.js(code)                      → run JS in page context
@@ -218,6 +218,36 @@ class AppName:
 - **`__repld_usage__`** — one line shown in the MCP instructions listing. Show the happy path, not the constructor.
 - **Module docstring** — first line auto-discovered by repld for the gist listing.
 - **Type hints + one-line docstrings** on public methods — auto-introspected when the agent imports the gist.
+
+### Pinning tabs and routing gates to the browser
+
+For gists that use browser tabs for authenticated API access, call `tab.pin()` in `connect()` to inject a floating status pill that prevents accidental tab close and serves as a gate surface.
+
+```python
+@classmethod
+async def connect(cls) -> "AppName":
+    """Find or open the app and return a ready instance."""
+    try:
+        tab = await browser.get("*app.example.com*")
+    except RuntimeError:
+        tab = await browser.open("https://app.example.com")
+        await tab.wait_for("role=main", timeout=10)
+    await tab.pin("AppName — repld integration")  # ← inject pill + beforeunload
+    return cls(tab)
+```
+
+For write operations that need human confirmation, use `self._tab.confirm()` or `self._tab.choose()` — these route the gate to the pill UI (amber pulsing dot, prompt + buttons) while also showing in the terminal. First resolution wins.
+
+```python
+async def post(self, text: str) -> dict:
+    """Post something — gated on confirm."""
+    ok = await self._tab.confirm(f"Post: "{text[:60]}"?")
+    if not ok:
+        raise RuntimeError("Cancelled")
+    return await self._do_post(text)
+```
+
+`tab.ask()` is terminal-only (no pill UI for free-text input). `tab.pin()` is idempotent — calling it again updates the reason string.
 
 ### Multi-tab gists (embedded apps)
 

@@ -1,6 +1,6 @@
 """repld exec — human-facing CLI for the running kernel.
 
-One-shot:     repld exec 'browser.attach("*gmail*")'
+One-shot:     repld exec 'await browser.watch("*gmail*")'
 Interactive:  repld exec
 
 Connects to the kernel via its unix socket (.pyrepl.lock), sends JSON-RPC
@@ -255,7 +255,7 @@ class RemoteConsole(code.InteractiveConsole):
 
     def __init__(self, rfile: IO[str], wfile: IO[str], json_mode: bool = False) -> None:
         super().__init__()
-        # Allow top-level await so `await browser.attach(...)` works —
+        # Allow top-level await so `await browser.watch(...)` works —
         # the kernel compiles with the same flag.
         self.compile.compiler.flags |= ast.PyCF_ALLOW_TOP_LEVEL_AWAIT  # type: ignore[attr-defined]
         self.rfile = rfile

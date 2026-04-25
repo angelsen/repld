@@ -27,24 +27,32 @@ _EXEC_MODEL = (
     "_ / _N history. Top-level await. "
     "defer(coro, label) schedules a background task, returns task_id immediately, "
     "pushes channel on completion. "
-    "ask()/confirm()/choose() block on human input in the kernel pane."
+    "ask()/confirm()/choose() block on human input in the kernel pane. "
+    "When you see a task that could run continuously — monitoring, polling, "
+    "watching for changes — suggest wiring it with defer() + notify() or @every. "
+    "The kernel persists; one-shot work can become background automation."
 )
 
 _BROWSER_MODEL = (
     "Browser model: "
-    "Attach by URL pattern. Short target IDs (9222:a1b2c3). "
+    "Watch by URL pattern. Short target IDs (9222:a1b2c3). "
     "Mutations (click/type/navigate/key/open) settle then return "
     "tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
     "Read workflow: network → request → body. "
     "browser object available in exec for chaining. "
+    "For repeated browser interactions, write a gist (gists/*.py) to capture "
+    "the API pattern. tab.pin() guards the session; tab.confirm()/choose() "
+    "gate mutations in the browser. "
     "Run `repld help browser` for the full Python API (Tab, network queries, fetch)."
 )
 
 _GISTS_MODEL = (
     "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import.\n"
     "Before using a gist, read repld://gists/{name} for the full API — constructor args, "
-    "method signatures, and usage patterns."
+    "method signatures, and usage patterns.\n"
+    "Stable gists can register as MCP tools via __repld_tools__ — callable "
+    "directly without exec, discoverable in tools/list."
 )
 
 _REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates"
@@ -164,6 +172,20 @@ Tab (async unless noted):
   tab.cookies()                          → list[dict]
   tab.cdp(method, **params)              → dict
 
+Tab — pin + gate bridge:
+  tab.pin(reason="")                     → None  inject pill + beforeunload guard; idempotent
+  tab.unpin()                            → None  remove pill + guard
+  tab.confirm(prompt, **kw)             → bool  gate routed to pill UI
+  tab.choose(prompt, options, **kw)     → str   gate routed to pill UI
+  tab.ask(prompt, **kw)                 → str   terminal only (no pill UI for text input)
+
+  Pill: bottom-center floating pill, green dot when connected, amber when awaiting input.
+  Clicking pill expands panel with status, hostname, reason, and gate prompt + buttons.
+  Gates queue — active gate on top, resolve pops next. Terminal and browser resolve same
+  Future; first resolution wins.
+  Lifecycle: heartbeat every 5s. Pill self-destructs if beats stop (detach/crash/shutdown).
+  Same-origin reload auto-reinjects. Cross-origin navigation unpins + pushes channel.
+
 Tab (sync — DuckDB queries):
   tab.network(url=, method=, status=, type=, since=, include_assets=) → Rows
   tab.request(request_id)                → dict
@@ -174,10 +196,9 @@ Tab (sync — DuckDB queries):
   row.body()                             → dict (response body for a Row)
 
 Browser:
-  browser.get(pattern, timeout=, fresh=)  → Tab  (find one; fresh=True waits for new tab)
-  browser.attach(pattern)                → str  (watch all matching)
+  browser.get(target, timeout=, fresh=)  → Tab  (glob or target ID; skips workers for globs)
+  browser.watch(pattern)                 → str  (watch all matching, auto-attach new)
   browser.open(url)                      → Tab
-  browser.find(target_id)                → Tab
   browser.tabs                           → list[Tab]
   browser.pages()                        → list[dict]
   browser.detach(pattern=)               → str
