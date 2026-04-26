@@ -12,3 +12,4 @@ wheels/
 # repld runtime state
 .pyrepl.lock
 .pyrepl.sock
+network.db*

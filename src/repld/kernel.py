@@ -14,6 +14,7 @@ import __main__
 import asyncio
 import atexit
 import concurrent.futures
+import inspect
 import json
 import os
 import signal
@@ -21,6 +22,7 @@ import sys
 import threading
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import events, ipc, tasks
@@ -76,11 +78,13 @@ def _cleanup_lockfile() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _banner(socket_path: Path, watchdog_threshold: float) -> str:
+def _banner(socket_path: Path, watchdog_threshold: float, kill_threshold: float) -> str:
     return (
         f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {LOCK_PATH.name})\n"
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
         f"(REPLD_LOOP_BLOCK_THRESHOLD)\n"
+        f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
+        f"(REPLD_LOOP_KILL_THRESHOLD)\n"
         f"  register:  claude mcp add -s project repld -- repld bridge\n"
         f"  launch:    claude --dangerously-load-development-channels server:repld\n"
         f"  human:     repld exec   # interactive REPL (state shared with agent)\033[0m"
@@ -144,10 +148,32 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
 # ---------------------------------------------------------------------------
 
 
+def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | None":
+    """Pick the oldest active user task to cancel.
+
+    Prefers tracked cell/defer tasks (insertion-ordered in tasks._tasks,
+    asyncio.Task referenced directly via task["asyncio_task"]). Falls back
+    to any non-internal loop task — typically an @every ticker — sorted by
+    name for determinism.
+    """
+    for task in tasks._tasks.values():
+        if task["done_event"].is_set():
+            continue
+        atask = task.get("asyncio_task")
+        if atask is not None and not atask.done():
+            return atask
+    candidates = sorted(
+        (t for t in asyncio.all_tasks(loop) if not t.get_name().startswith("repld-")),
+        key=lambda t: t.get_name(),
+    )
+    return candidates[0] if candidates else None
+
+
 def _loop_watchdog(
     loop: asyncio.AbstractEventLoop,
     stop: threading.Event,
     threshold: float,
+    kill_threshold: float,
     interval: float,
 ) -> None:
     """Daemon thread that detects when the bg asyncio loop is wedged.
@@ -157,6 +183,10 @@ def _loop_watchdog(
     coroutine each `interval`s; if it doesn't return within `threshold`s
     we push a channel notification with the active task ids so the agent
     knows what's stuck.
+
+    After the warn at `threshold`, we wait up to `kill_threshold` total. If
+    the loop is still blocked by then, we cancel the longest-running
+    non-internal asyncio task.
     """
     while not stop.is_set():
         # Probe first so `threshold` is the actual hang-detection time
@@ -179,10 +209,20 @@ def _loop_watchdog(
                     "active_tasks": active_str,
                 },
             )
-            # Wait (without spamming) for the loop to recover before the
-            # next probe.
+            # Escalate: wait up to kill_threshold total, then cancel the
+            # longest-running non-internal task.
+            remaining = kill_threshold - threshold
             try:
-                future.result(timeout=300)
+                future.result(timeout=remaining)
+            except concurrent.futures.TimeoutError:
+                victim = _pick_victim(loop)
+                if victim is not None:
+                    victim_name = victim.get_name()
+                    loop.call_soon_threadsafe(victim.cancel)
+                    push_channel(
+                        f"[repld] killed blocked task: {victim_name}",
+                        {"kind": "loop_kill", "task": victim_name},
+                    )
             except Exception:
                 pass
         if stop.wait(interval):
@@ -311,8 +351,6 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
         The task is visible to get_task and cancel. On completion, a task_done
         channel notification is pushed.
         """
-        import inspect
-
         if not inspect.iscoroutine(coro):
             raise TypeError(
                 f"defer() expects a coroutine object, got {type(coro).__name__}. "
@@ -329,6 +367,91 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
         return task_id
 
     return defer
+
+
+# ---------------------------------------------------------------------------
+# @every decorator
+# ---------------------------------------------------------------------------
+
+
+@dataclass(eq=False)
+class EveryHandle:
+    label: str
+    seconds: float
+    _task: "asyncio.Task[None]"
+
+    def cancel(self) -> None:
+        self._task.cancel()
+        _every_registry.discard(self)
+
+    def __repr__(self) -> str:
+        return f"<every {self.seconds}s: {self.label}>"
+
+
+_every_registry: set[EveryHandle] = set()
+
+
+async def _start_ticker(fn, seconds: float, label: str) -> None:
+    """Coroutine that runs on the shared asyncio loop.
+
+    Runs the first tick immediately, then sleeps `seconds` between ticks.
+    Catches exceptions so one bad tick doesn't stop the schedule.
+    Sets fn._handle and fn.cancel once the task is live.
+    """
+    task = asyncio.current_task()
+    assert task is not None
+    handle = EveryHandle(label, seconds, task)
+    _every_registry.add(handle)
+    fn._handle = handle
+    fn.cancel = handle.cancel
+
+    while True:
+        try:
+            result = fn()
+            if inspect.iscoroutine(result):
+                result = await result
+        except asyncio.CancelledError:
+            _every_registry.discard(handle)
+            raise
+        except Exception as exc:
+            push_channel(
+                f"@every {label}: {type(exc).__name__}: {exc}",
+                {"kind": "every", "label": label, "error": "1"},
+            )
+        else:
+            if result is not None:
+                push_channel(str(result), {"kind": "every", "label": label})
+        await asyncio.sleep(seconds)
+
+
+def _make_every(loop: asyncio.AbstractEventLoop):
+    """Return an every(seconds, *, label=None)(fn) decorator bound to the kernel's loop."""
+
+    def every(seconds: float, *, label: str | None = None):
+        """Schedule fn to run immediately, then every `seconds` on the kernel loop.
+
+        Returns fn unchanged so @every is a pure decorator. Attaches
+        fn._handle (EveryHandle) and fn.cancel() shortcut after the first
+        loop tick completes.
+        """
+
+        def decorator(fn):
+            name = label or fn.__name__
+            asyncio.run_coroutine_threadsafe(_start_ticker(fn, seconds, name), loop)
+            return fn
+
+        return decorator
+
+    def _list() -> list[EveryHandle]:
+        return list(_every_registry)
+
+    def _cancel_all() -> None:
+        for h in list(_every_registry):
+            h.cancel()
+
+    every.list = _list  # type: ignore[attr-defined]
+    every.cancel_all = _cancel_all  # type: ignore[attr-defined]
+    return every
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +533,30 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _drain_loop_tasks() -> None:
+    """Cancel and await every non-self loop task.
+
+    Lets `try/finally` blocks in @every bodies, defer() coroutines, and
+    in-flight exec cells run their cleanup before the loop halts.
+    """
+    me = asyncio.current_task()
+    targets = [t for t in asyncio.all_tasks() if t is not me and not t.done()]
+    if not targets:
+        return
+    for t in targets:
+        t.cancel()
+    await asyncio.gather(*targets, return_exceptions=True)
+    _every_registry.clear()
+
+
 def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
+    if loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(_drain_loop_tasks(), loop).result(
+                timeout=2.0
+            )
+        except (concurrent.futures.TimeoutError, RuntimeError):
+            pass  # loop wedged or already stopping — best effort
     loop.call_soon_threadsafe(loop.stop)
     ipc.stop_server()
 
@@ -451,8 +597,10 @@ def run_kernel(
     from . import gates
     import pydoc
 
+    _every = _make_every(loop)
     setattr(__main__, "notify", _notify)
     setattr(__main__, "defer", _make_defer(loop))
+    setattr(__main__, "every", _every)
     setattr(__main__, "ask", gates.ask)
     setattr(__main__, "confirm", gates.confirm)
     setattr(__main__, "choose", gates.choose)
@@ -500,19 +648,21 @@ def run_kernel(
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
+    #    Kill threshold: cancel longest-running task after REPLD_LOOP_KILL_THRESHOLD (default 30s).
     stop = threading.Event()
     threshold = float(os.environ.get("REPLD_LOOP_BLOCK_THRESHOLD", "5.0"))
+    kill_threshold = float(os.environ.get("REPLD_LOOP_KILL_THRESHOLD", "30.0"))
 
     # 6. Print banner (goes to sys.__stderr__ directly so it's visible even
     #    in --no-display mode before the tee is fully wired). Includes the
     #    active watchdog threshold so users know what to expect.
     stderr = sys.__stderr__
     if stderr is not None:
-        stderr.write(_banner(sock_path, threshold) + "\n")
+        stderr.write(_banner(sock_path, threshold, kill_threshold) + "\n")
         stderr.flush()
     threading.Thread(
         target=_loop_watchdog,
-        args=(loop, stop, threshold, 1.0),
+        args=(loop, stop, threshold, kill_threshold, 1.0),
         daemon=True,
         name="repld-watchdog",
     ).start()

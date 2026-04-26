@@ -1,4 +1,4 @@
-"""X (Twitter) — search, profiles, tweets, likes, retweets, bookmarks."""
+"""X (Twitter) — search, profiles, tweets, likes, retweets, bookmarks, followers, following."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ _ENDPOINTS = {
     "DeleteBookmark": "Wlmlj2-xzyS1GN3a6cj-mQ",
     "Followers": "xOdl9jiaOqwHUm68qsq6Hg",
     "Following": "lQxnNSmlJkQHod0yzbVYDg",
+    "FollowersYouKnow": "OBA-ChVl1ZPvozFotXP0ag",
+    "UserTweetsAndReplies": "YhE6S_TtdhVxLtpokXrRaA",
     "HomeTimeline": "3tb-_5Lf7kdCZ1cFHmsEfg",
     "Bookmarks": "1nFKbANnLDDNT2nyLFZxtQ",
 }
@@ -210,15 +212,10 @@ class X:
         return result
 
     @staticmethod
-    def _parse_tweet(entry: dict) -> dict | None:
-        """Extract a flat tweet dict from a timeline entry."""
-        content = entry.get("content", {})
-        item = content.get("itemContent", {})
-        tr = item.get("tweet_results", {}).get("result", {})
-        if not tr or tr.get("__typename") == "TweetWithVisibilityResults":
+    def _tweet_from_result(tr: dict) -> dict:
+        """Extract a flat tweet dict from a tweet result node."""
+        if tr.get("__typename") == "TweetWithVisibilityResults":
             tr = tr.get("tweet", tr)
-        if not tr.get("rest_id"):
-            return None
         legacy = tr.get("legacy", {})
         user = tr.get("core", {}).get("user_results", {}).get("result", {})
         user_core = user.get("core", {})
@@ -238,6 +235,16 @@ class X:
             "liked": legacy.get("favorited", False),
             "retweeted": legacy.get("retweeted", False),
         }
+
+    @staticmethod
+    def _parse_tweet(entry: dict) -> dict | None:
+        """Extract a flat tweet dict from a timeline entry."""
+        content = entry.get("content", {})
+        item = content.get("itemContent", {})
+        tr = item.get("tweet_results", {}).get("result", {})
+        if not tr or not tr.get("rest_id"):
+            return None
+        return X._tweet_from_result(tr)
 
     @staticmethod
     def _parse_user(result: dict) -> dict:
@@ -277,16 +284,30 @@ class X:
                     if t:
                         tweets.append(t)
                 elif typename == "TimelineTimelineModule":
-                    # Conversation threads / pinned tweet modules
                     for item in content.get("items", []):
                         ic = item.get("item", {}).get("itemContent", {})
                         tr = ic.get("tweet_results", {}).get("result", {})
                         if tr.get("rest_id"):
-                            fake_entry = {"content": {"itemContent": ic}}
-                            t = X._parse_tweet(fake_entry)
-                            if t:
-                                tweets.append(t)
+                            tweets.append(X._tweet_from_result(tr))
         return tweets
+
+    @staticmethod
+    def _timeline_users(data: dict, path: list[str]) -> list[dict]:
+        """Walk a nested dict path to find timeline user entries, parse users."""
+        node = data
+        for key in path:
+            node = node.get(key, {})
+        instructions = node.get("instructions", [])
+        users: list[dict] = []
+        for inst in instructions:
+            for entry in inst.get("entries", []):
+                content = entry.get("content", {})
+                ic = content.get("itemContent", {})
+                if ic.get("__typename") == "TimelineUser":
+                    ur = ic.get("user_results", {}).get("result", {})
+                    if ur.get("rest_id"):
+                        users.append(X._parse_user(ur))
+        return users
 
     # ------------------------------------------------------------------
     # Read operations
@@ -351,27 +372,9 @@ class X:
             },
         )
         tr = data.get("data", {}).get("tweetResult", {}).get("result", {})
-        if tr.get("__typename") == "TweetWithVisibilityResults":
-            tr = tr.get("tweet", tr)
         if not tr.get("rest_id"):
             raise RuntimeError(f"Tweet not found: {tweet_id}")
-        legacy = tr.get("legacy", {})
-        user = tr.get("core", {}).get("user_results", {}).get("result", {})
-        user_core = user.get("core", {})
-        return {
-            "id": tr.get("rest_id"),
-            "text": legacy.get("full_text", ""),
-            "created_at": legacy.get("created_at", ""),
-            "likes": legacy.get("favorite_count", 0),
-            "retweets": legacy.get("retweet_count", 0),
-            "replies": legacy.get("reply_count", 0),
-            "views": int(tr.get("views", {}).get("count", 0) or 0),
-            "screen_name": user_core.get("screen_name", ""),
-            "name": user_core.get("name", ""),
-            "bookmarked": legacy.get("bookmarked", False),
-            "liked": legacy.get("favorited", False),
-            "retweeted": legacy.get("retweeted", False),
-        }
+        return self._tweet_from_result(tr)
 
     async def home(self, *, count: int = 20) -> list[dict]:
         """Get home timeline."""
@@ -391,6 +394,52 @@ class X:
             "Bookmarks", {"count": count, "includePromotedContent": False}
         )
         return self._timeline_tweets(data, ["data", "bookmark_timeline_v2", "timeline"])
+
+    async def followers(self, user_id: str, *, count: int = 50) -> list[dict]:
+        """Get followers of a user by user ID."""
+        data = await self._gql(
+            "Followers",
+            {"userId": user_id, "count": count, "includePromotedContent": False},
+        )
+        return self._timeline_users(
+            data, ["data", "user", "result", "timeline", "timeline"]
+        )
+
+    async def following(self, user_id: str, *, count: int = 50) -> list[dict]:
+        """Get accounts a user follows by user ID."""
+        data = await self._gql(
+            "Following",
+            {"userId": user_id, "count": count, "includePromotedContent": False},
+        )
+        return self._timeline_users(
+            data, ["data", "user", "result", "timeline", "timeline"]
+        )
+
+    async def followers_you_know(self, user_id: str, *, count: int = 50) -> list[dict]:
+        """Get mutual followers (people you follow who also follow this user)."""
+        data = await self._gql(
+            "FollowersYouKnow",
+            {"userId": user_id, "count": count, "includePromotedContent": False},
+        )
+        return self._timeline_users(
+            data, ["data", "user", "result", "timeline", "timeline"]
+        )
+
+    async def user_replies(self, user_id: str, *, count: int = 20) -> list[dict]:
+        """Get tweets and replies by user ID (shows who they engage with)."""
+        data = await self._gql(
+            "UserTweetsAndReplies",
+            {
+                "userId": user_id,
+                "count": count,
+                "includePromotedContent": False,
+                "withCommunity": True,
+                "withVoice": True,
+            },
+        )
+        return self._timeline_tweets(
+            data, ["data", "user", "result", "timeline", "timeline"]
+        )
 
     # ------------------------------------------------------------------
     # Write operations

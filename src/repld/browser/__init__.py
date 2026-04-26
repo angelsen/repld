@@ -70,6 +70,8 @@ class Browser:
             self._session._on_target_destroyed = self._on_target_destroyed
             self._connected = True
             logger.debug("BrowserSession connected on port %s", self.port)
+        elif not self._session._is_connected():
+            await self._session._reconnect()
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:
         """Called when a new tab is auto-attached."""

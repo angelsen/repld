@@ -11,6 +11,7 @@ no overlap:
 """
 
 import json
+import sys
 from pathlib import Path
 
 from .ipc import _pid_alive
@@ -27,6 +28,8 @@ _EXEC_MODEL = (
     "_ / _N history. Top-level await. "
     "defer(coro, label) schedules a background task, returns task_id immediately, "
     "pushes channel on completion. "
+    "every(seconds)(fn) schedules fn to run periodically; "
+    "fn.cancel() stops it. every.list() shows active tickers. "
     "ask()/confirm()/choose() block on human input in the kernel pane. "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
@@ -77,10 +80,21 @@ def build_instructions() -> str:
         lines = ["Available gists:"]
         for name, doc in available:
             sig = gists.signature(name)
-            if sig:
-                lines.append(f"  {sig:<35s} {doc}")
+            mod = sys.modules.get(name)
+            usage = (
+                str(mod.__repld_usage__)
+                if mod and hasattr(mod, "__repld_usage__")
+                else None
+            )
+            if usage and sig:
+                # Usage override — show import of class name + usage hint
+                class_name = sig.split("(")[0]
+                hint = f"from {name} import {class_name}; {usage}"
+            elif sig:
+                hint = f"from {name} import {sig}"
             else:
-                lines.append(f"  {name:<35s} {doc}")
+                hint = f"import {name}"
+            lines.append(f"  {hint:<55s} {doc}")
         parts.append("\n".join(lines))
 
     # Gist-registered tools
@@ -147,15 +161,21 @@ exec(code, timeout=2.0)
 defer(coro, label=None) → task_id
   Fire-and-forget. Channel push on done. Visible to get_task/cancel.
 
+every(seconds, label=)(fn)   → fn    periodic ticker; fn.cancel() stops
+every.list()                 → list  active EveryHandles
+every.cancel_all()           → None  stop all tickers
+
 get_task(task_id)       → {done, text, spill_path, ...}
 cancel(task_id)         → {cancelled: bool}
 
 Channel kinds:
   task_done             exec or defer finished
   user                  notify() from user code
+  every                 periodic tick result or error (kind=every, label=fn_name)
   awaiting_human        ask/confirm/choose pending
   bg_task_error         uncaught exception in background task
   loop_blocked          asyncio loop blocked > 5s
+  loop_kill             watchdog cancelled a stuck task
   init_error            --init file failed
 """,
     "browser": """\

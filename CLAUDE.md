@@ -22,7 +22,7 @@ No CI configured yet. If you add any, update this file.
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 9). When you add a feature, extend a phase rather than introducing a separate harness.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 11). When you add a feature, extend a phase rather than introducing a separate harness.
 
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
@@ -30,8 +30,10 @@ Phases:
 - **5:** Lockfile conflict detection, `--init` file execution.
 - **6:** Tool registration, gist auto-reload, browser integration (requires Chrome with `--remote-debugging-port=9222`).
 - **7:** `defer()` — fire-and-forget with channel push on completion.
-- **8:** Gist resource templates — `resources/templates/list` + `resources/read repld://gists/{name}`.
+- **8:** Gist resources — `resources/list` includes one entry per loaded gist (with first-docstring-line as description); `resources/read repld://gists/{name}` returns the introspected API.
 - **9:** Gist-registered MCP tools — `__repld_tools__` discovery, dispatch, auto-reload, error handling.
+- **10:** `@every(seconds)` decorator — periodic ticker, immediate first tick, error survival, `cancel()` / `cancel_all()`.
+- **11:** Graceful shutdown — `_shutdown` drains `@every` + `defer()` `try/finally` blocks before stopping the loop, with a 2 s budget.
 
 ## Key subsystems
 
