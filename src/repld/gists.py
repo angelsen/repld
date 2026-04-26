@@ -242,14 +242,10 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
 def signature(name: str) -> str:
     """Return 'ClassName(args)' for a gist's first public class, or ''.
 
-    If the module defines ``__repld_usage__``, return that instead (opt-in
-    happy-path override).  Appends ``[async]`` when the class has async methods.
+    Always AST-derived — ``__repld_usage__`` is handled separately in
+    ``build_instructions()`` as a display concern.
+    Appends ``[async]`` when the class has async methods.
     """
-    # __repld_usage__ takes precedence — gist author controls the listing.
-    mod = sys.modules.get(name)
-    if mod and hasattr(mod, "__repld_usage__"):
-        return str(mod.__repld_usage__)
-
     path = _find_gist(name)
     if not path:
         return ""

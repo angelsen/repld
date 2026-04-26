@@ -28,6 +28,8 @@
 
 ### Task 2: `@every` decorator
 
+**Status:** EVOLVED — See: `.claude/specs/every-decorator/` (implemented in `kernel.py`, no separate reactive.py)
+
 **Description:** Create `src/repld/reactive.py` with `Handle` dataclass, registry, `init(loop)`, and the `every()` decorator. Inject into `__main__` from `kernel.py`.
 
 **Files:**
@@ -35,11 +37,11 @@
 - `src/repld/kernel.py` — import reactive, call `reactive.init(loop)`, inject `every` into `__main__`
 
 **Acceptance:**
-- [ ] `@every(5)` runs function every 5 seconds on shared loop
-- [ ] Each tick pushes to channel with `kind=every`
-- [ ] Supports sync and async decorated functions
-- [ ] `fn._handle.cancel()` stops the loop
-- [ ] Errors in the function push to channel with `error=1`, don't kill the loop
+- [x] `@every(5)` runs function every 5 seconds on shared loop
+- [x] Each tick pushes to channel with `kind=every`
+- [x] Supports sync and async decorated functions
+- [x] `fn._handle.cancel()` stops the loop
+- [x] Errors in the function push to channel with `error=1`, don't kill the loop
 
 **Dependencies:** None
 **Complexity:** Low

@@ -3,6 +3,11 @@
 Single websockets connection to Chrome, _recv_loop task dispatching by
 message shape, pending-command Futures keyed by msg_id, target discovery
 via Target.setDiscoverTargets.
+
+Auto-reconnects on WebSocket failure (network change, laptop sleep,
+Chrome restart). execute() detects a dead connection, triggers reconnect,
+re-attaches all previously attached targets (preserving CDPSession state
+including DuckDB event stores), and retries the command once.
 """
 
 import asyncio
@@ -52,11 +57,17 @@ class BrowserSession:
         self._on_target_created: Callable[[dict, str], None] | None = None
         self._on_target_destroyed: Callable[[str], None] | None = None
 
+        # Reconnect state
+        self._reconnect_lock = asyncio.Lock()
+        self._reconnecting: bool = False
+        # old sessionId → new sessionId (valid for one reconnect cycle)
+        self._session_remap: dict[str, str] = {}
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def connect(self) -> None:
+    async def connect(self, *, discover: bool = True) -> None:
         """Connect to Chrome DevTools WebSocket endpoint."""
         import websockets  # type: ignore[import-untyped]
 
@@ -88,7 +99,8 @@ class BrowserSession:
         self._recv_task = asyncio.create_task(self._recv_loop(), name="repld-cdp-recv")
 
         # Enable target discovery for lifecycle events
-        await self.execute("Target.setDiscoverTargets", {"discover": True})
+        if discover:
+            await self.execute("Target.setDiscoverTargets", {"discover": True})
 
     async def disconnect(self) -> None:
         """Close the WebSocket and cancel recv task."""
@@ -111,6 +123,105 @@ class BrowserSession:
                 fut.set_exception(RuntimeError("BrowserSession disconnected"))
         self._pending.clear()
 
+    def _is_connected(self) -> bool:
+        """True if the WebSocket is alive and the recv loop is running."""
+        if self._ws is None:
+            return False
+        if self._recv_task is not None and self._recv_task.done():
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Auto-reconnect
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_recoverable(exc: Exception) -> bool:
+        """True if exc indicates a dead WebSocket (not a CDP-level error)."""
+        import websockets.exceptions  # type: ignore[import-untyped]
+
+        if isinstance(exc, websockets.exceptions.ConnectionClosed):
+            return True
+        # recv_loop died, or execute() ran before connect — futures get these.
+        if isinstance(exc, RuntimeError) and (
+            "recv loop ended" in str(exc) or "not connected" in str(exc)
+        ):
+            return True
+        # Socket-level errors (broken pipe, connection reset)
+        if isinstance(exc, OSError):
+            return True
+        return False
+
+    async def _reconnect(self) -> None:
+        """Tear down the dead WebSocket, reconnect, and re-attach all targets.
+
+        CDPSession objects (and their DuckDB event stores) are preserved;
+        only the Chrome sessionId is updated. Watch patterns survive.
+        Serialized by _reconnect_lock so concurrent callers don't race.
+        """
+        async with self._reconnect_lock:
+            if self._is_connected():
+                return  # another caller already reconnected
+
+            self._reconnecting = True
+            try:
+                # Save CDPSessions keyed by Chrome targetId
+                old_cdps: dict[str, CDPSession] = {}
+                for cdp in self._sessions.values():
+                    tid = cdp.chrome_target_id
+                    if tid:
+                        old_cdps[tid] = cdp
+
+                # Tear down old connection
+                if self._recv_task and not self._recv_task.done():
+                    self._recv_task.cancel()
+                    try:
+                        await self._recv_task
+                    except asyncio.CancelledError:
+                        pass
+                if self._ws is not None:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+                self._pending.clear()
+                self._sessions.clear()
+                self._session_remap.clear()
+
+                # New WebSocket (no target discovery yet — re-attach first)
+                await self.connect(discover=False)
+
+                # Re-attach old targets, preserving CDPSession state
+                for target_id, cdp in old_cdps.items():
+                    old_sid = cdp._session_id
+                    try:
+                        result = await self.execute(
+                            "Target.attachToTarget",
+                            {"targetId": target_id, "flatten": True},
+                        )
+                        new_sid = result["sessionId"]
+                        cdp._session_id = new_sid
+                        self._sessions[new_sid] = cdp
+                        self._session_remap[old_sid] = new_sid
+                        await cdp._enable_domains()
+                    except Exception as exc:
+                        logger.debug(
+                            "reconnect: re-attach %s failed: %s", target_id, exc
+                        )
+                        cdp.cleanup()
+
+                # Now enable target discovery (picks up new tabs)
+                await self.execute("Target.setDiscoverTargets", {"discover": True})
+
+                logger.info(
+                    "Reconnected to Chrome on port %d (%d sessions restored)",
+                    self.port,
+                    len(self._sessions),
+                )
+            finally:
+                self._reconnecting = False
+
     # ------------------------------------------------------------------
     # Command execution
     # ------------------------------------------------------------------
@@ -122,7 +233,32 @@ class BrowserSession:
         session_id: str | None = None,
         timeout: float = 30,
     ) -> dict:
-        """Send a CDP command and await the response."""
+        """Send a CDP command and await the response.
+
+        On WebSocket failure, triggers reconnect and retries once.
+        During reconnect (_reconnecting=True), failures propagate directly
+        to avoid recursive reconnect loops.
+        """
+        try:
+            return await self._execute_once(method, params, session_id, timeout)
+        except Exception as exc:
+            if self._reconnecting or not self._is_recoverable(exc):
+                raise
+            # Connection died — reconnect and retry
+            await self._reconnect()
+            # Remap session_id if it changed during reconnect
+            if session_id and session_id in self._session_remap:
+                session_id = self._session_remap[session_id]
+            return await self._execute_once(method, params, session_id, timeout)
+
+    async def _execute_once(
+        self,
+        method: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 30,
+    ) -> dict:
+        """Send a CDP command without retry."""
         if self._ws is None:
             raise RuntimeError("BrowserSession not connected")
 

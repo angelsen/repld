@@ -373,16 +373,7 @@ TOOLS = [
     },
 ]
 
-RESOURCE_TEMPLATES = [
-    {
-        "uriTemplate": "repld://gists/{name}",
-        "name": "gist-api",
-        "description": "Introspected API reference for a gist module (classes, methods, signatures).",
-        "mimeType": "text/plain",
-    },
-]
-
-RESOURCES = [
+_BROWSER_RESOURCES = [
     {
         "uri": "repld://browser/tabs",
         "name": "browser-tabs",
@@ -438,12 +429,12 @@ class Dispatcher:
         if method == "tools/call":
             return self._tools_call(rid, req.get("params", {}))
         if method == "resources/list":
-            return {"jsonrpc": "2.0", "id": rid, "result": {"resources": RESOURCES}}
+            return self._resources_list(rid)
         if method == "resources/templates/list":
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
-                "result": {"resourceTemplates": RESOURCE_TEMPLATES},
+                "result": {"resourceTemplates": []},
             }
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
@@ -818,6 +809,21 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # Resource dispatch
     # ------------------------------------------------------------------
+
+    def _resources_list(self, rid) -> dict:
+        from . import gists
+
+        resources = list(_BROWSER_RESOURCES)
+        for name, doc in gists.scan():
+            resources.append(
+                {
+                    "uri": f"repld://gists/{name}",
+                    "name": name,
+                    "description": doc,
+                    "mimeType": "text/plain",
+                }
+            )
+        return {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}
 
     def _read_resource(self, rid, params: dict) -> dict:
         uri = params.get("uri", "")
