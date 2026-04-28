@@ -373,6 +373,15 @@ TOOLS = [
     },
 ]
 
+_DOC_RESOURCES = [
+    {
+        "uri": "repld://docs/guide",
+        "name": "repld-guide",
+        "description": "Working guide: execution model, browser API, gist patterns, conventions. Read before writing gists.",
+        "mimeType": "text/plain",
+    },
+]
+
 _BROWSER_RESOURCES = [
     {
         "uri": "repld://browser/tabs",
@@ -813,7 +822,7 @@ class Dispatcher:
     def _resources_list(self, rid) -> dict:
         from . import gists
 
-        resources = list(_BROWSER_RESOURCES)
+        resources = list(_DOC_RESOURCES) + list(_BROWSER_RESOURCES)
         for name, doc in gists.scan():
             resources.append(
                 {
@@ -828,7 +837,11 @@ class Dispatcher:
     def _read_resource(self, rid, params: dict) -> dict:
         uri = params.get("uri", "")
         try:
-            if uri == "repld://browser/tabs":
+            if uri == "repld://docs/guide":
+                from .help import GUIDE
+
+                text = GUIDE
+            elif uri == "repld://browser/tabs":
                 text = self._resource_tabs()
             elif uri == "repld://browser/network":
                 text = self._resource_network()

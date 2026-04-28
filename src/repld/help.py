@@ -2,12 +2,14 @@
 
 `build_instructions()` composes the MCP `initialize.instructions` dynamically
 based on kernel state (browser connected? which gists available?). `OVERVIEW`
-and `_TOPICS` back the `repld help` command / `browser.help()`. Three surfaces,
+and `_TOPICS` back the `repld help` command / `browser.help()`. Four surfaces,
 no overlap:
 
-  INSTRUCTIONS (dynamic)  → behavioral model for the agent
+  INSTRUCTIONS (dynamic)  → behavioral model for the agent (terse, always loaded)
   Tool descriptions       → per-tool what + gotchas (lives in protocol.py)
   Topics                  → pure API reference for the human user
+  GUIDE                   → MCP resource (repld://docs/guide) — working guide
+                            with patterns and conventions; read on demand
 """
 
 import json
@@ -58,7 +60,7 @@ _GISTS_MODEL = (
     "directly without exec, discoverable in tools/list."
 )
 
-_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates"
+_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide before writing gists — full patterns and conventions."
 
 
 def build_instructions() -> str:
@@ -285,6 +287,182 @@ notify(content, **meta)
   One-shot channel push to all MCP sessions.
 """,
 }
+
+
+GUIDE = """\
+repld — working guide
+
+repld is a persistent Python kernel exposed over MCP. One asyncio loop, one
+__main__ namespace shared between the human (terminal) and the agent (MCP).
+The kernel stays alive across cells — state, background tasks, and browser
+sessions persist.
+
+== Execution model ==
+
+exec runs Python in __main__. If it finishes within timeout (default 2s),
+result is returned inline. Otherwise it returns {task_id, done:false} and
+pushes a channel notification when done. Output spills to a file; the inline
+response shows a head+tail preview with a path to the full output.
+
+Builtins injected into __main__:
+  notify(content, **meta)      push a channel notification to the agent
+  defer(coro, label=)          fire-and-forget; channel push on completion
+  every(seconds)(fn)           periodic ticker; fn.cancel() stops it
+  ask(prompt) / confirm(prompt) / choose(prompt, options)
+                               block on human input in the kernel terminal
+
+Top-level await is supported. _ / _N history works.
+
+== Browser ==
+
+browser is lazy-injected into __main__. Connects to Chrome on first use
+(requires --remote-debugging-port=9222).
+
+  tab = await browser.get("*example.com*")   # find by URL glob
+  tab = await browser.get("9222:a1b2c3")     # find by target ID
+  await browser.watch("*example.com*")       # watch pattern, auto-attach
+  tab = await browser.open("https://...")     # open new tab
+
+Tab API (async):
+  tab.js(code)                        evaluate JS in page context
+  tab.fetch(url, method=, body=, headers=)
+                                      in-page fetch (inherits session/cookies)
+  tab.tree()                          accessibility tree as text lines
+  tab.click(selector)                 click element (auto-waits 2s)
+  tab.type_text(selector, text)       clear + type (auto-waits 2s)
+  tab.wait_for(selector, timeout=5)   wait for element to appear
+  tab.pin(reason)                     inject status pill + beforeunload guard
+  tab.confirm(prompt) → bool          gate routed to pill UI
+  tab.choose(prompt, options) → str   gate routed to pill UI
+
+Tab API (sync, DuckDB):
+  tab.network(url=, method=, status=) query captured requests
+  tab.request(request_id)             full HAR entry
+  tab.body(request_id)                response body
+
+tab.fetch() runs in the page context — it inherits cookies, CSRF tokens,
+session tokens, JWTs, everything the browser has. If the user is logged in,
+tab.fetch() is authenticated.
+
+Selectors: CSS, text=Label, role=button[name='OK'], label=Name,
+button:has-text('OK').
+
+== Gists ==
+
+Gists are Python modules in ~/.repld/gists/ (global) or ./gists/ (per-project).
+Both directories are on sys.path at kernel startup. Edit a file, re-import it,
+and the fresh version loads — auto-reload via mtime tracking.
+
+Gists turn GUI apps into callable Python APIs. The browser handles auth;
+the gist wraps the app's internal API in a clean interface.
+
+Module docstring first line → auto-shown in MCP instructions.
+__repld_usage__ = "app = await App.connect()" → custom listing line.
+Type hints + one-line docstrings on public methods → auto-introspected.
+
+=== Writing a browser-connected gist ===
+
+Template:
+
+  \"""AppName — what it does.\"""
+
+  __repld_usage__ = "app = await AppName.connect()"
+
+
+  class AppName:
+      \"""AppName — feature X, feature Y.\"""
+
+      def __init__(self, tab) -> None:
+          self._tab = tab
+
+      @classmethod
+      async def connect(cls) -> "AppName":
+          \"""Find or open the app and return a ready instance.\"""
+          from __main__ import browser
+
+          try:
+              tab = await browser.get("*app.example.com*")
+          except RuntimeError:
+              tab = await browser.open("https://app.example.com")
+              await tab.wait_for("role=main", timeout=10)
+          await tab.pin("AppName — repld integration")
+          return cls(tab)
+
+      async def list_things(self) -> list[dict]:
+          \"""List all things.\"""
+          return (await self._tab.fetch("/api/things"))["body"]
+
+      async def create_thing(self, name: str) -> dict:
+          \"""Create a thing (gated).\"""
+          ok = await self._tab.confirm(f"Create \\"{name}\\"?")
+          if not ok:
+              raise RuntimeError("Cancelled")
+          return (await self._tab.fetch(
+              "/api/things", method="POST", body={"name": name}
+          ))["body"]
+
+=== Conventions ===
+
+Import kernel builtins (browser, notify, defer, every) inside connect(),
+not at module top level. Top-level imports from __main__ break auto-reload
+and prevent introspection of the module before the kernel is running.
+
+Async by default. All methods async def, use await tab.fetch(). Async gists
+yield to the event loop — browser stays responsive, multiple gists can
+interleave, no "loop blocked" warnings.
+
+connect() classmethod. Finds or opens the app, returns a ready instance.
+Pattern: try browser.get() → except → browser.open() + wait_for().
+
+tab.pin(reason) in connect(). Injects a floating pill UI + beforeunload
+guard. Prevents accidental tab close. The pill also serves as a gate
+surface for confirm/choose prompts.
+
+Gate write operations. Anything that mutates state should call
+tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears
+in both the terminal and the pill UI — first resolution wins.
+
+For apps that don't need browser auth (public APIs), use stdlib urllib or
+install httpx in the project. No browser tab needed.
+
+=== Multi-tab gists (embedded apps) ===
+
+When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
+  - admin tab for navigation (host page)
+  - iframe tab for fetch/js (app context with auth)
+
+After navigating the admin tab, re-acquire the iframe with
+browser.get(pattern, timeout=10) — iframes reload on host navigation.
+Never navigate an iframe directly — it destroys the embedded session.
+
+=== Tool registration ===
+
+Stable gists can register MCP tools callable without exec:
+
+  __repld_tools__ = [
+      {"name": "myapp_query", "description": "...",
+       "inputSchema": {"type": "object", "properties": {...}, "required": [...]}},
+  ]
+
+  async def _tool_myapp_query(args: dict) -> str:
+      return json.dumps({"result": ...})
+
+Handler convention: _tool_{name}(args) → str | dict.
+Tools appear in tools/list automatically. Scaffold: repld gist <name>.
+
+=== Wiring background automation ===
+
+The kernel persists. One-shot work can become continuous:
+
+  @every(30)
+  async def check():
+      data = await app.poll()
+      if data["changed"]:
+          notify(f"Change detected: {data}")
+
+  # Or fire-and-forget:
+  defer(app.long_running_job(), label="nightly sync")
+"""
 
 
 # ---------------------------------------------------------------------------
