@@ -41,10 +41,11 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 
 **Request flow:** Claude Code spawns `bridge.py` (stdio MCP) → bridge reads `.pyrepl.lock` → proxies JSON-RPC over unix socket (`ipc.py`) → `protocol.py` dispatches to `exec`, `get_task`, `cancel`, or browser tools → `runtime.py` runs code in `__main__` → results (or `task_id` for deferred work) flow back. Channel notifications (`events.py`) flow kernel → bridge → Claude Code.
 
-**Three-surface doc system (`help.py`):** Agent-facing docs are split across three non-overlapping surfaces. Keep them in sync:
-1. **INSTRUCTIONS** (dynamic) — behavioral model composed at MCP init by `build_instructions()`. Includes exec model always; browser model only when `browser` exists in `__main__`; gist signatures extracted via AST from available gists. This is what the agent reasons with.
+**Four-surface doc system (`help.py`):** Agent-facing docs are split across four non-overlapping surfaces. Keep them in sync:
+1. **INSTRUCTIONS** (dynamic) — behavioral model composed at MCP init by `build_instructions()`. Includes exec model always; browser model only when `browser` exists in `__main__`; gist signatures extracted via AST from available gists. This is what the agent reasons with. Terse; always loaded.
 2. **Tool descriptions** — per-tool what + gotchas, defined in `protocol.py`.
 3. **Topics** — pure API reference for `repld help <topic>`, defined as `_TOPICS` in `help.py`.
+4. **GUIDE** — MCP resource (`repld://docs/guide`), defined as `GUIDE` in `help.py`. Working guide with execution model, browser API, gist patterns, and conventions. Read on demand by the agent before writing gists. Available from any project running repld.
 
 **Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. Pin/gate bridge: `tab.pin(reason)` injects a floating pill via `Runtime.evaluate` + `beforeunload` guard; `tab.confirm()`/`tab.choose()` route human gates to the pill UI; button clicks flow back via `Runtime.bindingCalled` → `resolve_gate()`. Terminal and browser resolve the same Future — first wins. See `docs/browser.md` for full design rationale.
 

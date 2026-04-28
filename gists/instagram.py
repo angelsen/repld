@@ -1,6 +1,7 @@
 """Instagram — profiles, DMs, search, likes, comments, follows."""
 
 from __future__ import annotations
+from urllib.parse import quote, urlencode
 
 __repld_usage__ = "ig = await IG.connect()"
 
@@ -52,7 +53,7 @@ class IG:
         }
         url = f"https://www.instagram.com/api/v1/{path}"
         if params:
-            qs = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
+            qs = urlencode({k: v for k, v in params.items() if v is not None})
             if qs:
                 url += f"?{qs}"
         r = await self._tab.fetch(url, headers=headers)
@@ -80,7 +81,6 @@ class IG:
     async def _gql(self, doc_id: str, friendly_name: str, variables: dict) -> dict:
         """GraphQL mutation via /api/graphql."""
         import json
-        from urllib.parse import quote
 
         csrf = await self._csrf()
         fb_dtsg = await self._tab.js(

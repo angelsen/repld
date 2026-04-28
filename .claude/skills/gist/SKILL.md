@@ -193,6 +193,8 @@ class AppName:
     @classmethod
     async def connect(cls) -> "AppName":
         """Find or open the app and return a ready instance."""
+        from __main__ import browser
+
         try:
             tab = await browser.get("*app.example.com*")
         except RuntimeError:
@@ -214,7 +216,7 @@ class AppName:
 ### Conventions
 
 - **Async by default.** All methods `async def`, use `await tab.fetch()`. Async gists yield to the event loop — browser stays responsive, multiple gists can interleave. Sync gists work (auto-threaded) but can't interleave.
-- **`connect()` classmethod.** Finds or opens the app, handles iframe discovery, returns a ready instance. One-line usage: `app = await AppName.connect()`.
+- **`connect()` classmethod.** Finds or opens the app, handles iframe discovery, returns a ready instance. One-line usage: `app = await AppName.connect()`. Import kernel builtins (`browser`, `notify`, `defer`, `every`) inside `connect()`, not at module top level — top-level imports break auto-reload and introspection.
 - **`__repld_usage__`** — one line shown in the MCP instructions listing. Show the happy path, not the constructor.
 - **Module docstring** — first line auto-discovered by repld for the gist listing.
 - **Type hints + one-line docstrings** on public methods — auto-introspected when the agent imports the gist.

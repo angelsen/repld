@@ -111,7 +111,7 @@ def _update_claude_md(cwd: Path, *, force: bool = False) -> str:
 _NEXT_STEPS = """\
 Next:
   1. (Optional) Write repl.py to pre-load project state (clients, sessions,
-     app handles). See examples/fastapi/repl.py for the shape.
+     app handles).
   2. Start the kernel:
        repld                       # bare kernel
        repld --init repl.py        # with project bootstrap
