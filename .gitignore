@@ -9,6 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Local working files
+.claude/specs/
+docs/*-brief.html
+
 # repld runtime state
 .pyrepl.lock
 .pyrepl.sock
