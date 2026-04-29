@@ -1,5 +1,5 @@
 [project]
-name = "repld"
+name = "repld-tool"
 version = "0.0.1"
 description = "Persistent Python runtime with MCP channel push. Dev shell and autonomous-agent substrate in one package."
 readme = "README.md"
@@ -27,6 +27,9 @@ browser = [
     "duckdb>=1.5.2",
     "websockets>=16.0",
 ]
+
+[tool.uv.build-backend]
+module-name = "repld"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
