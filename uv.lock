@@ -62,7 +62,7 @@ wheels = [
 ]
 
 [[package]]
-name = "repld"
+name = "repld-tool"
 version = "0.0.1"
 source = { editable = "." }
 
