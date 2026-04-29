@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), human gates, channel infrastructure, and scaffolding commands are live; the README is the design document and roadmap. When implementing, treat README.md as the spec — especially the **Architecture**, **Tools**, **Helpers**, and **Status** (checklist) sections. Don't drift from the shape described there without discussion.
+Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), human gates, channel infrastructure, and scaffolding commands are live. When implementing, treat `docs/ARCHITECTURE.md` as the design spec (architecture, status checklist, design principles) and this file for subsystem details and invariants. README.md is user-facing only. Don't drift from the shape described here without discussion.
 
 ## Build & run
 
