@@ -17,6 +17,6 @@ Initial release.
 - Core tools: `exec`, `get_task`, `cancel`
 - Human gates: `ask`, `confirm`, `choose`, `notify`
 - Background primitives: `defer(coro)`, `@every(seconds)`
-- Browser integration (`repld[browser]`): CDP attach, network capture, JS eval, trusted input
+- Browser integration (`repld-tool[browser]`): CDP attach, network capture, JS eval, trusted input
 - Gist system: auto-reload modules, MCP tool registration, resource templates
 - CLI: `repld`, `repld bridge`, `repld exec`, `repld init`, `repld help`, `repld gist`

@@ -3,7 +3,7 @@
 Persistent Python runtime with MCP channel push. Dev shell and autonomous-agent substrate in one package.
 
 ```bash
-uv tool install repld
+uv tool install repld-tool
 ```
 
 ## What it does
@@ -19,7 +19,7 @@ uv tool install repld
 
 ```bash
 # install globally
-uv tool install repld
+uv tool install repld-tool
 
 # in any project:
 cd path/to/project
@@ -27,7 +27,7 @@ repld init               # writes .mcp.json + updates .gitignore
 repld                    # starts the kernel
 ```
 
-Project-local alternative: `uv add --dev repld`, then point `.mcp.json` at `uv run repld bridge`.
+Project-local alternative: `uv add --dev repld-tool`, then point `.mcp.json` at `uv run repld bridge`.
 
 `repld init` produces this `.mcp.json`:
 
@@ -98,7 +98,7 @@ The agent now has a live handle on your running app: inspect routes, query the O
 | `get_task` | Status + head/tail preview of a running task's output. |
 | `cancel` | Cancel a running task by id. |
 
-**Browser** (requires `uv tool install repld[browser]`):
+**Browser** (requires `uv tool install repld-tool[browser]`):
 
 | Tool | What it does |
 |------|-------------|
