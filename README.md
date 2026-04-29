@@ -152,7 +152,7 @@ tab.network(url="*api*")                  # query captured traffic
 
 ## Gists
 
-Gists are Python modules in `./gists/` (project) or `~/.repld/gists/` (global) that wrap web apps into callable APIs. The browser handles auth; the gist captures the pattern.
+Gists are Python modules in `./gists/` (project) or `~/.repld/gists/` (global) that wrap anything into a callable API — web apps via the browser, databases, graph stores, embedding indexes, internal services.
 
 ```python
 # gists/myapp.py
