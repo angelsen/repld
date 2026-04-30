@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import code
 import json
+import os
 import signal
 import socket
 import sys
@@ -21,7 +22,11 @@ from typing import IO, Any
 
 from .ipc import connect_to_kernel
 
-LOCK_PATH = Path.cwd() / ".pyrepl.lock"
+def _lock_path() -> Path:
+    env = os.environ.get("REPLD_SOCKET")
+    if env:
+        return Path(env).with_suffix(".lock")
+    return Path.cwd() / ".pyrepl.lock"
 HISTORY_DIR = Path.home() / ".repld"
 HISTORY_PATH = HISTORY_DIR / "history"
 
@@ -98,7 +103,7 @@ def _connect() -> tuple[socket.socket, IO[str], IO[str], dict] | None:
 
     Returns (sock, rfile, wfile, lock_info) or None on failure.
     """
-    result = connect_to_kernel(LOCK_PATH)
+    result = connect_to_kernel(_lock_path())
     if isinstance(result, str):
         _err(result)
         return None

@@ -31,8 +31,9 @@ from .ipc import _pid_alive
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
-LOCK_PATH = Path.cwd() / ".pyrepl.lock"
-DEFAULT_SOCKET_PATH = Path.cwd() / ".pyrepl.sock"
+DEFAULT_SOCKET_PATH = Path(
+    os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock"))
+)
 
 
 # ---------------------------------------------------------------------------
@@ -40,19 +41,25 @@ DEFAULT_SOCKET_PATH = Path.cwd() / ".pyrepl.sock"
 # ---------------------------------------------------------------------------
 
 
-def _check_existing_kernel() -> None:
-    """Refuse to start if another repld kernel owns this cwd."""
-    if not LOCK_PATH.exists():
+def _lock_for(socket_path: Path) -> Path:
+    """Lock file lives next to the socket: /path/to/repld.sock → /path/to/repld.lock."""
+    return socket_path.with_suffix(".lock")
+
+
+def _check_existing_kernel(socket_path: Path) -> None:
+    """Refuse to start if another repld kernel owns this socket."""
+    lock_path = _lock_for(socket_path)
+    if not lock_path.exists():
         return
     try:
-        lock = json.loads(LOCK_PATH.read_text())
+        lock = json.loads(lock_path.read_text())
     except (OSError, json.JSONDecodeError):
         return
     pid = lock.get("pid", -1)
     if _pid_alive(pid):
         raise SystemExit(
-            f"\033[31m[repld] another kernel (pid={pid}) is running in "
-            f"{Path.cwd()}. Stop it or remove {LOCK_PATH.name} if stale.\033[0m"
+            f"\033[31m[repld] another kernel (pid={pid}) is running "
+            f"({lock_path}). Stop it or remove the lock file if stale.\033[0m"
         )
 
 
@@ -63,12 +70,17 @@ def _write_lockfile(socket_path: Path) -> None:
         "cwd": os.getcwd(),
         "started": time.time(),
     }
-    LOCK_PATH.write_text(json.dumps(info))
+    _lock_for(socket_path).write_text(json.dumps(info))
+
+
+_active_lock_path: Path | None = None
 
 
 def _cleanup_lockfile() -> None:
+    if _active_lock_path is None:
+        return
     try:
-        LOCK_PATH.unlink()
+        _active_lock_path.unlink()
     except FileNotFoundError:
         pass
 
@@ -80,7 +92,7 @@ def _cleanup_lockfile() -> None:
 
 def _banner(socket_path: Path, watchdog_threshold: float, kill_threshold: float) -> str:
     return (
-        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {LOCK_PATH.name})\n"
+        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {_lock_for(socket_path).name})\n"
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
         f"(REPLD_LOOP_BLOCK_THRESHOLD)\n"
         f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
@@ -572,7 +584,8 @@ def run_kernel(
     display: bool = True,
     init_file: str | None = None,
 ) -> int:
-    _check_existing_kernel()
+    sock_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH
+    _check_existing_kernel(sock_path)
 
     # 1. Start the asyncio loop on a daemon thread.
     loop = asyncio.new_event_loop()
@@ -633,7 +646,7 @@ def run_kernel(
         pass  # repld[browser] not installed — no browser builtin
 
     # 4. Wire IPC.
-    sock_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH
+    global _active_lock_path
     ctx = _Context(loop)
     dispatcher = Dispatcher(ctx)
 
@@ -642,6 +655,7 @@ def run_kernel(
 
     ipc.start_server(sock_path, _handler)
     _write_lockfile(sock_path)
+    _active_lock_path = _lock_for(sock_path)
     atexit.register(_cleanup_lockfile)
     atexit.register(ipc.stop_server)
 
