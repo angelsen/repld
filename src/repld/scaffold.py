@@ -9,12 +9,20 @@ import json
 import re
 from pathlib import Path
 
-_REPLD_MCP_ENTRY = {
-    "type": "stdio",
-    "command": "repld",
-    "args": ["bridge"],
-    "env": {},
-}
+def _mcp_entry(cwd: Path) -> dict:
+    if (cwd / "uv.lock").exists():
+        return {
+            "type": "stdio",
+            "command": "uv",
+            "args": ["run", "repld", "bridge"],
+            "env": {},
+        }
+    return {
+        "type": "stdio",
+        "command": "repld",
+        "args": ["bridge"],
+        "env": {},
+    }
 
 _GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock"]
 
@@ -33,6 +41,7 @@ _REPLD_BLOCK_RE = re.compile(r"<!-- repld:start -->.*?<!-- repld:end -->", re.DO
 
 
 def _write_mcp_json(cwd: Path) -> str:
+    entry = _mcp_entry(cwd)
     path = cwd / ".mcp.json"
     if path.exists():
         try:
@@ -44,11 +53,11 @@ def _write_mcp_json(cwd: Path) -> str:
         servers = cfg.setdefault("mcpServers", {})
         if "repld" in servers:
             return f"ok:      {path.name} already has a repld entry"
-        servers["repld"] = _REPLD_MCP_ENTRY
+        servers["repld"] = entry
         path.write_text(json.dumps(cfg, indent=2) + "\n")
         return f"updated: {path.name} (added repld entry)"
     path.write_text(
-        json.dumps({"mcpServers": {"repld": _REPLD_MCP_ENTRY}}, indent=2) + "\n"
+        json.dumps({"mcpServers": {"repld": entry}}, indent=2) + "\n"
     )
     return f"created: {path.name}"
 
@@ -108,13 +117,18 @@ def _update_claude_md(cwd: Path, *, force: bool = False) -> str:
     return f"updated: {path.name} (repld block overwritten)"
 
 
-_NEXT_STEPS = """\
+def _next_steps(cwd: Path) -> str:
+    if (cwd / "uv.lock").exists():
+        run = "uv run repld"
+    else:
+        run = "repld"
+    return f"""\
 Next:
   1. (Optional) Write repl.py to pre-load project state (clients, sessions,
      app handles).
   2. Start the kernel:
-       repld                       # bare kernel
-       repld --init repl.py        # with project bootstrap
+       {run}                       # bare kernel
+       {run} --init repl.py        # with project bootstrap
   3. Open Claude Code in this directory:
        claude
      The MCP bridge connects automatically via .mcp.json.
@@ -189,5 +203,5 @@ def run_init(argv: list[str]) -> int:
     print(_update_gitignore(cwd))
     print(_update_claude_md(cwd, force=force))
     print()
-    print(_NEXT_STEPS)
+    print(_next_steps(cwd))
     return 0
