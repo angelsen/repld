@@ -33,7 +33,7 @@ _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _tasks: dict[str, dict] = {}
 _CLOSED = object()  # sentinel: spill file was open, now closed by pruning
 _PRUNE_AGE = 300.0  # seconds after done_event before closing spill handle
-_PRUNE_EVERY = 50  # run pruning every N finalize() calls
+_PRUNE_EVERY = 50   # run pruning every N finalize() calls
 _finalize_count = 0
 
 

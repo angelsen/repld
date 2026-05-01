@@ -53,8 +53,8 @@ async def _eval(code, ns: dict) -> Any:
     don't block the loop (e.g. sync HTTP, time.sleep, heavy computation).
     """
     if code.co_flags & _CO_COROUTINE:
-        return await eval(code, ns)  # noqa: S307
-    raw = await asyncio.to_thread(eval, code, ns)  # noqa: S307
+        return await eval(code, ns)
+    raw = await asyncio.to_thread(eval, code, ns)
     if inspect.iscoroutine(raw):
         return await raw
     return raw
