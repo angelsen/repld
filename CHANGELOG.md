@@ -14,6 +14,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+## [0.0.3] - 2026-05-01
+
+### Changed
+
+- Expanded GUIDE resource: exec patterns, project context, live introspection with `--init`, `tab.fetch()` return shape, API discovery workflow
+- Removed unnecessary `# noqa: S307` from runtime.py
+
+### Fixed
+
+- Aligned trailing comments across source files
+
+
 ## [0.0.2] - 2026-04-30
 
 ### Added
