@@ -13,8 +13,8 @@ from pathlib import Path
 __all__ = ["install", "scan", "scan_tools", "resolve_tool", "signature"]
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}  # fullname → source .py path
-_mtimes: dict[str, float] = {}  # fullname → last known mtime
+_managed: dict[str, Path] = {}    # fullname → source .py path
+_mtimes: dict[str, float] = {}    # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
 
