@@ -60,7 +60,7 @@ _GISTS_MODEL = (
     "directly without exec, discoverable in tools/list."
 )
 
-_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide before writing gists — full patterns and conventions."
+_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns, browser workflows, and gist conventions."
 
 
 def build_instructions() -> str:
@@ -295,35 +295,172 @@ repld — working guide
 repld is a persistent Python kernel exposed over MCP. One asyncio loop, one
 __main__ namespace shared between the human (terminal) and the agent (MCP).
 The kernel stays alive across cells — state, background tasks, and browser
-sessions persist.
+sessions persist. Everything you assign to a variable stays alive for the
+next cell, the next turn, the next hour.
 
-== Execution model ==
+== How to think about exec ==
 
-exec runs Python in __main__. If it finishes within timeout (default 2s),
-result is returned inline. Otherwise it returns {task_id, done:false} and
-pushes a channel notification when done. Output spills to a file; the inline
-response shows a head+tail preview with a path to the full output.
+exec is the primary tool. It runs Python in __main__ and returns the result.
+For anything beyond a single action, use exec with Python control flow
+instead of chaining individual MCP tool calls — one exec cell can do what
+would otherwise take many separate tool calls, and you get variables,
+conditionals, loops, and error handling for free.
 
-Builtins injected into __main__:
+  # One cell — connect, fetch, filter, report:
+  tab = await browser.get("*app.example.com*")
+  users = (await tab.fetch("/api/users"))["body"]
+  active = [u for u in users if u["status"] == "active"]
+  f"{len(active)} active users out of {len(users)}"
+
+State persists across cells. Build up context over a conversation:
+
+  # Cell 1: connect and explore
+  tab = await browser.get("*salesforce*")
+  reqs = tab.network(url="*/api/*")
+
+  # Cell 2: use what you found (tab and reqs are still alive)
+  accounts = (await tab.fetch(reqs[0].url))["body"]
+
+  # Cell 3: process the data
+  big = [a for a in accounts if a["revenue"] > 1_000_000]
+
+The kernel is a workspace, not a calculator. Treat it like a persistent
+REPL session — import libraries, build up objects, iterate.
+
+=== Timing and deferred tasks ===
+
+If code finishes within timeout (default 2s), result is returned inline.
+Otherwise exec returns {task_id, done:false} and pushes a channel
+notification when done. Output spills to a file; the inline response
+shows a head+tail preview with a path to the full output. Use Read/Grep
+on that path for the full result.
+
+For intentionally long work, use defer():
+
+  defer(download_all_invoices(), label="invoice sync")
+
+This returns the task_id immediately. The channel notification arrives
+when the coroutine completes (or fails).
+
+=== Top-level await ===
+
+Top-level await is supported. No need to wrap in async def:
+
+  data = await tab.fetch("/api/data")
+  import asyncio
+  result = await asyncio.gather(fetch_a(), fetch_b())
+
+_ / _N history works — _ is the last expression, _1, _2, etc. for earlier.
+
+== Project context ==
+
+When repld runs inside a project (via uv run repld or an activated venv),
+exec has access to everything in the project environment — your app
+modules, ORM models, config, database sessions, API clients.
+
+Note: this only works when repld is installed in the project's environment
+(uv add --dev repld-tool). A globally-installed repld (uv tool install)
+cannot see project dependencies.
+
+  # FastAPI project — query the DB directly
+  from myapp.db import async_session_maker
+  from myapp.models import User
+  from sqlalchemy import select
+  async with async_session_maker() as s:
+      users = (await s.execute(select(User).where(User.active == True))).scalars().all()
+
+  # Django project — set up Django first, then query
+  import django; django.setup()
+  from myapp.models import Invoice
+  from datetime import date
+  overdue = list(Invoice.objects.filter(due_date__lt=date.today(), paid=False))
+
+  # Direct SQL — stdlib, always available
+  import sqlite3
+  conn = sqlite3.connect("data/app.db")
+  conn.execute("SELECT count(*) FROM events").fetchone()
+
+No API layer, no HTTP, no serialization — you're in the process. Faster
+than any external tool for ad-hoc queries, data inspection, and debugging.
+
+== Live introspection with --init ==
+
+repld --init repl.py runs a Python file at kernel startup, then keeps the
+kernel alive. If repl.py starts a server, worker, or any long-running
+process, that process lives inside __main__ — and exec can reach into it
+at any time without restarting.
+
+This is a dev-time decision, not a production architecture. Your service
+doesn't depend on repld — it just runs inside it during development so
+you can inspect it live.
+
+  # repl.py — boot your service inside the kernel
+  from myapp.server import create_app
+  import asyncio
+
+  app = create_app()
+  runner = asyncio.get_event_loop().create_task(app.start())
+  print(f"server running, app and runner in __main__")
+
+Now from exec (agent or human):
+
+  # Inspect live server state — no restart, no debugger
+  app.active_connections
+  app.config["feature_flags"]
+  list(app.sessions.keys())
+
+  # Debug a specific session
+  s = app.sessions["abc123"]
+  s.state, s.last_activity, s.pending_messages
+
+  # Poke at internals — test a handler directly
+  result = await app.handle_request({"type": "test", "data": "hello"})
+
+  # Patch something at runtime
+  app.config["rate_limit"] = 100
+
+This pattern works for any long-running Python process: HTTP servers
+(FastAPI, aiohttp, Flask), queue workers, WebSocket servers, CLI daemons.
+The service doesn't know it's inside repld — it just sees a normal asyncio
+loop and a normal __main__ namespace. repld adds the ability to exec into
+it mid-flight.
+
+The human can also introspect from a terminal:
+
+  repld exec 'list(app.sessions.keys())'    # one-shot query
+  repld exec                                 # interactive REPL
+
+Both the agent and the human see the same live objects.
+
+== Builtins ==
+
+Injected into __main__:
+
   notify(content, **meta)      push a channel notification to the agent
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds)(fn)           periodic ticker; fn.cancel() stops it
   ask(prompt) / confirm(prompt) / choose(prompt, options)
                                block on human input in the kernel terminal
 
-Top-level await is supported. _ / _N history works.
-
 == Browser ==
 
 browser is lazy-injected into __main__. Connects to Chrome on first use
 (requires --remote-debugging-port=9222).
+
+=== Getting tabs ===
 
   tab = await browser.get("*example.com*")   # find by URL glob
   tab = await browser.get("9222:a1b2c3")     # find by target ID
   await browser.watch("*example.com*")       # watch pattern, auto-attach
   tab = await browser.open("https://...")     # open new tab
 
-Tab API (async):
+browser.get() raises RuntimeError if no matching tab is found.
+browser.open() opens a new tab and navigates to the URL.
+tab.navigate(url) navigates an existing tab (use for same-site navigation;
+use browser.open() when you need a fresh tab).
+
+=== Tab API (async) ===
+
   tab.js(code)                        evaluate JS in page context
   tab.fetch(url, method=, body=, headers=)
                                       in-page fetch (inherits session/cookies)
@@ -335,17 +472,84 @@ Tab API (async):
   tab.confirm(prompt) → bool          gate routed to pill UI
   tab.choose(prompt, options) → str   gate routed to pill UI
 
-Tab API (sync, DuckDB):
-  tab.network(url=, method=, status=) query captured requests
-  tab.request(request_id)             full HAR entry
-  tab.body(request_id)                response body
+=== tab.fetch() return shape ===
 
-tab.fetch() runs in the page context — it inherits cookies, CSRF tokens,
-session tokens, JWTs, everything the browser has. If the user is logged in,
-tab.fetch() is authenticated.
+tab.fetch() returns a dict:
+  {"status": 200, "headers": {...}, "body": <parsed JSON or text>}
 
-Selectors: CSS, text=Label, role=button[name='OK'], label=Name,
-button:has-text('OK').
+body is auto-parsed as JSON if the content-type is application/json,
+otherwise returned as a string. Access the data with ["body"].
+
+If the request fails (network error, timeout), tab.fetch() raises
+RuntimeError with the error message.
+
+=== Tab API (sync, DuckDB-backed) ===
+
+  tab.network(url=, method=, status=) query captured requests (list of rows)
+  tab.request(request_id)             full request details
+  tab.body(request_id)                response body (str or bytes)
+  tab.clear()                         reset captured network/console data
+
+Each row from tab.network() has: .id, .url, .method, .status,
+.request_headers, .response_headers, .timestamp, .duration_ms.
+
+=== Selectors ===
+
+CSS, text=Label, role=button[name='OK'], label=Name,
+button:has-text('OK'). Same syntax across click, type_text, wait_for.
+
+=== When to use exec vs browser MCP tools ===
+
+Use exec with the browser object when you need to:
+  - Chain multiple operations (fetch → filter → fetch again)
+  - Use Python logic (conditionals, loops, error handling)
+  - Build up state across steps
+  - Do anything with the results beyond displaying them
+
+Use the browser MCP tools (browser_click, browser_network, etc.) for:
+  - Quick single inspections ("what's on this page?")
+  - One-off actions where you don't need the result in Python
+
+=== API discovery workflow ===
+
+When working with a new web app:
+
+  # 1. Attach and watch traffic
+  await browser.watch("*app.example.com*")
+  # → user clicks around in the app to generate traffic
+
+  # 2. See what API calls the app makes
+  tab = await browser.get("*app.example.com*")
+  tab.network(url="*/api/*")
+
+  # 3. Inspect a specific request
+  r = tab.network(url="*/api/users*")[0]
+  r.url, r.method, r.status
+  r.request_headers    # see auth headers
+  tab.body(r.id)       # see response body
+
+  # 4. Replay the call via tab.fetch() — inherits the browser session
+  users = (await tab.fetch("/api/users"))["body"]
+
+  # 5. Clear old traffic before exploring more
+  tab.clear()
+
+=== Building clients from captured traffic ===
+
+For APIs that use bearer tokens or API keys (auth not tied to cookies):
+
+  # Extract auth from captured traffic
+  r = tab.network(url="*/api/*")[0]
+  token = r.request_headers["Authorization"]
+
+  # Build a standalone client — works outside the browser
+  import urllib.request, json
+  req = urllib.request.Request("https://api.example.com/data",
+      headers={"Authorization": token})
+  data = json.loads(urllib.request.urlopen(req).read())
+
+For APIs that rely on cookies or session state — use tab.fetch(). The
+browser maintains the session; you just call through it.
 
 == Gists ==
 
@@ -353,8 +557,8 @@ Gists are Python modules in ~/.repld/gists/ (global) or ./gists/ (per-project).
 Both directories are on sys.path at kernel startup. Edit a file, re-import it,
 and the fresh version loads — auto-reload via mtime tracking.
 
-Gists turn GUI apps into callable Python APIs. The browser handles auth;
-the gist wraps the app's internal API in a clean interface.
+Gists wrap anything into a callable API — web apps via the browser, databases,
+graph stores, embedding indexes, internal services.
 
 Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
@@ -412,7 +616,7 @@ yield to the event loop — browser stays responsive, multiple gists can
 interleave, no "loop blocked" warnings.
 
 connect() classmethod. Finds or opens the app, returns a ready instance.
-Pattern: try browser.get() → except → browser.open() + wait_for().
+Pattern: try browser.get() → except RuntimeError → browser.open() + wait_for().
 
 tab.pin(reason) in connect(). Injects a floating pill UI + beforeunload
 guard. Prevents accidental tab close. The pill also serves as a gate
@@ -445,12 +649,13 @@ Stable gists can register MCP tools callable without exec:
   ]
 
   async def _tool_myapp_query(args: dict) -> str:
+      import json
       return json.dumps({"result": ...})
 
 Handler convention: _tool_{name}(args) → str | dict.
 Tools appear in tools/list automatically. Scaffold: repld gist <name>.
 
-=== Wiring background automation ===
+== Background automation ==
 
 The kernel persists. One-shot work can become continuous:
 
@@ -461,7 +666,44 @@ The kernel persists. One-shot work can become continuous:
           notify(f"Change detected: {data}")
 
   # Or fire-and-forget:
-  defer(app.long_running_job(), label="nightly sync")
+  defer(some_long_coroutine(), label="nightly sync")
+
+  # List active tickers:
+  every.list()
+
+  # Stop a ticker:
+  check.cancel()
+
+Combine with project context for dev workflows:
+
+  # Monitor your app's error rate (project-local repld)
+  from datetime import datetime, timedelta
+  from sqlalchemy import select, func
+  from myapp.db import async_session_maker
+  from myapp.models import ErrorLog
+
+  @every(60)
+  async def error_monitor():
+      cutoff = datetime.utcnow() - timedelta(minutes=5)
+      async with async_session_maker() as s:
+          count = (await s.execute(
+              select(func.count()).where(ErrorLog.created > cutoff)
+          )).scalar()
+          if count > 10:
+              notify(f"{count} errors in last 5 min", kind="alert")
+
+  # Watch a web app for price changes
+  price_history = {}
+
+  @every(300)
+  async def price_watch():
+      tab = await browser.get("*competitor.com*")
+      products = (await tab.fetch("/api/products"))["body"]
+      for p in products:
+          prev = price_history.get(p["id"])
+          if prev is not None and p["price"] != prev:
+              notify(f"{p['name']}: {prev} → {p['price']}", kind="price_change")
+          price_history[p["id"]] = p["price"]
 """
 
 
