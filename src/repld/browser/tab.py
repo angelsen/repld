@@ -145,34 +145,43 @@ _PIN_JS = r"""
   `;
   document.head.appendChild(style);
 
-  // ---- DOM ----
-  var pill = document.createElement('div');
-  pill.id = '__repld_pill';
-  pill.innerHTML = `
-    <div id="__repld_pill_bar">
-      <div id="__repld_dot"></div>
-      <span id="__repld_label">repld</span>
-    </div>
-    <div id="__repld_panel">
-      <div class="__repld_row">
-        <span class="__repld_row_label">status</span>
-        <span class="__repld_row_value" id="__repld_status">connected</span>
-      </div>
-      <div class="__repld_row">
-        <span class="__repld_row_label">host</span>
-        <span class="__repld_row_value" id="__repld_host"></span>
-      </div>
-      <div class="__repld_row" id="__repld_reason_row" style="display:none">
-        <span class="__repld_row_label">reason</span>
-        <span class="__repld_row_value" id="__repld_reason"></span>
-      </div>
-      <div id="__repld_gate_area" style="display:none">
-        <div id="__repld_gate_prompt"></div>
-        <div id="__repld_gate_buttons"></div>
-        <div id="__repld_pending_count"></div>
-      </div>
-    </div>
-  `;
+  // ---- DOM (createElement only — no innerHTML, Trusted Types safe) ----
+  function _el(tag, attrs, children) {
+    var e = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function(k) {
+      if (k === 'text') e.textContent = attrs[k];
+      else if (k === 'style') e.style.cssText = attrs[k];
+      else e[k] = attrs[k];
+    });
+    if (children) children.forEach(function(c) { e.appendChild(c); });
+    return e;
+  }
+
+  var pill = _el('div', {id: '__repld_pill'}, [
+    _el('div', {id: '__repld_pill_bar'}, [
+      _el('div', {id: '__repld_dot'}),
+      _el('span', {id: '__repld_label', text: 'repld'})
+    ]),
+    _el('div', {id: '__repld_panel'}, [
+      _el('div', {className: '__repld_row'}, [
+        _el('span', {className: '__repld_row_label', text: 'status'}),
+        _el('span', {className: '__repld_row_value', id: '__repld_status', text: 'connected'})
+      ]),
+      _el('div', {className: '__repld_row'}, [
+        _el('span', {className: '__repld_row_label', text: 'host'}),
+        _el('span', {className: '__repld_row_value', id: '__repld_host'})
+      ]),
+      _el('div', {className: '__repld_row', id: '__repld_reason_row', style: 'display:none'}, [
+        _el('span', {className: '__repld_row_label', text: 'reason'}),
+        _el('span', {className: '__repld_row_value', id: '__repld_reason'})
+      ]),
+      _el('div', {id: '__repld_gate_area', style: 'display:none'}, [
+        _el('div', {id: '__repld_gate_prompt'}),
+        _el('div', {id: '__repld_gate_buttons'}),
+        _el('div', {id: '__repld_pending_count'})
+      ])
+    ])
+  ]);
   document.body.appendChild(pill);
 
   // Set host
@@ -215,7 +224,7 @@ _PIN_JS = r"""
     promptEl.textContent = _active_gate.prompt;
 
     // Build buttons
-    buttonsEl.innerHTML = '';
+    while (buttonsEl.firstChild) buttonsEl.removeChild(buttonsEl.firstChild);
     _active_gate.buttons.forEach(function(btn) {
       var el = document.createElement('button');
       el.className = '__repld_btn' + (btn.style === 'primary' ? ' primary' : '');
