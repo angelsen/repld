@@ -14,6 +14,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+## [0.0.4] - 2026-05-03
+
+### Added
+
+- Gist introspection shows `async` prefix on async methods
+- NameError hints: suggests `__repld_usage__` when a gist variable name is undefined
+- MCP instructions include dependency guidance (uv project vs locked environment)
+
+### Changed
+
+- `tab.screenshot()` saves PNG to spill dir and returns path instead of raw bytes
+- `browser_screenshot` MCP tool returns file path instead of base64
+
+### Fixed
+
+- Unawaited coroutine warnings now appear in the cell that caused them, not later cells
+
+
 ## [0.0.3] - 2026-05-01
 
 ### Changed
