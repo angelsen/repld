@@ -577,6 +577,10 @@ graph stores, embedding indexes, internal services.
 Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
 Type hints + one-line docstrings on public methods → auto-introspected.
+Document return shapes in docstrings with -> {key, key, ...} so the agent
+knows the dict structure without trial and error:
+  async def search(self, query: str) -> list[dict]:
+      \"""Search things. -> [{id, name, status, created_at, ...}]\"""
 
 === Writing a browser-connected gist ===
 
@@ -607,7 +611,7 @@ Template:
           return cls(tab)
 
       async def list_things(self) -> list[dict]:
-          \"""List all things.\"""
+          \"""List all things. -> [{id, name, status, created_at}]\"""
           return (await self._tab.fetch("/api/things"))["body"]
 
       async def create_thing(self, name: str) -> dict:
