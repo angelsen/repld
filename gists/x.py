@@ -104,6 +104,12 @@ class X:
             tab = await browser.open("https://x.com")
             await tab.wait_for("role=main", timeout=10)
         await tab.pin("X (Twitter) — repld integration")
+        # Check login state — ct0 cookie is the CSRF token, only set when authenticated
+        cookies = await tab.js("document.cookie")
+        if "ct0" not in (cookies or ""):
+            raise RuntimeError(
+                "Not logged in to X — log in at x.com first, then retry connect()"
+            )
         # Bootstrap webpack require + find the transaction ID module.
         # Module IDs shift on every X.com deploy, so we discover by signature.
         ok = await tab.js("""
@@ -316,7 +322,7 @@ class X:
     async def search(
         self, query: str, *, count: int = 20, product: str = "Top"
     ) -> list[dict]:
-        """Search tweets. product: Top, Latest, People, Photos, Videos."""
+        """Search tweets. product: Top, Latest, People, Photos, Videos. -> [{id, text, screen_name, likes, retweets, views, ...}]"""
         data = await self._gql(
             "SearchTimeline",
             {
@@ -331,7 +337,7 @@ class X:
         )
 
     async def user(self, screen_name: str) -> dict:
-        """Get user profile by @handle."""
+        """Get user profile by @handle. -> {id, screen_name, name, bio, followers, following, tweets, verified}"""
         data = await self._gql(
             "UserByScreenName",
             {
@@ -345,7 +351,7 @@ class X:
         return self._parse_user(result)
 
     async def user_tweets(self, user_id: str, *, count: int = 20) -> list[dict]:
-        """Get recent tweets by user ID."""
+        """Get recent tweets by user ID. -> [{id, text, screen_name, likes, retweets, views, ...}]"""
         data = await self._gql(
             "UserTweets",
             {
@@ -361,7 +367,7 @@ class X:
         )
 
     async def tweet(self, tweet_id: str) -> dict:
-        """Get a single tweet by ID."""
+        """Get a single tweet by ID. -> {id, text, screen_name, likes, retweets, views, ...}"""
         data = await self._gql(
             "TweetResultByRestId",
             {
@@ -377,7 +383,7 @@ class X:
         return self._tweet_from_result(tr)
 
     async def home(self, *, count: int = 20) -> list[dict]:
-        """Get home timeline."""
+        """Get home timeline. -> [{id, text, screen_name, likes, retweets, views, ...}]"""
         data = await self._gql(
             "HomeTimeline",
             {
@@ -389,14 +395,14 @@ class X:
         return self._timeline_tweets(data, ["data", "home", "home_timeline_urt"])
 
     async def bookmarks(self, *, count: int = 20) -> list[dict]:
-        """Get bookmarked tweets."""
+        """Get bookmarked tweets. -> [{id, text, screen_name, likes, retweets, views, ...}]"""
         data = await self._gql(
             "Bookmarks", {"count": count, "includePromotedContent": False}
         )
         return self._timeline_tweets(data, ["data", "bookmark_timeline_v2", "timeline"])
 
     async def followers(self, user_id: str, *, count: int = 50) -> list[dict]:
-        """Get followers of a user by user ID."""
+        """Get followers of a user by user ID. -> [{id, screen_name, name, bio, followers, verified, ...}]"""
         data = await self._gql(
             "Followers",
             {"userId": user_id, "count": count, "includePromotedContent": False},
@@ -406,7 +412,7 @@ class X:
         )
 
     async def following(self, user_id: str, *, count: int = 50) -> list[dict]:
-        """Get accounts a user follows by user ID."""
+        """Get accounts a user follows by user ID. -> [{id, screen_name, name, bio, followers, verified, ...}]"""
         data = await self._gql(
             "Following",
             {"userId": user_id, "count": count, "includePromotedContent": False},
@@ -416,7 +422,7 @@ class X:
         )
 
     async def followers_you_know(self, user_id: str, *, count: int = 50) -> list[dict]:
-        """Get mutual followers (people you follow who also follow this user)."""
+        """Get mutual followers (people you follow who also follow this user). -> [{id, screen_name, name, bio, followers, verified, ...}]"""
         data = await self._gql(
             "FollowersYouKnow",
             {"userId": user_id, "count": count, "includePromotedContent": False},
@@ -426,7 +432,7 @@ class X:
         )
 
     async def user_replies(self, user_id: str, *, count: int = 20) -> list[dict]:
-        """Get tweets and replies by user ID (shows who they engage with)."""
+        """Get tweets and replies by user ID (shows who they engage with). -> [{id, text, screen_name, likes, ...}]"""
         data = await self._gql(
             "UserTweetsAndReplies",
             {

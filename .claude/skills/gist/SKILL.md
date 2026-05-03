@@ -203,11 +203,11 @@ class AppName:
         return cls(tab)
 
     async def list_things(self) -> list[dict]:
-        """List all things."""
+        """List all things. -> [{id, name, status, created_at}]"""
         return (await self._tab.fetch("/api/things"))["body"]
 
     async def create_thing(self, name: str) -> dict:
-        """Create a new thing."""
+        """Create a new thing. -> {id, name, status}"""
         return (await self._tab.fetch(
             "/api/things", method="POST", body={"name": name}
         ))["body"]
@@ -219,7 +219,7 @@ class AppName:
 - **`connect()` classmethod.** Finds or opens the app, handles iframe discovery, returns a ready instance. One-line usage: `app = await AppName.connect()`. Import kernel builtins (`browser`, `notify`, `defer`, `every`) inside `connect()`, not at module top level — top-level imports break auto-reload and introspection.
 - **`__repld_usage__`** — one line shown in the MCP instructions listing. Show the happy path, not the constructor.
 - **Module docstring** — first line auto-discovered by repld for the gist listing.
-- **Type hints + one-line docstrings** on public methods — auto-introspected when the agent imports the gist.
+- **Type hints + one-line docstrings** on public methods — auto-introspected when the agent imports the gist. Document return shapes inline: `"""Search things. -> [{id, name, status}]"""` so the agent knows dict keys without guessing.
 
 ### Pinning tabs and routing gates to the browser
 
