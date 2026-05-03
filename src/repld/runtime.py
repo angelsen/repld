@@ -7,6 +7,7 @@ last value so the kernel can bind it to `_` / `_N`.
 
 import ast
 import asyncio
+import gc
 import inspect
 import sys
 import traceback
@@ -96,6 +97,8 @@ async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
     except BaseException as exc:
         sys.stderr.write(_format_user_traceback(exc))
         raise
+    finally:
+        gc.collect()  # flush unawaited-coroutine warnings to this cell's output
 
 
 def _format_user_traceback(exc: BaseException) -> str:
@@ -114,6 +117,12 @@ def _format_user_traceback(exc: BaseException) -> str:
         formatted = traceback.format_exc()
     else:
         formatted = "".join(traceback.format_exception(type(exc), exc, tb))
+    if isinstance(exc, NameError) and exc.name:
+        from . import gists
+
+        hint = gists.hint_for_name(exc.name)
+        if hint:
+            formatted += f"\nHint: {hint}\n"
     if isinstance(exc, RuntimeError):
         msg = str(exc)
         if "cannot be called from a running event loop" in msg:

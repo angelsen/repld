@@ -109,6 +109,20 @@ def build_instructions() -> str:
             + " — call directly as MCP tools (no exec needed)."
         )
 
+    # Dependency management hint
+    from pathlib import Path
+
+    if (Path.cwd() / "uv.lock").exists():
+        parts.append(
+            "Dependencies: this is a uv project. "
+            "Add packages with `uv add <pkg>`, then restart the kernel."
+        )
+    else:
+        parts.append(
+            "Dependencies: cannot add packages at runtime. "
+            "Only stdlib and pre-installed packages are available."
+        )
+
     parts.append(_REFERENCE)
     return "\n\n".join(parts)
 
@@ -399,7 +413,7 @@ you can inspect it live.
   import asyncio
 
   app = create_app()
-  runner = asyncio.get_event_loop().create_task(app.start())
+  runner = asyncio.create_task(app.start())
   print(f"server running, app and runner in __main__")
 
 Now from exec (agent or human):
