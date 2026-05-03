@@ -114,7 +114,7 @@ def _extract_doc(path: Path) -> str:
 
 
 def hint_for_name(name: str) -> str | None:
-    """If `name` matches a gist's __repld_usage__ variable, return the usage hint."""
+    """If `name` matches a gist variable or class name, return a usage hint."""
     for d in _installed_dirs:
         if not d.is_dir():
             continue
@@ -125,6 +125,8 @@ def hint_for_name(name: str) -> str | None:
                 tree = ast.parse(p.read_text("utf-8"))
             except Exception:
                 continue
+            usage = None
+            classes: list[str] = []
             for node in ast.iter_child_nodes(tree):
                 if (
                     isinstance(node, ast.Assign)
@@ -133,10 +135,19 @@ def hint_for_name(name: str) -> str | None:
                     and isinstance(node.value, ast.Constant)
                 ):
                     usage = str(node.value.value)
-                    # Check if the variable on the left side of = matches
-                    lhs = usage.split("=")[0].strip()
-                    if lhs == name:
-                        return f"from gist {p.stem}: {usage}"
+                elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+                    classes.append(node.name)
+            # Check usage variable (e.g. "ig" from "ig = await IG.connect()")
+            if usage:
+                lhs = usage.split("=")[0].strip()
+                if lhs == name:
+                    return f"from gist {p.stem}: {usage}"
+            # Check class names (e.g. "IG" from instagram.py)
+            if name in classes:
+                hint = f"from {p.stem} import {name}"
+                if usage:
+                    hint += f"; then: {usage}"
+                return hint
     return None
 
 
