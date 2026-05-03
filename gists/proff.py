@@ -25,6 +25,8 @@ class Proff:
             tab = await browser.get("*proff.no*")
         except RuntimeError:
             tab = await browser.open("https://www.proff.no")
+            await tab.wait_for("role=main", timeout=10)
+        await tab.pin("Proff.no — repld integration")
         return cls(tab)
 
     async def search(self, query: str) -> list[dict]:
