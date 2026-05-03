@@ -8,6 +8,7 @@ network() and console().
 import asyncio
 import base64
 import json
+import pathlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -1044,14 +1045,28 @@ class Tab:
         """Page.navigate CDP command. Caller handles settle separately."""
         await self._session.execute("Page.navigate", {"url": url})
 
-    async def screenshot(self, *, full_page: bool = False) -> bytes:
-        """Capture a screenshot; returns PNG bytes."""
+    async def screenshot(self, *, full_page: bool = False, path: str | None = None) -> pathlib.Path:
+        """Capture a PNG screenshot, save to disk, return the path.
+
+        path: explicit save location. Default: $XDG_RUNTIME_DIR/repld/screenshot-{target}-{ts}.png
+        """
+        import time
+
+        from ..tasks import SPILL_DIR, _ensure_spill_dir
+
         params: dict = {"format": "png"}
         if full_page:
             params["captureBeyondViewport"] = True
         result = await self._session.execute("Page.captureScreenshot", params)
-        data = result.get("data", "")
-        return base64.b64decode(data)
+        png_bytes = base64.b64decode(result.get("data", ""))
+        if path:
+            out = pathlib.Path(path)
+        else:
+            _ensure_spill_dir()
+            tid = self.target_id.replace(":", "-")
+            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
+        out.write_bytes(png_bytes)
+        return out
 
     # ------------------------------------------------------------------
     # Query methods (sync DuckDB)

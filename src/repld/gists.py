@@ -113,6 +113,33 @@ def _extract_doc(path: Path) -> str:
     return ""
 
 
+def hint_for_name(name: str) -> str | None:
+    """If `name` matches a gist's __repld_usage__ variable, return the usage hint."""
+    for d in _installed_dirs:
+        if not d.is_dir():
+            continue
+        for p in d.glob("*.py"):
+            if p.name.startswith("_"):
+                continue
+            try:
+                tree = ast.parse(p.read_text("utf-8"))
+            except Exception:
+                continue
+            for node in ast.iter_child_nodes(tree):
+                if (
+                    isinstance(node, ast.Assign)
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "__repld_usage__"
+                    and isinstance(node.value, ast.Constant)
+                ):
+                    usage = str(node.value.value)
+                    # Check if the variable on the left side of = matches
+                    lhs = usage.split("=")[0].strip()
+                    if lhs == name:
+                        return f"from gist {p.stem}: {usage}"
+    return None
+
+
 def scan() -> list[tuple[str, str]]:
     """Scan gist directories for .py modules. Returns [(name, one_line_doc), ...]."""
     results: list[tuple[str, str]] = []
@@ -202,13 +229,14 @@ def _format_function(
     is_method: bool = False,
 ) -> None:
     """Format one function/method line."""
+    async_prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
     prefix = "." if is_method else ""
     args = _format_args(node.args, skip_self=is_method)
     ret = ""
     if node.returns:
         ret = f" -> {ast.unparse(node.returns)}"
 
-    sig = f"{indent}{prefix}{node.name}({args}){ret}"
+    sig = f"{indent}{async_prefix}{prefix}{node.name}({args}){ret}"
 
     doc = ast.get_docstring(node)
     if doc:

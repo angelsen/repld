@@ -5,7 +5,6 @@ Shared by the kernel; the bridge is a dumb byte-pipe and never touches this.
 
 import __main__
 import asyncio
-import base64
 import inspect
 import json
 import threading
@@ -325,7 +324,7 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a PNG screenshot of a tab. Returns base64-encoded PNG.",
+        "description": "Capture a PNG screenshot of a tab. Saves to disk, returns path. Use Read to view.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -799,11 +798,10 @@ class Dispatcher:
 
         if name == "browser_screenshot":
             tab = self._run_async(browser.get(args["target"]))
-
-            png_bytes = self._run_async(
+            path = self._run_async(
                 tab.screenshot(full_page=bool(args.get("full_page", False)))
             )
-            return {"base64_png": base64.b64encode(png_bytes).decode()}
+            return f"Screenshot saved to {path}\nUse Read to view it."
 
         if name == "browser_cdp":
             tab = self._run_async(browser.get(args["target"]))
