@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.5] - 2026-05-11
+
+### Added
+
 - Kernel primitives (`notify`, `defer`, `every`, `ask`, `confirm`, `choose`, `browser`) importable via `import repld` — gists no longer need lazy `from __main__` imports
 - Type stubs in `__init__.py` for IDE/pyright visibility of kernel primitives
 - Gmail gist: `headers=False` for fast snippet-only search
