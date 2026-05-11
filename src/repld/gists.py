@@ -7,15 +7,49 @@ import importlib
 import importlib.abc
 import importlib.machinery
 import importlib.util
+import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-__all__ = ["install", "scan", "scan_tools", "resolve_tool", "signature"]
+__all__ = ["install", "scan", "scan_tools", "resolve_tool", "signature", "registry"]
 
 # Module names managed by the gist finder (populated by _GistFinder)
 _managed: dict[str, Path] = {}    # fullname → source .py path
 _mtimes: dict[str, float] = {}    # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
+
+_REGISTRY_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "repld" / "gist-registry.json"
+
+
+def _register(name: str) -> None:
+    """Record a gist import in the central registry. Best-effort, never raises."""
+    try:
+        src = _managed.get(name)
+        if src is None:
+            return
+        _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        reg: dict = {}
+        if _REGISTRY_PATH.is_file():
+            reg = json.loads(_REGISTRY_PATH.read_text("utf-8"))
+        doc = _extract_doc(src)
+        reg[name] = {
+            "path": str(src),
+            "description": doc,
+            "project": str(Path.cwd()),
+            "last_used": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        _REGISTRY_PATH.write_text(json.dumps(reg, indent=2) + "\n", "utf-8")
+    except Exception:
+        pass
+
+
+def registry() -> dict:
+    """Read the gist registry. Returns {name: {path, description, project, last_used}}."""
+    if _REGISTRY_PATH.is_file():
+        return json.loads(_REGISTRY_PATH.read_text("utf-8"))
+    return {}
 
 
 def _check_reload(fullname: str) -> None:
@@ -89,8 +123,9 @@ class _GistImportHook:
 
         result = self._original(name, globals, locals, fromlist, level)
 
-        # Auto-inject API summary on gist import.
+        # Auto-inject API summary on gist import + register in central registry.
         if top in _managed:
+            _register(top)
             try:
                 summary = introspect(top)
                 if summary:
