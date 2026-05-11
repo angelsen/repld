@@ -72,8 +72,11 @@ class Gmail:
 
     # --- Read ---
 
-    def search(self, query: str, limit: int = 20) -> list[dict]:
-        """Search messages by Gmail query. -> [{id, thread_id, snippet, from, to, subject, date}]"""
+    def search(self, query: str, limit: int = 20, headers: bool = True) -> list[dict]:
+        """Search messages by Gmail query. -> [{id, thread_id, snippet, from, to, subject, date}]
+
+        With headers=False, returns only {id, thread_id, snippet} (fast, no per-message fetch).
+        """
         msgs = []
         page_token = None
         while len(msgs) < limit:
@@ -82,10 +85,23 @@ class Gmail:
                 params["pageToken"] = page_token
             data = self._req(f"messages?{urllib.parse.urlencode(params)}")
             for m in data.get("messages", []):
-                detail = self._req(f"messages/{m['id']}?format=metadata"
-                                   f"&metadataHeaders=From&metadataHeaders=To"
-                                   f"&metadataHeaders=Subject&metadataHeaders=Date")
-                msgs.append(self._parse_metadata(detail))
+                if headers:
+                    detail = self._req(f"messages/{m['id']}?format=metadata"
+                                       f"&metadataHeaders=From&metadataHeaders=To"
+                                       f"&metadataHeaders=Subject&metadataHeaders=Date")
+                    msgs.append(self._parse_metadata(detail))
+                else:
+                    # Fast mode: just get snippet without per-message fetch
+                    detail = self._req(f"messages/{m['id']}?format=minimal")
+                    msgs.append({
+                        "id": detail["id"],
+                        "thread_id": detail.get("threadId", ""),
+                        "snippet": detail.get("snippet", ""),
+                        "date": "",
+                        "from": "",
+                        "subject": "",
+                        "to": "",
+                    })
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
