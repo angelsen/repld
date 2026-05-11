@@ -8,11 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Kernel primitives (`notify`, `defer`, `every`, `ask`, `confirm`, `choose`, `browser`) importable via `import repld` — gists no longer need lazy `from __main__` imports
+- Type stubs in `__init__.py` for IDE/pyright visibility of kernel primitives
+- Gmail gist: `headers=False` for fast snippet-only search
+- Gmail gist: OAuth2 with auto-refresh, full CRUD
+- Google Messages gist: ADB-first with SMS/MMS/RCS dump to SQLite, web opt-in for writes
+
 ### Changed
+
+- Gist docstrings document return shapes
 
 ### Fixed
 
-### Removed
+- Browser smoketest skips gracefully when `websockets` extra is not installed
+- Trusted Types safe pill injection for Google domains with CSP
 
 ## [0.0.4] - 2026-05-03
 
