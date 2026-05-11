@@ -47,8 +47,15 @@ class GMessages:
         )""")
 
         # SMS
-        sms_out = _adb("shell", "content", "query", "--uri", "content://sms",
-                        "--projection", "_id:address:body:date:type")
+        sms_out = _adb(
+            "shell",
+            "content",
+            "query",
+            "--uri",
+            "content://sms",
+            "--projection",
+            "_id:address:body:date:type",
+        )
         sms_n = 0
         for line in sms_out.split("\n"):
             m = re.match(
@@ -63,8 +70,15 @@ class GMessages:
                 sms_n += 1
 
         # MMS/RCS text parts
-        parts_out = _adb("shell", "content", "query", "--uri", "content://mms/part",
-                          "--projection", "_id:mid:ct:text")
+        parts_out = _adb(
+            "shell",
+            "content",
+            "query",
+            "--uri",
+            "content://mms/part",
+            "--projection",
+            "_id:mid:ct:text",
+        )
         mms_texts: dict[str, str] = {}
         for line in parts_out.split("\n"):
             m = re.match(r"Row: \d+ _id=(\d+), mid=(\d+), ct=(.*?), text=(.*)", line)
@@ -72,13 +86,27 @@ class GMessages:
                 mms_texts[m[2]] = m[4]
 
         # MMS metadata
-        mms_out = _adb("shell", "content", "query", "--uri", "content://mms",
-                        "--projection", "_id:date:msg_box:thread_id")
+        mms_out = _adb(
+            "shell",
+            "content",
+            "query",
+            "--uri",
+            "content://mms",
+            "--projection",
+            "_id:date:msg_box:thread_id",
+        )
 
         # Thread -> address mapping (threads shared between SMS and MMS)
         thread_addr: dict[str, str] = {}
-        threads_out = _adb("shell", "content", "query", "--uri", "content://sms",
-                            "--projection", "thread_id:address")
+        threads_out = _adb(
+            "shell",
+            "content",
+            "query",
+            "--uri",
+            "content://sms",
+            "--projection",
+            "thread_id:address",
+        )
         for line in threads_out.split("\n"):
             tm = re.match(r"Row: \d+ thread_id=(\d+), address=(.+)", line)
             if tm and tm[1] not in thread_addr:
@@ -96,8 +124,14 @@ class GMessages:
                 addr = thread_addr.get(m[4], "")
                 db.execute(
                     "INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?,?)",
-                    (f"mms_{m[1]}", addr, text, int(m[2]) * 1000,
-                     1 if m[3] == "1" else 2, "mms"),
+                    (
+                        f"mms_{m[1]}",
+                        addr,
+                        text,
+                        int(m[2]) * 1000,
+                        1 if m[3] == "1" else 2,
+                        "mms",
+                    ),
                 )
                 mms_n += 1
 
@@ -119,25 +153,34 @@ class GMessages:
 
     def _fmt(self, rows) -> list[dict]:
         return [
-            {**dict(r), "date_str": datetime.fromtimestamp(r["date"] / 1000).strftime("%Y-%m-%d %H:%M")}
+            {
+                **dict(r),
+                "date_str": datetime.fromtimestamp(r["date"] / 1000).strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
+            }
             for r in rows
         ]
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
         """Search all messages by text content. -> [{address, body, date, type, source, date_str}]"""
         db = self._get_db()
-        return self._fmt(db.execute(
-            "SELECT * FROM messages WHERE body LIKE ? ORDER BY date DESC LIMIT ?",
-            (f"%{query}%", limit),
-        ).fetchall())
+        return self._fmt(
+            db.execute(
+                "SELECT * FROM messages WHERE body LIKE ? ORDER BY date DESC LIMIT ?",
+                (f"%{query}%", limit),
+            ).fetchall()
+        )
 
     def history(self, address: str, limit: int = 50) -> list[dict]:
         """Get messages from/to an address. -> [{address, body, date, type, source, date_str}]"""
         db = self._get_db()
-        return self._fmt(db.execute(
-            "SELECT * FROM messages WHERE address LIKE ? ORDER BY date DESC LIMIT ?",
-            (f"%{address}%", limit),
-        ).fetchall())
+        return self._fmt(
+            db.execute(
+                "SELECT * FROM messages WHERE address LIKE ? ORDER BY date DESC LIMIT ?",
+                (f"%{address}%", limit),
+            ).fetchall()
+        )
 
     def senders(self) -> list[dict]:
         """List unique senders with message counts. -> [{address, count, latest}]"""
@@ -148,14 +191,22 @@ class GMessages:
             GROUP BY address ORDER BY latest DESC
         """).fetchall()
         return [
-            {"address": r["address"], "count": r["count"],
-             "latest": datetime.fromtimestamp(r["latest"] / 1000).strftime("%Y-%m-%d")}
+            {
+                "address": r["address"],
+                "count": r["count"],
+                "latest": datetime.fromtimestamp(r["latest"] / 1000).strftime(
+                    "%Y-%m-%d"
+                ),
+            }
             for r in rows
         ]
 
     def compose(self, phone: str, text: str) -> None:
         """Open compose UI on phone with pre-filled message. -> None"""
-        _adb("shell", f'am start -a android.intent.action.SENDTO -d smsto:{phone} --es sms_body "{text}"')
+        _adb(
+            "shell",
+            f'am start -a android.intent.action.SENDTO -d smsto:{phone} --es sms_body "{text}"',
+        )
 
     # --- Web: send, archive, delete (requires browser tab) ---
 
@@ -166,7 +217,9 @@ class GMessages:
         try:
             self._tab = await repld.browser.get("*messages.google.com*")
         except RuntimeError:
-            self._tab = await repld.browser.open("https://messages.google.com/web/conversations")
+            self._tab = await repld.browser.open(
+                "https://messages.google.com/web/conversations"
+            )
             await self._tab.wait_for("role=listbox", timeout=15)
         await self._tab.pin("Google Messages — repld integration")
         await self._ensure_service()
@@ -291,7 +344,7 @@ class GMessages:
     async def send(self, conversation_id: str, text: str) -> dict:
         """Send a message via web (auto-send, pill-gated). -> {ok, conversationId}"""
         self._require_web()
-        ok = await self._tab.confirm(f"Send to {conversation_id}: \"{text[:60]}\"?")
+        ok = await self._tab.confirm(f'Send to {conversation_id}: "{text[:60]}"?')
         if not ok:
             raise RuntimeError("Cancelled by user")
         return await self._tab.js(f"""
@@ -331,9 +384,14 @@ class GMessages:
         self._require_web()
         convs = await self.conversations()
         q = name_or_phone.lower().replace(" ", "")
-        conv = next((c for c in convs
-                     if q in c["name"].lower() or q in c.get("phone", "").replace(" ", "")),
-                    None)
+        conv = next(
+            (
+                c
+                for c in convs
+                if q in c["name"].lower() or q in c.get("phone", "").replace(" ", "")
+            ),
+            None,
+        )
         if not conv:
             raise RuntimeError(f"No conversation found for: {name_or_phone}")
         return await self.send(conv["id"], text)
@@ -420,8 +478,13 @@ class GMessages:
         self._require_web()
         convs = await self.conversations()
         junk_patterns = [
-            "verification code", "code:", "kode:", "your code", "engangskode",
-            "do not share", "don't share",
+            "verification code",
+            "code:",
+            "kode:",
+            "your code",
+            "engangskode",
+            "do not share",
+            "don't share",
         ]
         junk = [
             {"id": c["id"], "name": c["name"], "last_message": c["last_message"][:80]}

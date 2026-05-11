@@ -35,30 +35,39 @@ class Gmail:
         """Refresh the access token using the stored refresh token."""
         with open(_CREDS_PATH) as f:
             creds = json.load(f)["installed"]
-        data = urllib.parse.urlencode({
-            "client_id": creds["client_id"],
-            "client_secret": creds["client_secret"],
-            "refresh_token": self._token["refresh_token"],
-            "grant_type": "refresh_token",
-        }).encode()
-        req = urllib.request.Request("https://oauth2.googleapis.com/token",
-                                     data=data, method="POST")
+        data = urllib.parse.urlencode(
+            {
+                "client_id": creds["client_id"],
+                "client_secret": creds["client_secret"],
+                "refresh_token": self._token["refresh_token"],
+                "grant_type": "refresh_token",
+            }
+        ).encode()
+        req = urllib.request.Request(
+            "https://oauth2.googleapis.com/token", data=data, method="POST"
+        )
         with urllib.request.urlopen(req) as resp:
             new = json.loads(resp.read())
         self._token["access_token"] = new["access_token"]
         with open(_TOKEN_PATH, "w") as f:
             json.dump(self._token, f, indent=2)
 
-    def _req(self, path: str, method: str = "GET", body: dict | None = None,
-             raw: bool = False) -> dict | bytes:
+    def _req(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        raw: bool = False,
+    ) -> dict | bytes:
         """Make an authenticated API request, auto-refreshing on 401."""
         url = f"{_API}/{path}" if not path.startswith("http") else path
         for attempt in range(2):
             headers = {"Authorization": f"Bearer {self._token['access_token']}"}
             if body is not None:
                 headers["Content-Type"] = "application/json"
-                req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                             headers=headers, method=method)
+                req = urllib.request.Request(
+                    url, data=json.dumps(body).encode(), headers=headers, method=method
+                )
             else:
                 req = urllib.request.Request(url, headers=headers, method=method)
             try:
@@ -86,22 +95,26 @@ class Gmail:
             data = self._req(f"messages?{urllib.parse.urlencode(params)}")
             for m in data.get("messages", []):
                 if headers:
-                    detail = self._req(f"messages/{m['id']}?format=metadata"
-                                       f"&metadataHeaders=From&metadataHeaders=To"
-                                       f"&metadataHeaders=Subject&metadataHeaders=Date")
+                    detail = self._req(
+                        f"messages/{m['id']}?format=metadata"
+                        f"&metadataHeaders=From&metadataHeaders=To"
+                        f"&metadataHeaders=Subject&metadataHeaders=Date"
+                    )
                     msgs.append(self._parse_metadata(detail))
                 else:
                     # Fast mode: just get snippet without per-message fetch
                     detail = self._req(f"messages/{m['id']}?format=minimal")
-                    msgs.append({
-                        "id": detail["id"],
-                        "thread_id": detail.get("threadId", ""),
-                        "snippet": detail.get("snippet", ""),
-                        "date": "",
-                        "from": "",
-                        "subject": "",
-                        "to": "",
-                    })
+                    msgs.append(
+                        {
+                            "id": detail["id"],
+                            "thread_id": detail.get("threadId", ""),
+                            "snippet": detail.get("snippet", ""),
+                            "date": "",
+                            "from": "",
+                            "subject": "",
+                            "to": "",
+                        }
+                    )
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
@@ -117,16 +130,20 @@ class Gmail:
 
     def thread(self, thread_id: str) -> list[dict]:
         """Read all messages in a thread. -> [{id, from, subject, date, snippet}]"""
-        data = self._req(f"threads/{thread_id}?format=metadata"
-                         f"&metadataHeaders=From&metadataHeaders=Subject"
-                         f"&metadataHeaders=Date")
+        data = self._req(
+            f"threads/{thread_id}?format=metadata"
+            f"&metadataHeaders=From&metadataHeaders=Subject"
+            f"&metadataHeaders=Date"
+        )
         return [self._parse_metadata(m) for m in data.get("messages", [])]
 
     def labels(self) -> list[dict]:
         """List all labels. -> [{id, name, type}]"""
         data = self._req("labels")
-        return [{"id": l["id"], "name": l["name"], "type": l.get("type", "")}
-                for l in data.get("labels", [])]
+        return [
+            {"id": l["id"], "name": l["name"], "type": l.get("type", "")}
+            for l in data.get("labels", [])
+        ]
 
     def inbox(self, limit: int = 20) -> list[dict]:
         """List inbox messages. -> [{id, thread_id, snippet, from, subject, date}]"""
@@ -140,8 +157,11 @@ class Gmail:
 
     def archive(self, message_id: str) -> None:
         """Archive a message (remove INBOX label). -> None"""
-        self._req(f"messages/{message_id}/modify",
-                  method="POST", body={"removeLabelIds": ["INBOX"]})
+        self._req(
+            f"messages/{message_id}/modify",
+            method="POST",
+            body={"removeLabelIds": ["INBOX"]},
+        )
 
     def trash(self, message_id: str) -> None:
         """Move a message to trash. -> None"""
@@ -153,27 +173,40 @@ class Gmail:
 
     def mark_read(self, message_id: str) -> None:
         """Mark a message as read. -> None"""
-        self._req(f"messages/{message_id}/modify",
-                  method="POST", body={"removeLabelIds": ["UNREAD"]})
+        self._req(
+            f"messages/{message_id}/modify",
+            method="POST",
+            body={"removeLabelIds": ["UNREAD"]},
+        )
 
     def mark_unread(self, message_id: str) -> None:
         """Mark a message as unread. -> None"""
-        self._req(f"messages/{message_id}/modify",
-                  method="POST", body={"addLabelIds": ["UNREAD"]})
+        self._req(
+            f"messages/{message_id}/modify",
+            method="POST",
+            body={"addLabelIds": ["UNREAD"]},
+        )
 
     def label(self, message_id: str, label_ids: list[str]) -> None:
         """Add labels to a message. -> None"""
-        self._req(f"messages/{message_id}/modify",
-                  method="POST", body={"addLabelIds": label_ids})
+        self._req(
+            f"messages/{message_id}/modify",
+            method="POST",
+            body={"addLabelIds": label_ids},
+        )
 
     def unlabel(self, message_id: str, label_ids: list[str]) -> None:
         """Remove labels from a message. -> None"""
-        self._req(f"messages/{message_id}/modify",
-                  method="POST", body={"removeLabelIds": label_ids})
+        self._req(
+            f"messages/{message_id}/modify",
+            method="POST",
+            body={"removeLabelIds": label_ids},
+        )
 
     def send(self, to: str, subject: str, body: str) -> dict:
         """Send an email. -> {id, thread_id}"""
         import base64
+
         raw = f"To: {to}\r\nSubject: {subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}"
         encoded = base64.urlsafe_b64encode(raw.encode()).decode()
         return self._req("messages/send", method="POST", body={"raw": encoded})
@@ -182,8 +215,11 @@ class Gmail:
 
     def archive_many(self, message_ids: list[str]) -> None:
         """Archive multiple messages. -> None"""
-        self._req("messages/batchModify", method="POST",
-                  body={"ids": message_ids, "removeLabelIds": ["INBOX"]})
+        self._req(
+            "messages/batchModify",
+            method="POST",
+            body={"ids": message_ids, "removeLabelIds": ["INBOX"]},
+        )
 
     def trash_many(self, message_ids: list[str]) -> None:
         """Trash multiple messages. -> None"""
@@ -192,15 +228,20 @@ class Gmail:
 
     def mark_read_many(self, message_ids: list[str]) -> None:
         """Mark multiple messages as read. -> None"""
-        self._req("messages/batchModify", method="POST",
-                  body={"ids": message_ids, "removeLabelIds": ["UNREAD"]})
+        self._req(
+            "messages/batchModify",
+            method="POST",
+            body={"ids": message_ids, "removeLabelIds": ["UNREAD"]},
+        )
 
     # --- Helpers ---
 
     @staticmethod
     def _parse_metadata(msg: dict) -> dict:
-        headers = {h["name"].lower(): h["value"]
-                   for h in msg.get("payload", msg).get("headers", [])}
+        headers = {
+            h["name"].lower(): h["value"]
+            for h in msg.get("payload", msg).get("headers", [])
+        }
         return {
             "id": msg["id"],
             "thread_id": msg.get("threadId", ""),
@@ -218,7 +259,9 @@ class Gmail:
 
         def _find(node: dict, mime: str) -> str | None:
             if node.get("mimeType") == mime and node.get("body", {}).get("data"):
-                return base64.urlsafe_b64decode(node["body"]["data"]).decode("utf-8", errors="replace")
+                return base64.urlsafe_b64decode(node["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
             for part in node.get("parts", []):
                 found = _find(part, mime)
                 if found:
@@ -234,13 +277,14 @@ class Gmail:
         html = _find(payload, "text/html")
         if html:
             import re
-            html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.S)
-            html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.S)
-            html = re.sub(r'<[^>]+>', ' ', html)
-            html = re.sub(r'&nbsp;', ' ', html)
-            html = re.sub(r'&amp;', '&', html)
-            html = re.sub(r'&#\d+;', '', html)
-            html = re.sub(r'\s+', ' ', html).strip()
+
+            html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.S)
+            html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.S)
+            html = re.sub(r"<[^>]+>", " ", html)
+            html = re.sub(r"&nbsp;", " ", html)
+            html = re.sub(r"&amp;", "&", html)
+            html = re.sub(r"&#\d+;", "", html)
+            html = re.sub(r"\s+", " ", html).strip()
             return html
 
         return ""
