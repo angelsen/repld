@@ -8,11 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-### Changed
-
-### Fixed
-
-### Removed
+- Central gist registry (`~/.config/repld/gist-registry.json`) — tracks every gist import across all projects with path, description, project, and last-used timestamp
+- Migrated all gists from lazy `from __main__` imports to `import repld`
 
 ## [0.0.5] - 2026-05-11
 
