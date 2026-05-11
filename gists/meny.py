@@ -4,6 +4,8 @@ __repld_usage__ = "meny = await Meny.connect()"
 
 from urllib.parse import quote
 
+import repld
+
 _BASE = "https://platform-rest-prod.ngdata.no/api"
 _DEFAULT_STORE = "7080001150488"
 _DEFAULT_CHAIN = "1300"
@@ -22,10 +24,8 @@ class Meny:
     @classmethod
     async def connect(cls, store_id: str = _DEFAULT_STORE) -> "Meny":
         """Attach to meny.no tab or open one."""
-        from __main__ import browser
-
         try:
-            tab = await browser.get("*meny.no*")
+            tab = await repld.browser.get("*meny.no*")
         except RuntimeError:
             tab = await browser.open("https://meny.no")
             await tab.wait_for("role=main", timeout=10)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import repld
+
 __repld_usage__ = "x = await X.connect()"
 
 # GraphQL endpoint IDs — discovered from webpack bundle.
@@ -96,12 +98,10 @@ class X:
     @classmethod
     async def connect(cls) -> "X":
         """Find or open X.com and return a ready instance."""
-        from __main__ import browser
-
         try:
-            tab = await browser.get("*://x.com/*")
+            tab = await repld.browser.get("*://x.com/*")
         except RuntimeError:
-            tab = await browser.open("https://x.com")
+            tab = await repld.browser.open("https://x.com")
             await tab.wait_for("role=main", timeout=10)
         await tab.pin("X (Twitter) — repld integration")
         # Check login state — ct0 cookie is the CSRF token, only set when authenticated

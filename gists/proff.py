@@ -3,6 +3,8 @@
 import json
 import re
 
+import repld
+
 __repld_usage__ = "p = await Proff.connect()"
 
 _NEXT_DATA_RE = re.compile(
@@ -19,10 +21,8 @@ class Proff:
     @classmethod
     async def connect(cls) -> "Proff":
         """Find or open proff.no and return a ready instance."""
-        from __main__ import browser
-
         try:
-            tab = await browser.get("*proff.no*")
+            tab = await repld.browser.get("*proff.no*")
         except RuntimeError:
             tab = await browser.open("https://www.proff.no")
             await tab.wait_for("role=main", timeout=10)

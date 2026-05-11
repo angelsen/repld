@@ -3,6 +3,8 @@
 from __future__ import annotations
 from urllib.parse import quote, urlencode
 
+import repld
+
 __repld_usage__ = "ig = await IG.connect()"
 
 
@@ -22,9 +24,7 @@ class IG:
     @classmethod
     async def connect(cls) -> "IG":
         """Attach to Instagram tab and return ready instance."""
-        from __main__ import browser
-
-        tab = await browser.get("*://www.instagram.com/*")
+        tab = await repld.browser.get("*://www.instagram.com/*")
         await tab.pin("Instagram — profiles, DMs, search, likes, comments, follows")
         return cls(tab)
 
@@ -263,9 +263,7 @@ class IG:
         Default on_new is notify().
         """
         if on_new is None:
-            from __main__ import notify
-
-            on_new = notify
+            on_new = repld.notify
         if not hasattr(self, "_seen_threads"):
             self._seen_threads = set()
         data = await self.inbox()

@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 from datetime import datetime
 
+import repld
+
 __repld_usage__ = "gm = GMessages()"
 
 _ADB = os.path.expanduser("~/Android/Sdk/platform-tools/adb")
@@ -161,11 +163,10 @@ class GMessages:
         """Connect to Google Messages web for send/archive/delete. -> self"""
         if self._tab:
             return self
-        from __main__ import browser
         try:
-            self._tab = await browser.get("*messages.google.com*")
+            self._tab = await repld.browser.get("*messages.google.com*")
         except RuntimeError:
-            self._tab = await browser.open("https://messages.google.com/web/conversations")
+            self._tab = await repld.browser.open("https://messages.google.com/web/conversations")
             await self._tab.wait_for("role=listbox", timeout=15)
         await self._tab.pin("Google Messages — repld integration")
         await self._ensure_service()

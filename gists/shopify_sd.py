@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+import repld
+
 __repld_usage__ = "sd = await SD.connect()"
 
 
@@ -33,10 +35,8 @@ class SD:
     @classmethod
     async def connect(cls) -> "SD":
         """Find or open S&D in admin, attach to iframe, return ready instance."""
-        from __main__ import browser
-
         try:
-            admin = await browser.get("*admin.shopify*search-and-discovery*")
+            admin = await repld.browser.get("*admin.shopify*search-and-discovery*")
         except RuntimeError:
             admin = await browser.open(
                 "https://admin.shopify.com/store/mym-shop-7ai85jfe/apps/search-and-discovery"
@@ -47,11 +47,9 @@ class SD:
 
     async def _navigate(self, path: str) -> None:
         """Navigate admin tab to an S&D sub-page, wait for new iframe."""
-        from __main__ import browser
-
         url = f"https://admin.shopify.com/store/{self._store}/apps/search-and-discovery/{path}"
         await self._admin.navigate(url)
-        self._tab = await browser.get(
+        self._tab = await repld.browser.get(
             "*search-and-discovery.shopifyapps*", timeout=10, fresh=True
         )
 

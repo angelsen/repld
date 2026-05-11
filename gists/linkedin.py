@@ -3,6 +3,8 @@
 import json
 from urllib.parse import quote, urlencode
 
+import repld
+
 __repld_usage__ = "li = await LI.connect()"
 
 _PROFILE_DECORATION = (
@@ -20,10 +22,8 @@ class LI:
     @classmethod
     async def connect(cls) -> "LI":
         """Find or open LinkedIn and return a ready instance."""
-        from __main__ import browser
-
         try:
-            tab = await browser.get("*linkedin.com*")
+            tab = await repld.browser.get("*linkedin.com*")
         except RuntimeError:
             tab = await browser.open("https://www.linkedin.com")
             await tab.wait_for("role=main", timeout=10)
