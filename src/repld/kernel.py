@@ -606,17 +606,24 @@ def run_kernel(
         ]
     )
 
-    # 3. Inject helpers into __main__.
+    # 3. Inject helpers into __main__ + repld module.
     from . import gates
     import pydoc
+    import repld as _repld_mod
 
     _every = _make_every(loop)
-    setattr(__main__, "notify", _notify)
-    setattr(__main__, "defer", _make_defer(loop))
-    setattr(__main__, "every", _every)
-    setattr(__main__, "ask", gates.ask)
-    setattr(__main__, "confirm", gates.confirm)
-    setattr(__main__, "choose", gates.choose)
+    _defer = _make_defer(loop)
+    _helpers = {
+        "notify": _notify,
+        "defer": _defer,
+        "every": _every,
+        "ask": gates.ask,
+        "confirm": gates.confirm,
+        "choose": gates.choose,
+    }
+    for _name, _fn in _helpers.items():
+        setattr(__main__, _name, _fn)
+        setattr(_repld_mod, _name, _fn)
     # Pager-free help — pydoc's default pager forks less(1) on the kernel tty,
     # bypassing _Tee and deadlocking the asyncio loop. Helper(output=...) writes
     # directly through sys.stdout (the _Tee) so output flows to exec clients.
@@ -628,6 +635,7 @@ def run_kernel(
 
         _lazy_browser = LazyBrowser(loop)
         setattr(__main__, "browser", _lazy_browser)
+        setattr(_repld_mod, "browser", _lazy_browser)
 
         def _browser_cleanup() -> None:
             b = getattr(__main__, "browser", None)
