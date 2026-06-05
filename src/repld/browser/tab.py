@@ -890,17 +890,8 @@ class Tab:
                 raise RuntimeError(f"Element not found: {selector}")
             await asyncio.sleep(0.1)
 
-    async def click(
-        self,
-        selector: str,
-        *,
-        button: str = "left",
-        click_count: int = 1,
-    ) -> None:
-        """Click an element. Auto-waits up to 2s for the element to appear.
-
-        Selector: CSS, text=Label, role=button[name='OK'], or tag:has-text('...')
-        """
+    async def _element_center(self, selector: str) -> tuple[float, float]:
+        """Resolve selector to (x, y) center coordinates. Auto-waits up to 2s."""
         find_expr = await self._find_element(selector)
         coords = await self._session.execute(
             "Runtime.evaluate",
@@ -920,7 +911,20 @@ class Tab:
         if result.get("value") is None:
             raise RuntimeError(f"Element not found: {selector}")
         pos = result["value"]
-        x, y = pos["x"], pos["y"]
+        return pos["x"], pos["y"]
+
+    async def click(
+        self,
+        selector: str,
+        *,
+        button: str = "left",
+        click_count: int = 1,
+    ) -> None:
+        """Click an element. Auto-waits up to 2s for the element to appear.
+
+        Selector: CSS, text=Label, role=button[name='OK'], or tag:has-text('...')
+        """
+        x, y = await self._element_center(selector)
 
         for event_type in ("mousePressed", "mouseReleased"):
             await self._session.execute(
@@ -980,6 +984,59 @@ class Tab:
                     "Input.dispatchKeyEvent",
                     {"type": event_type, "key": "Enter", "code": "Enter"},
                 )
+
+    async def tap(self, selector_or_x, y: float | None = None) -> None:
+        """Touch tap. Accepts a selector or (x, y) coordinates.
+
+        Uses Input.dispatchTouchEvent — triggers touchstart/touchend listeners
+        that dispatchMouseEvent won't reach. Use for mobile Chrome via ADB.
+        """
+        if y is not None:
+            x, y = float(selector_or_x), y
+        else:
+            x, y = await self._element_center(selector_or_x)
+
+        tp = [{"x": x, "y": y}]
+        await self._session.execute(
+            "Input.dispatchTouchEvent",
+            {"type": "touchStart", "touchPoints": tp},
+        )
+        await self._session.execute(
+            "Input.dispatchTouchEvent",
+            {"type": "touchEnd", "touchPoints": []},
+        )
+
+    async def swipe(
+        self,
+        x1: float, y1: float,
+        x2: float, y2: float,
+        *,
+        steps: int = 10,
+        duration_ms: int = 300,
+    ) -> None:
+        """Touch swipe from (x1,y1) to (x2,y2).
+
+        Dispatches touchStart → touchMove × steps → touchEnd.
+        For scrolling on mobile Chrome via ADB.
+        """
+        await self._session.execute(
+            "Input.dispatchTouchEvent",
+            {"type": "touchStart", "touchPoints": [{"x": x1, "y": y1}]},
+        )
+        delay = duration_ms / steps / 1000
+        for i in range(1, steps + 1):
+            frac = i / steps
+            cx = x1 + (x2 - x1) * frac
+            cy = y1 + (y2 - y1) * frac
+            await self._session.execute(
+                "Input.dispatchTouchEvent",
+                {"type": "touchMove", "touchPoints": [{"x": cx, "y": cy}]},
+            )
+            await asyncio.sleep(delay)
+        await self._session.execute(
+            "Input.dispatchTouchEvent",
+            {"type": "touchEnd", "touchPoints": []},
+        )
 
     async def tree(self) -> list[str]:
         """Compact accessibility tree as text lines.

@@ -54,13 +54,14 @@ class Browser:
     """
 
     def __init__(
-        self, loop: asyncio.AbstractEventLoop, port: int | None = None
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        port: int | None = None,
     ) -> None:
         from .session import BrowserSession
 
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         self._session: BrowserSession = BrowserSession(self.port)
-        self._loop: asyncio.AbstractEventLoop = loop
         self._connected: bool = False
 
     async def _ensure_connected(self) -> None:
