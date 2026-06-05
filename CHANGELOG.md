@@ -6,13 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-### Changed
-
 ### Fixed
 
-### Removed
+- MCP server and exec client now report actual package version instead of hardcoded `0.0.1`
+- `__version__` sourced from `importlib.metadata` — stays in sync with pyproject.toml
 
 ## [0.0.8] - 2026-06-05
 
