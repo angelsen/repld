@@ -621,12 +621,12 @@ Template:
       @classmethod
       async def connect(cls) -> "AppName":
           \"""Find or open the app and return a ready instance.\"""
-          from __main__ import browser
+          import repld
 
           try:
-              tab = await browser.get("*app.example.com*")
+              tab = await repld.browser.get("*app.example.com*")
           except RuntimeError:
-              tab = await browser.open("https://app.example.com")
+              tab = await repld.browser.open("https://app.example.com")
               await tab.wait_for("role=main", timeout=10)
           await tab.pin("AppName — repld integration")
           return cls(tab)
@@ -646,9 +646,9 @@ Template:
 
 === Conventions ===
 
-Import kernel builtins (browser, notify, defer, every) inside connect(),
-not at module top level. Top-level imports from __main__ break auto-reload
-and prevent introspection of the module before the kernel is running.
+Import kernel builtins via `import repld` at module top level. Access as
+repld.browser, repld.notify, repld.defer, repld.every. Module-level import
+is auto-reload safe (attribute lookup on each call, not a frozen reference).
 
 Async by default. All methods async def, use await tab.fetch(). Async gists
 yield to the event loop — browser stays responsive, multiple gists can
