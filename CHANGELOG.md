@@ -8,11 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ready=` parameter on `browser.get()` — CSS selector or JS expression as app-readiness contract
+- Session recovery: on "session not found" (HMR/navigation), re-attach to same target, wait for ready signal, retry
+- `navigate()` and `reload()` wait for ready signal before returning
+- 300ms settle delay after ready signal resolves (layout/CSS paint)
+
 ### Changed
 
-### Fixed
-
-### Removed
+- GUIDE: updated gist template and conventions to use `import repld` instead of `from __main__`
 
 ## [0.0.7] - 2026-06-05
 
