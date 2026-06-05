@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import IO, Any
 
+from . import __version__
 from .ipc import connect_to_kernel
 
 def _lock_path() -> Path:
@@ -120,7 +121,7 @@ def _connect() -> tuple[socket.socket, IO[str], IO[str], dict] | None:
         {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "repld-exec", "version": "0.0.1"},
+            "clientInfo": {"name": "repld-exec", "version": __version__},
         },
     )
     if resp is None:
