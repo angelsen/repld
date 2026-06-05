@@ -14,9 +14,9 @@ import traceback
 from typing import Any
 
 # Tagged compile result. One of:
-#   ("eval", code)                 — pure expression
-#   ("exec_eval", head, tail)      — exec head, then eval+display tail
-#   ("exec", code)                 — pure exec, no display
+#   ("eval", code)             — pure expression
+#   ("exec_eval", head, tail)  — exec head, then eval+display tail
+#   ("exec", code)             — pure exec, no display
 CompiledCell = tuple
 
 
