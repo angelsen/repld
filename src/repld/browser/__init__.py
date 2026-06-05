@@ -55,7 +55,6 @@ class Browser:
 
     def __init__(
         self,
-        loop: asyncio.AbstractEventLoop | None = None,
         port: int | None = None,
     ) -> None:
         from .session import BrowserSession
@@ -402,13 +401,12 @@ class LazyBrowser:
     replaces itself in __main__.__dict__.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
+    def __init__(self) -> None:
         self._real: Browser | None = None
 
     def _bootstrap(self) -> Browser:
         if self._real is None:
-            self._real = Browser(self._loop)
+            self._real = Browser()
         return self._real
 
     def help(self) -> None:

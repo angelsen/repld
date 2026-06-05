@@ -633,7 +633,7 @@ def run_kernel(
     try:
         from .browser import LazyBrowser
 
-        _lazy_browser = LazyBrowser(loop)
+        _lazy_browser = LazyBrowser()
         setattr(__main__, "browser", _lazy_browser)
         setattr(_repld_mod, "browser", _lazy_browser)
 
