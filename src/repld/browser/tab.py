@@ -570,10 +570,12 @@ class Tab:
         session: CDPSession,
         target_id: str,
         port: int = 9222,
+        ready: str | None = None,
     ) -> None:
         self._session = session
         self._chrome_target_id = target_id
         self._port = port
+        self._ready = ready
         self._pinned: bool = False
         self._pin_reason: str = ""
         self._pin_origin: str = ""
@@ -733,6 +735,80 @@ class Tab:
 
     # ------------------------------------------------------------------
     # JS interaction
+    @staticmethod
+    def _is_session_gone(exc: Exception) -> bool:
+        """True if the error indicates the CDP session was invalidated (HMR, navigation)."""
+        msg = str(exc).lower()
+        return "session with given id not found" in msg or "no session with given id" in msg
+
+    async def _reattach(self) -> None:
+        """Re-attach to the same target after session invalidation (HMR, navigation).
+
+        The target ID usually survives — only the CDP session ID changes.
+        Waits for the ready signal (CSS selector or JS expression) if set,
+        otherwise waits for document.readyState === "complete".
+        """
+        send_fn = self._session._send
+        browser_session = getattr(send_fn, "__self__", None)
+        if browser_session is None:
+            raise RuntimeError("Cannot re-attach: no BrowserSession reference")
+
+        old_sid = self._session._session_id
+        browser_session._sessions.pop(old_sid, None)
+
+        cdp = await browser_session.attach(self._chrome_target_id)
+        if cdp is None:
+            raise RuntimeError(f"Re-attach failed for {self._chrome_target_id}")
+        self._session = cdp
+
+        ready = self._ready or "document.readyState === 'complete'"
+        if ready.startswith((".", "#", "[", "data-")):
+            # CSS selector — poll via DOM.querySelector (no focus steal)
+            await self._wait_ready_selector(ready)
+        else:
+            # JS expression — poll via Runtime.evaluate
+            await self._wait_ready_js(ready)
+
+    async def _wait_ready_selector(self, selector: str, timeout: float = 10) -> None:
+        doc = await self._session.execute("DOM.getDocument")
+        root_id = doc["root"]["nodeId"]
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            result = await self._session.execute(
+                "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+            )
+            if result.get("nodeId", 0) != 0:
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError(f"Ready signal not found after re-attach: {selector}")
+
+    async def _wait_ready_js(self, expr: str, timeout: float = 10) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            result = await self._session.execute(
+                "Runtime.evaluate",
+                {"expression": expr, "returnByValue": True},
+            )
+            if result.get("result", {}).get("value"):
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError(f"Ready signal not satisfied after re-attach: {expr}")
+
+    async def _exec(self, method: str, params: dict | None = None, timeout: float = 30) -> dict:
+        """Execute a CDP command with session-gone recovery.
+
+        On HMR reload or navigation, the Chrome session ID changes but the
+        target ID stays the same. Detects "session not found", re-attaches,
+        waits for the ready signal, and retries once.
+        """
+        try:
+            return await self._session.execute(method, params, timeout)
+        except RuntimeError as exc:
+            if not self._is_session_gone(exc):
+                raise
+            await self._reattach()
+            return await self._session.execute(method, params, timeout)
+
     # ------------------------------------------------------------------
 
     async def js(
@@ -755,7 +831,7 @@ class Tab:
         Raises:
             BrowserJSError: If the JS throws an exception.
         """
-        result = await self._session.execute(
+        result = await self._exec(
             "Runtime.evaluate",
             {
                 "expression": expr,
@@ -880,17 +956,17 @@ class Tab:
         deadline = asyncio.get_running_loop().time() + timeout
 
         if use_cdp:
-            doc = await self._session.execute("DOM.getDocument")
+            doc = await self._exec("DOM.getDocument")
             root_id = doc["root"]["nodeId"]
 
         while True:
             if use_cdp:
-                result = await self._session.execute(
+                result = await self._exec(
                     "DOM.querySelector", {"nodeId": root_id, "selector": selector}
                 )
                 found = result.get("nodeId", 0) != 0
             else:
-                result = await self._session.execute(
+                result = await self._exec(
                     "Runtime.evaluate",
                     {
                         "expression": f"!!({find_expr})",
@@ -927,17 +1003,17 @@ class Tab:
         self, selector: str, timeout: float = 2.0
     ) -> tuple[float, float]:
         """Pure CDP path — no JS eval, no focus steal."""
-        doc = await self._session.execute("DOM.getDocument")
+        doc = await self._exec("DOM.getDocument")
         root_id = doc["root"]["nodeId"]
 
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            result = await self._session.execute(
+            result = await self._exec(
                 "DOM.querySelector", {"nodeId": root_id, "selector": selector}
             )
             node_id = result.get("nodeId", 0)
             if node_id:
-                box = await self._session.execute(
+                box = await self._exec(
                     "DOM.getBoxModel", {"nodeId": node_id}
                 )
                 content = box["model"]["content"]
@@ -951,7 +1027,7 @@ class Tab:
     async def _element_center_js(self, selector: str) -> tuple[float, float]:
         """JS eval path — for custom selectors (text=, role=, label=, :has-text)."""
         find_expr = await self._find_element(selector)
-        coords = await self._session.execute(
+        coords = await self._exec(
             "Runtime.evaluate",
             {
                 "expression": f"""
@@ -985,7 +1061,7 @@ class Tab:
         x, y = await self._element_center(selector)
 
         for event_type in ("mousePressed", "mouseReleased"):
-            await self._session.execute(
+            await self._exec(
                 "Input.dispatchMouseEvent",
                 {
                     "type": event_type,
@@ -1012,7 +1088,7 @@ class Tab:
         find_expr = await self._find_element(selector)
 
         # Focus + select all existing content so first keystroke replaces it
-        await self._session.execute(
+        await self._exec(
             "Runtime.evaluate",
             {
                 "expression": (
@@ -1026,7 +1102,7 @@ class Tab:
         # Type new text via key events
         for char in text:
             for event_type in ("keyDown", "keyUp"):
-                await self._session.execute(
+                await self._exec(
                     "Input.dispatchKeyEvent",
                     {
                         "type": event_type,
@@ -1038,7 +1114,7 @@ class Tab:
 
         if press_enter:
             for event_type in ("keyDown", "keyUp"):
-                await self._session.execute(
+                await self._exec(
                     "Input.dispatchKeyEvent",
                     {"type": event_type, "key": "Enter", "code": "Enter"},
                 )
@@ -1155,13 +1231,25 @@ class Tab:
         """
         await self._find_element(selector, timeout=timeout)
 
+    async def _wait_ready(self, timeout: float = 10) -> None:
+        """Wait for the ready signal after navigation/reload."""
+        ready = self._ready
+        if ready is None:
+            return
+        if ready.startswith((".", "#", "[", "data-")):
+            await self._wait_ready_selector(ready, timeout)
+        else:
+            await self._wait_ready_js(ready, timeout)
+
     async def reload(self) -> None:
-        """Reload the page via Page.reload CDP command."""
+        """Reload the page, then wait for the ready signal."""
         await self._session.execute("Page.reload")
+        await self._wait_ready()
 
     async def navigate(self, url: str) -> None:
-        """Page.navigate CDP command. Caller handles settle separately."""
+        """Navigate to URL, then wait for the ready signal."""
         await self._session.execute("Page.navigate", {"url": url})
+        await self._wait_ready()
 
     async def screenshot(self, *, full_page: bool = False, path: str | None = None) -> pathlib.Path:
         """Capture a PNG screenshot, save to disk, return the path.
