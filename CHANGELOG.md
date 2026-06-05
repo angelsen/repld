@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.8] - 2026-06-05
+
+### Added
+
 - `ready=` parameter on `browser.get()` — CSS selector or JS expression as app-readiness contract
 - Session recovery: on "session not found" (HMR/navigation), re-attach to same target, wait for ready signal, retry
 - `navigate()` and `reload()` wait for ready signal before returning
