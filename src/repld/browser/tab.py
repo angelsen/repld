@@ -788,11 +788,11 @@ class Tab:
         """Convert Playwright-style selectors to a JS expression returning an element.
 
         Supported patterns:
-          text=Submit                       → text content match
-          button:has-text('OK')            → CSS base + text filter
-          role=button[name="Save"]         → ARIA role + accessible name
-          label=Username                   → input by associated label
-          .css-selector                    → document.querySelector(...)
+          text=Submit               → text content match
+          button:has-text('OK')     → CSS base + text filter
+          role=button[name="Save"]  → ARIA role + accessible name
+          label=Username            → input by associated label
+          .css-selector             → document.querySelector(...)
         """
         # text=... → exact text content or aria-label match (prefer smallest element)
         if selector.startswith("text="):

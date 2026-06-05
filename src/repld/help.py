@@ -177,12 +177,12 @@ exec(code, timeout=2.0)
 defer(coro, label=None) → task_id
   Fire-and-forget. Channel push on done. Visible to get_task/cancel.
 
-every(seconds, label=)(fn)   → fn    periodic ticker; fn.cancel() stops
-every.list()                 → list  active EveryHandles
-every.cancel_all()           → None  stop all tickers
+every(seconds, label=)(fn)  → fn    periodic ticker; fn.cancel() stops
+every.list()                → list  active EveryHandles
+every.cancel_all()          → None  stop all tickers
 
-get_task(task_id)       → {done, text, spill_path, ...}
-cancel(task_id)         → {cancelled: bool}
+get_task(task_id)  → {done, text, spill_path, ...}
+cancel(task_id)    → {cancelled: bool}
 
 Channel kinds:
   task_done             exec or defer finished
@@ -196,26 +196,26 @@ Channel kinds:
 """,
     "browser": """\
 Tab (async unless noted):
-  tab.js(code, await_promise=)           → any
-  tab.tree()                             → list[str]
-  tab.click(selector)                    → None (auto-waits 2s, mouse event)
-  tab.tap(selector_or_x, y=)             → None (touch event, 3s timeout)
-  tab.swipe(x1, y1, x2, y2, steps=, duration_ms=) → None (touch scroll)
-  tab.type_text(selector, text, enter=)  → None (clears first, auto-waits)
-  tab.wait_for(selector, timeout=5)      → None (wait for element to appear)
-  tab.fetch(url, method=, body=, headers=) → {status, ok, body}
-  tab.navigate(url)                      → None
-  tab.reload()                           → None
-  tab.screenshot(full_page=)             → bytes
-  tab.cookies()                          → list[dict]
-  tab.cdp(method, **params)              → dict
+  tab.js(code, await_promise=)                     → any
+  tab.tree()                                       → list[str]
+  tab.click(selector)                              → None (auto-waits 2s, mouse event)
+  tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
+  tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
+  tab.type_text(selector, text, enter=)            → None (clears first, auto-waits)
+  tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
+  tab.fetch(url, method=, body=, headers=)         → {status, ok, body}
+  tab.navigate(url)                                → None
+  tab.reload()                                     → None
+  tab.screenshot(full_page=)                       → bytes
+  tab.cookies()                                    → list[dict]
+  tab.cdp(method, **params)                        → dict
 
 Tab — pin + gate bridge:
-  tab.pin(reason="")                     → None  inject pill + beforeunload guard; idempotent
-  tab.unpin()                            → None  remove pill + guard
-  tab.confirm(prompt, **kw)             → bool  gate routed to pill UI
-  tab.choose(prompt, options, **kw)     → str   gate routed to pill UI
-  tab.ask(prompt, **kw)                 → str   terminal only (no pill UI for text input)
+  tab.pin(reason="")                 → None  inject pill + beforeunload guard; idempotent
+  tab.unpin()                        → None  remove pill + guard
+  tab.confirm(prompt, **kw)          → bool  gate routed to pill UI
+  tab.choose(prompt, options, **kw)  → str   gate routed to pill UI
+  tab.ask(prompt, **kw)              → str   terminal only (no pill UI for text input)
 
   Pill: bottom-center floating pill, green dot when connected, amber when awaiting input.
   Clicking pill expands panel with status, hostname, reason, and gate prompt + buttons.
@@ -225,11 +225,11 @@ Tab — pin + gate bridge:
   Same-origin reload auto-reinjects. Cross-origin navigation unpins + pushes channel.
 
 Tab (sync — DuckDB queries):
-  tab.network(url=, method=, status=, type=, since=, include_assets=) → Rows
-  tab.request(request_id)                → dict
-  tab.body(request_id)                   → dict
-  tab.console(level=, source=, since=)   → Rows
-  tab.clear()                            → None
+  tab.network(url=, method=, status=, type=, since=, include_assets=)  → Rows
+  tab.request(request_id)                                              → dict
+  tab.body(request_id)                                                 → dict
+  tab.console(level=, source=, since=)                                 → Rows
+  tab.clear()                                                          → None
 
   row.body()                             → dict (response body for a Row)
 
@@ -304,9 +304,9 @@ Writing gists:
   Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
 """,
     "gates": """\
-await ask(prompt, *, default=None, timeout=None)       → str
-await confirm(prompt, *, default=None, timeout=None)   → bool
-await choose(prompt, options, *, default=None, timeout=None) → str
+await ask(prompt, *, default=None, timeout=None)              → str
+await confirm(prompt, *, default=None, timeout=None)          → bool
+await choose(prompt, options, *, default=None, timeout=None)  → str
 
 Blocks cell on human input in kernel pane.
 TimeoutError if no default and timeout expires.
