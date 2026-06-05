@@ -872,26 +872,84 @@ class Tab:
     async def _find_element(self, selector: str, timeout: float = 2.0) -> str:
         """Resolve selector to element with auto-wait. Returns the JS find expression.
 
+        Uses DOM.querySelector for CSS selectors (no focus steal).
         Retries for up to `timeout` seconds before raising RuntimeError.
         """
         find_expr = self._resolve_selector(selector)
+        use_cdp = self._is_css_selector(selector)
         deadline = asyncio.get_running_loop().time() + timeout
+
+        if use_cdp:
+            doc = await self._session.execute("DOM.getDocument")
+            root_id = doc["root"]["nodeId"]
+
         while True:
-            result = await self._session.execute(
-                "Runtime.evaluate",
-                {
-                    "expression": f"!!({find_expr})",
-                    "returnByValue": True,
-                },
-            )
-            if result.get("result", {}).get("value"):
+            if use_cdp:
+                result = await self._session.execute(
+                    "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+                )
+                found = result.get("nodeId", 0) != 0
+            else:
+                result = await self._session.execute(
+                    "Runtime.evaluate",
+                    {
+                        "expression": f"!!({find_expr})",
+                        "returnByValue": True,
+                    },
+                )
+                found = result.get("result", {}).get("value")
+            if found:
                 return find_expr
             if asyncio.get_running_loop().time() >= deadline:
                 raise RuntimeError(f"Element not found: {selector}")
             await asyncio.sleep(0.1)
 
+    @staticmethod
+    def _is_css_selector(selector: str) -> bool:
+        """True if selector can be resolved via DOM.querySelector (no JS eval)."""
+        if selector.startswith(("text=", "label=", "role=")):
+            return False
+        if ":has-text(" in selector:
+            return False
+        return True
+
     async def _element_center(self, selector: str) -> tuple[float, float]:
-        """Resolve selector to (x, y) center coordinates. Auto-waits up to 2s."""
+        """Resolve selector to (x, y) center coordinates. Auto-waits up to 2s.
+
+        Uses DOM.querySelector + DOM.getBoxModel for plain CSS selectors
+        (no focus steal). Falls back to Runtime.evaluate for custom selectors.
+        """
+        if self._is_css_selector(selector):
+            return await self._element_center_cdp(selector)
+        return await self._element_center_js(selector)
+
+    async def _element_center_cdp(
+        self, selector: str, timeout: float = 2.0
+    ) -> tuple[float, float]:
+        """Pure CDP path — no JS eval, no focus steal."""
+        doc = await self._session.execute("DOM.getDocument")
+        root_id = doc["root"]["nodeId"]
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            result = await self._session.execute(
+                "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+            )
+            node_id = result.get("nodeId", 0)
+            if node_id:
+                box = await self._session.execute(
+                    "DOM.getBoxModel", {"nodeId": node_id}
+                )
+                content = box["model"]["content"]
+                xs = [content[i] for i in range(0, 8, 2)]
+                ys = [content[i] for i in range(1, 8, 2)]
+                return sum(xs) / 4, sum(ys) / 4
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"Element not found: {selector}")
+            await asyncio.sleep(0.1)
+
+    async def _element_center_js(self, selector: str) -> tuple[float, float]:
+        """JS eval path — for custom selectors (text=, role=, label=, :has-text)."""
         find_expr = await self._find_element(selector)
         coords = await self._session.execute(
             "Runtime.evaluate",
