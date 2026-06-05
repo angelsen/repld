@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.9] - 2026-06-05
+
 ### Fixed
 
 - MCP server and exec client now report actual package version instead of hardcoded `0.0.1`
