@@ -198,7 +198,9 @@ Channel kinds:
 Tab (async unless noted):
   tab.js(code, await_promise=)           → any
   tab.tree()                             → list[str]
-  tab.click(selector)                    → None (auto-waits 2s)
+  tab.click(selector)                    → None (auto-waits 2s, mouse event)
+  tab.tap(selector_or_x, y=)             → None (touch event, 3s timeout)
+  tab.swipe(x1, y1, x2, y2, steps=, duration_ms=) → None (touch scroll)
   tab.type_text(selector, text, enter=)  → None (clears first, auto-waits)
   tab.wait_for(selector, timeout=5)      → None (wait for element to appear)
   tab.fetch(url, method=, body=, headers=) → {status, ok, body}
@@ -241,14 +243,27 @@ Browser:
   browser.clear(target=)                 → str
   browser.disconnect()                   → None
 
-Selectors (click/type_text):
-  .css-class, #id, [attr]               CSS
-  text=Submit                            visible text match
-  role=button[name="Save"]              ARIA role + name
-  label=Username                        input by label
-  button:has-text('OK')                 CSS + text filter
+Selectors (click/tap/type_text):
+  .css-class, #id, [attr]               CSS (no focus steal — pure CDP path)
+  [data-testid='name']                   CSS (no focus steal — recommended for own code)
+  text=Submit                            visible text match (JS eval)
+  role=button[name="Save"]              ARIA role + name (JS eval)
+  label=Username                        input by label (JS eval)
+  button:has-text('OK')                 CSS + text filter (JS eval)
+
+  CSS selectors use DOM.querySelector + DOM.getBoxModel (no JS eval, no focus steal).
+  Custom selectors (text=, role=, label=, :has-text) use Runtime.evaluate.
+
+Touch vs mouse:
+  tab.click()  — Input.dispatchMouseEvent (works everywhere)
+  tab.tap()    — Input.dispatchTouchEvent (fires touchstart/touchend)
+  tab.swipe()  — touch sequence for scrolling
+
+  Touch events may hang on complex apps (React, Messenger) where JS handlers
+  block. tap/swipe have a 3s timeout and raise TimeoutError cleanly.
 
 Target IDs: "{port}:{6-hex}" (e.g. 9222:887d3d). Stable across navigation.
+Browser(port=N) creates a standalone instance for non-default ports (e.g. ADB-forwarded).
 Requires: Chrome --remote-debugging-port=9222
 """,
     "gists": """\
@@ -479,12 +494,18 @@ use browser.open() when you need a fresh tab).
   tab.fetch(url, method=, body=, headers=)
                                       in-page fetch (inherits session/cookies)
   tab.tree()                          accessibility tree as text lines
-  tab.click(selector)                 click element (auto-waits 2s)
+  tab.click(selector)                 click element (mouse, auto-waits 2s)
+  tab.tap(selector_or_x, y=)          touch tap (fires touchstart/touchend)
+  tab.swipe(x1, y1, x2, y2)          touch scroll
   tab.type_text(selector, text)       clear + type (auto-waits 2s)
   tab.wait_for(selector, timeout=5)   wait for element to appear
   tab.pin(reason)                     inject status pill + beforeunload guard
   tab.confirm(prompt) → bool          gate routed to pill UI
   tab.choose(prompt, options) → str   gate routed to pill UI
+
+CSS selectors (#id, .class, [data-testid]) use pure CDP calls (no JS eval,
+no focus steal). Custom selectors (text=, role=, label=) use Runtime.evaluate.
+For own code, prefer [data-testid='name'] to keep keyboard/focus intact.
 
 === tab.fetch() return shape ===
 
