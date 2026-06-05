@@ -1232,7 +1232,7 @@ class Tab:
         await self._find_element(selector, timeout=timeout)
 
     async def _wait_ready(self, timeout: float = 10) -> None:
-        """Wait for the ready signal after navigation/reload."""
+        """Wait for the ready signal after navigation/reload, then settle 300ms."""
         ready = self._ready
         if ready is None:
             return
@@ -1240,6 +1240,7 @@ class Tab:
             await self._wait_ready_selector(ready, timeout)
         else:
             await self._wait_ready_js(ready, timeout)
+        await asyncio.sleep(0.3)
 
     async def reload(self) -> None:
         """Reload the page, then wait for the ready signal."""
