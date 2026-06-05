@@ -418,11 +418,12 @@ class Dispatcher:
         ctx: KernelContext,
         *,
         server_name: str = "repld",
-        server_version: str = "0.0.1",
     ):
+        from . import __version__
+
         self.ctx = ctx
         self.server_name = server_name
-        self.server_version = server_version
+        self.server_version = __version__
 
     def handle(self, req: dict, session) -> dict | None:
         method = req.get("method")

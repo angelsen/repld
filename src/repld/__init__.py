@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import importlib.metadata
 from typing import TYPE_CHECKING
 
 from .cli import main
+
+__version__ = importlib.metadata.version("repld-tool")
 
 if TYPE_CHECKING:
     from typing import Any, Callable, Coroutine
