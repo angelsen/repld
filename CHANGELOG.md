@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.7] - 2026-06-05
+
+### Added
+
 - `tab.tap(selector_or_x, y)` — touch tap via `Input.dispatchTouchEvent` for mobile Chrome
 - `tab.swipe(x1, y1, x2, y2)` — touch swipe for scrolling on mobile
 - No-focus-steal element resolution: CSS selectors use `DOM.querySelector` + `DOM.getBoxModel` instead of `Runtime.evaluate`
