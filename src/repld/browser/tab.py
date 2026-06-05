@@ -763,11 +763,10 @@ class Tab:
 
         ready = self._ready or "document.readyState === 'complete'"
         if ready.startswith((".", "#", "[", "data-")):
-            # CSS selector — poll via DOM.querySelector (no focus steal)
             await self._wait_ready_selector(ready)
         else:
-            # JS expression — poll via Runtime.evaluate
             await self._wait_ready_js(ready)
+        await asyncio.sleep(0.3)
 
     async def _wait_ready_selector(self, selector: str, timeout: float = 10) -> None:
         doc = await self._session.execute("DOM.getDocument")
