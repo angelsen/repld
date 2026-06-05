@@ -93,6 +93,7 @@ class Browser:
         *,
         timeout: float | None = None,
         fresh: bool = False,
+        ready: str | None = None,
     ) -> Tab:
         """Find one tab by URL glob or target ID. Attach on demand.
 
@@ -103,28 +104,30 @@ class Browser:
         **Target ID** (e.g. ``"9222:a81998"``): resolves any type including
         workers. Attaches if not already attached. ``timeout``/``fresh``
         are ignored.
+
+        **ready**: CSS selector or JS expression that must be truthy before
+        the Tab is returned. Also used for auto-recovery on HMR/navigation.
+        Default (None) uses ``document.readyState === 'complete'``.
         """
         if _is_target_id(target):
-            return await self._get_by_id(target)
-        return await self._get_by_glob(target, timeout=timeout, fresh=fresh)
+            return await self._get_by_id(target, ready=ready)
+        return await self._get_by_glob(target, timeout=timeout, fresh=fresh, ready=ready)
 
-    async def _get_by_id(self, target: str) -> Tab:
+    async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
         """Resolve a target ID, attaching on demand if needed."""
-        # Fast path: already attached
         _, prefix = target.split(":", 1)
         for cdp in self._session._sessions.values():
             chrome_id = cdp.target_info.get("targetId", "")
             if chrome_id[:6].lower() == prefix:
-                return Tab(cdp, chrome_id, self.port)
+                return Tab(cdp, chrome_id, self.port, ready=ready)
 
-        # Slow path: find in all targets and attach
         await self._ensure_connected()
         for t in await self._session.list_targets():
             tid = t.get("targetId", "")
             if tid and tid[:6].lower() == prefix:
                 cdp = await self._session.attach(tid)
                 if cdp is not None:
-                    return Tab(cdp, tid, self.port)
+                    return Tab(cdp, tid, self.port, ready=ready)
 
         attached = [
             make_target(self.port, cdp.target_info.get("targetId", ""))
@@ -138,9 +141,9 @@ class Browser:
         *,
         timeout: float | None = None,
         fresh: bool = False,
+        ready: str | None = None,
     ) -> Tab:
         """Find one tab matching a URL glob. Skips workers."""
-        # Snapshot existing matches so fresh=True can exclude them.
         exclude: set[str] = set()
         if fresh:
             for cdp in self._session._sessions.values():
@@ -158,16 +161,14 @@ class Browser:
             asyncio.get_running_loop().time() + timeout if timeout is not None else None
         )
         while True:
-            # 1. Check already-attached tabs (skip workers)
             for cdp in self._session._sessions.values():
                 if cdp.target_info.get("type", "") in WORKER_TYPES:
                     continue
                 url = cdp.target_info.get("url", "")
                 tid = cdp.target_info.get("targetId", "")
                 if fnmatch.fnmatch(url, pattern) and tid not in exclude:
-                    return Tab(cdp, tid, self.port)
+                    return Tab(cdp, tid, self.port, ready=ready)
 
-            # 2. Search all Chrome targets, attach first match (skip workers)
             await self._ensure_connected()
             for t in await self._session.list_targets():
                 if t.get("type", "") in WORKER_TYPES:
@@ -177,7 +178,7 @@ class Browser:
                 if fnmatch.fnmatch(url, pattern) and tid and tid not in exclude:
                     cdp = await self._session.attach(tid)
                     if cdp is not None:
-                        return Tab(cdp, tid, self.port)
+                        return Tab(cdp, tid, self.port, ready=ready)
 
             if deadline is None or asyncio.get_running_loop().time() >= deadline:
                 break
