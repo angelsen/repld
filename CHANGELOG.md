@@ -8,11 +8,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tab.tap(selector_or_x, y)` — touch tap via `Input.dispatchTouchEvent` for mobile Chrome
+- `tab.swipe(x1, y1, x2, y2)` — touch swipe for scrolling on mobile
+- No-focus-steal element resolution: CSS selectors use `DOM.querySelector` + `DOM.getBoxModel` instead of `Runtime.evaluate`
+- `Browser(port=N)` works without a loop arg — standalone instances for ADB-forwarded ports
+
 ### Changed
+
+- Documented touch vs mouse, no-focus-steal selectors, `Browser(port=)` in help topics and guide
 
 ### Fixed
 
-### Removed
+- `TimeoutError` (inherits `OSError`) no longer triggers CDP reconnect — was causing double hangs
+- `CancelledError` in `_execute_once` now cleans up pending futures instead of leaking them
+- Touch events use 3s timeout via `_touch()` helper — prevents indefinite hangs on complex apps
+- Removed vestigial `loop` parameter from `Browser` and `LazyBrowser`
 
 ## [0.0.6] - 2026-05-11
 
