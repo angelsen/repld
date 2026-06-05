@@ -138,6 +138,9 @@ class BrowserSession:
     @staticmethod
     def _is_recoverable(exc: Exception) -> bool:
         """True if exc indicates a dead WebSocket (not a CDP-level error)."""
+        # TimeoutError inherits from OSError but is a CDP command timeout, not a socket death.
+        if isinstance(exc, TimeoutError):
+            return False
         import websockets.exceptions  # type: ignore[import-untyped]
 
         if isinstance(exc, websockets.exceptions.ConnectionClosed):
@@ -281,6 +284,9 @@ class BrowserSession:
         except asyncio.TimeoutError:
             self._pending.pop(msg_id, None)
             raise TimeoutError(f"CDP command {method} timed out after {timeout}s")
+        except asyncio.CancelledError:
+            self._pending.pop(msg_id, None)
+            raise
 
     # ------------------------------------------------------------------
     # Target management

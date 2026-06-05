@@ -985,6 +985,15 @@ class Tab:
                     {"type": event_type, "key": "Enter", "code": "Enter"},
                 )
 
+    async def _touch(self, type: str, touch_points: list[dict], timeout: float = 3) -> None:
+        """Dispatch a touch event with a timeout. Raises TimeoutError if the page's
+        touch handler blocks (e.g. preventDefault on complex apps like Messenger)."""
+        await self._session.execute(
+            "Input.dispatchTouchEvent",
+            {"type": type, "touchPoints": touch_points},
+            timeout=timeout,
+        )
+
     async def tap(self, selector_or_x, y: float | None = None) -> None:
         """Touch tap. Accepts a selector or (x, y) coordinates.
 
@@ -997,14 +1006,8 @@ class Tab:
             x, y = await self._element_center(selector_or_x)
 
         tp = [{"x": x, "y": y}]
-        await self._session.execute(
-            "Input.dispatchTouchEvent",
-            {"type": "touchStart", "touchPoints": tp},
-        )
-        await self._session.execute(
-            "Input.dispatchTouchEvent",
-            {"type": "touchEnd", "touchPoints": []},
-        )
+        await self._touch("touchStart", tp)
+        await self._touch("touchEnd", [])
 
     async def swipe(
         self,
@@ -1019,24 +1022,15 @@ class Tab:
         Dispatches touchStart → touchMove × steps → touchEnd.
         For scrolling on mobile Chrome via ADB.
         """
-        await self._session.execute(
-            "Input.dispatchTouchEvent",
-            {"type": "touchStart", "touchPoints": [{"x": x1, "y": y1}]},
-        )
+        await self._touch("touchStart", [{"x": x1, "y": y1}])
         delay = duration_ms / steps / 1000
         for i in range(1, steps + 1):
             frac = i / steps
             cx = x1 + (x2 - x1) * frac
             cy = y1 + (y2 - y1) * frac
-            await self._session.execute(
-                "Input.dispatchTouchEvent",
-                {"type": "touchMove", "touchPoints": [{"x": cx, "y": cy}]},
-            )
+            await self._touch("touchMove", [{"x": cx, "y": cy}])
             await asyncio.sleep(delay)
-        await self._session.execute(
-            "Input.dispatchTouchEvent",
-            {"type": "touchEnd", "touchPoints": []},
-        )
+        await self._touch("touchEnd", [])
 
     async def tree(self) -> list[str]:
         """Compact accessibility tree as text lines.
