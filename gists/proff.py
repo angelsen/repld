@@ -133,11 +133,11 @@ def _parse_company(raw: dict) -> dict:
                 "revenue": codes.get("SDI"),  # sum driftsinntekter
                 "profit": codes.get("AARS"),  # årsresultat
                 "ebitda": codes.get("EBITDA"),
-                "total_assets": codes.get("SIA"),  # sum eiendeler
-                "equity": codes.get("SEK"),  # sum egenkapital
+                "total_assets": codes.get("SIA"),     # sum eiendeler
+                "equity": codes.get("SEK"),           # sum egenkapital
                 "short_term_debt": codes.get("SKG"),  # sum kortsiktig gjeld
-                "long_term_debt": codes.get("LG"),  # langsiktig gjeld
-                "employees": codes.get("OPAV"),  # antall ansatte
+                "long_term_debt": codes.get("LG"),    # langsiktig gjeld
+                "employees": codes.get("OPAV"),       # antall ansatte
             }
         )
 
