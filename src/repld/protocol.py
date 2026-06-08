@@ -646,173 +646,204 @@ class Dispatcher:
 
         Returns JSON-serializable result, OR a plain str for observation text.
         """
-        from .browser.observe import compose_tree, pre_observe, post_observe
+        handler = self._BROWSER_DISPATCH.get(name)
+        if handler is None:
+            raise ValueError(f"Unknown browser tool: {name}")
+        return handler(self, self._get_browser(), args)
 
-        browser = self._get_browser()
+    # ------------------------------------------------------------------
+    # Browser handlers — browser-level (no tab)
+    # ------------------------------------------------------------------
 
-        if name == "browser_watch":
-            return {"result": self._run_async(browser.watch(args["pattern"]))}
+    def _bh_watch(self, browser, args):
+        return {"result": self._run_async(browser.watch(args["pattern"]))}
 
-        if name == "browser_detach":
-            return {"result": self._run_async(browser.detach(args.get("pattern")))}
+    def _bh_detach(self, browser, args):
+        return {"result": self._run_async(browser.detach(args.get("pattern")))}
 
-        if name == "browser_tabs":
-            return browser.format_tabs_nested()
+    def _bh_tabs(self, browser, args):
+        return browser.format_tabs_nested()
 
-        if name == "browser_pages":
-            return self._run_async(browser.pages())
+    def _bh_pages(self, browser, args):
+        return self._run_async(browser.pages())
 
-        if name == "browser_js":
-            tab = self._run_async(browser.get(args["target"]))
-            ap = args.get("await_promise", "auto")
-            result = self._run_async(tab.js(args["code"], await_promise=ap))
-            return {"result": result}
+    def _bh_clear(self, browser, args):
+        return {"result": browser.clear(args.get("target"))}
 
-        if name == "browser_network":
-            tab = self._run_async(browser.get(args["target"]))
-            rows = tab.network(
-                url=args.get("url"),
-                method=args.get("method"),
-                status=args.get("status"),
-                type=args.get("type"),
-                include_assets=bool(args.get("include_assets", False)),
+    # ------------------------------------------------------------------
+    # Browser handlers — tab read-only
+    # ------------------------------------------------------------------
+
+    def _bh_js(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        ap = args.get("await_promise", "auto")
+        return {"result": self._run_async(tab.js(args["code"], await_promise=ap))}
+
+    def _bh_network(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        rows = tab.network(
+            url=args.get("url"),
+            method=args.get("method"),
+            status=args.get("status"),
+            type=args.get("type"),
+            include_assets=bool(args.get("include_assets", False)),
+        )
+        return [repr(r) for r in rows]
+
+    def _bh_request(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        return tab.request(args["request_id"])
+
+    def _bh_body(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        return tab.body(args["request_id"])
+
+    def _bh_fetch(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        return self._run_async(
+            tab.fetch(
+                args["url"],
+                method=args.get("method", "GET"),
+                body=args.get("body"),
+                headers=args.get("headers"),
             )
-            return [repr(r) for r in rows]
+        )
 
-        if name == "browser_request":
-            tab = self._run_async(browser.get(args["target"]))
-            return tab.request(args["request_id"])
+    def _bh_console(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        rows = tab.console(
+            level=args.get("level"),
+            source=args.get("source"),
+        )
+        return [repr(r) for r in rows]
 
-        if name == "browser_body":
-            tab = self._run_async(browser.get(args["target"]))
-            return tab.body(args["request_id"])
+    def _bh_screenshot(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        path = self._run_async(
+            tab.screenshot(full_page=bool(args.get("full_page", False)))
+        )
+        return f"Screenshot saved to {path}\nUse Read to view it."
 
-        if name == "browser_navigate":
-            tab = self._run_async(browser.get(args["target"]))
-            if tab.type == "iframe" and not args.get("force"):
-                from .browser import make_target
+    def _bh_cdp(self, browser, args):
+        tab = self._run_async(browser.get(args["target"]))
+        params = args.get("params") or {}
+        return self._run_async(tab.cdp(args["method"], **params))
 
-                parent_short = (
-                    make_target(tab._port, tab.parent_frame_id)
-                    if tab.parent_frame_id
-                    else "unknown"
+    def _bh_tree(self, browser, args):
+        from .browser.observe import compose_tree
+
+        tab = self._run_async(browser.get(args["target"]))
+        lines, _ = self._run_async(compose_tree(tab, browser._session))
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Browser handlers — tab mutations (with observe)
+    # ------------------------------------------------------------------
+
+    def _bh_navigate(self, browser, args):
+        from .browser.observe import post_observe, pre_observe
+
+        tab = self._run_async(browser.get(args["target"]))
+        if tab.type == "iframe" and not args.get("force"):
+            from .browser import make_target
+
+            parent_short = (
+                make_target(tab._port, tab.parent_frame_id)
+                if tab.parent_frame_id
+                else "unknown"
+            )
+            return {
+                "error": (
+                    f"Cannot navigate iframe target {tab.target_id} — "
+                    f"this would destroy the embedded app session. "
+                    f"Use click/fetch on the iframe for in-app navigation, "
+                    f"or navigate the parent ({parent_short}). "
+                    f"Pass force=true to override."
                 )
-                return {
-                    "error": (
-                        f"Cannot navigate iframe target {tab.target_id} — "
-                        f"this would destroy the embedded app session. "
-                        f"Use click/fetch on the iframe for in-app navigation, "
-                        f"or navigate the parent ({parent_short}). "
-                        f"Pass force=true to override."
-                    )
-                }
-            pre = self._run_async(pre_observe(tab, browser._session))
-            self._run_async(tab.navigate(args["url"]))
-            return self._run_async(
-                post_observe(tab, browser._session, pre, timeout=8.0)
-            )
+            }
+        pre = self._run_async(pre_observe(tab, browser._session))
+        self._run_async(tab.navigate(args["url"]))
+        return self._run_async(post_observe(tab, browser._session, pre, timeout=8.0))
 
-        if name == "browser_open":
-            tab = self._run_async(browser.open(args["url"]))
-            from .browser.observe import PreObservation
+    def _bh_open(self, browser, args):
+        from .browser.observe import PreObservation, post_observe
 
-            # New tab — all activity is the delta, so snapshot at 0.
-            # Calling pre_observe here would race: by the time it queries
-            # MAX(id), early navigation events may already be in DuckDB.
-            key = tab.target_id
-            pre = PreObservation(
-                iframe_children=[],
-                har_snapshots={key: 0},
-                console_snapshots={key: 0},
+        tab = self._run_async(browser.open(args["url"]))
+        # New tab — all activity is the delta, so snapshot at 0.
+        key = tab.target_id
+        pre = PreObservation(
+            iframe_children=[],
+            har_snapshots={key: 0},
+            console_snapshots={key: 0},
+        )
+        return self._run_async(
+            post_observe(
+                tab,
+                browser._session,
+                pre,
+                timeout=8.0,
+                extra_header=f"target: {tab.target_id}",
             )
-            return self._run_async(
-                post_observe(
-                    tab,
-                    browser._session,
-                    pre,
-                    timeout=8.0,
-                    extra_header=f"target: {tab.target_id}",
-                )
-            )
+        )
 
-        if name == "browser_key":
-            tab = self._run_async(browser.get(args["target"]))
-            key = args["key"]
-            pre = self._run_async(pre_observe(tab, browser._session))
-            self._run_async(
-                tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
-            )
-            self._run_async(
-                tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
-            )
-            return self._run_async(
-                post_observe(tab, browser._session, pre, timeout=5.0)
-            )
+    def _bh_key(self, browser, args):
+        from .browser.observe import post_observe, pre_observe
 
-        if name == "browser_tree":
-            tab = self._run_async(browser.get(args["target"]))
-            lines, _ = self._run_async(compose_tree(tab, browser._session))
-            return "\n".join(lines)
+        tab = self._run_async(browser.get(args["target"]))
+        key = args["key"]
+        pre = self._run_async(pre_observe(tab, browser._session))
+        self._run_async(
+            tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
+        )
+        self._run_async(
+            tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
+        )
+        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
 
-        if name == "browser_fetch":
-            tab = self._run_async(browser.get(args["target"]))
-            return self._run_async(
-                tab.fetch(
-                    args["url"],
-                    method=args.get("method", "GET"),
-                    body=args.get("body"),
-                    headers=args.get("headers"),
-                )
+    def _bh_click(self, browser, args):
+        from .browser.observe import post_observe, pre_observe
+
+        tab = self._run_async(browser.get(args["target"]))
+        pre = self._run_async(pre_observe(tab, browser._session))
+        self._run_async(tab.click(args["selector"]))
+        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
+
+    def _bh_type(self, browser, args):
+        from .browser.observe import post_observe, pre_observe
+
+        tab = self._run_async(browser.get(args["target"]))
+        pre = self._run_async(pre_observe(tab, browser._session))
+        self._run_async(
+            tab.type_text(
+                args["selector"],
+                args["text"],
+                press_enter=bool(args.get("press_enter", False)),
             )
+        )
+        self._run_async(asyncio.sleep(0.3))
+        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
 
-        if name == "browser_click":
-            tab = self._run_async(browser.get(args["target"]))
-            pre = self._run_async(pre_observe(tab, browser._session))
-            self._run_async(tab.click(args["selector"]))
-            return self._run_async(
-                post_observe(tab, browser._session, pre, timeout=5.0)
-            )
-
-        if name == "browser_type":
-            tab = self._run_async(browser.get(args["target"]))
-            pre = self._run_async(pre_observe(tab, browser._session))
-            self._run_async(
-                tab.type_text(
-                    args["selector"],
-                    args["text"],
-                    press_enter=bool(args.get("press_enter", False)),
-                )
-            )
-            # Debounce: wait 300ms after last keystroke before settle check
-            self._run_async(asyncio.sleep(0.3))
-            return self._run_async(
-                post_observe(tab, browser._session, pre, timeout=5.0)
-            )
-
-        if name == "browser_console":
-            tab = self._run_async(browser.get(args["target"]))
-            rows = tab.console(
-                level=args.get("level"),
-                source=args.get("source"),
-            )
-            return [repr(r) for r in rows]
-
-        if name == "browser_screenshot":
-            tab = self._run_async(browser.get(args["target"]))
-            path = self._run_async(
-                tab.screenshot(full_page=bool(args.get("full_page", False)))
-            )
-            return f"Screenshot saved to {path}\nUse Read to view it."
-
-        if name == "browser_cdp":
-            tab = self._run_async(browser.get(args["target"]))
-            params = args.get("params") or {}
-            return self._run_async(tab.cdp(args["method"], **params))
-
-        if name == "browser_clear":
-            return {"result": browser.clear(args.get("target"))}
-
-        raise ValueError(f"Unknown browser tool: {name}")
+    _BROWSER_DISPATCH = {
+        "browser_watch": _bh_watch,
+        "browser_detach": _bh_detach,
+        "browser_tabs": _bh_tabs,
+        "browser_pages": _bh_pages,
+        "browser_clear": _bh_clear,
+        "browser_js": _bh_js,
+        "browser_network": _bh_network,
+        "browser_request": _bh_request,
+        "browser_body": _bh_body,
+        "browser_fetch": _bh_fetch,
+        "browser_console": _bh_console,
+        "browser_screenshot": _bh_screenshot,
+        "browser_cdp": _bh_cdp,
+        "browser_tree": _bh_tree,
+        "browser_navigate": _bh_navigate,
+        "browser_open": _bh_open,
+        "browser_key": _bh_key,
+        "browser_click": _bh_click,
+        "browser_type": _bh_type,
+    }
 
     # ------------------------------------------------------------------
     # Resource dispatch
