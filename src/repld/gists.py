@@ -10,17 +10,31 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-__all__ = ["install", "scan", "scan_tools", "resolve_tool", "signature", "registry"]
+__all__ = [
+    "install",
+    "scan",
+    "scan_tools",
+    "resolve_tool",
+    "signature",
+    "registry",
+    "scan_deps",
+    "install_deps",
+]
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}    # fullname → source .py path
-_mtimes: dict[str, float] = {}    # fullname → last known mtime
+_managed: dict[str, Path] = {}  # fullname → source .py path
+_mtimes: dict[str, float] = {}  # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
-_REGISTRY_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "repld" / "gist-registry.json"
+_REGISTRY_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    / "repld"
+    / "gist-registry.json"
+)
 
 
 def _register(name: str) -> None:
@@ -404,6 +418,156 @@ def resolve_tool(name: str):
                 )
             return handler
     return None
+
+
+# ---------------------------------------------------------------------------
+# Dependency management
+# ---------------------------------------------------------------------------
+
+_VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
+
+
+def _parse_pkg_name(req: str) -> str:
+    """Extract the base package name from a PEP 508 requirement string."""
+    for spec in _VERSION_SPECIFIERS:
+        if spec in req:
+            return req[: req.index(spec)].strip()
+    return req.strip()
+
+
+def _is_importable(name: str) -> bool:
+    """Check if a package is importable. Tries the name as-is (covers most packages)."""
+    return importlib.util.find_spec(name.replace("-", "_")) is not None
+
+
+@dataclass
+class _DepInfo:
+    requirement: str
+    gists: list[str]
+
+
+def scan_deps() -> list[_DepInfo]:
+    """AST-scan all gist files for __repld_deps__. Returns missing deps with their sources."""
+    deps: dict[str, _DepInfo] = {}
+    for p in _iter_gist_files():
+        try:
+            tree = ast.parse(p.read_text("utf-8"))
+        except Exception:
+            continue
+        for node in ast.iter_child_nodes(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "__repld_deps__"
+            ):
+                try:
+                    reqs = ast.literal_eval(ast.unparse(node.value))
+                except Exception:
+                    continue
+                if not isinstance(reqs, list):
+                    continue
+                for req in reqs:
+                    pkg = _parse_pkg_name(str(req))
+                    if _is_importable(pkg):
+                        continue
+                    if pkg in deps:
+                        deps[pkg].gists.append(p.stem)
+                    else:
+                        deps[pkg] = _DepInfo(str(req), [p.stem])
+    return list(deps.values())
+
+
+def _tty_write(msg: str) -> None:
+    """Write directly to the real stderr, bypassing _Tee."""
+    w = sys.__stderr__
+    if w is not None:
+        w.write(msg)
+        w.flush()
+
+
+def _tty_input(prompt: str) -> str:
+    """Prompt on real stderr, read from real stdin."""
+    _tty_write(prompt)
+    stdin = sys.__stdin__
+    assert stdin is not None
+    return stdin.readline().strip().lower()
+
+
+def install_deps(missing: list[_DepInfo]) -> bool:
+    """Prompt user and install missing deps. Returns True if anything was installed."""
+    import shutil
+    import subprocess
+
+    if not missing:
+        return False
+
+    if sys.prefix == sys.base_prefix:
+        _tty_write("\033[33m[repld] gists need packages not in system Python:\n")
+        for dep in missing:
+            _tty_write(f"  {dep.requirement:<24} ({', '.join(dep.gists)})\n")
+        _tty_write("  use: uv tool install repld-tool --with <pkg>\033[0m\n")
+        return False
+
+    _tty_write("\033[36m[repld]\033[0m missing gist deps:\n")
+    n = len(missing)
+    for i, dep in enumerate(missing, 1):
+        _tty_write(f"  {i}) {dep.requirement:<24} ({', '.join(dep.gists)})\n")
+
+    try:
+        if n == 1:
+            choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
+            if choice in ("", "y", "yes"):
+                selected = missing
+            elif choice == "n" or choice == "no":
+                return False
+            else:
+                return False
+        else:
+            choice = _tty_input(
+                f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: "
+            )
+            if choice in ("", "y", "yes", "all"):
+                selected = missing
+            elif choice in ("n", "no", "none"):
+                return False
+            else:
+                indices = []
+                for part in choice.replace(",", " ").split():
+                    try:
+                        idx = int(part) - 1
+                        if 0 <= idx < n:
+                            indices.append(idx)
+                    except ValueError:
+                        pass
+                selected = [missing[i] for i in indices]
+                if not selected:
+                    return False
+    except (EOFError, KeyboardInterrupt):
+        _tty_write("\n")
+        return False
+
+    reqs = [d.requirement for d in selected]
+    uv = shutil.which("uv")
+    cmd = (
+        [uv, "pip", "install", "--python", sys.executable, *reqs]
+        if uv
+        else [sys.executable, "-m", "pip", "install", *reqs]
+    )
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        importlib.invalidate_caches()
+        count = len(selected)
+        _tty_write(
+            f"  \033[32m✓\033[0m installed {count} package{'s' * (count != 1)}\n"
+        )
+        return True
+
+    _tty_write("  \033[31m✗\033[0m install failed:\n")
+    for line in result.stderr.strip().splitlines()[-5:]:
+        _tty_write(f"    {line}\n")
+    return False
 
 
 def install(dirs: list[Path]) -> None:
