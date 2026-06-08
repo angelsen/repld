@@ -461,7 +461,7 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         for h in list(_every_registry):
             h.cancel()
 
-    every.list = _list              # type: ignore[attr-defined]
+    every.list = _list  # type: ignore[attr-defined]
     every.cancel_all = _cancel_all  # type: ignore[attr-defined]
     return every
 
@@ -605,6 +605,11 @@ def run_kernel(
             Path.cwd() / "gists",
         ]
     )
+
+    # 2c. Check gist dependencies before IPC starts (interactive prompt).
+    missing = _gists.scan_deps()
+    if missing:
+        _gists.install_deps(missing)
 
     # 3. Inject helpers into __main__ + repld module.
     from . import gates

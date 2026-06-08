@@ -53,9 +53,15 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     if not sock_path:
         return f"{lock_path.name} missing socket_path"
 
+    sock_resolved = Path(sock_path)
+    if not sock_resolved.is_absolute():
+        kernel_cwd = lock.get("cwd")
+        base = Path(kernel_cwd) if kernel_cwd else lock_path.parent
+        sock_resolved = base / sock_resolved
+
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock.connect(sock_path)
+        sock.connect(str(sock_resolved))
     except OSError as e:
         return f"cannot connect to kernel socket {sock_path}: {e}"
 

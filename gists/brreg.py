@@ -1,28 +1,24 @@
 """Brønnøysundregistrene — Norwegian business registry. Companies, roles, search."""
 
-import asyncio
-import json
-import urllib.error
-import urllib.request
-from urllib.parse import urlencode
+import httpx
 
+__repld_deps__ = ["httpx>=0.27"]
 __repld_usage__ = "b = Brreg(); results = await b.search(kommune='5001', nace='62')"
 
 _BASE = "https://data.brreg.no/enhetsregisteret/api"
+_client: httpx.AsyncClient | None = None
 
 
-def _get(path: str, params: dict | None = None) -> dict:
-    url = f"{_BASE}{path}"
-    if params:
-        url += "?" + urlencode({k: v for k, v in params.items() if v is not None})
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {}
-        raise
+async def _get(path: str, params: dict | None = None) -> dict:
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(base_url=_BASE, timeout=15)
+    clean = {k: v for k, v in (params or {}).items() if v is not None}
+    resp = await _client.get(path, params=clean, headers={"Accept": "application/json"})
+    if resp.status_code == 404:
+        return {}
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _parse_company(e: dict) -> dict:
@@ -79,7 +75,7 @@ class Brreg:
             "size": str(size),
             "page": str(page),
         }
-        data = await asyncio.to_thread(_get, "/enheter", params)
+        data = await _get("/enheter", params)
         companies = [
             _parse_company(e) for e in data.get("_embedded", {}).get("enheter", [])
         ]
@@ -88,11 +84,11 @@ class Brreg:
 
     async def company(self, orgnr: str) -> dict:
         """Get full company record by org number."""
-        return _parse_company(await asyncio.to_thread(_get, f"/enheter/{orgnr}"))
+        return _parse_company(await _get(f"/enheter/{orgnr}"))
 
     async def roles(self, orgnr: str) -> list[dict]:
         """Get board members, CEO, auditor etc. for a company."""
-        data = await asyncio.to_thread(_get, f"/enheter/{orgnr}/roller")
+        data = await _get(f"/enheter/{orgnr}/roller")
         results = []
         for group in data.get("rollegrupper", []):
             group_type = group["type"]["beskrivelse"]
@@ -104,7 +100,7 @@ class Brreg:
 
     async def sub_units(self, orgnr: str) -> list[dict]:
         """Get sub-units (underenheter) for a parent company."""
-        data = await asyncio.to_thread(_get, f"/enheter/{orgnr}/underenheter")
+        data = await _get(f"/enheter/{orgnr}/underenheter")
         return [
             _parse_company(e) for e in data.get("_embedded", {}).get("underenheter", [])
         ]
@@ -124,7 +120,7 @@ class Brreg:
             "navn": navn,
             "size": str(size),
         }
-        data = await asyncio.to_thread(_get, "/underenheter", params)
+        data = await _get("/underenheter", params)
         units = [
             _parse_company(e) for e in data.get("_embedded", {}).get("underenheter", [])
         ]
