@@ -77,6 +77,11 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Gist tools — `__repld_tools__` declaration + `_tool_*` handlers, auto-discovery in `tools/list`, `repld gist` scaffolding
 - [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard
+- [x] Ready signal — `browser.get(ready=selector)`, session recovery on HMR, navigate/reload wait
+- [x] Touch input — `tab.tap()`, `tab.swipe()`, 3s timeout for blocking handlers
+- [x] No-focus-steal selectors — CSS selectors use `DOM.querySelector` + `DOM.getBoxModel` (no JS eval)
+- [x] Gist dependency management — `__repld_deps__` declaration, boot-time scan + interactive install prompt
+- [x] Dynamic `__version__` — `importlib.metadata.version("repld-tool")`
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@watch("/path")` — poll-based file watcher → channel (stdlib only)
 - [ ] `@webhook("/path")` — stdlib asyncio HTTP server → channel

@@ -57,7 +57,9 @@ _GISTS_MODEL = (
     "Before using a gist, read repld://gists/{name} for the full API — constructor args, "
     "method signatures, and usage patterns.\n"
     "Stable gists can register as MCP tools via __repld_tools__ — callable "
-    "directly without exec, discoverable in tools/list."
+    "directly without exec, discoverable in tools/list.\n"
+    'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
+    "kernel prompts to install missing ones at boot."
 )
 
 _REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns, browser workflows, and gist conventions."
@@ -115,12 +117,14 @@ def build_instructions() -> str:
     if (Path.cwd() / "uv.lock").exists():
         parts.append(
             "Dependencies: this is a uv project. "
-            "Add packages with `uv add <pkg>`, then restart the kernel."
+            "Add packages with `uv add <pkg>`, then restart the kernel. "
+            "Gists can also declare __repld_deps__ for auto-install at boot."
         )
     else:
         parts.append(
-            "Dependencies: cannot add packages at runtime. "
-            "Only stdlib and pre-installed packages are available."
+            'Dependencies: gists can declare __repld_deps__ = ["pkg"] '
+            "for boot-time install into the tool venv. "
+            "Stdlib and pre-installed packages are always available."
         )
 
     parts.append(_REFERENCE)
@@ -234,14 +238,19 @@ Tab (sync — DuckDB queries):
   row.body()                             → dict (response body for a Row)
 
 Browser:
-  browser.get(target, timeout=, fresh=)  → Tab  (glob or target ID; skips workers for globs)
-  browser.watch(pattern)                 → str  (watch all matching, auto-attach new)
-  browser.open(url)                      → Tab
-  browser.tabs                           → list[Tab]
-  browser.pages()                        → list[dict]
-  browser.detach(pattern=)               → str
-  browser.clear(target=)                 → str
-  browser.disconnect()                   → None
+  browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
+  browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
+  browser.open(url)                              → Tab
+  browser.tabs                                   → list[Tab]
+  browser.pages()                                → list[dict]
+  browser.detach(pattern=)                       → str
+  browser.clear(target=)                         → str
+  browser.disconnect()                           → None
+
+  ready= takes a CSS selector. Tab waits for the element to appear before
+  returning. On session loss (HMR/navigation), re-attaches and waits again.
+  navigate() and reload() also wait for the ready selector before returning.
+  Convention: add data-testid to your root layout component.
 
 Selectors (click/tap/type_text):
   .css-class, #id, [attr]               CSS (no focus steal — pure CDP path)
@@ -295,6 +304,11 @@ Tool registration:
     ]
     async def _tool_foo_query(args: dict) -> str:
         return json.dumps({"result": ...})
+
+Dependencies:
+  __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
+  Kernel scans at boot, prompts to install missing packages into the venv.
+  Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
 
 Writing gists:
   Prefer async — use httpx.AsyncClient, async def methods, await tab.fetch().
@@ -483,10 +497,18 @@ browser is lazy-injected into __main__. Connects to Chrome on first use
   await browser.watch("*example.com*")       # watch pattern, auto-attach
   tab = await browser.open("https://...")     # open new tab
 
+  # Ready signal — wait for element before returning
+  tab = await browser.get("*localhost*", ready="[data-testid='app-root']")
+
 browser.get() raises RuntimeError if no matching tab is found.
 browser.open() opens a new tab and navigates to the URL.
 tab.navigate(url) navigates an existing tab (use for same-site navigation;
 use browser.open() when you need a fresh tab).
+
+ready= takes a CSS selector. The tab waits for that element to appear before
+returning. On session loss (HMR, navigation), re-attaches to the same target
+and waits for the ready signal again. navigate() and reload() also wait.
+Convention: add data-testid to your root layout component.
 
 === Tab API (async) ===
 
@@ -597,6 +619,7 @@ graph stores, embedding indexes, internal services.
 
 Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
+__repld_deps__ = ["httpx>=0.27"] → kernel prompts to install at boot.
 Type hints + one-line docstrings on public methods → auto-introspected.
 Document return shapes in docstrings with -> {key, key, ...} so the agent
 knows the dict structure without trial and error:
@@ -609,6 +632,7 @@ Template:
 
   \"""AppName — what it does.\"""
 
+  __repld_deps__ = ["httpx>=0.27"]  # optional: auto-installed at boot
   __repld_usage__ = "app = await AppName.connect()"
 
 
@@ -665,8 +689,8 @@ Gate write operations. Anything that mutates state should call
 tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears
 in both the terminal and the pill UI — first resolution wins.
 
-For apps that don't need browser auth (public APIs), use stdlib urllib or
-install httpx in the project. No browser tab needed.
+For apps that don't need browser auth (public APIs), use httpx (declare it
+in __repld_deps__) or stdlib urllib. No browser tab needed.
 
 === Multi-tab gists (embedded apps) ===
 
