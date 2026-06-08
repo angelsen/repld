@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+
 def _mcp_entry(cwd: Path) -> dict:
     if (cwd / "uv.lock").exists():
         return {
@@ -23,6 +24,7 @@ def _mcp_entry(cwd: Path) -> dict:
         "args": ["bridge"],
         "env": {},
     }
+
 
 _GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock"]
 
@@ -56,9 +58,7 @@ def _write_mcp_json(cwd: Path) -> str:
         servers["repld"] = entry
         path.write_text(json.dumps(cfg, indent=2) + "\n")
         return f"updated: {path.name} (added repld entry)"
-    path.write_text(
-        json.dumps({"mcpServers": {"repld": entry}}, indent=2) + "\n"
-    )
+    path.write_text(json.dumps({"mcpServers": {"repld": entry}}, indent=2) + "\n")
     return f"created: {path.name}"
 
 
@@ -139,6 +139,8 @@ _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
 import json
+
+# __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
 
 __repld_tools__ = [
     {{
