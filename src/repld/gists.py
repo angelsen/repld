@@ -26,8 +26,8 @@ __all__ = [
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}  # fullname → source .py path
-_mtimes: dict[str, float] = {}  # fullname → last known mtime
+_managed: dict[str, Path] = {}    # fullname → source .py path
+_mtimes: dict[str, float] = {}    # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
 _REGISTRY_PATH = (
