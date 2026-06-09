@@ -207,6 +207,7 @@ Tab (async unless noted):
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.type_text(selector, text, enter=)            → None (clears first, auto-waits)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
+  tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body}
   tab.navigate(url)                                → None
   tab.reload()                                     → None
@@ -521,6 +522,8 @@ Convention: add data-testid to your root layout component.
   tab.swipe(x1, y1, x2, y2)          touch scroll
   tab.type_text(selector, text)       clear + type (auto-waits 2s)
   tab.wait_for(selector, timeout=5)   wait for element to appear
+  tab.wait_for_idle(timeout=5, quiet=0.5)
+                                      wait for network idle; returns settle ms
   tab.pin(reason)                     inject status pill + beforeunload guard
   tab.confirm(prompt) → bool          gate routed to pill UI
   tab.choose(prompt, options) → str   gate routed to pill UI
