@@ -4,6 +4,11 @@ import sys
 
 def main() -> None:
     argv = sys.argv[1:]
+    if argv and argv[0] in ("--version", "-V"):
+        from importlib.metadata import version
+
+        print(f"repld-tool {version('repld-tool')}")
+        return
     if argv and argv[0] == "bridge":
         from .bridge import run_bridge
 
