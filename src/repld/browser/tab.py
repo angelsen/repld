@@ -739,7 +739,10 @@ class Tab:
     def _is_session_gone(exc: Exception) -> bool:
         """True if the error indicates the CDP session was invalidated (HMR, navigation)."""
         msg = str(exc).lower()
-        return "session with given id not found" in msg or "no session with given id" in msg
+        return (
+            "session with given id not found" in msg
+            or "no session with given id" in msg
+        )
 
     async def _reattach(self) -> None:
         """Re-attach to the same target after session invalidation (HMR, navigation).
@@ -793,7 +796,9 @@ class Tab:
             await asyncio.sleep(0.1)
         raise RuntimeError(f"Ready signal not satisfied after re-attach: {expr}")
 
-    async def _exec(self, method: str, params: dict | None = None, timeout: float = 30) -> dict:
+    async def _exec(
+        self, method: str, params: dict | None = None, timeout: float = 30
+    ) -> dict:
         """Execute a CDP command with session-gone recovery.
 
         On HMR reload or navigation, the Chrome session ID changes but the
@@ -1012,9 +1017,7 @@ class Tab:
             )
             node_id = result.get("nodeId", 0)
             if node_id:
-                box = await self._exec(
-                    "DOM.getBoxModel", {"nodeId": node_id}
-                )
+                box = await self._exec("DOM.getBoxModel", {"nodeId": node_id})
                 content = box["model"]["content"]
                 xs = [content[i] for i in range(0, 8, 2)]
                 ys = [content[i] for i in range(1, 8, 2)]
@@ -1118,7 +1121,9 @@ class Tab:
                     {"type": event_type, "key": "Enter", "code": "Enter"},
                 )
 
-    async def _touch(self, type: str, touch_points: list[dict], timeout: float = 3) -> None:
+    async def _touch(
+        self, type: str, touch_points: list[dict], timeout: float = 3
+    ) -> None:
         """Dispatch a touch event with a timeout. Raises TimeoutError if the page's
         touch handler blocks (e.g. preventDefault on complex apps like Messenger)."""
         await self._session.execute(
@@ -1144,8 +1149,10 @@ class Tab:
 
     async def swipe(
         self,
-        x1: float, y1: float,
-        x2: float, y2: float,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
         *,
         steps: int = 10,
         duration_ms: int = 300,
@@ -1230,8 +1237,14 @@ class Tab:
         """
         await self._find_element(selector, timeout=timeout)
 
+    async def wait_for_idle(self, *, timeout: float = 5.0, quiet: float = 0.5) -> int:
+        """Wait for network idle. Returns settle time in ms."""
+        from .observe import settle
+
+        return await settle([self], timeout=timeout, quiet=quiet)
+
     async def _wait_ready(self, timeout: float = 10) -> None:
-        """Wait for the ready signal after navigation/reload, then settle 300ms."""
+        """Wait for the ready signal after navigation/reload, then network idle."""
         ready = self._ready
         if ready is None:
             return
@@ -1239,7 +1252,7 @@ class Tab:
             await self._wait_ready_selector(ready, timeout)
         else:
             await self._wait_ready_js(ready, timeout)
-        await asyncio.sleep(0.3)
+        await self.wait_for_idle(timeout=2.0, quiet=0.3)
 
     async def reload(self) -> None:
         """Reload the page, then wait for the ready signal."""
@@ -1251,7 +1264,9 @@ class Tab:
         await self._session.execute("Page.navigate", {"url": url})
         await self._wait_ready()
 
-    async def screenshot(self, *, full_page: bool = False, path: str | None = None) -> pathlib.Path:
+    async def screenshot(
+        self, *, full_page: bool = False, path: str | None = None
+    ) -> pathlib.Path:
         """Capture a PNG screenshot, save to disk, return the path.
 
         path: explicit save location. Default: $XDG_RUNTIME_DIR/repld/screenshot-{target}-{ts}.png
