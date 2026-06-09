@@ -14,6 +14,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+## [0.0.10] - 2026-06-09
+
+### Added
+
+- Gist dependency management: `__repld_deps__ = ["httpx>=0.27"]` — kernel AST-scans at boot, prompts to install missing packages into the tool venv
+- Interactive install prompt (pacman-style): Y/n for single dep, pick-by-number for multiple, Enter defaults to install all
+- Venv safety guard: refuses to install into system Python, shows manual install instructions
+
+### Changed
+
+- Brreg gist ported to httpx — native async, no `asyncio.to_thread` wrapper
+- Browser dispatch refactored from 172-line if/elif chain to dispatch table with 18 individual handler methods
+- Docs aligned across all surfaces: `__repld_deps__`, `ready=` signal, session recovery documented in INSTRUCTIONS, topics, GUIDE, ARCHITECTURE.md, CLAUDE.md, and gist scaffold template
+- Gist scaffold template (`repld gist`) includes commented `__repld_deps__` example
+
+### Fixed
+
+- IPC socket path resolution for relative paths (resolves against kernel cwd from lockfile)
+
 ## [0.0.9] - 2026-06-05
 
 ### Fixed
