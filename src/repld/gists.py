@@ -26,8 +26,8 @@ __all__ = [
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}    # fullname → source .py path
-_mtimes: dict[str, float] = {}    # fullname → last known mtime
+_managed: dict[str, Path] = {}  # fullname → source .py path
+_mtimes: dict[str, float] = {}  # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
 _REGISTRY_PATH = (
@@ -519,8 +519,6 @@ def install_deps(missing: list[_DepInfo]) -> bool:
             choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
             if choice in ("", "y", "yes"):
                 selected = missing
-            elif choice == "n" or choice == "no":
-                return False
             else:
                 return False
         else:

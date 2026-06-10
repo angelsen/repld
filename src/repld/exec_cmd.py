@@ -23,11 +23,14 @@ from typing import IO, Any
 from . import __version__
 from .ipc import connect_to_kernel
 
+
 def _lock_path() -> Path:
     env = os.environ.get("REPLD_SOCKET")
     if env:
         return Path(env).with_suffix(".lock")
     return Path.cwd() / ".pyrepl.lock"
+
+
 HISTORY_DIR = Path.home() / ".repld"
 HISTORY_PATH = HISTORY_DIR / "history"
 
@@ -328,7 +331,7 @@ def run_exec(argv: list[str]) -> int:
             pid = lock.get("pid", "?")
             console = RemoteConsole(rfile, wfile, json_mode)
             console.interact(
-                banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, ask, confirm, choose",
+                banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, defer, every, ask, confirm, choose",
                 exitmsg="",
             )
             return 0
