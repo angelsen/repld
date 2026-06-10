@@ -319,11 +319,13 @@ Writing gists:
   Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
 """,
     "gates": """\
-await ask(prompt, *, default=None, timeout=None)              → str
-await confirm(prompt, *, default=None, timeout=None)          → bool
-await choose(prompt, options, *, default=None, timeout=None)  → str
+await ask(prompt, *, default=None, timeout=None)                       → str
+await confirm(prompt, *, tab=None, default=None, timeout=None)         → bool
+await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 
 Blocks cell on human input in kernel pane.
+Pass tab= to also surface the gate in that tab's pin pill (requires
+tab.pin()); terminal and browser resolve the same gate — first wins.
 TimeoutError if no default and timeout expires.
 Emits awaiting_human channel while blocked.
 
