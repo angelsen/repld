@@ -8,9 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld gist` command group: `new` / `add` / `rm` / `list`. `repld gist add <name>` links a gist registered in another project — without copying — by resolving its path through the registry, following same-dir sibling imports, and recording absolute paths in a committed `./gists/.links` manifest. Local `./gists` and `~/.repld/gists` always shadow a linked gist of the same name; stale links are skipped at boot and pruned with `rm --stale`
+- `repld://gists/_registry` MCP resource — browse every gist seen across projects, grouped by project (the agent-facing counterpart to `repld gist list`)
+- `tab.wait_for_idle(timeout, quiet)` — wait for network idle, returns settle time in ms; replaces the hardcoded 300ms post-navigation settle
+- `repld --version` / `-V`
+
 ### Changed
 
+- Top-level CLI dispatch unified into a single `_SUBCOMMANDS` table driving both dispatch and `--help`, so subcommands are now listed in `repld --help` and an unknown command shows the list
+- Gist discovery unified through one iterator so linked gists appear consistently in instructions, dependency scanning, and resources
+- Docs synced across surfaces (INSTRUCTIONS, topics, GUIDE, CLAUDE.md): cross-project linking, gist conventions (normalize returns, document return shapes, subclassing/introspection caveat), and gate `tab=` routing to the browser pin pill
+- Interactive REPL banner lists all injected builtins (`defer`, `every`)
+- Dev environment installs the `pretty` + `browser` extras via a dev dependency group so the full tree type-checks
+
 ### Fixed
+
+- Possibly-unbound `root_id` in `Tab._find_element` on the CSS-selector path
 
 ### Removed
 
