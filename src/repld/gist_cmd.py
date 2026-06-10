@@ -97,10 +97,7 @@ def _gist_add(argv: list[str]) -> int:
     gists_dir = Path.cwd() / "gists"
     try:
         linked = _gists.add_link(name, gists_dir)
-    except LookupError as e:
-        print(f"error: {e}")
-        return 1
-    except FileExistsError as e:
+    except (LookupError, FileExistsError, ValueError) as e:
         print(f"error: {e}")
         return 1
 
@@ -124,22 +121,26 @@ def _gist_rm(argv: list[str]) -> int:
     from . import gists as _gists
 
     gists_dir = Path.cwd() / "gists"
-    if argv and argv[0] == "--stale":
-        dropped = _gists.remove_stale_links(gists_dir)
-        if dropped:
-            print(f"dropped stale link(s): {', '.join(dropped)}")
-        else:
-            print("no stale links")
-        return 0
-    if not argv:
-        print("repld gist rm <name> | --stale")
-        return 2
-    name = argv[0]
-    if _gists.remove_link(name, gists_dir):
-        print(f"unlinked: {name}")
-        return 0
-    print(f"error: '{name}' is not linked")
-    return 1
+    try:
+        if argv and argv[0] == "--stale":
+            dropped = _gists.remove_stale_links(gists_dir)
+            if dropped:
+                print(f"dropped stale link(s): {', '.join(dropped)}")
+            else:
+                print("no stale links")
+            return 0
+        if not argv:
+            print("repld gist rm <name> | --stale")
+            return 2
+        name = argv[0]
+        if _gists.remove_link(name, gists_dir):
+            print(f"unlinked: {name}")
+            return 0
+        print(f"error: '{name}' is not linked")
+        return 1
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
 
 
 def _gist_list(argv: list[str]) -> int:
@@ -156,7 +157,11 @@ def _gist_list(argv: list[str]) -> int:
             print(f"  {name:<20} {sig}")
 
     # Linked gists, flagging stale entries.
-    links = _gists.read_links(gists_dir)
+    try:
+        links = _gists.read_links(gists_dir)
+    except ValueError as e:
+        print(f"error: {e}")
+        links = {}
     if links:
         print("linked:")
         stale = 0

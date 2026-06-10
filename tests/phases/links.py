@@ -89,6 +89,43 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(sorted(remaining), ["sib"], "rm keeps shared sibling")
         print("  ✓ gist rm drops target, leaves shared sibling")
 
+        # --- corrupt manifest: read raises, add refuses, boot warns — never clobbered ---
+        links_path = gd / ".links"
+        good = links_path.read_text()
+        links_path.write_text('{"widget": \n')  # truncated JSON
+        raised = False
+        try:
+            g.read_links(gd)
+        except ValueError:
+            raised = True
+        assert_true(raised, "read_links raises on corrupt manifest")
+        raised = False
+        try:
+            g.add_link("widget", gd)
+        except ValueError:
+            raised = True
+        assert_true(raised, "add_link refuses on corrupt manifest")
+        assert_eq(
+            links_path.read_text(), '{"widget": \n', "corrupt manifest not clobbered"
+        )
+        g._load_links(gd)  # warns on stderr, loads nothing, doesn't raise
+        assert_eq(dict(g._linked), {}, "corrupt manifest loads no links")
+        links_path.write_text(good)
+        print("  ✓ corrupt manifest → loud error, add refuses, never clobbered")
+
+        # --- registry entry whose file is gone: add errors instead of false success ---
+        g.registry = lambda: {
+            "ghost": {"path": str(src / "ghost.py"), "project": str(other)}
+        }
+        raised = False
+        try:
+            g.link_targets("ghost")
+        except LookupError as e:
+            raised = True
+            assert_true("gone" in str(e), f"error says the file is gone (got {e!r})")
+        assert_true(raised, "link_targets raises on gone registry path")
+        print("  ✓ gone registry path → LookupError, not silent empty link")
+
         # --- stale: delete the source, load skips it, rm --stale prunes it ---
         shutil.rmtree(other)
         g._load_links(gd)

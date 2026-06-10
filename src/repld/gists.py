@@ -121,17 +121,22 @@ def registry_summary() -> str:
 
 
 def read_links(gists_dir: Path) -> dict[str, str]:
-    """Read the link manifest. Returns {name: abspath}. Best-effort → {} on error."""
+    """Read the link manifest. Returns {name: abspath}; {} if absent.
+
+    Raises ValueError if the manifest exists but won't parse — callers must
+    not guess: treating a corrupt manifest as empty would make `gist add`
+    rewrite it and silently drop every other committed link.
+    """
     path = gists_dir / _LINKS_FILENAME
     if not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text("utf-8"))
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
-    except Exception:
-        pass
-    return {}
+    except (OSError, json.JSONDecodeError) as e:
+        raise ValueError(f"corrupt link manifest {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"corrupt link manifest {path}: expected a JSON object")
+    return {str(k): str(v) for k, v in data.items()}
 
 
 def write_links(gists_dir: Path, links: dict[str, str]) -> None:
@@ -150,7 +155,15 @@ def _load_links(gists_dir: Path) -> None:
     the working tree. Use `repld gist rm --stale` to drop dead links.
     """
     _linked.clear()
-    for name, raw in read_links(gists_dir).items():
+    try:
+        links = read_links(gists_dir)
+    except ValueError as e:
+        print(
+            f"repld: {e} — linked gists unavailable (fix or delete the file)",
+            file=sys.stderr,
+        )
+        return
+    for name, raw in links.items():
         p = Path(raw)
         if p.is_file():
             _linked[name] = p
@@ -211,6 +224,17 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
             candidates = (rp.parent / f"{cur}.py" for rp in resolved.values())
             p = next((c for c in candidates if c.is_file()), Path())
         if not p.is_file():
+            if cur == name:
+                raise LookupError(
+                    f"gist '{name}' is registered at {p} but the file is gone"
+                    " — import it from its home project to re-register, or"
+                    " remove the entry from ~/.config/repld/gist-registry.json"
+                )
+            print(
+                f"repld: sibling gist '{cur}' could not be resolved — "
+                f"'{name}' may not import without it",
+                file=sys.stderr,
+            )
             continue
         resolved[cur] = p
         queue.extend(_sibling_imports(p) - resolved.keys())
