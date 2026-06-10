@@ -38,10 +38,12 @@ class SD:
         try:
             admin = await repld.browser.get("*admin.shopify*search-and-discovery*")
         except RuntimeError:
-            admin = await browser.open(
+            admin = await repld.browser.open(
                 "https://admin.shopify.com/store/mym-shop-7ai85jfe/apps/search-and-discovery"
             )
-        iframe = await browser.get("*search-and-discovery.shopifyapps*", timeout=10)
+        iframe = await repld.browser.get(
+            "*search-and-discovery.shopifyapps*", timeout=10
+        )
         await iframe.pin("Shopify S&D — synonyms, boosts, filters, recommendations")
         return cls(admin, iframe)
 

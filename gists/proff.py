@@ -24,13 +24,13 @@ class Proff:
         try:
             tab = await repld.browser.get("*proff.no*")
         except RuntimeError:
-            tab = await browser.open("https://www.proff.no")
+            tab = await repld.browser.open("https://www.proff.no")
             await tab.wait_for("role=main", timeout=10)
         await tab.pin("Proff.no — repld integration")
         return cls(tab)
 
     async def search(self, query: str) -> list[dict]:
-        """Search companies by name or orgnr. Returns list of {name, url, city, industry}."""
+        """Search companies by name or orgnr. -> [{name, url, city, industry}]"""
         r = await self._tab.fetch(
             f"https://www.proff.no/bransjes%C3%B8k?q={_quote(query)}"
         )
@@ -51,7 +51,7 @@ class Proff:
         return results
 
     async def company(self, url_or_orgnr: str) -> dict:
-        """Get full company data. Pass a proff.no URL or an orgnr."""
+        """Get full company data by proff.no URL or orgnr. -> {name, orgnr, employees, revenue, ceo, roles, shareholders, accounts, ...}"""
         if url_or_orgnr.startswith("http"):
             url = url_or_orgnr
         else:
@@ -72,17 +72,17 @@ class Proff:
         return _parse_company(raw)
 
     async def roles(self, url_or_orgnr: str) -> list[dict]:
-        """Get board members, CEO, auditor for a company."""
+        """Get board members, CEO, auditor for a company. -> [{group, role, name, type, birth_date, person_id}]"""
         co = await self.company(url_or_orgnr)
         return co.get("roles", [])
 
     async def shareholders(self, url_or_orgnr: str) -> list[dict]:
-        """Get shareholders for a company."""
+        """Get shareholders for a company. -> [{name, share_pct, num_shares, company_id}]"""
         co = await self.company(url_or_orgnr)
         return co.get("shareholders", [])
 
     async def financials(self, url_or_orgnr: str) -> list[dict]:
-        """Get financial accounts history for a company."""
+        """Get financial accounts history. -> [{year, revenue, profit, ebitda, total_assets, equity, employees, ...}]"""
         co = await self.company(url_or_orgnr)
         return co.get("accounts", [])
 
@@ -133,11 +133,11 @@ def _parse_company(raw: dict) -> dict:
                 "revenue": codes.get("SDI"),  # sum driftsinntekter
                 "profit": codes.get("AARS"),  # årsresultat
                 "ebitda": codes.get("EBITDA"),
-                "total_assets": codes.get("SIA"),     # sum eiendeler
-                "equity": codes.get("SEK"),           # sum egenkapital
+                "total_assets": codes.get("SIA"),  # sum eiendeler
+                "equity": codes.get("SEK"),  # sum egenkapital
                 "short_term_debt": codes.get("SKG"),  # sum kortsiktig gjeld
-                "long_term_debt": codes.get("LG"),    # langsiktig gjeld
-                "employees": codes.get("OPAV"),       # antall ansatte
+                "long_term_debt": codes.get("LG"),  # langsiktig gjeld
+                "employees": codes.get("OPAV"),  # antall ansatte
             }
         )
 

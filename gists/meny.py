@@ -27,7 +27,7 @@ class Meny:
         try:
             tab = await repld.browser.get("*meny.no*")
         except RuntimeError:
-            tab = await browser.open("https://meny.no")
+            tab = await repld.browser.open("https://meny.no")
             await tab.wait_for("role=main", timeout=10)
         await tab.pin("Meny — repld integration")
         return cls(tab, store_id=store_id)
@@ -35,7 +35,7 @@ class Meny:
     async def search(
         self, query: str, *, page: int = 1, page_size: int = 20
     ) -> list[dict]:
-        """Search products by text. Returns list with nutrition, price, allergens."""
+        """Search products by text. -> [{ean, title, vendor, price, kcal, protein, fat, carbs, allergens_contains, url, ...}]"""
         r = await self._tab.fetch(
             f"{_BASE}/episearch/{self._chain}/products"
             f"?search={quote(query)}&page={page}&page_size={page_size}"
@@ -49,7 +49,7 @@ class Meny:
         return await self.products(eans)
 
     async def products(self, eans: list[str]) -> list[dict]:
-        """Fetch full product details (with nutrition) by EAN codes."""
+        """Fetch full product details by EAN codes. -> same shape as search()"""
         r = await self._tab.fetch(
             f"{_BASE}/products/{self._chain}/{self._store}"
             f"?page=1&page_size={len(eans)}&full_response=true"
@@ -67,7 +67,7 @@ class Meny:
         page: int = 1,
         page_size: int = 20,
     ) -> list[dict]:
-        """Browse products by category and/or keyword with full nutrition."""
+        """Browse products by category and/or keyword. -> same shape as search()"""
         params = (
             f"?page={page}&page_size={page_size}&full_response=true"
             f"&fieldset=maximal&facets=Category,Allergen&showNotForSale=true"

@@ -6,7 +6,6 @@ import json
 import os
 import urllib.parse
 import urllib.request
-from datetime import datetime
 
 __repld_usage__ = "gm = Gmail()"
 
@@ -141,8 +140,8 @@ class Gmail:
         """List all labels. -> [{id, name, type}]"""
         data = self._req("labels")
         return [
-            {"id": l["id"], "name": l["name"], "type": l.get("type", "")}
-            for l in data.get("labels", [])
+            {"id": lb["id"], "name": lb["name"], "type": lb.get("type", "")}
+            for lb in data.get("labels", [])
         ]
 
     def inbox(self, limit: int = 20) -> list[dict]:

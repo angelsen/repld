@@ -430,8 +430,13 @@ class GMessages:
         await self._conv_action(conversation_id, "deleteConversation")
 
     async def permanent_delete(self, conversation_id: str) -> None:
-        """Permanently delete a conversation via web (bypasses bin). -> None"""
+        """Permanently delete a conversation via web (bypasses bin, gated). -> None"""
         self._require_web()
+        ok = await self._tab.confirm(
+            f"PERMANENTLY delete conversation {conversation_id}? (no bin, no undo)"
+        )
+        if not ok:
+            raise RuntimeError("Cancelled by user")
         await self._tab.js(f"""
 (() => {{
     const ji = window._jIInstance;

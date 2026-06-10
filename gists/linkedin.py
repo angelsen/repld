@@ -25,7 +25,7 @@ class LI:
         try:
             tab = await repld.browser.get("*linkedin.com*")
         except RuntimeError:
-            tab = await browser.open("https://www.linkedin.com")
+            tab = await repld.browser.open("https://www.linkedin.com")
             await tab.wait_for("role=main", timeout=10)
         await tab.pin("LinkedIn — repld integration")
         csrf = await tab.js(
@@ -69,7 +69,7 @@ class LI:
         return json.loads(r["body"]) if isinstance(r["body"], str) else r["body"]
 
     async def me(self) -> dict:
-        """Get own profile summary."""
+        """Get own profile summary. -> {id, first_name, last_name, headline, public_id, member_id, urn}"""
         data = await self._voyager("me")
         mini = {}
         for item in data.get("included", []):
@@ -87,7 +87,7 @@ class LI:
         }
 
     async def profile(self, identifier: str) -> dict:
-        """Get full profile by public_id ('olejrosendahl') or member_id ('ACoAA...')."""
+        """Get full profile by public_id or member_id ('ACoAA...'). -> {first_name, headline, positions, education, skills, ...}"""
         try:
             data = await self._voyager(
                 "identity/dash/profiles",
@@ -109,7 +109,7 @@ class LI:
             raise
 
     async def company(self, universal_name: str) -> dict:
-        """Get company by URL slug (e.g. 'attensi'). Returns info + company_id."""
+        """Get company by URL slug (e.g. 'attensi'). -> {name, company_id, staff_count, hq_city, website, ...}"""
         data = await self._voyager(
             "organization/companies",
             {"q": "universalName", "universalName": universal_name},
@@ -129,9 +129,9 @@ class LI:
         geo: str | None = None,
         network: str | None = None,
     ) -> list[dict]:
-        """Search people. Filters: company (ID or name), geo (ID), network (F/S/O).
+        """Search people. -> [{name, headline, location, member_id, public_id?, url?}]
 
-        Returns list of {name, headline, location, member_id, public_id?, url?}.
+        Filters: company (ID or name), geo (ID), network (F/S/O).
         Paginates automatically up to `count`.
         """
         company_id = await self._resolve_company_id(company) if company else None

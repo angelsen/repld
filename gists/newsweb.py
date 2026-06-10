@@ -34,7 +34,7 @@ class Newsweb:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> list[dict]:
-        """Search filings. category: 1005=inside info, 1102=managers' tx, 1006=major shareholdings, 1001=annual report."""
+        """Search filings (1005=inside info, 1102=managers' tx, 1006=major holdings). -> [{id, title, issuer, published, category, ...}]"""
         data = await asyncio.to_thread(
             _post,
             "list",
@@ -50,7 +50,7 @@ class Newsweb:
         return [_parse_message(m) for m in data.get("data", {}).get("messages", [])]
 
     async def issuers(self, active_only: bool = True) -> list[dict]:
-        """List all 1,588 issuers on Oslo Børs."""
+        """List issuers on Oslo Børs. -> [{id, symbol, name}]"""
         data = await asyncio.to_thread(_post, "issuers")
         issuers = data.get("data", {}).get("issuers", [])
         if active_only:
@@ -65,7 +65,7 @@ class Newsweb:
         ]
 
     async def categories(self) -> list[dict]:
-        """List filing categories (inside info, managers' tx, etc)."""
+        """List filing categories (inside info, managers' tx, etc). -> [{id, name_en, name_no}]"""
         data = await asyncio.to_thread(_post, "categories")
         return [
             {
@@ -82,7 +82,7 @@ class Newsweb:
         return data.get("data", {}).get("markets", [])
 
     async def find_issuer(self, name: str) -> list[dict]:
-        """Find issuer by name substring."""
+        """Find issuer by name or symbol substring. -> [{id, symbol, name}]"""
         issuers = await self.issuers()
         q = name.lower()
         return [

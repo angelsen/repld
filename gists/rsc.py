@@ -8,7 +8,7 @@ __repld_usage__ = "from rsc import parse_rehydration, walk_text"
 
 
 def parse_rehydration(html: str) -> dict[str, str]:
-    """Extract __como_rehydration__ from HTML into assembled RSC lines.
+    """Extract __como_rehydration__ from HTML. -> {line_id_hex: payload_str}
 
     Returns a dict mapping line ID (hex string) to its data payload.
     Chunks split across array elements are concatenated automatically.
@@ -46,7 +46,7 @@ def parse_tree(data: str) -> list | dict | None:
 
 
 def walk_text(node) -> list[dict]:
-    """Walk an RSC component tree and extract all text entries.
+    """Walk an RSC component tree and extract all text entries. -> [{text, weight, size, slug}]
 
     Each entry: {'text': str, 'weight': str, 'size': str, 'slug': str|None}
     - weight: 'bold', 'normal', etc (from fontWeight)
