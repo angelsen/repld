@@ -153,6 +153,7 @@ Commands:
   repld exec               Interactive REPL (state persists in kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld init               Scaffold .mcp.json + .gitignore in cwd
+  repld gist NAME          Scaffold a tool gist in ./gists/NAME.py
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:
@@ -238,6 +239,11 @@ Tab (sync — DuckDB queries):
 
   row.body()                             → dict (response body for a Row)
 
+Tab properties:
+  tab.url / tab.title / tab.type         str   target info (type: page/iframe/worker)
+  tab.target_id / tab.parent_frame_id    str   short ID; parent frame for iframes
+  tab.capture_bodies = False             bool  toggle Fetch-domain body capture
+
 Browser:
   browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
   browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
@@ -245,6 +251,7 @@ Browser:
   browser.tabs                                   → list[Tab]
   browser.pages()                                → list[dict]
   browser.detach(pattern=)                       → str
+  browser.patterns()                             → list[str]  active watch patterns
   browser.clear(target=)                         → str
   browser.disconnect()                           → None
 
@@ -486,7 +493,9 @@ Injected into __main__:
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds)(fn)           periodic ticker; fn.cancel() stops it
   ask(prompt) / confirm(prompt) / choose(prompt, options)
-                               block on human input in the kernel terminal
+                               block on human input in the kernel terminal;
+                               confirm/choose accept tab= to also surface
+                               the gate in that tab's pin pill
 
 == Browser ==
 
@@ -702,6 +711,14 @@ in both the terminal and the pill UI — first resolution wins.
 
 For apps that don't need browser auth (public APIs), use httpx (declare it
 in __repld_deps__) or stdlib urllib. No browser tab needed.
+
+Normalize responses. Parse provider payloads into flat dicts with stable
+keys (_parse_* module helpers) instead of returning raw API JSON — terse
+output, stable downstream code, and a shape that fits in a docstring.
+
+Module-level state resets on reload. Globals (clients, caches) re-initialize
+when the gist auto-reloads; stale connections are not closed. Keep such
+state disposable — lazy-init clients, caches that can rebuild.
 
 === Multi-tab gists (embedded apps) ===
 
