@@ -21,6 +21,7 @@ __all__ = [
     "resolve_tool",
     "signature",
     "registry",
+    "registry_summary",
     "scan_deps",
     "install_deps",
     "read_links",
@@ -76,6 +77,34 @@ def registry() -> dict:
     if _REGISTRY_PATH.is_file():
         return json.loads(_REGISTRY_PATH.read_text("utf-8"))
     return {}
+
+
+def registry_summary() -> str:
+    """Render the cross-project registry as text, grouped by project (recent first)."""
+    reg = registry()
+    if not reg:
+        return "(gist registry empty — import a gist in any project to populate it)"
+    by_project: dict[str, list[tuple[str, dict]]] = {}
+    for name, entry in reg.items():
+        by_project.setdefault(entry.get("project", "?"), []).append((name, entry))
+    lines = [
+        "Gist registry — every gist seen across projects.",
+        "Link one into the current project: repld gist add <name>",
+        "",
+    ]
+    for project, entries in sorted(
+        by_project.items(),
+        key=lambda kv: max((e.get("last_used", "") for _, e in kv[1]), default=""),
+        reverse=True,
+    ):
+        lines.append(project)
+        for name, entry in sorted(entries, key=lambda x: x[0]):
+            stale = "" if Path(entry.get("path", "")).is_file() else "  (stale)"
+            date = (entry.get("last_used", "") or "")[:10]
+            desc = entry.get("description", "") or ""
+            lines.append(f"  {name:<22} {date}  {desc}{stale}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 # ---------------------------------------------------------------------------

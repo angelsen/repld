@@ -59,7 +59,9 @@ _GISTS_MODEL = (
     "Stable gists can register as MCP tools via __repld_tools__ — callable "
     "directly without exec, discoverable in tools/list.\n"
     'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
-    "kernel prompts to install missing ones at boot."
+    "kernel prompts to install missing ones at boot.\n"
+    "Read repld://gists/_registry to see gists written in other projects; the "
+    "user can link one in with `repld gist add <name>` (no copy)."
 )
 
 _REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns, browser workflows, and gist conventions."
@@ -320,6 +322,15 @@ Dependencies:
   __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
   Kernel scans at boot, prompts to install missing packages into the venv.
   Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
+
+Cross-project links:
+  repld gist list             local + linked gists in this project
+  repld gist add <name>       link a gist registered in another project
+  repld gist rm <name>        unlink (--stale drops all dead links)
+  Every import is recorded in a central registry; `add` resolves a name to its
+  path, follows same-dir sibling imports, and records absolute paths in a
+  committed ./gists/.links manifest — no copy. Read repld://gists/_registry to
+  browse every gist seen across projects.
 
 Writing gists:
   Prefer async — use httpx.AsyncClient, async def methods, await tab.fetch().

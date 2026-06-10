@@ -853,6 +853,14 @@ class Dispatcher:
         from . import gists
 
         resources = list(_DOC_RESOURCES) + list(_BROWSER_RESOURCES)
+        resources.append(
+            {
+                "uri": "repld://gists/_registry",
+                "name": "gist-registry",
+                "description": "Every gist seen across projects; link one in with `repld gist add`.",
+                "mimeType": "text/plain",
+            }
+        )
         for name, doc in gists.scan():
             resources.append(
                 {
@@ -877,6 +885,10 @@ class Dispatcher:
                 text = self._resource_network()
             elif uri == "repld://browser/console":
                 text = self._resource_console()
+            elif uri == "repld://gists/_registry":
+                from . import gists
+
+                text = gists.registry_summary()
             elif uri.startswith("repld://gists/"):
                 name = uri.removeprefix("repld://gists/")
                 text = self._resource_gist(name)

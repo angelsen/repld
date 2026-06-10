@@ -49,6 +49,11 @@ def main() -> int:
     args = ap.parse_args()
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
+    # Isolate the gist registry so test-kernel imports don't pollute the real
+    # ~/.config/repld/gist-registry.json with throwaway tempdir paths.
+    import os
+
+    os.environ["XDG_CONFIG_HOME"] = str(tmp / "config")
     kernel = None
     try:
         print(f"== kernel cwd: {tmp} ==")
