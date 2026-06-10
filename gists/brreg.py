@@ -45,11 +45,14 @@ def _parse_company(e: dict) -> dict:
 def _parse_role(group_type: str, r: dict) -> dict:
     p = r.get("person", {})
     name = p.get("navn", {})
+    ent = r.get("enhet", {})  # org-backed roles: auditor, accountant
     return {
         "group": group_type,
         "role": r["type"]["beskrivelse"],
         "role_code": r["type"]["kode"],
-        "name": f"{name.get('fornavn', '')} {name.get('etternavn', '')}".strip(),
+        "name": f"{name.get('fornavn', '')} {name.get('etternavn', '')}".strip()
+        or " ".join(ent.get("navn", [])),
+        "orgnr": ent.get("organisasjonsnummer", ""),
         "birth_date": p.get("fodselsdato", ""),
         "active": not r.get("fratraadt", False),
     }
@@ -67,7 +70,7 @@ class Brreg:
         size: int = 20,
         page: int = 0,
     ) -> dict:
-        """Search companies. Filter by kommune (5001=Trondheim), NACE industry code, name."""
+        """Search companies by kommune (5001=Trondheim), NACE code, name. -> {total, companies: [{orgnr, name, city, nace_code, employees, ...}]}"""
         params = {
             "kommunenummer": kommune,
             "naeringskode": nace,
@@ -83,23 +86,23 @@ class Brreg:
         return {"total": total, "companies": companies}
 
     async def company(self, orgnr: str) -> dict:
-        """Get full company record by org number."""
+        """Get one company by org number. -> {orgnr, name, org_form, address, city, nace_code, employees, founded, status, website, ...}"""
         return _parse_company(await _get(f"/enheter/{orgnr}"))
 
     async def roles(self, orgnr: str) -> list[dict]:
-        """Get board members, CEO, auditor etc. for a company."""
+        """Get board, CEO, auditor, accountant for a company. -> [{group, role, role_code, name, orgnr, birth_date, active}]"""
         data = await _get(f"/enheter/{orgnr}/roller")
         results = []
         for group in data.get("rollegrupper", []):
             group_type = group["type"]["beskrivelse"]
             for r in group.get("roller", []):
                 parsed = _parse_role(group_type, r)
-                if parsed["name"]:  # skip empty (auditor firms etc)
+                if parsed["name"]:
                     results.append(parsed)
         return results
 
     async def sub_units(self, orgnr: str) -> list[dict]:
-        """Get sub-units (underenheter) for a parent company."""
+        """Get sub-units (underenheter) for a parent company. -> [{orgnr, name, city, nace_code, ...}]"""
         data = await _get(f"/enheter/{orgnr}/underenheter")
         return [
             _parse_company(e) for e in data.get("_embedded", {}).get("underenheter", [])
@@ -113,7 +116,7 @@ class Brreg:
         navn: str | None = None,
         size: int = 20,
     ) -> dict:
-        """Search sub-units (branch offices, departments)."""
+        """Search sub-units (branch offices, departments). -> {total, units: [{orgnr, name, city, nace_code, ...}]}"""
         params = {
             "kommunenummer": kommune,
             "naeringskode": nace,
