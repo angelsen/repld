@@ -56,6 +56,19 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
             assert_true(required in by_uri, f"resources/list contains {required}")
         print("  ✓ resources/list still includes browser resources")
 
+        # Cross-project registry resource is listed and readable
+        assert_true(
+            "repld://gists/_registry" in by_uri,
+            "resources/list contains repld://gists/_registry",
+        )
+        resp = b.call("resources/read", {"uri": "repld://gists/_registry"})
+        reg_text = resp["result"]["contents"][0]["text"]
+        assert_true(
+            "registry" in reg_text.lower(),
+            f"registry resource read returns text (got {reg_text[:60]!r})",
+        )
+        print("  ✓ repld://gists/_registry listed + readable")
+
         # resources/templates/list returns empty (template was removed)
         resp = b.call("resources/templates/list")
         templates = resp["result"]["resourceTemplates"]
