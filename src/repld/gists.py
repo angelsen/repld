@@ -23,12 +23,24 @@ __all__ = [
     "registry",
     "scan_deps",
     "install_deps",
+    "read_links",
+    "write_links",
+    "link_targets",
+    "add_link",
+    "remove_link",
+    "remove_stale_links",
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
 _managed: dict[str, Path] = {}  # fullname → source .py path
 _mtimes: dict[str, float] = {}  # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
+
+# Cross-project linked gists: name → absolute source path. Populated from
+# ./gists/.links at install() time; consulted by the finder + iterators after
+# local dirs (so local gists always shadow a linked one of the same name).
+_linked: dict[str, Path] = {}
+_LINKS_FILENAME = ".links"
 
 _REGISTRY_PATH = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -64,6 +76,158 @@ def registry() -> dict:
     if _REGISTRY_PATH.is_file():
         return json.loads(_REGISTRY_PATH.read_text("utf-8"))
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Cross-project links (./gists/.links manifest)
+# ---------------------------------------------------------------------------
+
+
+def read_links(gists_dir: Path) -> dict[str, str]:
+    """Read the link manifest. Returns {name: abspath}. Best-effort → {} on error."""
+    path = gists_dir / _LINKS_FILENAME
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text("utf-8"))
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return {}
+
+
+def write_links(gists_dir: Path, links: dict[str, str]) -> None:
+    """Write the link manifest (pretty JSON, name-sorted)."""
+    gists_dir.mkdir(parents=True, exist_ok=True)
+    path = gists_dir / _LINKS_FILENAME
+    ordered = {k: links[k] for k in sorted(links)}
+    path.write_text(json.dumps(ordered, indent=2) + "\n", "utf-8")
+
+
+def _load_links(gists_dir: Path) -> None:
+    """Populate the live _linked overlay from the manifest.
+
+    Skips (with a stderr warning) any entry whose path no longer exists; never
+    rewrites the manifest — it is committed, and silently editing it would dirty
+    the working tree. Use `repld gist rm --stale` to drop dead links.
+    """
+    _linked.clear()
+    for name, raw in read_links(gists_dir).items():
+        p = Path(raw)
+        if p.is_file():
+            _linked[name] = p
+        else:
+            print(
+                f"repld: linked gist '{name}' path gone: {raw} (repld gist rm {name})",
+                file=sys.stderr,
+            )
+
+
+def _sibling_imports(path: Path) -> set[str]:
+    """Top-level names imported by `path` that exist as `<name>.py` beside it.
+
+    Same-directory match = sibling gist; everything else is stdlib/third-party.
+    """
+    siblings: set[str] = set()
+    try:
+        tree = ast.parse(path.read_text("utf-8"))
+    except Exception:
+        return siblings
+    src_dir = path.parent
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module.split(".")[0]]
+        for n in names:
+            if n != path.stem and (src_dir / f"{n}.py").is_file():
+                siblings.add(n)
+    return siblings
+
+
+def link_targets(name: str) -> list[tuple[str, Path]]:
+    """Resolve `name` via the registry + transitive same-dir sibling imports.
+
+    Returns [(name, path), ...] — the full set that must be linked for `name` to
+    import. Raises LookupError (listing known projects) if `name` isn't registered.
+    """
+    reg = registry()
+    if name not in reg:
+        projects = sorted({v.get("project", "?") for v in reg.values()})
+        raise LookupError(
+            f"gist '{name}' is not registered. Known projects:\n  "
+            + "\n  ".join(projects)
+        )
+    resolved: dict[str, Path] = {}
+    queue = [name]
+    while queue:
+        cur = queue.pop()
+        if cur in resolved:
+            continue
+        entry = reg.get(cur)
+        # Siblings may not be registered themselves — fall back to a path beside
+        # an already-resolved gist.
+        if entry is not None:
+            p = Path(entry["path"])
+        else:
+            p = next((rp.parent / f"{cur}.py" for rp in resolved.values()), Path())
+        if not p.is_file():
+            continue
+        resolved[cur] = p
+        queue.extend(_sibling_imports(p) - resolved.keys())
+    return list(resolved.items())
+
+
+def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
+    """Link `name` (and its siblings) into gists_dir's manifest.
+
+    Refuses on local collision — a target already present in ./gists or
+    ~/.repld/gists, or resolving to a path inside this project. Returns the newly
+    linked (name, path) pairs.
+    """
+    targets = link_targets(name)
+    project_root = gists_dir.parent.resolve()
+    for tname, tpath in targets:
+        if (gists_dir / f"{tname}.py").is_file():
+            raise FileExistsError(
+                f"'{tname}' already exists locally: {gists_dir / f'{tname}.py'}"
+            )
+        global_gist = Path.home() / ".repld" / "gists" / f"{tname}.py"
+        if global_gist.is_file():
+            raise FileExistsError(f"'{tname}' already exists globally: {global_gist}")
+        if project_root in tpath.resolve().parents:
+            raise FileExistsError(f"'{tname}' already lives in this project: {tpath}")
+    links = read_links(gists_dir)
+    for tname, tpath in targets:
+        links[tname] = str(tpath.resolve())
+    write_links(gists_dir, links)
+    return targets
+
+
+def remove_link(name: str, gists_dir: Path) -> bool:
+    """Drop `name` from the manifest (works on stale names). Returns True if removed.
+
+    Leaves siblings in place — they may be shared with other linked gists.
+    """
+    links = read_links(gists_dir)
+    if name not in links:
+        return False
+    del links[name]
+    write_links(gists_dir, links)
+    return True
+
+
+def remove_stale_links(gists_dir: Path) -> list[str]:
+    """Drop every manifest entry whose path is gone. Returns the removed names."""
+    links = read_links(gists_dir)
+    stale = [n for n, p in links.items() if not Path(p).is_file()]
+    if stale:
+        for n in stale:
+            del links[n]
+        write_links(gists_dir, links)
+    return stale
 
 
 def _check_reload(fullname: str) -> None:
@@ -110,6 +274,12 @@ class _GistFinder(importlib.abc.MetaPathFinder):
                             [str(candidate)] if p.name == "__init__.py" else None
                         ),
                     )
+        # Cross-project linked gist (exact name only — local dirs win above).
+        linked = _linked.get(fullname)
+        if linked is not None and linked.is_file():
+            _managed[fullname] = linked
+            _mtimes[fullname] = linked.stat().st_mtime
+            return importlib.util.spec_from_file_location(fullname, linked)
         return None
 
 
@@ -201,28 +371,19 @@ def hint_for_name(name: str) -> str | None:
 
 
 def scan() -> list[tuple[str, str]]:
-    """Scan gist directories for .py modules. Returns [(name, one_line_doc), ...]."""
+    """Scan gist files (local + linked) for .py modules. Returns [(name, doc), ...]."""
     results: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for d in _installed_dirs:
-        if not d.is_dir():
+    for p in _iter_gist_files():
+        name = p.stem
+        # Check loaded module for __repld_help__ override
+        mod = sys.modules.get(name)
+        if mod and hasattr(mod, "__repld_help__"):
+            results.append((name, str(mod.__repld_help__)))
             continue
-        for p in sorted(d.glob("*.py")):
-            if p.name.startswith("_"):
-                continue
-            name = p.stem
-            if name in seen:
-                continue
-            seen.add(name)
-            # Check loaded module for __repld_help__ override
-            mod = sys.modules.get(name)
-            if mod and hasattr(mod, "__repld_help__"):
-                results.append((name, str(mod.__repld_help__)))
-                continue
-            # Else parse first docstring line from file
-            doc = _extract_doc(p)
-            if doc:
-                results.append((name, doc))
+        # Else parse first docstring line from file
+        doc = _extract_doc(p)
+        if doc:
+            results.append((name, doc))
     return results
 
 
@@ -252,11 +413,14 @@ def introspect(name: str) -> str:
 
 
 def _find_gist(name: str) -> Path | None:
-    """Resolve gist name to file path."""
+    """Resolve gist name to file path (local dirs first, then linked)."""
     for d in _installed_dirs:
         p = d / f"{name}.py"
         if p.is_file():
             return p
+    linked = _linked.get(name)
+    if linked is not None and linked.is_file():
+        return linked
     return None
 
 
@@ -335,8 +499,11 @@ def signature(name: str) -> str:
     Appends ``[async]`` when the class has async methods.
     """
     path = _find_gist(name)
-    if not path:
-        return ""
+    return signature_for_path(path) if path else ""
+
+
+def signature_for_path(path: Path) -> str:
+    """Like signature(), but for a path already in hand (no _installed_dirs lookup)."""
     try:
         tree = ast.parse(path.read_text("utf-8"))
     except Exception:
@@ -375,13 +542,25 @@ def _extract_tools(path: Path) -> list[dict]:
 
 
 def _iter_gist_files():
-    """Yield non-private .py paths from installed gist directories."""
+    """Yield non-private .py gist paths: installed dirs first, then linked.
+
+    Deduped by stem so a local gist shadows a linked one of the same name, and
+    stale linked paths are skipped.
+    """
+    seen: set[str] = set()
     for d in _installed_dirs:
         if not d.is_dir():
             continue
         for p in sorted(d.glob("*.py")):
-            if not p.name.startswith("_"):
-                yield p
+            if p.name.startswith("_") or p.stem in seen:
+                continue
+            seen.add(p.stem)
+            yield p
+    for name, p in sorted(_linked.items()):
+        if name in seen or not p.is_file():
+            continue
+        seen.add(name)
+        yield p
 
 
 def scan_tools() -> list[dict]:
@@ -446,10 +625,14 @@ class _DepInfo:
     gists: list[str]
 
 
-def scan_deps() -> list[_DepInfo]:
-    """AST-scan all gist files for __repld_deps__. Returns missing deps with their sources."""
+def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
+    """AST-scan gist files for __repld_deps__. Returns missing deps with their sources.
+
+    Scans `paths` when given (used by `gist add` for just-linked files), else all
+    local + linked gist files.
+    """
     deps: dict[str, _DepInfo] = {}
-    for p in _iter_gist_files():
+    for p in paths if paths is not None else _iter_gist_files():
         try:
             tree = ast.parse(p.read_text("utf-8"))
         except Exception:
@@ -590,3 +773,6 @@ def install(dirs: list[Path]) -> None:
     # Guard against double-wrapping
     if not isinstance(builtins.__import__, _GistImportHook):
         builtins.__import__ = _GistImportHook(builtins.__import__)
+
+    # Load cross-project links from the project gist dir's manifest.
+    _load_links(Path.cwd() / "gists")
