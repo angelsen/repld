@@ -208,7 +208,8 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
         if entry is not None:
             p = Path(entry["path"])
         else:
-            p = next((rp.parent / f"{cur}.py" for rp in resolved.values()), Path())
+            candidates = (rp.parent / f"{cur}.py" for rp in resolved.values())
+            p = next((c for c in candidates if c.is_file()), Path())
         if not p.is_file():
             continue
         resolved[cur] = p
