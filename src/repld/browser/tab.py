@@ -1,21 +1,21 @@
-"""Tab facade + Row dataclass.
+"""Tab facade — user-friendly API over CDPSession.
 
-Tab wraps CDPSession with a user-friendly API for JS eval, DOM interaction,
-network queries, and console queries. Row is the dataclass returned by
-network() and console().
+Wraps CDPSession with JS eval, DOM interaction, network queries, and
+console queries. Row/Rows types live in row.py; selector resolution
+lives in selector.py.
 """
 
 import asyncio
 import base64
 import json
 import pathlib
-import re
-from dataclasses import dataclass
 from typing import Any
 
 from .cdp import CDPSession
+from .row import Row, Rows, _dict_from_har_entry, _row_from_console, _row_from_har
+from .selector import resolve as _resolve_selector
 
-__all__ = ["Tab", "Row", "Rows", "BrowserJSError"]
+__all__ = ["Tab", "BrowserJSError"]
 
 # ---------------------------------------------------------------------------
 # Pill JS/CSS blob — injected via Runtime.evaluate on tab.pin()
@@ -335,229 +335,6 @@ class BrowserJSError(Exception):
         super().__init__(text)
 
 
-@dataclass
-class Row:
-    """A row from a HAR or console query."""
-
-    # HAR fields (network rows)
-    id: int = 0
-    request_id: str = ""
-    redirect_index: int = 0
-    protocol: str = ""
-    method: str = ""
-    status: int = 0
-    url: str = ""
-    type: str = ""
-    size: int = 0
-    time_ms: int | None = None
-    state: str = ""
-    pause_stage: str | None = None
-    paused_id: int | None = None
-    frames_sent: int | None = None
-    frames_received: int | None = None
-    started_datetime: str | None = None
-    last_activity: float | None = None
-    target: str = ""
-    body_status: str | None = None
-    mime_family: str = ""
-    is_asset: bool = False
-    initiator_type: str | None = None
-    initiator_url: str | None = None
-
-    # Console fields
-    level: str = ""
-    source: str = ""
-    text: str = ""
-    stack_url: str | None = None
-    stack_line: str | None = None
-    stack_function: str | None = None
-    timestamp: str | None = None
-
-    # Back-reference for .body()
-    _session: "CDPSession | None" = None
-
-    def body(self) -> dict:
-        """Fetch the response body for this request."""
-        if self._session is None:
-            return {"error": "no session"}
-        return self._session.fetch_body(self.request_id)
-
-    def __repr__(self) -> str:
-        if self.method and self.url:
-            size_str = f"{self.size / 1024:.1f}KB" if self.size else "0B"
-            time_str = f"{self.time_ms}ms" if self.time_ms is not None else "?"
-            rid = f" rid={self.request_id}" if self.request_id else ""
-            return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_str}){rid}>"
-        if self.level:
-            return f"<Console {self.level}: {self.text[:60]}>"
-        return f"<Row id={self.id}>"
-
-
-class Rows(list):
-    """List subclass with one-entry-per-line repr for grep-friendly spill files."""
-
-    def __repr__(self) -> str:
-        if not self:
-            return "[]"
-        return "\n".join(repr(r) for r in self)
-
-
-def _row_from_har(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from a har_summary query result tuple."""
-    # har_summary columns: id, request_id, redirect_index, protocol, method, status,
-    #   url, type, size, time_ms, state, pause_stage, paused_id, frames_sent,
-    #   frames_received, started_datetime, last_activity, target, body_status,
-    #   mime_family, is_asset, initiator_type, initiator_url
-    return Row(
-        id=cols[0] or 0,
-        request_id=cols[1] or "",
-        redirect_index=cols[2] or 0,
-        protocol=cols[3] or "",
-        method=cols[4] or "",
-        status=cols[5] or 0,
-        url=cols[6] or "",
-        type=cols[7] or "",
-        size=cols[8] or 0,
-        time_ms=cols[9],
-        state=cols[10] or "",
-        pause_stage=cols[11],
-        paused_id=cols[12],
-        frames_sent=cols[13],
-        frames_received=cols[14],
-        started_datetime=cols[15],
-        last_activity=cols[16],
-        target=cols[17] or "",
-        body_status=cols[18],
-        mime_family=cols[19] or "",
-        is_asset=bool(cols[20]),
-        initiator_type=cols[21],
-        initiator_url=cols[22],
-        _session=session,
-    )
-
-
-def _row_from_console(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from a console_entries query result tuple."""
-    # console_entries columns: id, level, source, text, stack_url, stack_line,
-    #   stack_function, timestamp, target
-    return Row(
-        id=cols[0] or 0,
-        level=cols[1] or "",
-        source=cols[2] or "",
-        text=cols[3] or "",
-        stack_url=cols[4],
-        stack_line=cols[5],
-        stack_function=cols[6],
-        timestamp=cols[7],
-        target=cols[8] or "",
-        _session=session,
-    )
-
-
-def _parse_json(val: Any) -> Any:
-    """Parse a JSON string into a dict/list, or return None."""
-    if val is None:
-        return None
-    if isinstance(val, (dict, list)):
-        return val
-    try:
-        return json.loads(val)
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-def _dict_from_har_entry(cols: tuple) -> dict:
-    """Build a structured dict from a har_entries query result tuple.
-
-    har_entries columns (0-indexed):
-      0  id, 1  request_id, 2  redirect_index, 3  protocol, 4  method,
-      5  url, 6  status, 7  status_text, 8  type, 9  size, 10 time_ms,
-      11 state, 12 pause_stage, 13 paused_id, 14 request_headers,
-      15 post_data, 16 response_headers, 17 mime_type, 18 timing,
-      19 error_text, 20 request_cookies, 21 frames_sent, 22 frames_received,
-      23 ws_total_bytes, 24 started_datetime, 25 last_activity, 26 target,
-      27 body_status, 28 initiator_type, 29 initiator_url,
-      30 initiator_function, 31 initiator_line, 32 loader_id, 33 frame_id,
-      34 auth_scheme, 35 auth_cookies, 36 csrf_token_header, 37 mime_family,
-      38 is_asset, 39 curl_command
-    """
-    d: dict[str, Any] = {
-        "request": {
-            "method": cols[4] or "",
-            "url": cols[5] or "",
-        },
-        "response": {
-            "status": cols[6] or 0,
-        },
-        "state": cols[11] or "",
-        "type": cols[8] or "",
-        "size": cols[9] or 0,
-        "time_ms": cols[10],
-    }
-
-    # Request details
-    req_headers = _parse_json(cols[14])
-    if req_headers:
-        d["request"]["headers"] = req_headers
-    if cols[15]:
-        d["request"]["postData"] = cols[15]
-
-    # Response details
-    if cols[7]:
-        d["response"]["statusText"] = cols[7]
-    resp_headers = _parse_json(cols[16])
-    if resp_headers:
-        d["response"]["headers"] = resp_headers
-    if cols[17]:
-        d["response"]["mimeType"] = cols[17]
-
-    # Timing
-    timing = _parse_json(cols[18])
-    if timing:
-        d["timing"] = timing
-
-    # Error
-    if cols[19]:
-        d["error_text"] = cols[19]
-
-    # Auth
-    if cols[34]:
-        d["auth_scheme"] = cols[34]
-    if cols[36]:
-        d["csrf_token_header"] = cols[36]
-
-    # Initiator
-    init_type = cols[28]
-    if init_type:
-        initiator: dict[str, Any] = {"type": init_type}
-        if cols[29]:
-            initiator["url"] = cols[29]
-        if cols[30]:
-            initiator["function"] = cols[30]
-        if cols[31]:
-            initiator["line"] = cols[31]
-        d["initiator"] = initiator
-
-    return d
-
-
-# Shared role → CSS selector mapping (used by _resolve_selector for both
-# role= and :has-text() patterns).
-_ROLE_CSS: dict[str, str] = {
-    "button": 'button, [role="button"], input[type="button"], input[type="submit"]',
-    "link": 'a[href], [role="link"]',
-    "textbox": 'input:not([type]), input[type="text"], input[type="email"], input[type="search"], input[type="url"], input[type="password"], textarea, [role="textbox"]',
-    "checkbox": 'input[type="checkbox"], [role="checkbox"]',
-    "radio": 'input[type="radio"], [role="radio"]',
-    "heading": 'h1, h2, h3, h4, h5, h6, [role="heading"]',
-    "listitem": 'li, [role="listitem"]',
-    "tab": '[role="tab"]',
-    "tabpanel": '[role="tabpanel"]',
-    "option": 'option, [role="option"]',
-    "combobox": 'select, [role="combobox"]',
-}
-
-
 class Tab:
     """User-facing facade over a CDPSession.
 
@@ -863,179 +640,68 @@ class Tab:
 
         return rv.get("value")
 
-    @staticmethod
-    def _resolve_selector(selector: str) -> str:
-        """Convert Playwright-style selectors to a JS expression returning an element.
+    async def _wait_for_node(
+        self, selector: str, timeout: float = 2.0
+    ) -> tuple[int, str]:
+        """Auto-wait for an element. Returns (nodeId, js_expr).
 
-        Supported patterns:
-          text=Submit               → text content match
-          button:has-text('OK')     → CSS base + text filter
-          role=button[name="Save"]  → ARIA role + accessible name
-          label=Username            → input by associated label
-          .css-selector             → document.querySelector(...)
+        CSS selectors use DOM.querySelector (no JS eval, no focus steal).
+        Custom selectors use Runtime.evaluate.  nodeId is 0 for the JS path.
         """
-        # text=... → exact text content or aria-label match (prefer smallest element)
-        if selector.startswith("text="):
-            text = selector[5:]
-            return (
-                f"(function() {{"
-                f" const text = {json.dumps(text)};"
-                f" const all = Array.from(document.querySelectorAll('*'));"
-                f" const exact = all.filter(el => el.offsetWidth > 0 && ("
-                f"   el.textContent.trim() === text || el.getAttribute('aria-label') === text));"
-                f" return exact.sort((a,b) => a.textContent.length - b.textContent.length)[0] || null;"
-                f"}})()"
-            )
-
-        # role=button[name="Save"] → ARIA role + accessible name
-        # Supports = (exact), *= (contains), ^= (starts-with)
-        m = re.match(r'^role=(\w+)(?:\[name([*^]?=)["\']?(.+?)["\']?\])?$', selector)
-        if m:
-            role, op, name = m.group(1), m.group(2), m.group(3)
-            css = _ROLE_CSS.get(role, f'[role="{role}"]')
-            if name:
-                n = json.dumps(name)
-                if op == "*=":
-                    cmp = (
-                        f"el.textContent.trim().includes({n})"
-                        f" || (el.getAttribute('aria-label') || '').includes({n})"
-                        f" || (el.getAttribute('title') || '').includes({n})"
-                    )
-                elif op == "^=":
-                    cmp = (
-                        f"el.textContent.trim().startsWith({n})"
-                        f" || (el.getAttribute('aria-label') || '').startsWith({n})"
-                        f" || (el.getAttribute('title') || '').startsWith({n})"
-                    )
-                else:
-                    cmp = (
-                        f"el.textContent.trim() === {n}"
-                        f" || el.getAttribute('aria-label') === {n}"
-                        f" || el.getAttribute('title') === {n}"
-                        f" || el.value === {n}"
-                        f" || (el.labels && Array.from(el.labels).some(l => l.textContent.trim() === {n}))"
-                    )
-                return (
-                    f"Array.from(document.querySelectorAll({json.dumps(css)}))"
-                    f".find(el => {cmp})"
-                )
-            return f"document.querySelector({json.dumps(css)})"
-
-        # label=Username → input by associated label text
-        if selector.startswith("label="):
-            label_text = selector[6:]
-            return (
-                f"(function() {{"
-                f" const lbl = Array.from(document.querySelectorAll('label'))"
-                f"   .find(l => l.textContent.trim() === {json.dumps(label_text)});"
-                f" if (!lbl) return null;"
-                f" if (lbl.htmlFor) return document.getElementById(lbl.htmlFor);"
-                f" return lbl.querySelector('input, textarea, select');"
-                f"}})()"
-            )
-
-        # :has-text('...') → split into CSS base + JS text filter
-        # Expands known role names (button → includes [role="button"])
-        m = re.match(r"^(.+?):has-text\(['\"](.+?)['\"]\)$", selector)
-        if m:
-            css_base, text = m.group(1), m.group(2)
-            css_expanded = _ROLE_CSS.get(css_base, css_base)
-            return (
-                f"Array.from(document.querySelectorAll({json.dumps(css_expanded)}))"
-                f".find(el => el.textContent.trim().includes({json.dumps(text)})"
-                f" || (el.getAttribute('aria-label') || '').includes({json.dumps(text)}))"
-            )
-
-        # Plain CSS selector
-        return f"document.querySelector({json.dumps(selector)})"
-
-    async def _find_element(self, selector: str, timeout: float = 2.0) -> str:
-        """Resolve selector to element with auto-wait. Returns the JS find expression.
-
-        Uses DOM.querySelector for CSS selectors (no focus steal).
-        Retries for up to `timeout` seconds before raising RuntimeError.
-        """
-        find_expr = self._resolve_selector(selector)
-        use_cdp = self._is_css_selector(selector)
+        resolved = _resolve_selector(selector)
         deadline = asyncio.get_running_loop().time() + timeout
 
         root_id = 0
-        if use_cdp:
+        if resolved.css is not None:
             doc = await self._exec("DOM.getDocument")
             root_id = doc["root"]["nodeId"]
 
         while True:
-            if use_cdp:
+            if resolved.css is not None:
                 result = await self._exec(
-                    "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+                    "DOM.querySelector", {"nodeId": root_id, "selector": resolved.css}
                 )
-                found = result.get("nodeId", 0) != 0
+                node_id = result.get("nodeId", 0)
+                if node_id:
+                    return node_id, resolved.js
             else:
                 result = await self._exec(
                     "Runtime.evaluate",
                     {
-                        "expression": f"!!({find_expr})",
+                        "expression": f"!!({resolved.js})",
                         "returnByValue": True,
                     },
                 )
-                found = result.get("result", {}).get("value")
-            if found:
-                return find_expr
+                if result.get("result", {}).get("value"):
+                    return 0, resolved.js
             if asyncio.get_running_loop().time() >= deadline:
                 raise RuntimeError(f"Element not found: {selector}")
             await asyncio.sleep(0.1)
 
     @staticmethod
-    def _is_css_selector(selector: str) -> bool:
-        """True if selector can be resolved via DOM.querySelector (no JS eval)."""
-        if selector.startswith(("text=", "label=", "role=")):
-            return False
-        if ":has-text(" in selector:
-            return False
-        return True
+    def _quad_center(quads: list) -> tuple[float, float]:
+        """Center point from DOM.getContentQuads result."""
+        quad = quads[0]
+        xs = [quad[i] for i in range(0, 8, 2)]
+        ys = [quad[i] for i in range(1, 8, 2)]
+        return sum(xs) / 4, sum(ys) / 4
 
     async def _element_center(self, selector: str) -> tuple[float, float]:
         """Resolve selector to (x, y) center coordinates. Auto-waits up to 2s.
 
-        Uses DOM.querySelector + DOM.getBoxModel for plain CSS selectors
-        (no focus steal). Falls back to Runtime.evaluate for custom selectors.
+        CSS selectors: DOM.querySelector → DOM.getContentQuads (no JS).
+        Custom selectors: Runtime.evaluate → getBoundingClientRect (JS).
         """
-        if self._is_css_selector(selector):
-            return await self._element_center_cdp(selector)
-        return await self._element_center_js(selector)
-
-    async def _element_center_cdp(
-        self, selector: str, timeout: float = 2.0
-    ) -> tuple[float, float]:
-        """Pure CDP path — no JS eval, no focus steal."""
-        doc = await self._exec("DOM.getDocument")
-        root_id = doc["root"]["nodeId"]
-
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            result = await self._exec(
-                "DOM.querySelector", {"nodeId": root_id, "selector": selector}
-            )
-            node_id = result.get("nodeId", 0)
-            if node_id:
-                box = await self._exec("DOM.getBoxModel", {"nodeId": node_id})
-                content = box["model"]["content"]
-                xs = [content[i] for i in range(0, 8, 2)]
-                ys = [content[i] for i in range(1, 8, 2)]
-                return sum(xs) / 4, sum(ys) / 4
-            if asyncio.get_running_loop().time() >= deadline:
-                raise RuntimeError(f"Element not found: {selector}")
-            await asyncio.sleep(0.1)
-
-    async def _element_center_js(self, selector: str) -> tuple[float, float]:
-        """JS eval path — for custom selectors (text=, role=, label=, :has-text)."""
-        find_expr = await self._find_element(selector)
+        node_id, js_expr = await self._wait_for_node(selector)
+        if node_id:
+            quads = await self._exec("DOM.getContentQuads", {"nodeId": node_id})
+            return self._quad_center(quads["quads"])
         coords = await self._exec(
             "Runtime.evaluate",
             {
                 "expression": f"""
 (function() {{
-    const el = {find_expr};
+    const el = {js_expr};
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return {{x: r.left + r.width/2, y: r.top + r.height/2}};
@@ -1088,19 +754,29 @@ class Tab:
         Selects all existing content then types over it.
         Selector: CSS, text=Label, role=textbox, label=Name, or tag:has-text('...')
         """
-        find_expr = await self._find_element(selector)
+        node_id, js_expr = await self._wait_for_node(selector)
 
-        # Focus + select all existing content so first keystroke replaces it
-        await self._exec(
-            "Runtime.evaluate",
-            {
-                "expression": (
-                    f"(function() {{ const el = {find_expr};"
-                    f" if (el) {{ el.focus(); if (el.select) el.select(); }} }})()"
-                ),
-                "returnByValue": True,
-            },
-        )
+        if node_id:
+            await self._exec("DOM.focus", {"nodeId": node_id})
+            # Select all existing content so first keystroke replaces it
+            await self._exec(
+                "Runtime.evaluate",
+                {
+                    "expression": "document.execCommand('selectAll')",
+                    "returnByValue": True,
+                },
+            )
+        else:
+            await self._exec(
+                "Runtime.evaluate",
+                {
+                    "expression": (
+                        f"(function() {{ const el = {js_expr};"
+                        f" if (el) {{ el.focus(); if (el.select) el.select(); }} }})()"
+                    ),
+                    "returnByValue": True,
+                },
+            )
 
         # Type new text via key events
         for char in text:
@@ -1236,7 +912,7 @@ class Tab:
         label=, :has-text).  Polls every 0.1s up to *timeout* seconds.
         Raises RuntimeError if the element never appears.
         """
-        await self._find_element(selector, timeout=timeout)
+        await self._wait_for_node(selector, timeout=timeout)
 
     async def wait_for_idle(self, *, timeout: float = 5.0, quiet: float = 0.5) -> int:
         """Wait for network idle. Returns settle time in ms."""

@@ -2,13 +2,13 @@
 
 ## Code cleanup
 
-- [ ] Split `browser/tab.py` (~1400 lines) — extract selector constants + resolution (~300 lines) and Row/Rows types + factory functions (~150 lines) into own modules. Tab class stays, drops to ~900 lines.
-- [ ] `help.py` — gists topic in `_TOPICS` overlaps GUIDE's gist section despite the "four surfaces, no overlap" principle; trim one side.
-- [ ] Malformed `__repld_tools__` / `__repld_deps__` (non-literal expressions) fail `ast.literal_eval` and the tools/deps silently never appear (`gists.py` `_extract_tools` / `scan_deps`). Warn once on stderr at boot — not per `tools/list` scan, which would spam.
+- [x] Split `browser/tab.py` (~1400 lines) — extract selector constants + resolution (~300 lines) and Row/Rows types + factory functions (~150 lines) into own modules. Tab class stays, drops to ~900 lines.
+- [x] `help.py` — gists topic in `_TOPICS` overlaps GUIDE's gist section despite the "four surfaces, no overlap" principle; trim one side.
+- [x] Malformed `__repld_tools__` / `__repld_deps__` (non-literal expressions) fail `ast.literal_eval` and the tools/deps silently never appear (`gists.py` `_extract_tools` / `scan_deps`). Warn once on stderr at boot — not per `tools/list` scan, which would spam.
 
 ## Features (from session 002 backlog)
 
-- [ ] `tab.wait_for_idle()` — network-quiet without full observation pipeline
+- [x] `tab.wait_for_idle()` — network-quiet without full observation pipeline (already implemented)
 - [ ] `tab.scroll(selector, dy)` — sugar over swipe for containers
 - [ ] Safari/iOS support — WebKit Inspector over usbmuxd (gist, not core)
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script

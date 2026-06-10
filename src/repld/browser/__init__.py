@@ -23,7 +23,8 @@ from typing import Any
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
 from .session import WORKER_TYPES
-from .tab import Rows, Tab
+from .row import Rows
+from .tab import Tab
 
 __all__ = ["Browser", "LazyBrowser"]
 

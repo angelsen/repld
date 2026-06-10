@@ -638,9 +638,8 @@ browser maintains the session; you just call through it.
 
 == Gists ==
 
-Gists are Python modules in ~/.repld/gists/ (global) or ./gists/ (per-project).
-Both directories are on sys.path at kernel startup. Edit a file, re-import it,
-and the fresh version loads — auto-reload via mtime tracking.
+See `repld help gists` for the full API reference (paths, tool registration,
+dependencies, cross-project links).
 
 Gists wrap anything into a callable API — web apps via the browser, databases,
 graph stores, embedding indexes, internal services.
@@ -743,22 +742,6 @@ When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
 After navigating the admin tab, re-acquire the iframe with
 browser.get(pattern, timeout=10) — iframes reload on host navigation.
 Never navigate an iframe directly — it destroys the embedded session.
-
-=== Tool registration ===
-
-Stable gists can register MCP tools callable without exec:
-
-  __repld_tools__ = [
-      {"name": "myapp_query", "description": "...",
-       "inputSchema": {"type": "object", "properties": {...}, "required": [...]}},
-  ]
-
-  async def _tool_myapp_query(args: dict) -> str:
-      import json
-      return json.dumps({"result": ...})
-
-Handler convention: _tool_{name}(args) → str | dict.
-Tools appear in tools/list automatically. Scaffold: repld gist new <name>.
 
 == Background automation ==
 

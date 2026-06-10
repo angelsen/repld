@@ -43,6 +43,10 @@ _installed_dirs: list[Path] = []  # set by install()
 _linked: dict[str, Path] = {}
 _LINKS_FILENAME = ".links"
 
+# Dedup warnings for malformed __repld_tools__ / __repld_deps__ so boot warns
+# once but subsequent tools/list scans stay quiet.
+_malformed_warned: set[str] = set()
+
 _REGISTRY_PATH = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     / "repld"
@@ -609,6 +613,14 @@ def _extract_tools(path: Path) -> list[dict]:
                     try:
                         return ast.literal_eval(ast.unparse(node.value))
                     except Exception:
+                        key = f"{path}:__repld_tools__"
+                        if key not in _malformed_warned:
+                            _malformed_warned.add(key)
+                            print(
+                                f"repld: {path.name}: malformed __repld_tools__ "
+                                f"(not a valid literal) — skipped",
+                                file=sys.stderr,
+                            )
                         return []
     return []
 
@@ -718,6 +730,14 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
                 try:
                     reqs = ast.literal_eval(ast.unparse(node.value))
                 except Exception:
+                    key = f"{p}:__repld_deps__"
+                    if key not in _malformed_warned:
+                        _malformed_warned.add(key)
+                        print(
+                            f"repld: {p.name}: malformed __repld_deps__ "
+                            f"(not a valid literal) — skipped",
+                            file=sys.stderr,
+                        )
                     continue
                 if not isinstance(reqs, list):
                     continue
