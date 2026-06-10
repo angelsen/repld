@@ -14,11 +14,32 @@ Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.t
 uv sync                                 # install deps into .venv
 uv run repld                            # runs the `repld:main` entrypoint
 uv build                                # wheel + sdist via uv_build
-uv run tests/smoketest.py --phase 9           # end-to-end smoketest
+uv run tests/smoketest.py --phase 12          # end-to-end smoketest
 ruff check --fix && ruff format && basedpyright   # lint / format / type-check
 ```
 
 No CI configured yet. If you add any, update this file.
+
+## Releasing
+
+Published to PyPI as `repld-tool`. Manual, no CI. The local `uv` is a wrapper
+(`~/.local/bin/wrappers/uv`) that automates most of it — raw uv is `@ uv`.
+
+```bash
+# 1. Accrue changelog notes under CHANGELOG.md [Unreleased] as you work, and COMMIT them.
+#    The bump needs a clean tree and promotes [Unreleased] → [X.Y.Z].
+uv version --bump patch        # bumps pyproject + uv.lock, promotes changelog, commits "release repld-tool X.Y.Z", tags vX.Y.Z
+rm -f dist/* && uv build       # clean stale artifacts first — publish refuses mixed versions
+git push origin master --tags
+uv publish                     # prints a review summary + a confirmation token (10-min TTL)
+uv publish --confirm <token>   # GPG prompt for the PyPI token (from `pass pypi/uv-publish`), then uploads
+```
+
+Gotchas the wrapper enforces: clean working tree before `version --bump`; only
+the target version in `dist/` before publish (it blocks on leftovers from a
+prior release). Verify with the simple index (fast) — the JSON API lags:
+`curl -s https://pypi.org/simple/repld-tool/ | grep X.Y.Z`. CHANGELOG covers
+*packaged* changes only — `gists/` is not in the wheel.
 
 ## Testing
 
