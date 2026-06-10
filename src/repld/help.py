@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from .ipc import _pid_alive
+from .ipc import read_lock
 
 # ---------------------------------------------------------------------------
 # Composable instruction blocks (agent-facing, behavioral model only)
@@ -825,11 +825,7 @@ def _check_state(cwd: Path) -> dict:
         "repl_py_exists": (cwd / "repl.py").exists(),
     }
     if state["lock_exists"]:
-        try:
-            lock = json.loads((cwd / ".pyrepl.lock").read_text())
-            state["lock_alive"] = _pid_alive(lock.get("pid", -1))
-        except (OSError, json.JSONDecodeError):
-            pass
+        state["lock_alive"] = isinstance(read_lock(cwd / ".pyrepl.lock"), dict)
     mcp = cwd / ".mcp.json"
     if mcp.exists():
         try:

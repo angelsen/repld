@@ -44,7 +44,6 @@ except ImportError:
 
 _DIM = "\033[2m"
 _RED = "\033[31m"
-_YELLOW = "\033[33m"
 _CYAN = "\033[36m"
 _GREEN = "\033[32m"
 _RESET = "\033[0m"

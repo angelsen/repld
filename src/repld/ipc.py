@@ -32,11 +32,11 @@ def _pid_alive(pid) -> bool:
         return True
 
 
-def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
-    """Read lockfile, validate kernel pid, connect unix socket.
+def read_lock(lock_path: Path) -> dict | str:
+    """Read + validate a kernel lockfile.
 
-    Returns (sock, lock_info) on success, or an error message string on failure.
-    Used by both ``bridge`` and ``exec`` subcommands.
+    Returns the lock dict if the file parses and its pid is alive, or an
+    error message string (missing / unreadable / stale pid) otherwise.
     """
     if not lock_path.exists():
         return (
@@ -49,6 +49,18 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
         return f"cannot read {lock_path.name}: {e}"
     if not _pid_alive(lock.get("pid", -1)):
         return f"kernel pid {lock.get('pid')} is not running (stale {lock_path.name})"
+    return lock
+
+
+def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
+    """Read lockfile, validate kernel pid, connect unix socket.
+
+    Returns (sock, lock_info) on success, or an error message string on failure.
+    Used by both ``bridge`` and ``exec`` subcommands.
+    """
+    lock = read_lock(lock_path)
+    if isinstance(lock, str):
+        return lock
     sock_path = lock.get("socket_path")
     if not sock_path:
         return f"{lock_path.name} missing socket_path"
@@ -82,15 +94,22 @@ class Session:
         self.pending: list[dict] = []
         self._closed = False
 
+    def _write_msg(self, msg: dict) -> None:
+        """Write one NDJSON line + flush; close the session on I/O failure.
+
+        Caller must hold write_lock.
+        """
+        try:
+            self.wfile.write(json.dumps(msg) + "\n")
+            self.wfile.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            self._close_locked()
+
     def write(self, msg: dict) -> None:
         with self.write_lock:
             if self._closed:
                 return
-            try:
-                self.wfile.write(json.dumps(msg) + "\n")
-                self.wfile.flush()
-            except (BrokenPipeError, OSError, ValueError):
-                self._close_locked()
+            self._write_msg(msg)
 
     def post_channel(self, msg: dict) -> None:
         """Server-initiated notification (channel push).
@@ -104,11 +123,7 @@ class Session:
             if not self.initialized:
                 self.pending.append(msg)
                 return
-            try:
-                self.wfile.write(json.dumps(msg) + "\n")
-                self.wfile.flush()
-            except (BrokenPipeError, OSError, ValueError):
-                self._close_locked()
+            self._write_msg(msg)
 
     def set_initialized(self) -> None:
         with self.write_lock:
@@ -117,15 +132,9 @@ class Session:
             self.initialized = True
             pending, self.pending = self.pending, []
             for msg in pending:
-                try:
-                    self.wfile.write(json.dumps(msg) + "\n")
-                except (BrokenPipeError, OSError, ValueError):
-                    self._close_locked()
+                self._write_msg(msg)
+                if self._closed:
                     return
-            try:
-                self.wfile.flush()
-            except (BrokenPipeError, OSError, ValueError):
-                self._close_locked()
 
     def _close_locked(self) -> None:
         if self._closed:

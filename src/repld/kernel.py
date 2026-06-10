@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import events, ipc, tasks
 from .events import CellDone, CellStart
-from .ipc import _pid_alive
+from .ipc import read_lock
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
@@ -49,16 +49,10 @@ def _lock_for(socket_path: Path) -> Path:
 def _check_existing_kernel(socket_path: Path) -> None:
     """Refuse to start if another repld kernel owns this socket."""
     lock_path = _lock_for(socket_path)
-    if not lock_path.exists():
-        return
-    try:
-        lock = json.loads(lock_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return
-    pid = lock.get("pid", -1)
-    if _pid_alive(pid):
+    lock = read_lock(lock_path)
+    if isinstance(lock, dict):
         raise SystemExit(
-            f"\033[31m[repld] another kernel (pid={pid}) is running "
+            f"\033[31m[repld] another kernel (pid={lock.get('pid')}) is running "
             f"({lock_path}). Stop it or remove the lock file if stale.\033[0m"
         )
 

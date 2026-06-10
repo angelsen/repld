@@ -393,25 +393,12 @@ class PreObservation:
     console_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
 
 
-def _tab_key(tab: "Tab") -> str:
-    return tab.target_id
-
-
-def snapshot_har_ids(tabs: list["Tab"]) -> dict[str, int]:
-    """Record MAX(id) from har_entries for each tab's DuckDB."""
+def _snapshot_max_ids(tabs: list["Tab"], table: str) -> dict[str, int]:
+    """Record MAX(id) from `table` for each tab's DuckDB, keyed by target_id."""
     result: dict[str, int] = {}
     for tab in tabs:
-        rows = tab._session.query("SELECT COALESCE(MAX(id), 0) FROM har_entries")
-        result[_tab_key(tab)] = rows[0][0]
-    return result
-
-
-def snapshot_console_ids(tabs: list["Tab"]) -> dict[str, int]:
-    """Record MAX(id) from console_entries for each tab's DuckDB."""
-    result: dict[str, int] = {}
-    for tab in tabs:
-        rows = tab._session.query("SELECT COALESCE(MAX(id), 0) FROM console_entries")
-        result[_tab_key(tab)] = rows[0][0]
+        rows = tab._session.query(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
+        result[tab.target_id] = rows[0][0]
     return result
 
 
@@ -419,8 +406,8 @@ async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
     """Capture state before a mutation. Fast — no blocking."""
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
-    har_snaps = snapshot_har_ids(all_tabs)
-    console_snaps = snapshot_console_ids(all_tabs)
+    har_snaps = _snapshot_max_ids(all_tabs, "har_entries")
+    console_snaps = _snapshot_max_ids(all_tabs, "console_entries")
     return PreObservation(
         iframe_children=iframe_children,
         har_snapshots=har_snaps,
@@ -458,8 +445,7 @@ def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEnt
     """Query each tab's DuckDB for entries with id > snapshot."""
     entries: list[NetworkEntry] = []
     for tab in tabs:
-        key = _tab_key(tab)
-        min_id = pre_ids.get(key, 0)
+        min_id = pre_ids.get(tab.target_id, 0)
         rows = tab._session.query(
             """SELECT method, status, url, time_ms, size, is_asset, mime_family, type
                FROM har_summary
@@ -506,8 +492,7 @@ def console_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[str]:
     """
     lines: list[str] = []
     for tab in tabs:
-        key = _tab_key(tab)
-        min_id = pre_ids.get(key, 0)
+        min_id = pre_ids.get(tab.target_id, 0)
         rows = tab._session.query(
             "SELECT level, text FROM console_entries WHERE id > ? ORDER BY id ASC",
             [min_id],

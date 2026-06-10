@@ -1294,6 +1294,14 @@ class Tab:
     # Query methods (sync DuckDB)
     # ------------------------------------------------------------------
 
+    def _filtered_query(
+        self, source: str, conditions: list[str], bind_params: list[Any], tail: str
+    ) -> list:
+        """SELECT * FROM `source` with an optional WHERE built from conditions."""
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM {source} {where} {tail}"
+        return self._session.query(sql, bind_params if bind_params else None)
+
     def network(
         self,
         *,
@@ -1331,10 +1339,9 @@ class Tab:
         if not include_assets:
             conditions.append("is_asset = false")
 
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        sql = f"SELECT * FROM har_summary {where} ORDER BY id DESC LIMIT 500"
-
-        rows = self._session.query(sql, bind_params if bind_params else None)
+        rows = self._filtered_query(
+            "har_summary", conditions, bind_params, "ORDER BY id DESC LIMIT 500"
+        )
         return Rows(_row_from_har(r, self._session) for r in rows)
 
     def console(
@@ -1358,10 +1365,9 @@ class Tab:
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
             bind_params.append(since)
 
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        sql = f"SELECT * FROM console_entries {where} LIMIT 200"
-
-        rows = self._session.query(sql, bind_params if bind_params else None)
+        rows = self._filtered_query(
+            "console_entries", conditions, bind_params, "LIMIT 200"
+        )
         return Rows(_row_from_console(r, self._session) for r in rows)
 
     def clear(self) -> None:

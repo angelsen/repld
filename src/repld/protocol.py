@@ -440,11 +440,7 @@ class Dispatcher:
         if method == "resources/list":
             return self._resources_list(rid)
         if method == "resources/templates/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {"resourceTemplates": []},
-            }
+            return _response(rid, {"resourceTemplates": []})
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
         if rid is None:
@@ -452,10 +448,9 @@ class Dispatcher:
         return _error(rid, -32601, f"method not found: {method}")
 
     def _initialize(self, rid) -> dict:
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {
+        return _response(
+            rid,
+            {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
                     "tools": {},
@@ -471,13 +466,13 @@ class Dispatcher:
                 },
                 "instructions": _build_instructions(),
             },
-        }
+        )
 
     def _tools_list(self, rid) -> dict:
         from . import gists
 
         all_tools = list(TOOLS) + gists.scan_tools()
-        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": all_tools}}
+        return _response(rid, {"tools": all_tools})
 
     def _tools_call(self, rid, params: dict) -> dict:
         name = params.get("name")
@@ -507,10 +502,9 @@ class Dispatcher:
             if snap["truncated"]:
                 parts.append(f"[full output: {snap['spill_path']}]")
             text = "\n".join(parts) or "(no output)"
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
+            return _response(
+                rid,
+                {
                     "content": [{"type": "text", "text": text}],
                     "isError": bool(snap["exception"]),
                     "_meta": {
@@ -520,44 +514,41 @@ class Dispatcher:
                         "spill_path": snap["spill_path"],
                     },
                 },
-            }
+            )
         self.ctx.mark_nudged(task_id)
         preview = snap["text"].rstrip()
         msg = f"[task {task_id} still running after {timeout}s; completion will arrive via channel]"
         if preview:
             msg += "\n" + preview
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {
+        return _response(
+            rid,
+            {
                 "content": [{"type": "text", "text": msg}],
                 "_meta": {"task_id": task_id, "done": False},
             },
-        }
+        )
 
     def _get_task(self, rid, args: dict) -> dict:
         snap = self.ctx.snapshot(args["task_id"])
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {
+        return _response(
+            rid,
+            {
                 "content": [{"type": "text", "text": json.dumps(snap, indent=2)}],
                 "_meta": snap,
             },
-        }
+        )
 
     def _cancel(self, rid, args: dict) -> dict:
         tid = args["task_id"]
         accepted = self.ctx.cancel_task(tid)
         status = "accepted" if accepted else "no-op"
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {
+        return _response(
+            rid,
+            {
                 "content": [{"type": "text", "text": f"cancel task={tid}: {status}"}],
                 "_meta": {"task_id": tid, "cancelled": accepted},
             },
-        }
+        )
 
     # ------------------------------------------------------------------
     # Gist tool dispatch
@@ -583,13 +574,7 @@ class Dispatcher:
                 result = self._run_async(result)
             if not isinstance(result, str):
                 result = json.dumps(result, indent=2)
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
-                    "content": [{"type": "text", "text": result}],
-                },
-            }
+            return _response(rid, {"content": [{"type": "text", "text": result}]})
         except Exception as exc:
             return _error(rid, -32000, f"{name}: {exc}")
 
@@ -617,11 +602,9 @@ class Dispatcher:
             parts.append(sp["text"].rstrip())
         if sp["truncated"]:
             parts.append(f"[full output: {sp['spill_path']}]")
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {"content": [{"type": "text", "text": "\n".join(parts) or text}]},
-        }
+        return _response(
+            rid, {"content": [{"type": "text", "text": "\n".join(parts) or text}]}
+        )
 
     def _get_browser(self):
         """Retrieve the browser object from __main__; raise if not available."""
@@ -740,9 +723,17 @@ class Dispatcher:
     # Browser handlers — tab mutations (with observe)
     # ------------------------------------------------------------------
 
-    def _bh_navigate(self, browser, args):
+    def _observed_mutation(self, browser, tab, mutate, *, timeout: float):
+        """Run pre_observe → mutate() → post_observe around a tab mutation."""
         from .browser.observe import post_observe, pre_observe
 
+        pre = self._run_async(pre_observe(tab, browser._session))
+        mutate()
+        return self._run_async(
+            post_observe(tab, browser._session, pre, timeout=timeout)
+        )
+
+    def _bh_navigate(self, browser, args):
         tab = self._run_async(browser.get(args["target"]))
         if tab.type == "iframe" and not args.get("force"):
             from .browser import make_target
@@ -752,18 +743,19 @@ class Dispatcher:
                 if tab.parent_frame_id
                 else "unknown"
             )
-            return {
-                "error": (
-                    f"Cannot navigate iframe target {tab.target_id} — "
-                    f"this would destroy the embedded app session. "
-                    f"Use click/fetch on the iframe for in-app navigation, "
-                    f"or navigate the parent ({parent_short}). "
-                    f"Pass force=true to override."
-                )
-            }
-        pre = self._run_async(pre_observe(tab, browser._session))
-        self._run_async(tab.navigate(args["url"]))
-        return self._run_async(post_observe(tab, browser._session, pre, timeout=8.0))
+            raise ValueError(
+                f"Cannot navigate iframe target {tab.target_id} — "
+                f"this would destroy the embedded app session. "
+                f"Use click/fetch on the iframe for in-app navigation, "
+                f"or navigate the parent ({parent_short}). "
+                f"Pass force=true to override."
+            )
+        return self._observed_mutation(
+            browser,
+            tab,
+            lambda: self._run_async(tab.navigate(args["url"])),
+            timeout=8.0,
+        )
 
     def _bh_open(self, browser, args):
         from .browser.observe import PreObservation, post_observe
@@ -787,41 +779,42 @@ class Dispatcher:
         )
 
     def _bh_key(self, browser, args):
-        from .browser.observe import post_observe, pre_observe
-
         tab = self._run_async(browser.get(args["target"]))
         key = args["key"]
-        pre = self._run_async(pre_observe(tab, browser._session))
-        self._run_async(
-            tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
-        )
-        self._run_async(
-            tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
-        )
-        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
+
+        def mutate():
+            self._run_async(
+                tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
+            )
+            self._run_async(
+                tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
+            )
+
+        return self._observed_mutation(browser, tab, mutate, timeout=5.0)
 
     def _bh_click(self, browser, args):
-        from .browser.observe import post_observe, pre_observe
-
         tab = self._run_async(browser.get(args["target"]))
-        pre = self._run_async(pre_observe(tab, browser._session))
-        self._run_async(tab.click(args["selector"]))
-        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
+        return self._observed_mutation(
+            browser,
+            tab,
+            lambda: self._run_async(tab.click(args["selector"])),
+            timeout=5.0,
+        )
 
     def _bh_type(self, browser, args):
-        from .browser.observe import post_observe, pre_observe
-
         tab = self._run_async(browser.get(args["target"]))
-        pre = self._run_async(pre_observe(tab, browser._session))
-        self._run_async(
-            tab.type_text(
-                args["selector"],
-                args["text"],
-                press_enter=bool(args.get("press_enter", False)),
+
+        def mutate():
+            self._run_async(
+                tab.type_text(
+                    args["selector"],
+                    args["text"],
+                    press_enter=bool(args.get("press_enter", False)),
+                )
             )
-        )
-        self._run_async(asyncio.sleep(0.3))
-        return self._run_async(post_observe(tab, browser._session, pre, timeout=5.0))
+            self._run_async(asyncio.sleep(0.3))
+
+        return self._observed_mutation(browser, tab, mutate, timeout=5.0)
 
     _BROWSER_DISPATCH = {
         "browser_watch": _bh_watch,
@@ -870,7 +863,7 @@ class Dispatcher:
                     "mimeType": "text/plain",
                 }
             )
-        return {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}
+        return _response(rid, {"resources": resources})
 
     def _read_resource(self, rid, params: dict) -> dict:
         uri = params.get("uri", "")
@@ -898,15 +891,10 @@ class Dispatcher:
             content = sp["text"].rstrip() if sp["text"] else text
             if sp["truncated"]:
                 content += f"\n[full output: {sp['spill_path']}]"
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
-                    "contents": [
-                        {"uri": uri, "mimeType": "text/plain", "text": content}
-                    ]
-                },
-            }
+            return _response(
+                rid,
+                {"contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]},
+            )
         except Exception as exc:
             return _error(rid, -32000, f"resource read: {exc}")
 
@@ -942,6 +930,10 @@ class Dispatcher:
         from . import gists
 
         return gists.introspect(name)
+
+
+def _response(rid, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": rid, "result": result}
 
 
 def _error(rid, code: int, message: str) -> dict:

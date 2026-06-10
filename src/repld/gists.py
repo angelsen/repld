@@ -50,6 +50,14 @@ _REGISTRY_PATH = (
 )
 
 
+def _parse(path: Path) -> ast.Module | None:
+    """ast.parse a gist file; None if unreadable or unparseable."""
+    try:
+        return ast.parse(path.read_text("utf-8"))
+    except Exception:
+        return None
+
+
 def _register(name: str) -> None:
     """Record a gist import in the central registry. Best-effort, never raises."""
     try:
@@ -159,9 +167,8 @@ def _sibling_imports(path: Path) -> set[str]:
     Same-directory match = sibling gist; everything else is stdlib/third-party.
     """
     siblings: set[str] = set()
-    try:
-        tree = ast.parse(path.read_text("utf-8"))
-    except Exception:
+    tree = _parse(path)
+    if tree is None:
         return siblings
     src_dir = path.parent
     for node in ast.walk(tree):
@@ -351,14 +358,9 @@ class _GistImportHook:
 
 def _extract_doc(path: Path) -> str:
     """Extract first line of module docstring without importing."""
-    try:
-        tree = ast.parse(path.read_text("utf-8"))
-        doc = ast.get_docstring(tree)
-        if doc:
-            return doc.split("\n")[0].strip()[:80]
-    except Exception:
-        pass
-    return ""
+    tree = _parse(path)
+    doc = ast.get_docstring(tree) if tree else None
+    return doc.split("\n")[0].strip()[:80] if doc else ""
 
 
 def hint_for_name(name: str) -> str | None:
@@ -369,9 +371,8 @@ def hint_for_name(name: str) -> str | None:
         for p in d.glob("*.py"):
             if p.name.startswith("_"):
                 continue
-            try:
-                tree = ast.parse(p.read_text("utf-8"))
-            except Exception:
+            tree = _parse(p)
+            if tree is None:
                 continue
             usage = None
             classes: list[str] = []
@@ -547,9 +548,8 @@ def signature(name: str) -> str:
 
 def signature_for_path(path: Path) -> str:
     """Like signature(), but for a path already in hand (no _installed_dirs lookup)."""
-    try:
-        tree = ast.parse(path.read_text("utf-8"))
-    except Exception:
+    tree = _parse(path)
+    if tree is None:
         return ""
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
@@ -569,9 +569,8 @@ def signature_for_path(path: Path) -> str:
 
 def _extract_tools(path: Path) -> list[dict]:
     """Extract __repld_tools__ list from a gist file via ast.literal_eval."""
-    try:
-        tree = ast.parse(path.read_text("utf-8"))
-    except Exception:
+    tree = _parse(path)
+    if tree is None:
         return []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
@@ -676,9 +675,8 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
     """
     deps: dict[str, _DepInfo] = {}
     for p in paths if paths is not None else _iter_gist_files():
-        try:
-            tree = ast.parse(p.read_text("utf-8"))
-        except Exception:
+        tree = _parse(p)
+        if tree is None:
             continue
         for node in ast.iter_child_nodes(tree):
             if (
@@ -720,6 +718,28 @@ def _tty_input(prompt: str) -> str:
     return stdin.readline().strip().lower()
 
 
+def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
+    """Prompt which deps to install. Empty list means install nothing."""
+    n = len(missing)
+    if n == 1:
+        choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
+        return missing if choice in ("", "y", "yes") else []
+    choice = _tty_input(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
+    if choice in ("", "y", "yes", "all"):
+        return missing
+    if choice in ("n", "no", "none"):
+        return []
+    indices = []
+    for part in choice.replace(",", " ").split():
+        try:
+            idx = int(part) - 1
+        except ValueError:
+            continue
+        if 0 <= idx < n:
+            indices.append(idx)
+    return [missing[i] for i in indices]
+
+
 def install_deps(missing: list[_DepInfo]) -> bool:
     """Prompt user and install missing deps. Returns True if anything was installed."""
     import shutil
@@ -736,39 +756,15 @@ def install_deps(missing: list[_DepInfo]) -> bool:
         return False
 
     _tty_write("\033[36m[repld]\033[0m missing gist deps:\n")
-    n = len(missing)
     for i, dep in enumerate(missing, 1):
         _tty_write(f"  {i}) {dep.requirement:<24} ({', '.join(dep.gists)})\n")
 
     try:
-        if n == 1:
-            choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
-            if choice in ("", "y", "yes"):
-                selected = missing
-            else:
-                return False
-        else:
-            choice = _tty_input(
-                f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: "
-            )
-            if choice in ("", "y", "yes", "all"):
-                selected = missing
-            elif choice in ("n", "no", "none"):
-                return False
-            else:
-                indices = []
-                for part in choice.replace(",", " ").split():
-                    try:
-                        idx = int(part) - 1
-                        if 0 <= idx < n:
-                            indices.append(idx)
-                    except ValueError:
-                        pass
-                selected = [missing[i] for i in indices]
-                if not selected:
-                    return False
+        selected = _prompt_dep_selection(missing)
     except (EOFError, KeyboardInterrupt):
         _tty_write("\n")
+        return False
+    if not selected:
         return False
 
     reqs = [d.requirement for d in selected]

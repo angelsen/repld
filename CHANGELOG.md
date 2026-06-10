@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `browser_navigate` on an iframe target (without `force`) now returns a proper MCP error instead of a success result containing `{"error": ...}` JSON — same guidance text, consistent error signaling
+
 ### Fixed
 
 ### Removed
