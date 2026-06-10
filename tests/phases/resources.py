@@ -101,5 +101,23 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         assert_true("error" in resp, f"unknown gist returns error (got {resp!r})")
         print("  ✓ unknown gist → MCP error")
 
+        # Malformed gist → MCP error pointing at the syntax error, like a linter
+        broken_file = gists_dir / "test_broken.py"
+        broken_file.write_text("def oops(:\n")
+        try:
+            resp = b.call(
+                "resources/read",
+                {"uri": "repld://gists/test_broken"},
+            )
+            assert_true("error" in resp, f"malformed gist returns error (got {resp!r})")
+            msg = resp["error"]["message"]
+            assert_true(
+                "syntax error at line 1" in msg,
+                f"error names the gist and line (got {msg!r})",
+            )
+            print(f"  ✓ malformed gist → MCP error: {msg!r}")
+        finally:
+            broken_file.unlink()
+
     finally:
         b.close()

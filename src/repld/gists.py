@@ -424,7 +424,12 @@ def introspect(name: str) -> str:
     if path is None:
         raise FileNotFoundError(f"No gist '{name}' found in {_installed_dirs}")
 
-    tree = ast.parse(path.read_text("utf-8"))
+    try:
+        tree = ast.parse(path.read_text("utf-8"))
+    except SyntaxError as e:
+        raise ValueError(
+            f"gist '{name}': syntax error at line {e.lineno}: {e.msg}"
+        ) from e
     lines: list[str] = []
 
     mod_doc = ast.get_docstring(tree)
@@ -467,7 +472,7 @@ def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
 
     cls_doc = ast.get_docstring(node)
     if cls_doc:
-        lines.append(f"  {cls_doc.split(chr(10))[0].strip()}")
+        lines.append(f"  {cls_doc.split('\n')[0].strip()}")
         lines.append("")
 
     for item in node.body:
