@@ -75,6 +75,11 @@ pretty = [
     { name = "rich" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "repld-tool", extra = ["browser", "pretty"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "duckdb", marker = "extra == 'browser'", specifier = ">=1.5.2" },
@@ -82,6 +87,9 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'browser'", specifier = ">=16.0" },
 ]
 provides-extras = ["pretty", "browser"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "repld-tool", extras = ["pretty", "browser"] }]
 
 [[package]]
 name = "rich"

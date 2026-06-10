@@ -389,7 +389,7 @@ class PreObservation:
     """State captured before the mutation."""
 
     iframe_children: list["Tab"] = field(default_factory=list)
-    har_snapshots: dict[str, int] = field(default_factory=dict)      # tab_key → MAX(id)
+    har_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
     console_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
 
 

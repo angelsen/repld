@@ -33,4 +33,5 @@ if TYPE_CHECKING:
         timeout: float | None = None,
     ) -> str: ...
 
+
 __all__ = ["main"]
