@@ -26,7 +26,7 @@ class LI:
             tab = await repld.browser.get("*linkedin.com*")
         except RuntimeError:
             tab = await repld.browser.open("https://www.linkedin.com")
-            await tab.wait_for("role=main", timeout=10)
+            await tab.wait_for_idle(timeout=15)
         await tab.pin("LinkedIn — repld integration")
         csrf = await tab.js(
             "document.cookie.match(/JSESSIONID=\"?([^;\"]+)/)?.[1] || ''"

@@ -28,7 +28,7 @@ class Meny:
             tab = await repld.browser.get("*meny.no*")
         except RuntimeError:
             tab = await repld.browser.open("https://meny.no")
-            await tab.wait_for("role=main", timeout=10)
+            await tab.wait_for_idle(timeout=15)
         await tab.pin("Meny — repld integration")
         return cls(tab, store_id=store_id)
 

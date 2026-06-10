@@ -25,7 +25,7 @@ class Proff:
             tab = await repld.browser.get("*proff.no*")
         except RuntimeError:
             tab = await repld.browser.open("https://www.proff.no")
-            await tab.wait_for("role=main", timeout=10)
+            await tab.wait_for_idle(timeout=15)
         await tab.pin("Proff.no — repld integration")
         return cls(tab)
 
