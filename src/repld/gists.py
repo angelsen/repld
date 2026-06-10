@@ -500,22 +500,36 @@ def _format_function(
 
 
 def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
-    """Format function arguments as compact string."""
+    """Format function arguments as compact string ('=' marks a default)."""
     parts: list[str] = []
-    all_args = args.args[1:] if skip_self else args.args
+    pos_args = args.posonlyargs + args.args
+    if skip_self:
+        pos_args = pos_args[1:]
+    first_default = len(pos_args) - len(args.defaults)
 
-    for arg in all_args:
+    for i, arg in enumerate(pos_args):
         s = arg.arg
         if arg.annotation:
             s += f": {ast.unparse(arg.annotation)}"
+        if i >= first_default:
+            s += "="
         parts.append(s)
 
-    for arg in args.kwonlyargs:
+    if args.vararg:
+        parts.append(f"*{args.vararg.arg}")
+    elif args.kwonlyargs:
+        parts.append("*")
+
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
         s = arg.arg
         if arg.annotation:
             s += f": {ast.unparse(arg.annotation)}"
-        s += "="
+        if default is not None:
+            s += "="
         parts.append(s)
+
+    if args.kwarg:
+        parts.append(f"**{args.kwarg.arg}")
 
     return ", ".join(parts)
 
