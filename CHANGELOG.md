@@ -10,6 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.0.12] - 2026-06-10
+
+### Changed
+
 - `repld gist list` now shows a third section — linkable gists registered in other projects (not already local/linked) — so `gist add <name>` targets are discoverable from the terminal, not just the `repld://gists/_registry` MCP resource
 
 ### Fixed
