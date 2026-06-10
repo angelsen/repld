@@ -1,6 +1,6 @@
 [project]
 name = "repld-tool"
-version = "0.0.10"
+version = "0.0.11"
 description = "Persistent Python runtime with MCP channel push. Dev shell and autonomous-agent substrate in one package."
 readme = "README.md"
 authors = [
