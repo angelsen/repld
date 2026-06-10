@@ -28,6 +28,12 @@ browser = [
     "websockets>=16.0",
 ]
 
+[dependency-groups]
+# Optional extras installed in dev so basedpyright can resolve their imports.
+dev = [
+    "repld-tool[pretty,browser]",
+]
+
 [tool.uv.build-backend]
 module-name = "repld"
 

@@ -461,7 +461,7 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         for h in list(_every_registry):
             h.cancel()
 
-    every.list = _list              # type: ignore[attr-defined]
+    every.list = _list  # type: ignore[attr-defined]
     every.cancel_all = _cancel_all  # type: ignore[attr-defined]
     return every
 

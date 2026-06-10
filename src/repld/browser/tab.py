@@ -959,6 +959,7 @@ class Tab:
         use_cdp = self._is_css_selector(selector)
         deadline = asyncio.get_running_loop().time() + timeout
 
+        root_id = 0
         if use_cdp:
             doc = await self._exec("DOM.getDocument")
             root_id = doc["root"]["nodeId"]

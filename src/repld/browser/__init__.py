@@ -111,7 +111,9 @@ class Browser:
         """
         if _is_target_id(target):
             return await self._get_by_id(target, ready=ready)
-        return await self._get_by_glob(target, timeout=timeout, fresh=fresh, ready=ready)
+        return await self._get_by_glob(
+            target, timeout=timeout, fresh=fresh, ready=ready
+        )
 
     async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
         """Resolve a target ID, attaching on demand if needed."""
