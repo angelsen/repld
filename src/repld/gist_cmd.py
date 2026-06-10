@@ -48,18 +48,18 @@ def run_gist(argv: list[str]) -> int:
         return _gist_rm(rest)
     if cmd == "list":
         return _gist_list(rest)
-    # Verb-less alias: `repld gist <name>` == `repld gist new <name>`.
-    return _gist_new(argv)
+    print(f"repld gist: unknown command '{cmd}'\n")
+    _print_gist_usage()
+    return 2
 
 
 def _print_gist_usage() -> None:
     print("repld gist — manage tool gists")
     print()
     print("  repld gist new <name>    scaffold ./gists/<name>.py")
-    print("  repld gist <name>        alias for `new`")
     print("  repld gist add <name>    link a gist registered in another project")
     print("  repld gist rm <name>     unlink (use --stale to drop all dead links)")
-    print("  repld gist list          show local + linked gists")
+    print("  repld gist list          show local + linked + linkable gists")
 
 
 def _gist_new(argv: list[str]) -> int:
@@ -171,6 +171,28 @@ def _gist_list(argv: list[str]) -> int:
             print()
             print(f"{stale} stale link(s) — repld gist rm --stale to drop")
 
-    if not local and not links:
+    # Linkable: registered in other projects, not already here. Makes the valid
+    # `gist add <name>` targets discoverable from the terminal (the _registry
+    # MCP resource is agent-only).
+    here = set(local) | set(links)
+    cwd = Path.cwd().resolve()
+    linkable: dict[str, list[tuple[str, str]]] = {}
+    for name, entry in _gists.registry().items():
+        if name in here or name.startswith("_"):
+            continue
+        path = Path(entry.get("path", ""))
+        if not path.is_file() or cwd in path.resolve().parents:
+            continue
+        linkable.setdefault(entry.get("project", "?"), []).append(
+            (name, entry.get("description", "") or "")
+        )
+    if linkable:
+        print("linkable (other projects — repld gist add <name>):")
+        for project in sorted(linkable):
+            print(f"  {project}")
+            for name, desc in sorted(linkable[project]):
+                print(f"    {name:<20} {desc[:60]}")
+
+    if not local and not links and not linkable:
         print("no gists in ./gists")
     return 0

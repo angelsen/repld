@@ -155,7 +155,7 @@ Commands:
   repld exec               Interactive REPL (state persists in kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld init               Scaffold .mcp.json + .gitignore in cwd
-  repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py (alias: gist NAME)
+  repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
   repld gist list          Show local + linked gists
@@ -308,7 +308,7 @@ Tool registration:
   Set __repld_tools__ = [...] in module for MCP tool schemas.
   Name handlers _tool_{name}(args: dict) → str | dict.
   Tools appear in tools/list automatically; no exec round-trip needed.
-  Scaffold: repld gist <name>
+  Scaffold: repld gist new <name>
 
   Example:
     __repld_tools__ = [
@@ -758,7 +758,7 @@ Stable gists can register MCP tools callable without exec:
       return json.dumps({"result": ...})
 
 Handler convention: _tool_{name}(args) → str | dict.
-Tools appear in tools/list automatically. Scaffold: repld gist <name>.
+Tools appear in tools/list automatically. Scaffold: repld gist new <name>.
 
 == Background automation ==
 
