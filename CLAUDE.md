@@ -22,7 +22,7 @@ No CI configured yet. If you add any, update this file.
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 11). When you add a feature, extend a phase rather than introducing a separate harness.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 12). When you add a feature, extend a phase rather than introducing a separate harness.
 
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
@@ -34,6 +34,7 @@ Phases:
 - **9:** Gist-registered MCP tools — `__repld_tools__` discovery, dispatch, auto-reload, error handling.
 - **10:** `@every(seconds)` decorator — periodic ticker, immediate first tick, error survival, `cancel()` / `cancel_all()`.
 - **11:** Graceful shutdown — `_shutdown` drains `@every` + `defer()` `try/finally` blocks before stopping the loop, with a 2 s budget.
+- **12:** Cross-project gist links — `add_link` resolves via the registry + AST sibling co-link, writes `./gists/.links`; a fresh kernel boots with the manifest and the linked gist imports (sibling resolving); stale entries skipped at load + pruned by `rm --stale`.
 
 ## Key subsystems
 
@@ -49,7 +50,7 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 
 **Browser (`browser/`):** CDP integration via WebSocket multiplexer. DuckDB event store for network/console queries (HAR-style). Fetch domain interception captures request/response bodies. Observation pipeline (`observe.py`) returns accessibility tree + network delta + console delta after mutations. Pin/gate bridge: `tab.pin(reason)` injects a floating pill via `Runtime.evaluate` + `beforeunload` guard; `tab.confirm()`/`tab.choose()` route human gates to the pill UI; button clicks flow back via `Runtime.bindingCalled` → `resolve_gate()`. Terminal and browser resolve the same Future — first wins. See `docs/browser.md` for full design rationale.
 
-**Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description. Gists can also register MCP tools via `__repld_tools__` — `scan_tools()` discovers tool schemas across all gist files, `resolve_tool(name)` imports the owning gist and returns its `_tool_{name}` handler. Tools appear in `tools/list` automatically alongside built-in tools. Gists declare external dependencies via `__repld_deps__ = ["httpx>=0.27"]` — `scan_deps()` AST-scans at boot, `install_deps()` prompts interactively and installs into the tool venv via `uv pip install`.
+**Gist system (`gists.py`):** Custom import hook (`_GistFinder` + `_GistImportHook`) wraps `builtins.__import__`, tracks mtimes, evicts stale modules from `sys.modules` on re-import. Module docstring first line → auto-injected into MCP instructions. Override with `__repld_help__ = "..."`. Constructor signatures extracted via AST and shown alongside the description. Gists can also register MCP tools via `__repld_tools__` — `scan_tools()` discovers tool schemas across all gist files, `resolve_tool(name)` imports the owning gist and returns its `_tool_{name}` handler. Tools appear in `tools/list` automatically alongside built-in tools. Gists declare external dependencies via `__repld_deps__ = ["httpx>=0.27"]` — `scan_deps()` AST-scans at boot, `install_deps()` prompts interactively and installs into the tool venv via `uv pip install`. Every import is recorded in a central registry (`~/.config/repld/gist-registry.json`, name → path/project/last_used). **Cross-project links:** `repld gist add <name>` resolves a registered gist's path, AST-follows its same-dir sibling imports, and records absolute paths in a committed `./gists/.links` manifest — without copying. At boot `_load_links()` populates the `_linked` name→path overlay (consulted by `_GistFinder` + `_iter_gist_files` *after* local dirs, so local gists always shadow); stale entries are skipped (never auto-rewritten — the manifest is committed). `repld gist list` shows local + linked (flagging stale), `repld gist rm <name>` / `rm --stale` unlink.
 
 ## Architecture (target shape)
 
@@ -60,7 +61,7 @@ Six CLI subcommands, all dispatched from `repld:main`:
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
-- `repld gist <name>` — scaffold a tool gist in `./gists/<name>.py` with `__repld_tools__` and handler skeleton.
+- `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`; verb-less `gist <name>` aliases it), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (show local + linked). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
 
 Key invariants to preserve when building this out:
 

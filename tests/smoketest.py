@@ -24,6 +24,7 @@ from phases.core import phase_3
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
 from phases.gist_tools import phase_9_gist_tools
+from phases.links import phase_12_gist_links
 from phases.lockfile import phase_5, phase_5_init
 from phases.resources import phase_8_gist_resources
 from phases.shutdown import phase_11_shutdown
@@ -38,6 +39,7 @@ PHASES = {
     9: phase_9_gist_tools,
     10: phase_10_every,
     11: phase_11_shutdown,
+    12: phase_12_gist_links,
 }
 
 

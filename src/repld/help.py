@@ -153,7 +153,10 @@ Commands:
   repld exec               Interactive REPL (state persists in kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld init               Scaffold .mcp.json + .gitignore in cwd
-  repld gist NAME          Scaffold a tool gist in ./gists/NAME.py
+  repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py (alias: gist NAME)
+  repld gist add NAME      Link a gist registered in another project
+  repld gist rm NAME       Unlink a gist (--stale drops all dead links)
+  repld gist list          Show local + linked gists
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:

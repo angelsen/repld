@@ -83,7 +83,9 @@ def phase_6(kernel: Kernel) -> None:
     try:
         import websockets  # noqa: F401
     except ImportError:
-        print("  - phase 6: websockets not installed (uv sync --extra browser), skipping")
+        print(
+            "  - phase 6: websockets not installed (uv sync --extra browser), skipping"
+        )
         return
 
     import urllib.request as _urlreq
