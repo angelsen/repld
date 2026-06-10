@@ -61,7 +61,7 @@ Six CLI subcommands, all dispatched from `repld:main`:
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
-- `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`; verb-less `gist <name>` aliases it), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (show local + linked). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
+- `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (local + linked + linkable-from-registry). Unknown verbs error (no verb-less scaffold alias). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
 
 Key invariants to preserve when building this out:
 

@@ -10,9 +10,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `repld gist list` now shows a third section — linkable gists registered in other projects (not already local/linked) — so `gist add <name>` targets are discoverable from the terminal, not just the `repld://gists/_registry` MCP resource
+
 ### Fixed
 
+- `repld gist <unknown>` now errors with the usage list instead of silently scaffolding a gist by that name. A typo like `repld gist lis` no longer creates `lis.py`
+
 ### Removed
+
+- Verb-less `repld gist <name>` scaffold alias — use `repld gist new <name>`. The alias turned typo'd subcommands into stray gist files
 
 ## [0.0.11] - 2026-06-10
 
