@@ -626,10 +626,16 @@ Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
 __repld_deps__ = ["httpx>=0.27"] → kernel prompts to install at boot.
 Type hints + one-line docstrings on public methods → auto-introspected.
-Document return shapes in docstrings with -> {key, key, ...} so the agent
-knows the dict structure without trial and error:
+Document return shapes in the docstring FIRST line with -> {key, key, ...}
+(only the first line is surfaced) so the agent knows the dict structure
+without trial and error:
   async def search(self, query: str) -> list[dict]:
       \"""Search things. -> [{id, name, status, created_at, ...}]\"""
+
+Introspection is AST-based on the gist file alone — inherited methods and an
+inherited __init__ are INVISIBLE in repld://gists/{name}. When subclassing a
+library class, define an explicit __init__ and thin documented wrappers for
+the methods agents should discover; list the rest in the class docstring.
 
 === Writing a browser-connected gist ===
 
