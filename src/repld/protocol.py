@@ -182,7 +182,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
                 "url": {"type": "string"},
                 "force": {
                     "type": "boolean",
@@ -216,7 +219,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
                 "key": {
                     "type": "string",
                     "description": "Key name: Enter, Escape, Tab, ArrowDown, etc.",
@@ -234,7 +240,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
             },
             "required": ["target"],
         },
@@ -248,7 +257,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
                 "url": {"type": "string"},
                 "method": {"type": "string", "default": "GET"},
                 "body": {
@@ -624,6 +636,9 @@ class Dispatcher:
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
         return fut.result(timeout=timeout)
 
+    def _get_tab(self, browser, args):
+        return self._run_async(browser.get(args["target"]))
+
     def _browser_dispatch(self, name: str, args: dict):
         """Route to individual browser tool handler.
 
@@ -658,12 +673,12 @@ class Dispatcher:
     # ------------------------------------------------------------------
 
     def _bh_js(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         ap = args.get("await_promise", "auto")
         return {"result": self._run_async(tab.js(args["code"], await_promise=ap))}
 
     def _bh_network(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         rows = tab.network(
             url=args.get("url"),
             method=args.get("method"),
@@ -674,15 +689,15 @@ class Dispatcher:
         return [repr(r) for r in rows]
 
     def _bh_request(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         return tab.request(args["request_id"])
 
     def _bh_body(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         return tab.body(args["request_id"])
 
     def _bh_fetch(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         return self._run_async(
             tab.fetch(
                 args["url"],
@@ -693,7 +708,7 @@ class Dispatcher:
         )
 
     def _bh_console(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         rows = tab.console(
             level=args.get("level"),
             source=args.get("source"),
@@ -701,21 +716,21 @@ class Dispatcher:
         return [repr(r) for r in rows]
 
     def _bh_screenshot(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         path = self._run_async(
             tab.screenshot(full_page=bool(args.get("full_page", False)))
         )
         return f"Screenshot saved to {path}\nUse Read to view it."
 
     def _bh_cdp(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         params = args.get("params") or {}
         return self._run_async(tab.cdp(args["method"], **params))
 
     def _bh_tree(self, browser, args):
         from .browser.observe import compose_tree
 
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         lines, _ = self._run_async(compose_tree(tab, browser._session))
         return "\n".join(lines)
 
@@ -734,7 +749,7 @@ class Dispatcher:
         )
 
     def _bh_navigate(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         if tab.type == "iframe" and not args.get("force"):
             from .browser import make_target
 
@@ -779,7 +794,7 @@ class Dispatcher:
         )
 
     def _bh_key(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         key = args["key"]
 
         def mutate():
@@ -793,7 +808,7 @@ class Dispatcher:
         return self._observed_mutation(browser, tab, mutate, timeout=5.0)
 
     def _bh_click(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
         return self._observed_mutation(
             browser,
             tab,
@@ -802,7 +817,7 @@ class Dispatcher:
         )
 
     def _bh_type(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        tab = self._get_tab(browser, args)
 
         def mutate():
             self._run_async(
