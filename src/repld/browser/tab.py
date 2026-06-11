@@ -894,11 +894,10 @@ class Tab:
   }};
   const r = await fetch({json.dumps(url)}, opts);
   const ct = r.headers.get('content-type') || '';
-  let body;
-  if (ct.includes('json')) {{
-    try {{ body = await r.json(); }} catch(e) {{ body = await r.text(); }}
-  }} else {{
-    body = await r.text();
+  const text = await r.text();
+  let body = text;
+  if (ct.includes('json') && text) {{
+    try {{ body = JSON.parse(text); }} catch(e) {{}}
   }}
   return {{status: r.status, ok: r.ok, body: body}};
 }})()
