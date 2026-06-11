@@ -59,7 +59,8 @@ _GISTS_MODEL = (
     "Stable gists can register as MCP tools via __repld_tools__ — callable "
     "directly without exec, discoverable in tools/list.\n"
     'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
-    "kernel prompts to install missing ones at boot.\n"
+    'use "." to depend on the gist\'s own project. '
+    "Kernel prompts to install missing ones at boot.\n"
     "Read repld://gists/_registry to see gists written in other projects; the "
     "user can link one in with `repld gist add <name>` (no copy)."
 )
@@ -645,6 +646,7 @@ graph stores, embedding indexes, internal services.
 Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
 __repld_deps__ = ["httpx>=0.27"] → kernel prompts to install at boot.
+  Use "." to depend on the gist's own project (editable install when linked elsewhere).
 Type hints + one-line docstrings on public methods → auto-introspected.
 Document return shapes in the docstring FIRST line with -> {key, key, ...}
 (only the first line is surfaced) so the agent knows the dict structure
@@ -663,7 +665,8 @@ Template:
 
   \"""AppName — what it does.\"""
 
-  __repld_deps__ = ["httpx>=0.27"]  # optional: auto-installed at boot
+  __repld_deps__ = ["httpx>=0.27"]  # PyPI packages, auto-installed at boot
+  # __repld_deps__ = ["."]          # depend on the project itself (editable install)
   __repld_usage__ = "app = await AppName.connect()"
 
 

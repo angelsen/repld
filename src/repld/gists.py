@@ -707,6 +707,46 @@ def _is_importable(name: str) -> bool:
 class _DepInfo:
     requirement: str
     gists: list[str]
+    editable: bool = False
+
+
+_TOOL_DEPS_DIR = Path.home() / ".local" / "share" / "repld" / "deps"
+
+
+def _is_tool_venv() -> bool:
+    return "uv/tools/" in sys.prefix
+
+
+def _read_project_name(pyproject: Path) -> str | None:
+    """Read [project] name from pyproject.toml."""
+    import tomllib
+
+    try:
+        data = tomllib.loads(pyproject.read_text("utf-8"))
+        return data.get("project", {}).get("name")
+    except Exception:
+        return None
+
+
+def _resolve_dot_dep(gist_path: Path) -> _DepInfo | None:
+    """Resolve '.' dep to the source project's editable install path."""
+    project_root = gist_path.parent.parent
+    pyproject = project_root / "pyproject.toml"
+    if not pyproject.is_file():
+        print(
+            f"repld: {gist_path.name}: '.' dep but "
+            f"{project_root} has no pyproject.toml",
+            file=sys.stderr,
+        )
+        return None
+    pkg_name = _read_project_name(pyproject) or project_root.name
+    if _is_importable(pkg_name):
+        return None
+    return _DepInfo(
+        requirement=str(project_root),
+        gists=[gist_path.stem],
+        editable=True,
+    )
 
 
 def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
@@ -742,13 +782,23 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
                 if not isinstance(reqs, list):
                     continue
                 for req in reqs:
-                    pkg = _parse_pkg_name(str(req))
+                    req_str = str(req).strip()
+                    if req_str == ".":
+                        info = _resolve_dot_dep(p)
+                        if info is not None:
+                            key = info.requirement
+                            if key in deps:
+                                deps[key].gists.append(p.stem)
+                            else:
+                                deps[key] = info
+                        continue
+                    pkg = _parse_pkg_name(req_str)
                     if _is_importable(pkg):
                         continue
                     if pkg in deps:
                         deps[pkg].gists.append(p.stem)
                     else:
-                        deps[pkg] = _DepInfo(str(req), [p.stem])
+                        deps[pkg] = _DepInfo(req_str, [p.stem])
     return list(deps.values())
 
 
@@ -817,16 +867,27 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     if not selected:
         return False
 
-    reqs = [d.requirement for d in selected]
     uv = shutil.which("uv")
-    cmd = (
-        [uv, "pip", "install", "--python", sys.executable, *reqs]
-        if uv
-        else [sys.executable, "-m", "pip", "install", *reqs]
-    )
+    req_args: list[str] = []
+    for d in selected:
+        if d.editable:
+            req_args.extend(["-e", d.requirement])
+        else:
+            req_args.append(d.requirement)
+
+    if uv:
+        if _is_tool_venv():
+            _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
+            cmd = [uv, "pip", "install", "--target", str(_TOOL_DEPS_DIR), *req_args]
+        else:
+            cmd = [uv, "pip", "install", "--python", sys.executable, *req_args]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", *req_args]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
+        if _is_tool_venv() and str(_TOOL_DEPS_DIR) not in sys.path:
+            sys.path.insert(0, str(_TOOL_DEPS_DIR))
         importlib.invalidate_caches()
         count = len(selected)
         _tty_write(
@@ -846,6 +907,10 @@ def install(dirs: list[Path]) -> None:
 
     global _installed_dirs
     _installed_dirs = dirs
+
+    # Tool-mode deps dir: gist deps installed via --target land here
+    if _TOOL_DEPS_DIR.is_dir() and str(_TOOL_DEPS_DIR) not in sys.path:
+        sys.path.insert(0, str(_TOOL_DEPS_DIR))
 
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
