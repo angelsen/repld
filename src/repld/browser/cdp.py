@@ -192,9 +192,10 @@ class CDPSession:
                 "(SELECT rowid FROM events ORDER BY rowid LIMIT ?)",
                 [delete_count],
             )
-            self._event_count -= delete_count
+            row = self.db.execute("SELECT COUNT(*) FROM events").fetchone()
+            self._event_count = row[0] if row else 0
             logger.debug(
-                "Pruned %d events; ~%d remaining", delete_count, self._event_count
+                "Pruned %d events; %d remaining", delete_count, self._event_count
             )
         except Exception as exc:
             logger.debug("Prune error: %s", exc)

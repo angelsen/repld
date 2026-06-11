@@ -333,8 +333,10 @@ class BrowserSession:
                 loop=asyncio.get_running_loop(),
             )
             self._sessions[session_id] = cdp
-            # Enable domains
-            asyncio.create_task(cdp._enable_domains())
+            asyncio.create_task(
+                cdp._enable_domains(),
+                name=f"repld-domains-{target_id[:8]}",
+            )
             return cdp
         finally:
             self._attaching.discard(target_id)

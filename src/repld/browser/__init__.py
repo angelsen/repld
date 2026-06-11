@@ -224,26 +224,31 @@ class Browser:
         # Attach any targets that match the pattern and aren't already attached
         newly_attached: list[str] = []
         targets = await self._session.list_targets()
+        to_attach: list[str] = []
         for t in targets:
             if t.get("type", "") in WORKER_TYPES:
                 continue
             tid = t.get("targetId", "")
             url = t.get("url", "")
             if fnmatch.fnmatch(url, pattern) and tid:
-                # Check if already attached
                 already = any(
                     cdp.target_info.get("targetId") == tid
                     for cdp in self._session._sessions.values()
                 )
                 if not already:
-                    try:
-                        await self._session.attach(tid)
-                        newly_attached.append(tid)
-                        self._session._watched_patterns.setdefault(pattern, set()).add(
-                            tid
-                        )
-                    except Exception as exc:
-                        logger.debug("Attach %s: %s", tid, exc)
+                    to_attach.append(tid)
+
+        async def _attach_one(tid: str) -> str | None:
+            try:
+                await self._session.attach(tid)
+                self._session._watched_patterns.setdefault(pattern, set()).add(tid)
+                return tid
+            except Exception as exc:
+                logger.debug("Attach %s: %s", tid, exc)
+                return None
+
+        results = await asyncio.gather(*[_attach_one(tid) for tid in to_attach])
+        newly_attached = [tid for tid in results if tid]
 
         total = len(self._session._sessions)
         return (

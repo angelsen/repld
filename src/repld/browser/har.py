@@ -201,16 +201,21 @@ captured_request_bodies AS (
     GROUP BY request_id
 ),
 
--- Captured response bodies with status (ok/err)
+-- Captured response bodies with status (ok/err), deduped to latest per request
 captured_bodies AS (
-    SELECT
-        request_id,
-        CASE
-            WHEN json_extract_string(event, '$.params.capture.ok') = 'true' THEN 'ok'
-            ELSE 'err'
-        END as body_status
-    FROM events
-    WHERE method = 'Network.responseBodyCaptured'
+    SELECT request_id, body_status
+    FROM (
+        SELECT
+            request_id,
+            CASE
+                WHEN json_extract_string(event, '$.params.capture.ok') = 'true' THEN 'ok'
+                ELSE 'err'
+            END as body_status,
+            ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY rowid DESC) as rn
+        FROM events
+        WHERE method = 'Network.responseBodyCaptured'
+    )
+    WHERE rn = 1
 ),
 
 -- WebSocket Created
@@ -312,7 +317,10 @@ http_entries AS (
         CAST(NULL AS BIGINT) as frames_received,
         CAST(NULL AS BIGINT) as ws_total_bytes,
         rh.started_datetime,
-        CAST(rh.started_datetime AS DOUBLE) as last_activity,
+        CASE WHEN fin.finished_timestamp IS NOT NULL AND rh.started_datetime IS NOT NULL AND rh.started_timestamp IS NOT NULL
+            THEN CAST(rh.started_datetime AS DOUBLE) + (CAST(fin.finished_timestamp AS DOUBLE) - CAST(rh.started_timestamp AS DOUBLE))
+            ELSE CAST(rh.started_datetime AS DOUBLE)
+        END as last_activity,
         rh.target,
         cb.body_status,
         -- Initiator fields

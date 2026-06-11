@@ -338,7 +338,7 @@ async def settle(
         inflight = 0
         for tab in tabs:
             rows = tab._session.query(
-                "SELECT COUNT(*) FROM har_entries WHERE state != 'complete' AND method != 'WS'"
+                "SELECT COUNT(*) FROM har_entries WHERE state NOT IN ('complete', 'failed', 'redirect', 'closed') AND method != 'WS'"
             )
             inflight += rows[0][0]
 
