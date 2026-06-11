@@ -114,8 +114,6 @@ def build_instructions() -> str:
         )
 
     # Dependency management hint
-    from pathlib import Path
-
     if (Path.cwd() / "uv.lock").exists():
         parts.append(
             "Dependencies: this is a uv project. "
