@@ -181,6 +181,28 @@ def phase_6(kernel: Kernel) -> None:
         )
         print(f"  ✓ browser_js: 1+1 = {js_result['result']!r}")
 
+        # browser_js await semantics: multi-statement top-level await,
+        # promise results auto-awaited (regression: replMode + awaitPromise)
+        for code, expected, label in [
+            ("await new Promise(r => setTimeout(r, 10)); 1 + 1", 2, "multi-stmt await"),
+            ("(async () => 'iife')()", "iife", "async IIFE"),
+            ("Promise.resolve(42)", 42, "bare promise"),
+        ]:
+            resp = b.call(
+                "tools/call",
+                {
+                    "name": "browser_js",
+                    "arguments": {"target": tab_target, "code": code},
+                },
+                timeout=10.0,
+            )
+            js_result = json.loads(resp["result"]["content"][0]["text"])
+            assert_true(
+                js_result.get("result") == expected,
+                f"browser_js {label}: expected {expected!r}, got {js_result!r}",
+            )
+        print("  ✓ browser_js: top-level await, async IIFE, bare promise all resolve")
+
         # browser_network: returns a list (may be empty)
         resp = b.call(
             "tools/call",

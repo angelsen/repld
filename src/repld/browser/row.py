@@ -63,7 +63,13 @@ class Row:
             rid = f" rid={self.request_id}" if self.request_id else ""
             return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_str}){rid}>"
         if self.level:
-            return f"<Console {self.level}: {self.text[:60]}>"
+            text = self.text if len(self.text) <= 200 else self.text[:200] + "…"
+            loc = ""
+            if self.stack_url:
+                loc = f" @ {self.stack_url}"
+                if self.stack_line:
+                    loc += f":{self.stack_line}"
+            return f"<Console {self.level}: {text}{loc}>"
         return f"<Row id={self.id}>"
 
 

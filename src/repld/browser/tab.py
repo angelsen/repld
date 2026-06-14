@@ -596,14 +596,15 @@ class Tab:
         self,
         expr: str,
         *,
-        await_promise: str | bool = "auto",
+        await_promise: bool = True,
         user_gesture: bool = True,
     ) -> Any:
         """Evaluate JavaScript expression in the page context.
 
         Args:
             expr: JavaScript expression to evaluate.
-            await_promise: Whether to await Promises. "auto" retries if result is a Promise.
+            await_promise: Await a Promise result. Default awaits (like the
+                DevTools console); pass False to return without awaiting.
             user_gesture: Simulate a user gesture (makes isTrusted=true).
 
         Returns:
@@ -616,13 +617,44 @@ class Tab:
             "Runtime.evaluate",
             {
                 "expression": expr,
-                "returnByValue": True,
                 "userGesture": user_gesture,
-                "awaitPromise": await_promise is True,
+                # replMode is how the DevTools console supports top-level await
+                # (and let/const redeclaration across calls). Without it, any
+                # `await` outside an async function is a parse-time SyntaxError.
+                # replMode wraps the evaluation in its own completion promise,
+                # which awaitPromise unwraps here — a promise *returned by* the
+                # code keeps its identity (objectId) and is awaited below.
+                "replMode": True,
+                "awaitPromise": True,
             },
         )
+        rv = self._js_result(result)
 
-        # Check for exception
+        if "objectId" in rv:
+            if rv.get("subtype") == "promise" and await_promise is not False:
+                result = await self._exec(
+                    "Runtime.awaitPromise",
+                    {"promiseObjectId": rv["objectId"], "returnByValue": True},
+                )
+            else:
+                # Serialize object results by value (returnByValue on the
+                # initial evaluate would flatten promises to {} instead).
+                result = await self._exec(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": rv["objectId"],
+                        "functionDeclaration": "function () { return this; }",
+                        "returnByValue": True,
+                    },
+                )
+            rv = self._js_result(result)
+
+        return rv.get("value")
+
+    @staticmethod
+    def _js_result(result: dict) -> dict:
+        """Extract the result object from an evaluate-style response, raising
+        BrowserJSError if the response carries exceptionDetails."""
         if "exceptionDetails" in result:
             details = result["exceptionDetails"]
             exc_obj = details.get("exception", {})
@@ -631,14 +663,7 @@ class Tab:
             url = details.get("url", "")
             line = details.get("lineNumber", 0)
             raise BrowserJSError(text, stack, url, line)
-
-        rv = result.get("result", {})
-
-        # Auto-await: if result is a Promise, re-evaluate with awaitPromise=True
-        if await_promise == "auto" and rv.get("subtype") == "promise":
-            return await self.js(expr, await_promise=True, user_gesture=user_gesture)
-
-        return rv.get("value")
+        return result.get("result", {})
 
     async def _wait_for_node(
         self, selector: str, timeout: float = 2.0

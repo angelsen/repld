@@ -92,7 +92,8 @@ TOOLS = [
     {
         "name": "browser_js",
         "description": (
-            "Evaluate JavaScript in a browser tab. Top-level await is auto-detected."
+            "Evaluate JavaScript in a browser tab. Top-level await works "
+            "(REPL semantics, like the DevTools console); promise results are awaited."
         ),
         "inputSchema": {
             "type": "object",
@@ -107,7 +108,7 @@ TOOLS = [
                 },
                 "await_promise": {
                     "type": "boolean",
-                    "description": "Force promise awaiting (default: auto-detect)",
+                    "description": "Set false to return without awaiting a promise result",
                 },
             },
             "required": ["target", "code"],

@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser_js` / `tab.js()` now evaluates with REPL semantics like the DevTools console: top-level `await` works in multi-statement code (was a SyntaxError), and promise results — bare promises, async IIFEs — resolve to their value instead of `{}`. Evaluation preserves object identity and awaits via `Runtime.awaitPromise`, so code is never re-evaluated (the old auto-detect re-ran side effects). `let`/`const` can be redeclared across calls
+- Console row repr no longer cuts messages at 60 chars and now appends the source URL/line — "Failed to load resource" entries finally say *which* resource
+
 ### Removed
 
 ## [0.0.12] - 2026-06-10
