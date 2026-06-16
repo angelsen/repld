@@ -10,6 +10,8 @@ no overlap:
   Topics                  → pure API reference for the human user
   GUIDE                   → MCP resource (repld://docs/guide) — working guide
                             with patterns and conventions; read on demand
+  BROWSER_GUIDE            → MCP resource (repld://docs/browser) — comprehensive
+                            browser API reference, internals, and workflows
 """
 
 import json
@@ -49,7 +51,7 @@ _BROWSER_MODEL = (
     "For repeated browser interactions, write a gist (gists/*.py) to capture "
     "the API pattern. tab.pin() guards the session; tab.confirm()/choose() "
     "gate mutations in the browser. "
-    "Run `repld help browser` for the full Python API (Tab, network queries, fetch)."
+    "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
 _GISTS_MODEL = (
@@ -65,7 +67,437 @@ _GISTS_MODEL = (
     "user can link one in with `repld gist add <name>` (no copy)."
 )
 
-_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns, browser workflows, and gist conventions."
+_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns and gist conventions. Read repld://docs/browser for the full browser API and internals."
+
+
+# ---------------------------------------------------------------------------
+# BROWSER_GUIDE (repld://docs/browser resource — comprehensive browser reference)
+# ---------------------------------------------------------------------------
+
+BROWSER_GUIDE = """\
+repld browser — comprehensive guide
+
+API reference, non-obvious behaviors, and workflow patterns for the browser
+object.  Read this instead of diving into source code.
+
+== Getting tabs ==
+
+  tab = await browser.get("*example.com*")          # URL glob
+  tab = await browser.get("9222:a1b2c3")            # target ID (any type)
+  tab = await browser.get("*app*", fresh=True)       # only newly-appearing tabs
+  tab = await browser.get("*app*", timeout=10)       # wait up to 10s for match
+  tab = await browser.open("https://example.com")    # open new tab
+  await browser.watch("*example.com*")               # auto-attach current + future
+
+  browser.tabs                                       # list[Tab] currently attached
+  browser.pages()                                    # all Chrome targets (dict list)
+  browser.patterns()                                 # active watch patterns
+  browser.detach("*example.com*")                    # detach pattern + tabs
+  browser.detach()                                   # detach everything
+  browser.clear(target=)                             # clear all captured data
+
+  browser.disconnect()                               # close WebSocket
+
+Quirks:
+  - get(glob) skips workers (service_worker, shared_worker, worker). To reach
+    a worker, use its target ID directly: get("9222:a1b2c3").
+  - get() raises RuntimeError if no match found (with timeout=None, checks once).
+  - fresh=True snapshots currently-matching targets at call time and excludes
+    them — returns only tabs that appear *after* the call.
+  - open() creates a tab via Target.createTarget, waits for attach, sleeps 0.3s
+    for the page to settle before returning.
+
+=== ready= parameter ===
+
+  tab = await browser.get("*localhost*", ready="[data-testid='app-root']")
+
+ready= stores a CSS selector or JS expression on the Tab.  It's used by:
+  - get() / open() — waits after initial attach
+  - navigate() / reload() — waits after page load
+  - _reattach() — waits after session recovery (HMR, navigation)
+
+CSS selectors (starts with '.', '#', '[', 'data-') use DOM.querySelector,
+polled every 100ms, 10s timeout.  Everything else is evaluated as a JS
+expression via Runtime.evaluate, polled every 100ms, must return truthy.
+
+Default (no ready=): waits for document.readyState === 'complete'.
+
+Convention: add data-testid to your root layout component.
+
+== Tab API (async) ==
+
+  tab.js(expr, *, await_promise=True, user_gesture=True)     → Any
+      Evaluate JS in page context.  Results returned by value (deep-serialized).
+      await_promise=True (default) awaits Promise results like the DevTools console.
+      user_gesture=True makes isTrusted=true on events.
+      Raises BrowserJSError on JS exceptions (with preserved stack trace).
+
+  tab.click(selector, *, button='left', click_count=1)       → None
+      Mouse click via Input.dispatchMouseEvent (mousePressed + mouseReleased).
+      Produces isTrusted=true events.  Auto-waits up to 2s for the element.
+
+  tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → None
+      Focus element, select-all existing content, type character-by-character
+      via Input.dispatchKeyEvent.  Auto-waits up to 2s.
+      delay_ms adds a pause between keystrokes (in milliseconds).
+      press_enter sends an Enter key after the text.
+
+  tab.tap(selector_or_x, y=None)                             → None
+      Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
+      Accepts a selector string OR (x, y) coordinates.
+      3s timeout — raises TimeoutError if the page's touch handler blocks
+      (common on complex apps like Messenger/React).
+
+  tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300)   → None
+      Touch swipe: touchStart → touchMove × steps → touchEnd.
+      For scrolling on mobile Chrome via ADB.
+
+  tab.tree()                                                  → list[str]
+      Compact accessibility tree as text lines.  Crosses iframes — discovers
+      attached iframe children by matching parentFrameId, inlines their trees.
+      Standalone read (no settle, no observation pipeline).
+
+  tab.fetch(url, *, method='GET', body=None, headers=None)    → dict
+      In-page JS fetch() — inherits the browser's cookies, session, and CORS
+      origin.  NOT a separate HTTP call.
+      Returns: {"status": int, "ok": bool, "body": Any}
+      body is auto-parsed as JSON when content-type includes 'json'.
+      Auto-sets Content-Type: application/json when body is a dict.
+      Caller headers override auto-set headers.
+      Raises RuntimeError (via BrowserJSError) on network errors.
+
+  tab.navigate(url)                                           → None
+      Navigate to URL.  Waits for ready signal after page load.
+
+  tab.reload()                                                → None
+      Reload page.  Waits for ready signal after load.
+
+  tab.wait_for(selector, *, timeout=5.0)                      → None
+      Wait for element to appear.  Polls every 100ms.
+      Same selector syntax as click/type_text.
+
+  tab.wait_for_idle(*, timeout=5.0, quiet=0.5)                → int
+      Wait for network idle.  Returns settle time in ms.
+      See "Settle loop" below for what "idle" means.
+
+  tab.screenshot(*, full_page=False, path=None)               → bytes | Path
+      Capture screenshot as PNG bytes.  full_page captures the full scrollable
+      page.  If path is given, writes to file and returns the Path.
+
+  tab.cookies()                                               → list[dict]
+      All cookies for this tab via Network.getCookies.
+
+  tab.cdp(method, **params)                                   → dict
+      Raw CDP passthrough — escape hatch for anything not wrapped.
+
+=== Pin + gate bridge ===
+
+  tab.pin(reason='')                → None
+      Inject floating pill UI + beforeunload guard.  Idempotent.
+      Pill shows green dot when connected, amber when awaiting input.
+      Prevents accidental tab close.
+
+  tab.unpin()                       → None
+      Remove pill + guard + heartbeat.
+
+  tab.confirm(prompt, **kw)         → bool
+      Gate routed to pill UI.  Also appears in terminal — first wins.
+
+  tab.choose(prompt, options, **kw) → str
+      Gate routed to pill UI.
+
+  tab.ask(prompt, **kw)             → str
+      Terminal only (no pill UI for text input).
+
+Gates queue — only one rendered at a time in the pill.  Pending count shown.
+Terminal and browser resolve the same Future; first resolution wins.
+
+Heartbeat: kernel beats every 5s by setting window.__repld_hb = Date.now().
+The pill checks every 5s and self-destructs if stale for > 15s.
+Same-origin reload: pill auto-reinjects (heartbeat detects __repld_pill missing
+but origin matches).
+Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
+3 consecutive heartbeat exceptions also exit the loop.
+
+== Tab API (sync, DuckDB-backed) ==
+
+  tab.network(url=, method=, status=, type=, since=, include_assets=False)
+      → Rows (list[Row])
+      Query captured requests from the HAR summary view.
+      url uses LIKE matching — "*" becomes "%".
+      Assets excluded by default (is_asset=false); pass include_assets=True
+      to see them.  Returns max 500 rows, ordered newest-first.
+
+  tab.console(level=, source=, since=)  → Rows
+      Query console messages.  Returns max 200 rows.
+
+  tab.request(request_id)               → dict
+      Full HAR entry as a dict: request/response headers, postData, auth
+      scheme, timing, initiator — everything except the response body.
+
+  tab.body(request_id)                  → dict
+      Response body for a request.  Checks DuckDB first (captured bodies),
+      falls back to Network.getResponseBody CDP call.
+      Returns: {"body": str, "base64Encoded": bool}
+      If unavailable: {"error": "..."}
+
+  row.body()                            → dict
+      Shortcut — calls tab.body(self.request_id) on the row's session.
+
+  tab.clear()                           → None
+      Clear all captured events (network + console) for this tab.
+
+=== Row fields ===
+
+Network rows: id, request_id, redirect_index, protocol, method, status, url,
+  type, size, time_ms, state, pause_stage, paused_id, frames_sent,
+  frames_received, started_datetime, last_activity, target, body_status,
+  mime_family, is_asset, initiator_type, initiator_url
+
+Console rows: id, level, source, text, stack_url, stack_line, stack_function,
+  timestamp, target
+
+Rows is a list subclass with one-entry-per-line repr for grep-friendly output.
+
+=== Full HAR entry fields (via tab.request()) ===
+
+All of the above plus: request_headers, post_data, response_headers, mime_type,
+  timing, error_text, request_cookies, status_text, auth_scheme, auth_cookies,
+  csrf_token_header, curl_command, loader_id, frame_id, initiator_function,
+  initiator_line
+
+== Tab properties ==
+
+  tab.url            str   current URL (from target_info, see staleness note)
+  tab.title          str   page title (from target_info)
+  tab.type           str   "page", "iframe", "service_worker", etc.
+  tab.target_id      str   short ID in "{port}:{6-hex}" format, stable across nav
+  tab.parent_frame_id str  parent frame for iframes
+  tab.capture_bodies bool  toggle Fetch-domain body capture (default True)
+
+Staleness: tab.url and tab.title are read from a cached target_info dict,
+updated only on Target.targetInfoChanged events.  They can be briefly stale
+after navigation — if you need the live URL, use tab.js("location.href").
+
+== Selectors ==
+
+Same syntax across click, tap, type_text, wait_for:
+
+  .css-class, #id, [attr], tag                        CSS (pure CDP, no focus steal)
+  [data-testid='name']                                CSS (recommended for own code)
+  text=Submit                                         visible text match (JS eval)
+  role=button[name="Save"]                            ARIA role + name (JS eval)
+  label=Username                                      input by label (JS eval)
+  button:has-text('OK')                               CSS + text filter (JS eval)
+
+CSS vs JS path:
+  Plain CSS selectors use DOM.querySelector + DOM.getContentQuads for coordinate
+  resolution — pure CDP, no JavaScript eval, no focus steal.  This means typing
+  into a field found by CSS won't dismiss a dropdown or blur another element.
+
+  Custom selectors (text=, role=, label=, :has-text) use Runtime.evaluate to
+  find the element and getBoundingClientRect() for coordinates.  This runs JS
+  in the page, which *can* trigger focus changes.
+
+  For your own code, prefer [data-testid='name'] to keep keyboard/focus intact.
+
+role= expansions:
+  role=button  → button, [role="button"], input[type="button"], input[type="submit"]
+  role=link    → a[href], [role="link"]
+  role=textbox → input:not([type]), input[type="text"], ..., textarea, [role="textbox"]
+  (and checkbox, radio, heading, listitem, tab, tabpanel, option, combobox)
+
+role= name operators:
+  role=button[name="Save"]     exact match (textContent, aria-label, title, value, labels)
+  role=button[name*="Save"]    contains
+  role=button[name^="Save"]    starts with
+
+text= matching: finds visible elements (offsetWidth > 0) where textContent or
+  aria-label matches exactly.  Returns shortest match (avoids matching a parent
+  container that also contains the text).
+
+label= resolution: finds <label> by text, then resolves to the input via
+  htmlFor attribute or querySelector within the label element.
+
+Auto-wait: all selectors auto-wait up to 2s (click/type_text) or the specified
+  timeout (wait_for), polling every 100ms.
+
+== Internals ==
+
+=== Network body capture ===
+
+Fetch domain interception captures request and response bodies proactively.
+Enabled by default (tab.capture_bodies = True).
+
+Request stage: ALL requests are intercepted.  POST/PUT/PATCH bodies are captured
+  via Fetch.getRequestPostData and stored as synthetic Network.requestBodyCaptured
+  events in DuckDB.  This gets the full un-truncated body (Network.requestWillBeSent
+  .postData caps at ~64KB).
+
+Response stage: only URLs matching */api/* and */graphql* are intercepted.
+  Everything else (scripts, images, stylesheets) passes through untouched.
+  Within those patterns, bodies are captured only when:
+    - Status is not a redirect (301, 302, 303, 307, 308 are skipped)
+    - Content-type is not text/event-stream (SSE skipped)
+    - Content-type includes "json"
+    - Content-length is under 500KB (_MAX_BODY_SIZE = 500,000 bytes)
+
+  Captured bodies are replayed to the page via Fetch.fulfillRequest (because
+  Fetch.getResponseBody consumes the internal buffer).
+
+  For non-API URLs, tab.body() falls back to Network.getResponseBody (a CDP
+  call that works for completed requests still in Chrome's resource cache).
+
+  tab.capture_bodies = False disables Fetch interception entirely — all requests
+  pass through without pausing.  Useful when capture latency (~5-15ms per request)
+  is causing issues.
+
+=== Settle loop ===
+
+wait_for_idle() and the MCP observation pipeline use the same settle logic:
+
+  Polls DuckDB every 50ms across all tabs (including iframe children):
+    SELECT COUNT(*) FROM har_entries
+    WHERE state NOT IN ('complete', 'failed', 'redirect', 'closed')
+    AND method != 'WS'
+
+  WebSocket connections are excluded — they stay 'open' indefinitely and would
+  block settle forever.
+
+  Returns when the inflight count is 0 for a continuous quiet period
+  (default 0.5s).  Timeout default is 5s.
+
+  Returns settle time in milliseconds.
+
+=== MCP tools vs exec — settle behavior ===
+
+MCP browser tools (browser_click, browser_type, browser_navigate, etc.) run
+  the full observation pipeline: pre_observe → mutate → settle → post_observe.
+  They automatically wait for network idle and return tree + network delta +
+  console delta.
+
+exec-based mutations (calling tab.click(), tab.type_text() etc. in Python code)
+  do NOT auto-settle.  The method returns as soon as the CDP command completes.
+  If you need to wait for the page to settle after a mutation:
+    await tab.click("button.submit")
+    await tab.wait_for_idle()          # explicit settle
+
+=== Session recovery ===
+
+When Chrome invalidates a CDP session (HMR reload, same-origin navigation that
+destroys the render process), tab methods detect the error and recover:
+
+  Detection: error message contains "session with given id not found" or
+  "no session with given id" (case-insensitive).  Any other RuntimeError
+  propagates immediately.
+
+  Recovery (_reattach):
+    1. Detach old CDPSession from BrowserSession
+    2. Re-attach to the same Chrome target ID (target ID is stable, only the
+       session ID changes)
+    3. Wait for ready signal (CSS or JS, 10s timeout)
+    4. Sleep 0.3s for stability
+    5. Retry the original CDP command once
+
+  If the retry also fails, the error propagates.
+
+=== WebSocket reconnect ===
+
+On WebSocket connection loss (ConnectionClosed, OSError), BrowserSession
+reconnects automatically on the next CDP command:
+  - Opens a new WebSocket to the same Chrome debug port
+  - Re-attaches all previously-tracked targets
+  - Watch patterns survive reconnect
+  - CDPSession objects and their DuckDB event stores are preserved —
+    only Chrome session IDs change (remapped internally)
+  - Serialized by an asyncio Lock to prevent concurrent reconnect races
+
+=== DuckDB event store ===
+
+Each attached tab has its own in-memory DuckDB connection.  All CDP events are
+inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
+
+  Event table: (event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR)
+
+  HAR views (har_entries, har_summary) and console_entries are SQL views
+  created on CDPSession init.  See "Row fields" above for available columns.
+
+  FIFO prune: every 1000 event inserts, checks if count > 50,000.  If so,
+  deletes the oldest batch (at least 5000 events).
+
+  Events survive reconnect (DuckDB is on the CDPSession object, which is
+  preserved).  Events do NOT survive tab close + re-attach — new attachment
+  creates a new CDPSession with a fresh DB.
+
+=== Attachment race guard ===
+
+BrowserSession.attach() tracks in-flight attaches via an _attaching set.  If
+attach() is called concurrently for the same target_id, the second call
+returns None immediately.
+
+== Workflow patterns ==
+
+=== When to use exec vs browser MCP tools ===
+
+Use exec with the browser object when you need to:
+  - Chain multiple operations (fetch → filter → fetch again)
+  - Use Python logic (conditionals, loops, error handling)
+  - Build up state across steps
+  - Do anything with the results beyond displaying them
+
+Use the browser MCP tools (browser_click, browser_network, etc.) for:
+  - Quick single inspections ("what's on this page?")
+  - One-off actions where you don't need the result in Python
+
+=== API discovery workflow ===
+
+When working with a new web app:
+
+  # 1. Attach and watch traffic
+  await browser.watch("*app.example.com*")
+  # → user clicks around in the app to generate traffic
+
+  # 2. See what API calls the app makes
+  tab = await browser.get("*app.example.com*")
+  tab.network(url="*/api/*")
+
+  # 3. Inspect a specific request
+  r = tab.network(url="*/api/users*")[0]
+  r.url, r.method, r.status
+  tab.request(r.request_id)     # full headers, auth scheme, timing
+  r.body()                      # response body (shortcut)
+
+  # 4. Replay the call via tab.fetch() — inherits the browser session
+  users = (await tab.fetch("/api/users"))["body"]
+
+  # 5. Clear old traffic before exploring more
+  tab.clear()
+
+=== Building clients from captured traffic ===
+
+For APIs that use bearer tokens or API keys (auth not tied to cookies):
+
+  r = tab.network(url="*/api/*")[0]
+  token = tab.request(r.request_id)["request_headers"]["Authorization"]
+
+  import urllib.request, json
+  req = urllib.request.Request("https://api.example.com/data",
+      headers={"Authorization": token})
+  data = json.loads(urllib.request.urlopen(req).read())
+
+For APIs that rely on cookies or session state — use tab.fetch(). The
+browser maintains the session; you just call through it.
+
+=== Multi-tab gists (embedded apps) ===
+
+When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
+  - admin tab for navigation (host page)
+  - iframe tab for fetch/js (app context with auth)
+
+After navigating the admin tab, re-acquire the iframe with
+browser.get(pattern, timeout=10) — iframes reload on host navigation.
+Never navigate an iframe directly — it destroys the embedded session.
+"""
 
 
 def build_instructions() -> str:
@@ -515,125 +947,24 @@ Injected into __main__:
 browser is lazy-injected into __main__. Connects to Chrome on first use
 (requires --remote-debugging-port=9222).
 
-=== Getting tabs ===
-
   tab = await browser.get("*example.com*")   # find by URL glob
-  tab = await browser.get("9222:a1b2c3")     # find by target ID
   await browser.watch("*example.com*")       # watch pattern, auto-attach
   tab = await browser.open("https://...")     # open new tab
 
-  # Ready signal — wait for element before returning
-  tab = await browser.get("*localhost*", ready="[data-testid='app-root']")
+  tab.fetch(url, method=, body=, headers=)   # in-page fetch (inherits session)
+  tab.network(url=, method=, status=)        # query captured requests (DuckDB)
+  tab.tree()                                 # accessibility tree
+  tab.click(selector)                        # click (auto-waits, mouse event)
+  tab.type_text(selector, text)              # clear + type (auto-waits)
+  tab.js(code)                               # evaluate JavaScript
 
-browser.get() raises RuntimeError if no matching tab is found.
-browser.open() opens a new tab and navigates to the URL.
-tab.navigate(url) navigates an existing tab (use for same-site navigation;
-use browser.open() when you need a fresh tab).
+Use exec with the browser object for multi-step operations (fetch, filter,
+iterate). Use browser MCP tools for quick one-off inspections.
 
-ready= takes a CSS selector. The tab waits for that element to appear before
-returning. On session loss (HMR, navigation), re-attaches to the same target
-and waits for the ready signal again. navigate() and reload() also wait.
-Convention: add data-testid to your root layout component.
-
-=== Tab API (async) ===
-
-  tab.js(code)                        evaluate JS in page context
-  tab.fetch(url, method=, body=, headers=)
-                                      in-page fetch (inherits session/cookies)
-  tab.tree()                          accessibility tree as text lines
-  tab.click(selector)                 click element (mouse, auto-waits 2s)
-  tab.tap(selector_or_x, y=)          touch tap (fires touchstart/touchend)
-  tab.swipe(x1, y1, x2, y2)          touch scroll
-  tab.type_text(selector, text)       clear + type (auto-waits 2s)
-  tab.wait_for(selector, timeout=5)   wait for element to appear
-  tab.wait_for_idle(timeout=5, quiet=0.5)
-                                      wait for network idle; returns settle ms
-  tab.pin(reason)                     inject status pill + beforeunload guard
-  tab.confirm(prompt) → bool          gate routed to pill UI
-  tab.choose(prompt, options) → str   gate routed to pill UI
-
-CSS selectors (#id, .class, [data-testid]) use pure CDP calls (no JS eval,
-no focus steal). Custom selectors (text=, role=, label=) use Runtime.evaluate.
-For own code, prefer [data-testid='name'] to keep keyboard/focus intact.
-
-=== tab.fetch() return shape ===
-
-tab.fetch() returns a dict:
-  {"status": 200, "headers": {...}, "body": <parsed JSON or text>}
-
-body is auto-parsed as JSON if the content-type is application/json,
-otherwise returned as a string. Access the data with ["body"].
-
-If the request fails (network error, timeout), tab.fetch() raises
-RuntimeError with the error message.
-
-=== Tab API (sync, DuckDB-backed) ===
-
-  tab.network(url=, method=, status=) query captured requests (list of rows)
-  tab.request(request_id)             full request details
-  tab.body(request_id)                response body (str or bytes)
-  tab.clear()                         reset captured network/console data
-
-Each row from tab.network() has: .id, .url, .method, .status,
-.request_headers, .response_headers, .timestamp, .duration_ms.
-
-=== Selectors ===
-
-CSS, text=Label, role=button[name='OK'], label=Name,
-button:has-text('OK'). Same syntax across click, type_text, wait_for.
-
-=== When to use exec vs browser MCP tools ===
-
-Use exec with the browser object when you need to:
-  - Chain multiple operations (fetch → filter → fetch again)
-  - Use Python logic (conditionals, loops, error handling)
-  - Build up state across steps
-  - Do anything with the results beyond displaying them
-
-Use the browser MCP tools (browser_click, browser_network, etc.) for:
-  - Quick single inspections ("what's on this page?")
-  - One-off actions where you don't need the result in Python
-
-=== API discovery workflow ===
-
-When working with a new web app:
-
-  # 1. Attach and watch traffic
-  await browser.watch("*app.example.com*")
-  # → user clicks around in the app to generate traffic
-
-  # 2. See what API calls the app makes
-  tab = await browser.get("*app.example.com*")
-  tab.network(url="*/api/*")
-
-  # 3. Inspect a specific request
-  r = tab.network(url="*/api/users*")[0]
-  r.url, r.method, r.status
-  r.request_headers    # see auth headers
-  tab.body(r.id)       # see response body
-
-  # 4. Replay the call via tab.fetch() — inherits the browser session
-  users = (await tab.fetch("/api/users"))["body"]
-
-  # 5. Clear old traffic before exploring more
-  tab.clear()
-
-=== Building clients from captured traffic ===
-
-For APIs that use bearer tokens or API keys (auth not tied to cookies):
-
-  # Extract auth from captured traffic
-  r = tab.network(url="*/api/*")[0]
-  token = r.request_headers["Authorization"]
-
-  # Build a standalone client — works outside the browser
-  import urllib.request, json
-  req = urllib.request.Request("https://api.example.com/data",
-      headers={"Authorization": token})
-  data = json.loads(urllib.request.urlopen(req).read())
-
-For APIs that rely on cookies or session state — use tab.fetch(). The
-browser maintains the session; you just call through it.
+Read repld://docs/browser for the full API reference, internals (settle loop,
+body capture patterns, selector dispatch, session recovery, DuckDB event
+store), and workflow patterns (API discovery, building clients, multi-tab
+gists).
 
 == Gists ==
 

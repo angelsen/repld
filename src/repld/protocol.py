@@ -389,7 +389,13 @@ _DOC_RESOURCES = [
     {
         "uri": "repld://docs/guide",
         "name": "repld-guide",
-        "description": "Working guide: execution model, browser API, gist patterns, conventions. Read before writing gists.",
+        "description": "Working guide: execution model, gist patterns, conventions. Read before writing gists.",
+        "mimeType": "text/plain",
+    },
+    {
+        "uri": "repld://docs/browser",
+        "name": "repld-browser",
+        "description": "Browser API reference, internals (capture, settle, selectors, session recovery), and workflow patterns.",
         "mimeType": "text/plain",
     },
 ]
@@ -888,6 +894,10 @@ class Dispatcher:
                 from .help import GUIDE
 
                 text = GUIDE
+            elif uri == "repld://docs/browser":
+                from .help import BROWSER_GUIDE
+
+                text = BROWSER_GUIDE
             elif uri == "repld://browser/tabs":
                 text = self._resource_tabs()
             elif uri == "repld://browser/network":
