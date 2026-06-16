@@ -558,9 +558,36 @@ ORDER BY rowid DESC
 """
 
 
+_SSE_ENTRIES_SQL = """
+CREATE OR REPLACE VIEW sse_entries AS
+SELECT
+    rowid as id,
+    p.requestId as request_id,
+    p.eventName as event_name,
+    p.eventId as event_id,
+    p.data as data,
+    p.timestamp as timestamp,
+    target
+FROM (
+    SELECT rowid, target,
+        (json_transform(event, '{"params": {
+            "requestId": "VARCHAR",
+            "eventName": "VARCHAR",
+            "eventId": "VARCHAR",
+            "data": "VARCHAR",
+            "timestamp": "VARCHAR"
+        }}')).params as p
+    FROM events
+    WHERE method = 'Network.eventSourceMessageReceived'
+) t
+ORDER BY rowid ASC
+"""
+
+
 def _create_views(db_execute) -> None:
-    """Create all HAR and console views. Called from CDPSession init."""
+    """Create all HAR, console, and SSE views. Called from CDPSession init."""
     db_execute(_HAR_ENTRIES_SQL)
     db_execute(_HAR_SUMMARY_SQL)
     db_execute(_CONSOLE_ENTRIES_SQL)
-    logger.debug("HAR + console views created")
+    db_execute(_SSE_ENTRIES_SQL)
+    logger.debug("HAR + console + SSE views created")

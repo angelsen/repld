@@ -54,8 +54,10 @@ class CDPSession:
         target_info: dict,
         port: int,
         loop: asyncio.AbstractEventLoop | None = None,
+        send_nowait: Any = None,  # BrowserSession.send_nowait bound method
     ) -> None:
         self._send = send
+        self._send_nowait = send_nowait or send
         self._loop = loop
         self._session_id = session_id
         self.target_info = target_info
@@ -106,6 +108,8 @@ class CDPSession:
         from .capture import enable as fetch_enable
 
         for method in (
+            "Inspector.enable",
+            "DOM.enable",
             "Page.enable",
             "Network.enable",
             "Runtime.enable",
@@ -136,6 +140,14 @@ class CDPSession:
     ) -> dict:
         """Execute a CDP command on this session."""
         return await self._send(method, params, self._session_id, timeout)
+
+    async def send_nowait(
+        self,
+        method: str,
+        params: dict | None = None,
+    ) -> None:
+        """Send a CDP command without awaiting the response."""
+        return await self._send_nowait(method, params, self._session_id)
 
     # ------------------------------------------------------------------
     # Event handling (sync — called from recv loop on asyncio thread)

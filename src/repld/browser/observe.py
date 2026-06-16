@@ -63,7 +63,7 @@ LEAF_ROLES: frozenset[str] = frozenset(
 
 # Asset MIME families / type patterns
 ASSET_TYPES: frozenset[str] = frozenset(
-    {"image", "font", "stylesheet", "script", "media", "other", "manifest", "wasm"}
+    {"image", "font", "stylesheet", "script", "media", "manifest", "wasm"}
 )
 
 

@@ -2,11 +2,10 @@
 
 Enables Fetch domain interception on attach. Captures:
 - Request POST bodies (all requests)
-- Response bodies (JSON API responses only, < 500KB)
+- Response bodies (any response under 500KB)
 
-Large responses, assets, and streams pass through untouched via
-continueResponse — only small JSON bodies are read and replayed
-via fulfillRequest.
+SSE streams pass through untouched (infinite body). Captured bodies
+are replayed to the page via fulfillRequest.
 """
 
 import asyncio
@@ -30,11 +29,7 @@ async def enable(session: CDPSession) -> None:
         {
             "patterns": [
                 {"urlPattern": "*", "requestStage": "Request"},
-                # Response-stage: only API paths, not assets/scripts/images.
-                # Captures JSON bodies proactively; everything else uses
-                # Network.getResponseBody on demand.
-                {"urlPattern": "*/api/*", "requestStage": "Response"},
-                {"urlPattern": "*/graphql*", "requestStage": "Response"},
+                {"urlPattern": "*", "requestStage": "Response"},
             ]
         },
     )
@@ -75,19 +70,23 @@ async def handle_paused(session: CDPSession, params: dict) -> None:
 async def _fast_continue(
     session: CDPSession, request_id: str, is_response: bool
 ) -> None:
-    """Continue a paused request without body capture."""
+    """Continue a paused request without body capture.
+
+    Uses send_nowait — no roundtrip wait for Chrome's ack.
+    """
     method = "Fetch.continueResponse" if is_response else "Fetch.continueRequest"
     try:
-        await session.execute(method, {"requestId": request_id})
+        await session.send_nowait(method, {"requestId": request_id})
     except Exception as exc:
         logger.debug("fast_continue %s: %s", request_id, exc)
 
 
 def _should_capture_body(params: dict) -> bool:
-    """Decide whether to capture a response body based on headers.
+    """Decide whether to capture a response body.
 
-    Captures JSON responses under 500KB.  Skips redirects, SSE, assets,
-    and anything too large — those pass through untouched.
+    Captures any response under 500KB.  Skips redirects (CDP puts them
+    in kRedirectReceived state — getResponseBody errors) and SSE
+    (infinite stream — getResponseBody blocks forever).
     """
     status = params.get("responseStatusCode", 0)
     if status in (301, 302, 303, 307, 308):
@@ -109,9 +108,6 @@ def _should_capture_body(params: dict) -> bool:
     if "text/event-stream" in content_type:
         return False
 
-    if "json" not in content_type:
-        return False
-
     if 0 < content_length > _MAX_BODY_SIZE:
         return False
 
@@ -121,9 +117,9 @@ def _should_capture_body(params: dict) -> bool:
 async def _handle_response(
     session: CDPSession, request_id: str, network_id: str, params: dict
 ) -> None:
-    """Response stage: capture body for JSON API responses, pass through the rest."""
+    """Response stage: capture body if under size cap, pass through the rest."""
     if not _should_capture_body(params):
-        await session.execute("Fetch.continueResponse", {"requestId": request_id})
+        await session.send_nowait("Fetch.continueResponse", {"requestId": request_id})
         return
 
     status_code = params.get("responseStatusCode", 200)
@@ -176,7 +172,7 @@ async def _handle_response(
 
     # Fallback: body empty or fulfillRequest failed — let original through
     try:
-        await session.execute("Fetch.continueResponse", {"requestId": request_id})
+        await session.send_nowait("Fetch.continueResponse", {"requestId": request_id})
     except Exception as exc:
         logger.debug("continueResponse fallback %s: %s", request_id, exc)
 
@@ -205,7 +201,7 @@ async def _handle_request(
     if post_data:
         _store_request_body(session, network_id, post_data)
 
-    await session.execute("Fetch.continueRequest", {"requestId": request_id})
+    await session.send_nowait("Fetch.continueRequest", {"requestId": request_id})
 
 
 def _store_request_body(session: CDPSession, network_id: str, body: str) -> None:

@@ -12,7 +12,14 @@ import pathlib
 from typing import Any
 
 from .cdp import CDPSession
-from .row import Row, Rows, _dict_from_har_entry, _row_from_console, _row_from_har
+from .row import (
+    Row,
+    Rows,
+    _dict_from_har_entry,
+    _row_from_console,
+    _row_from_har,
+    _row_from_sse,
+)
 from .selector import resolve as _resolve_selector
 
 __all__ = ["Tab", "BrowserJSError"]
@@ -1070,8 +1077,39 @@ class Tab:
         )
         return Rows(_row_from_console(r, self._session) for r in rows)
 
+    def sse(
+        self,
+        *,
+        url: str | None = None,
+        event_name: str | None = None,
+        since: float | None = None,
+    ) -> list[Row]:
+        """Query SSE (EventSource) messages received on this tab."""
+        conditions: list[str] = []
+        bind_params: list[Any] = []
+
+        if url:
+            like_pattern = url.replace("*", "%")
+            if not like_pattern.startswith("%"):
+                like_pattern = "%" + like_pattern
+            if not like_pattern.endswith("%"):
+                like_pattern = like_pattern + "%"
+            conditions.append(
+                "request_id IN (SELECT request_id FROM har_summary WHERE url LIKE ?)"
+            )
+            bind_params.append(like_pattern)
+        if event_name:
+            conditions.append("event_name = ?")
+            bind_params.append(event_name)
+        if since is not None:
+            conditions.append("CAST(timestamp AS DOUBLE) >= ?")
+            bind_params.append(since)
+
+        rows = self._filtered_query("sse_entries", conditions, bind_params, "LIMIT 500")
+        return Rows(_row_from_sse(r, self._session) for r in rows)
+
     def clear(self) -> None:
-        """Clear all captured events (network + console) for this tab."""
+        """Clear all captured events (network + console + SSE) for this tab."""
         self._session.clear_events()
 
     def body(self, request_id: str | int) -> dict:

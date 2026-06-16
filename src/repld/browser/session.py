@@ -288,6 +288,31 @@ class BrowserSession:
             self._pending.pop(msg_id, None)
             raise
 
+    async def send_nowait(
+        self,
+        method: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        """Send a CDP command without awaiting the response.
+
+        For fire-and-forget commands (Fetch.continueResponse, etc.) where
+        the result is always empty and the latency of the roundtrip is waste.
+        """
+        if self._ws is None:
+            raise RuntimeError("BrowserSession not connected")
+
+        msg_id = self._next_id
+        self._next_id += 1
+
+        msg: dict[str, Any] = {"id": msg_id, "method": method}
+        if params:
+            msg["params"] = params
+        if session_id:
+            msg["sessionId"] = session_id
+
+        await self._ws.send(json.dumps(msg))
+
     # ------------------------------------------------------------------
     # Target management
     # ------------------------------------------------------------------
@@ -331,6 +356,7 @@ class BrowserSession:
                 target_info,
                 self.port,
                 loop=asyncio.get_running_loop(),
+                send_nowait=self.send_nowait,
             )
             self._sessions[session_id] = cdp
             asyncio.create_task(
@@ -432,7 +458,14 @@ class BrowserSession:
             fut = self._pending.pop(msg_id, None)
             if fut and not fut.done():
                 if "error" in data:
-                    fut.set_exception(RuntimeError(str(data["error"])))
+                    err = data["error"]
+                    if isinstance(err, dict):
+                        msg = err.get("message", str(err))
+                        if "data" in err:
+                            msg = f"{msg} ({err['data']})"
+                    else:
+                        msg = str(err)
+                    fut.set_exception(RuntimeError(msg))
                 else:
                     fut.set_result(data.get("result", {}))
 

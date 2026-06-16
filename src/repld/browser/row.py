@@ -47,6 +47,11 @@ class Row:
     stack_function: str | None = None
     timestamp: str | None = None
 
+    # SSE fields (None = not an SSE row)
+    event_name: str | None = None
+    event_id: str | None = None
+    data: str | None = None
+
     # Back-reference for .body()
     _session: CDPSession | None = None
 
@@ -70,6 +75,10 @@ class Row:
                 if self.stack_line:
                     loc += f":{self.stack_line}"
             return f"<Console {self.level}: {text}{loc}>"
+        if self.data is not None:
+            data = self.data if len(self.data) <= 200 else self.data[:200] + "…"
+            name = f" {self.event_name}" if self.event_name else ""
+            return f"<SSE{name}: {data}>"
         return f"<Row id={self.id}>"
 
 
@@ -130,6 +139,22 @@ def _row_from_console(cols: tuple, session: CDPSession) -> Row:
         stack_function=cols[6],
         timestamp=cols[7],
         target=cols[8] or "",
+        _session=session,
+    )
+
+
+def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
+    """Build a Row from an sse_entries query result tuple."""
+    # sse_entries columns: id, request_id, event_name, event_id, data,
+    #   timestamp, target
+    return Row(
+        id=cols[0] or 0,
+        request_id=cols[1] or "",
+        event_name=cols[2] or "",
+        event_id=cols[3] or "",
+        data=cols[4] if cols[4] is not None else "",
+        timestamp=cols[5],
+        target=cols[6] or "",
         _session=session,
     )
 

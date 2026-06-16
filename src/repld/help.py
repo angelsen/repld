@@ -235,6 +235,14 @@ Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
   tab.console(level=, source=, since=)  → Rows
       Query console messages.  Returns max 200 rows.
 
+  tab.sse(url=, event_name=, since=)    → Rows
+      Query SSE (EventSource) messages.  Each row has: request_id,
+      event_name, event_id, data, timestamp.  Chrome parses the stream
+      and fires Network.eventSourceMessageReceived per message — no
+      manual parsing needed.  Returns max 500 rows, oldest-first.
+      NOTE: only captures EventSource API connections, not fetch()-based
+      SSE streams (common in modern apps for POST/custom-header SSE).
+
   tab.request(request_id)               → dict
       Full HAR entry as a dict: request/response headers, postData, auth
       scheme, timing, initiator — everything except the response body.
@@ -260,6 +268,8 @@ Network rows: id, request_id, redirect_index, protocol, method, status, url,
 
 Console rows: id, level, source, text, stack_url, stack_line, stack_function,
   timestamp, target
+
+SSE rows: id, request_id, event_name, event_id, data, timestamp, target
 
 Rows is a list subclass with one-entry-per-line repr for grep-friendly output.
 
@@ -338,23 +348,21 @@ Request stage: ALL requests are intercepted.  POST/PUT/PATCH bodies are captured
   events in DuckDB.  This gets the full un-truncated body (Network.requestWillBeSent
   .postData caps at ~64KB).
 
-Response stage: only URLs matching */api/* and */graphql* are intercepted.
-  Everything else (scripts, images, stylesheets) passes through untouched.
-  Within those patterns, bodies are captured only when:
-    - Status is not a redirect (301, 302, 303, 307, 308 are skipped)
-    - Content-type is not text/event-stream (SSE skipped)
-    - Content-type includes "json"
+Response stage: ALL responses are intercepted.  Bodies are captured when:
+    - Status is not a redirect (301-308 — Chrome puts redirects in
+      kRedirectReceived state; Fetch.getResponseBody errors on them)
+    - Content-type is not text/event-stream (SSE is an infinite stream —
+      Fetch.getResponseBody would block forever)
     - Content-length is under 500KB (_MAX_BODY_SIZE = 500,000 bytes)
 
   Captured bodies are replayed to the page via Fetch.fulfillRequest (because
   Fetch.getResponseBody consumes the internal buffer).
 
-  For non-API URLs, tab.body() falls back to Network.getResponseBody (a CDP
-  call that works for completed requests still in Chrome's resource cache).
+  Non-captured responses (assets, redirects, SSE) use fire-and-forget continue
+  commands (no roundtrip wait).  Body captures still await the CDP response.
 
   tab.capture_bodies = False disables Fetch interception entirely — all requests
-  pass through without pausing.  Useful when capture latency (~5-15ms per request)
-  is causing issues.
+  pass through without pausing.
 
 === Settle loop ===
 
@@ -423,8 +431,8 @@ inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
 
   Event table: (event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR)
 
-  HAR views (har_entries, har_summary) and console_entries are SQL views
-  created on CDPSession init.  See "Row fields" above for available columns.
+  HAR views (har_entries, har_summary), console_entries, and sse_entries are
+  SQL views created on CDPSession init.  See "Row fields" above for columns.
 
   FIFO prune: every 1000 event inserts, checks if count > 50,000.  If so,
   deletes the oldest batch (at least 5000 events).
@@ -675,6 +683,7 @@ Tab (sync — DuckDB queries):
   tab.request(request_id)                                              → dict
   tab.body(request_id)                                                 → dict
   tab.console(level=, source=, since=)                                 → Rows
+  tab.sse(url=, event_name=, since=)                                   → Rows
   tab.clear()                                                          → None
 
   row.body()                             → dict (response body for a Row)
