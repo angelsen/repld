@@ -64,6 +64,23 @@ class Browser:
         self._session: BrowserSession = BrowserSession(self.port)
         self._connected: bool = False
 
+    @classmethod
+    def from_profile(cls, path: str) -> "Browser":
+        """Connect to a Chrome instance by its user-data-dir.
+
+        Reads the debug port from DevToolsActivePort (written by Chrome
+        when launched with --remote-debugging-port).
+        """
+        port_file = os.path.join(path, "DevToolsActivePort")
+        try:
+            with open(port_file) as f:
+                port = int(f.readline().strip())
+        except (FileNotFoundError, ValueError) as exc:
+            raise RuntimeError(
+                f"No DevToolsActivePort in {path} — is Chrome running with --remote-debugging-port?"
+            ) from exc
+        return cls(port=port)
+
     async def _ensure_connected(self) -> None:
         if not self._connected:
             await self._session.connect()

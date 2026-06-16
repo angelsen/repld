@@ -96,6 +96,7 @@ object.  Read this instead of diving into source code.
   browser.detach()                                   # detach everything
   browser.clear(target=)                             # clear all captured data
 
+  b = Browser.from_profile("/tmp/my-chrome")          # connect by user-data-dir
   browser.disconnect()                               # close WebSocket
 
 Quirks:
@@ -106,6 +107,9 @@ Quirks:
     them — returns only tabs that appear *after* the call.
   - open() creates a tab via Target.createTarget, waits for attach, sleeps 0.3s
     for the page to settle before returning.
+  - Browser.from_profile(path) reads DevToolsActivePort from a Chrome
+    user-data-dir to discover the debug port.  Works with --remote-debugging-port=0
+    (random port) — Chrome writes the actual port to that file on startup.
 
 === ready= parameter ===
 
@@ -681,6 +685,7 @@ Tab properties:
   tab.capture_bodies = False             bool  toggle Fetch-domain body capture
 
 Browser:
+  Browser.from_profile(path)                     → Browser  (read port from DevToolsActivePort)
   browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
   browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
   browser.open(url)                              → Tab
