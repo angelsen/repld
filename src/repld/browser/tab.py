@@ -18,6 +18,7 @@ from .row import (
     _dict_from_har_entry,
     _row_from_console,
     _row_from_har,
+    _row_from_lifecycle,
     _row_from_sse,
 )
 from .selector import resolve as _resolve_selector
@@ -1108,8 +1109,36 @@ class Tab:
         rows = self._filtered_query("sse_entries", conditions, bind_params, "LIMIT 500")
         return Rows(_row_from_sse(r, self._session) for r in rows)
 
+    def lifecycle(
+        self,
+        *,
+        name: str | None = None,
+        since: float | None = None,
+    ) -> list[Row]:
+        """Query Page.lifecycleEvent events for this tab.
+
+        Event names (from Chromium source):
+          init, DOMContentLoaded, load, firstPaint, firstContentfulPaint,
+          firstImagePaint, firstMeaningfulPaintCandidate, firstMeaningfulPaint,
+          networkAlmostIdle, networkIdle, InteractiveTime, commit (catch-up only)
+        """
+        conditions: list[str] = []
+        bind_params: list[Any] = []
+
+        if name:
+            conditions.append("name = ?")
+            bind_params.append(name)
+        if since is not None:
+            conditions.append("CAST(timestamp AS DOUBLE) >= ?")
+            bind_params.append(since)
+
+        rows = self._filtered_query(
+            "lifecycle_entries", conditions, bind_params, "LIMIT 500"
+        )
+        return Rows(_row_from_lifecycle(r, self._session) for r in rows)
+
     def clear(self) -> None:
-        """Clear all captured events (network + console + SSE) for this tab."""
+        """Clear all captured events (network + console + SSE + lifecycle) for this tab."""
         self._session.clear_events()
 
     def body(self, request_id: str | int) -> dict:

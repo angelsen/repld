@@ -584,10 +584,35 @@ ORDER BY rowid ASC
 """
 
 
+_LIFECYCLE_ENTRIES_SQL = """
+CREATE OR REPLACE VIEW lifecycle_entries AS
+SELECT
+    rowid as id,
+    p.frameId as frame_id,
+    p.loaderId as loader_id,
+    p.name as name,
+    p.timestamp as timestamp,
+    target
+FROM (
+    SELECT rowid, target,
+        (json_transform(event, '{"params": {
+            "frameId": "VARCHAR",
+            "loaderId": "VARCHAR",
+            "name": "VARCHAR",
+            "timestamp": "VARCHAR"
+        }}')).params as p
+    FROM events
+    WHERE method = 'Page.lifecycleEvent'
+) t
+ORDER BY rowid ASC
+"""
+
+
 def _create_views(db_execute) -> None:
-    """Create all HAR, console, and SSE views. Called from CDPSession init."""
+    """Create all HAR, console, SSE, and lifecycle views. Called from CDPSession init."""
     db_execute(_HAR_ENTRIES_SQL)
     db_execute(_HAR_SUMMARY_SQL)
     db_execute(_CONSOLE_ENTRIES_SQL)
     db_execute(_SSE_ENTRIES_SQL)
-    logger.debug("HAR + console + SSE views created")
+    db_execute(_LIFECYCLE_ENTRIES_SQL)
+    logger.debug("HAR + console + SSE + lifecycle views created")

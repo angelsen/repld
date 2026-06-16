@@ -256,8 +256,17 @@ Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
   row.body()                            → dict
       Shortcut — calls tab.body(self.request_id) on the row's session.
 
+  tab.lifecycle(name=, since=)           → Rows
+      Query Page.lifecycleEvent events.  Each row has: frame_id, loader_id,
+      name, timestamp.  Requires Page.setLifecycleEventsEnabled (auto-enabled
+      on attach).  Chrome replays already-fired events on late attach.
+      Event names: init, DOMContentLoaded, load, firstPaint,
+      firstContentfulPaint, firstImagePaint, firstMeaningfulPaintCandidate,
+      firstMeaningfulPaint, networkAlmostIdle, networkIdle, InteractiveTime,
+      commit (catch-up only).
+
   tab.clear()                           → None
-      Clear all captured events (network + console) for this tab.
+      Clear all captured events for this tab.
 
 === Row fields ===
 
@@ -270,6 +279,8 @@ Console rows: id, level, source, text, stack_url, stack_line, stack_function,
   timestamp, target
 
 SSE rows: id, request_id, event_name, event_id, data, timestamp, target
+
+Lifecycle rows: id, frame_id, loader_id, name, timestamp, target
 
 Rows is a list subclass with one-entry-per-line repr for grep-friendly output.
 
@@ -431,8 +442,8 @@ inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
 
   Event table: (event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR)
 
-  HAR views (har_entries, har_summary), console_entries, and sse_entries are
-  SQL views created on CDPSession init.  See "Row fields" above for columns.
+  HAR views (har_entries, har_summary), console_entries, sse_entries, and
+  lifecycle_entries are SQL views created on CDPSession init.
 
   FIFO prune: every 1000 event inserts, checks if count > 50,000.  If so,
   deletes the oldest batch (at least 5000 events).
@@ -684,6 +695,7 @@ Tab (sync — DuckDB queries):
   tab.body(request_id)                                                 → dict
   tab.console(level=, source=, since=)                                 → Rows
   tab.sse(url=, event_name=, since=)                                   → Rows
+  tab.lifecycle(name=, since=)                                         → Rows
   tab.clear()                                                          → None
 
   row.body()                             → dict (response body for a Row)

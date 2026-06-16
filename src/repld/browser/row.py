@@ -52,6 +52,11 @@ class Row:
     event_id: str | None = None
     data: str | None = None
 
+    # Lifecycle fields (None = not a lifecycle row)
+    frame_id: str | None = None
+    loader_id: str | None = None
+    name: str | None = None
+
     # Back-reference for .body()
     _session: CDPSession | None = None
 
@@ -79,6 +84,8 @@ class Row:
             data = self.data if len(self.data) <= 200 else self.data[:200] + "…"
             name = f" {self.event_name}" if self.event_name else ""
             return f"<SSE{name}: {data}>"
+        if self.name is not None:
+            return f"<Lifecycle {self.name}>"
         return f"<Row id={self.id}>"
 
 
@@ -155,6 +162,20 @@ def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
         data=cols[4] if cols[4] is not None else "",
         timestamp=cols[5],
         target=cols[6] or "",
+        _session=session,
+    )
+
+
+def _row_from_lifecycle(cols: tuple, session: CDPSession) -> Row:
+    """Build a Row from a lifecycle_entries query result tuple."""
+    # lifecycle_entries columns: id, frame_id, loader_id, name, timestamp, target
+    return Row(
+        id=cols[0] or 0,
+        frame_id=cols[1] or "",
+        loader_id=cols[2] or "",
+        name=cols[3] or "",
+        timestamp=cols[4],
+        target=cols[5] or "",
         _session=session,
     )
 

@@ -121,6 +121,12 @@ class CDPSession:
             except Exception as exc:
                 logger.debug("Domain enable %s: %s", method, exc)
 
+        # Lifecycle events require a separate enable (Page.enable alone is not enough)
+        try:
+            await self.execute("Page.setLifecycleEventsEnabled", {"enabled": True})
+        except Exception as exc:
+            logger.debug("Page.setLifecycleEventsEnabled: %s", exc)
+
         # Enable Fetch body capture
         if self.capture_bodies:
             try:
