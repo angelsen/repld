@@ -259,6 +259,25 @@ linked (from other projects):
 				<div class="install big" data-reveal>
 					<code><span class="dim">$</span> uv tool install repld-tool</code>
 				</div>
+				<div class="journey" data-reveal>
+					<a href={`${base}quickstart`} class="journey-card">
+						<span class="journey-label">Start here</span>
+						<span class="journey-title">Quickstart</span>
+						<span class="journey-desc">How to talk to Claude when repld is connected</span>
+					</a>
+					<span class="journey-arrow"><Icon name="right-arrow" size="1.2em" /></span>
+					<a href={`${base}playbook`} class="journey-card">
+						<span class="journey-label">Then read</span>
+						<span class="journey-title">The Playbook</span>
+						<span class="journey-desc">Prototype interactive, extract gists, wire triggers</span>
+					</a>
+					<span class="journey-arrow"><Icon name="right-arrow" size="1.2em" /></span>
+					<a href={`${base}production`} class="journey-card">
+						<span class="journey-label">When ready</span>
+						<span class="journey-title">Production</span>
+						<span class="journey-desc">Graduate gists to FastMCP or FastAPI</span>
+					</a>
+				</div>
 				<p class="outro-links" data-reveal>
 					<a href={`${base}docs/`}>read the docs <Icon name="right-arrow" size="1em" /></a>
 				</p>
@@ -867,6 +886,57 @@ linked (from other projects):
 				font-size: clamp(2.4rem, 5vw, 4rem);
 				margin-bottom: 40px;
 			}
+			.journey {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 16px;
+				margin-top: 48px;
+			}
+			.journey-card {
+				border: 1px solid var(--color-line);
+				background: var(--color-panel);
+				border-radius: 10px;
+				padding: 20px 22px;
+				text-decoration: none;
+				text-align: left;
+				max-width: 220px;
+				display: flex;
+				flex-direction: column;
+				gap: 6px;
+				transition: border-color 0.2s, transform 0.2s;
+			}
+			.journey-card:hover {
+				border-color: rgb(60 232 130 / 0.4);
+				transform: translateY(-3px);
+			}
+			.journey-label {
+				font-size: 10px;
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+				color: var(--color-accent);
+			}
+			.journey-title {
+				font-family: var(--font-display);
+				font-weight: 700;
+				font-size: 16px;
+				color: var(--color-bright);
+			}
+			.journey-desc {
+				font-size: 12.5px;
+				color: var(--color-muted);
+				line-height: 1.5;
+			}
+			.journey-arrow {
+				color: var(--color-muted);
+				opacity: 0.4;
+				display: flex;
+				align-items: center;
+			}
+			.journey-arrow :global(svg) {
+				width: 1.2em;
+				height: 1.2em;
+			}
 			.outro-links {
 				margin-top: 28px;
 			}
@@ -894,6 +964,17 @@ linked (from other projects):
 
 			/* ---------- mobile ---------- */
 			@media (max-width: 900px) {
+				.journey {
+					flex-direction: column;
+					gap: 12px;
+				}
+				.journey-card {
+					max-width: 100%;
+					width: 100%;
+				}
+				.journey-arrow {
+					transform: rotate(90deg);
+				}
 				.hero {
 					grid-template-columns: minmax(0, 1fr);
 					gap: 44px;

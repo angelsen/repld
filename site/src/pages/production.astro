@@ -322,6 +322,30 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 				</div>
 			</section>
 
+			<!-- ==================== nudge claude ==================== -->
+			<section class="section" data-anim>
+				<div class="section-label"><span class="dot"></span>nudge claude</div>
+				<h2 class="display sm">Say this when you're ready.</h2>
+				<p class="body-text">
+					Claude reads the production guide on demand. One line sets the context
+					for the whole graduation conversation.
+				</p>
+				<div class="nudge-grid" data-reveal>
+					<div class="nudge">
+						<p class="nudge-when">Starting the conversation</p>
+						<p class="nudge-say">"Read repld://docs/production — let's graduate this gist"</p>
+					</div>
+					<div class="nudge">
+						<p class="nudge-when">Standalone service</p>
+						<p class="nudge-say">"Set up a FastMCP server for this gist — no browser needed"</p>
+					</div>
+					<div class="nudge">
+						<p class="nudge-when">Browser-backed service</p>
+						<p class="nudge-say">"Graduate this to FastAPI with repld-tool[browser]"</p>
+					</div>
+				</div>
+			</section>
+
 			<!-- ==================== outro ==================== -->
 			<section class="outro" data-anim>
 				<blockquote data-reveal>
@@ -708,6 +732,42 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 				opacity: 0.5;
 			}
 
+			/* ========== nudge grid ========== */
+			.nudge-grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 14px;
+				margin-top: 8px;
+			}
+			.nudge {
+				border: 1px solid var(--color-line);
+				background: var(--color-panel);
+				border-radius: 10px;
+				padding: 20px 18px;
+				display: flex;
+				flex-direction: column;
+				gap: 10px;
+				transition:
+					border-color 0.2s,
+					transform 0.2s;
+			}
+			.nudge:hover {
+				border-color: rgb(60 232 130 / 0.35);
+				transform: translateY(-2px);
+			}
+			.nudge-when {
+				font-size: 11px;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--color-muted);
+			}
+			.nudge-say {
+				color: var(--color-bright);
+				font-size: 14px;
+				line-height: 1.5;
+				font-style: italic;
+			}
+
 			/* ========== outro ========== */
 			.outro {
 				padding: 72px 0 120px;
@@ -762,7 +822,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 					grid-template-columns: minmax(0, 1fr);
 					gap: 28px;
 				}
-				.compare {
+				.compare,
+				.nudge-grid {
 					grid-template-columns: minmax(0, 1fr);
 				}
 				.hero {
