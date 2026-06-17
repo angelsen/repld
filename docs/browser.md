@@ -1,6 +1,6 @@
 # repld[browser] — design
 
-Working spec for the browser extra. Not shipped. Folds back into README once v1 lands.
+Design spec for the browser extra. Shipped as `repld[browser]` — see README for user-facing docs.
 
 ## Premise
 
