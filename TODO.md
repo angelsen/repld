@@ -10,6 +10,10 @@
 
 - [ ] `__repld_tools__` dict shorthand — allow `{"name": {"function": fn_ref, "description": "...", "parameters": {...}}}` and resolve function refs at import time, so gist authors don't need the `_tool_` naming convention
 
+## Screenshot / vision
+
+- [ ] Chunked screenshots — tile full-page and ultrawide captures into overlapping viewport-sized chunks (each ≤1440x900 token budget) instead of scaling down to unreadable sizes. Heuristic: chunk when either dimension would shrink below ~600px. Agent gets an array of images.
+
 ## Features (from session 002 backlog)
 
 - [x] `tab.wait_for_idle()` — network-quiet without full observation pipeline (already implemented)

@@ -29,9 +29,9 @@ __all__ = ["Tab", "BrowserJSError"]
 # Anthropic vision API resize — ported from resize.rs via nanokvm client.
 # Pre-sizes to the API's token grid so the model sees exactly what we send.
 # ---------------------------------------------------------------------------
-_MAX_PX = 1568
+_MAX_PX = 1440
 _PX_PER_TOKEN = 28
-_MAX_TOKENS = 1568
+_MAX_TOKENS = 1716  # ceil(1440/28) * ceil(900/28) = 52*33
 
 
 def _model_dims(w: int, h: int) -> tuple[int, int]:
