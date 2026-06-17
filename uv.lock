@@ -63,7 +63,7 @@ wheels = [
 
 [[package]]
 name = "repld-tool"
-version = "0.0.19"
+version = "0.0.20"
 source = { editable = "." }
 
 [package.optional-dependencies]
