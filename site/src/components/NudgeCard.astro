@@ -1,0 +1,54 @@
+---
+interface Props {
+	when: string;
+	say: string;
+	uri?: string;
+}
+
+const { when, say, uri } = Astro.props;
+---
+
+<div class="nudge">
+	<p class="nudge-when">{when}</p>
+	<p class="nudge-say">{say}</p>
+	{uri && <code class="c">{uri}</code>}
+</div>
+
+<style>
+	.nudge {
+		border: 1px solid var(--color-line);
+		background: var(--color-panel);
+		border-radius: 10px;
+		padding: 20px 18px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		transition:
+			border-color 0.2s,
+			transform 0.2s,
+			box-shadow 0.2s;
+	}
+	.nudge:hover {
+		border-color: var(--accent-glow);
+		transform: translateY(-2px);
+		box-shadow: 0 12px 30px -18px rgb(60 232 130 / 0.5);
+	}
+	.nudge-when {
+		font-size: 11px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--color-muted);
+	}
+	.nudge-say {
+		color: var(--color-bright);
+		font-size: 14px;
+		line-height: 1.5;
+		font-style: italic;
+		flex: 1;
+	}
+	.nudge code {
+		display: block;
+		margin-top: auto;
+		font-size: 0.82em;
+	}
+</style>

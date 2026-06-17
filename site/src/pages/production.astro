@@ -1,9 +1,9 @@
 ---
-import { Font } from 'astro:assets';
-import { Code } from 'astro:components';
 import { Icon } from '@astrojs/starlight/components';
-import vesper from '@shikijs/themes/vesper';
-import '../styles/global.css';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Section from '../components/Section.astro';
+import CodeCard from '../components/CodeCard.astro';
+import NudgeCard from '../components/NudgeCard.astro';
 
 const twoLayerCore = `"""acme — client for the Acme directory."""
 
@@ -101,751 +101,464 @@ $ uv run uvicorn main:app       # FastAPI`;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Production — repld</title>
-		<meta
-			name="description"
-			content="Graduate gists from interactive prototyping to production services. FastMCP, FastAPI — same code, different harness."
-		/>
-		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-		<Font cssVariable="--font-geist-mono" preload />
-		<Font cssVariable="--font-bricolage" preload />
-	</head>
-	<body>
-		<header class="nav">
-			<a class="wordmark" href={base}>repld<span class="blink"></span></a>
-			<nav class="links">
-				<a href={base}>home</a>
-				<a href={`${base}playbook`}>playbook</a>
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</header>
+<BaseLayout
+	title="Production — repld"
+	description="Graduate gists from interactive prototyping to production services. FastMCP, FastAPI — same code, different harness."
+	active="production"
+>
+	<!-- ==================== hero ==================== -->
+	<section class="hero">
+		<p class="tag">production</p>
+		<h1 class="display">From gist<br />to service.</h1>
+		<p class="hero-sub">
+			A gist is a plain Python file. It runs in repld during prototyping and in FastMCP or FastAPI
+			in production. Same code, different harness. This page shows how to wire it.
+		</p>
+	</section>
 
-		<main>
-			<!-- ==================== hero ==================== -->
-			<section class="hero">
-				<p class="tag">production</p>
-				<h1 class="display">From gist<br />to service.</h1>
-				<p class="hero-sub">
-					A gist is a plain Python file. It runs in repld during prototyping and in
-					FastMCP or FastAPI in production. Same code, different harness. This page
-					shows how to wire it.
-				</p>
-			</section>
+	<!-- ==================== two-layer pattern ==================== -->
+	<Section label="the two-layer pattern">
+		<h2 class="display sm">Core logic stays.<br />Wiring gets replaced.</h2>
+		<p class="body-text">
+			Write gists with two layers: core logic at the top (portable, moves to production unchanged)
+			and repld wiring at the bottom (<code class="c">__repld_tools__</code> +
+			<code class="c">_tool_*</code> — shed on graduation, replaced by <code class="c"
+				>@mcp.tool</code
+			> or <code class="c">@router.get</code>).
+		</p>
+		<div class="code-stack" data-reveal>
+			<CodeCard code={twoLayerCore} label="keeps" labelTone="accent" class="keeps" />
+			<div class="seam" aria-hidden="true">
+				<span class="seam-dot"></span>
+				<span class="seam-label">graduation seam</span>
+			</div>
+			<CodeCard code={twoLayerWiring} label="sheds" labelTone="dim" class="sheds" />
+		</div>
+	</Section>
 
-			<!-- ==================== two-layer pattern ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>the two-layer pattern</div>
-				<h2 class="display sm">Core logic stays.<br />Wiring gets replaced.</h2>
+	<!-- ==================== fetch callable ==================== -->
+	<Section label="browser auth portability">
+		<div class="split">
+			<div>
+				<h2 class="display sm">The browser is the credential.</h2>
 				<p class="body-text">
-					Write gists with two layers: core logic at the top (portable, moves to production
-					unchanged) and repld wiring at the bottom (<code class="c">__repld_tools__</code> +
-					<code class="c">_tool_*</code> — shed on graduation, replaced by <code class="c"
-						>@mcp.tool</code
-					> or <code class="c">@router.get</code>).
+					For APIs with session auth (no API key), accept a <code class="c">fetch=</code>
+					callable. In repld, pass <code class="c">tab.fetch</code>. In production, pass an httpx
+					client or switch to token auth. The core function doesn't care which path.
 				</p>
-				<div class="code-stack" data-reveal>
-					<div class="code-card keeps">
-						<div class="code-label accent">keeps</div>
-						<Code code={twoLayerCore} lang="python" theme={vesper} />
-					</div>
-					<div class="code-card sheds">
-						<div class="code-label dim">sheds</div>
-						<Code code={twoLayerWiring} lang="python" theme={vesper} />
-					</div>
-				</div>
-			</section>
+			</div>
+			<CodeCard code={fetchPattern} />
+		</div>
+	</Section>
 
-			<!-- ==================== fetch callable ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>browser auth portability</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">The browser is the credential.</h2>
-						<p class="body-text">
-							For APIs with session auth (no API key), accept a <code class="c">fetch=</code>
-							 callable. In repld, pass <code class="c">tab.fetch</code>. In production, pass
-							an httpx client or switch to token auth. The core function doesn't care which path.
-						</p>
-					</div>
-					<div class="code-card" data-reveal>
-						<Code code={fetchPattern} lang="python" theme={vesper} />
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== secrets / .env ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>secrets</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">One <code class="c">.env</code>,<br />both contexts.</h2>
-						<p class="body-text">
-							Core logic reads <code class="c">os.environ</code> — never hardcode tokens. repld
-							loads <code class="c">.env</code> from the project root at kernel boot. Production
-							frameworks load the same file their own way. The gist code is identical.
-						</p>
-					</div>
-					<div class="code-card" data-reveal>
-						<Code code={envSnippet} lang="bash" theme={vesper} />
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== three tiers ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>graduation tiers</div>
-				<h2 class="display sm">Pick the tier that fits.</h2>
+	<!-- ==================== secrets / .env ==================== -->
+	<Section label="secrets">
+		<div class="split">
+			<div>
+				<h2 class="display sm">One <code class="c">.env</code>,<br />both contexts.</h2>
 				<p class="body-text">
-					Not every gist needs the same production setup. Some use public APIs with tokens,
-					some need the browser's authenticated session, some use both.
+					Core logic reads <code class="c">os.environ</code> — never hardcode tokens. repld loads <code
+						class="c">.env</code
+					> from the project root at kernel boot. Production frameworks load the same file their own way.
+					The gist code is identical.
 				</p>
-				<div class="table-wrap" data-reveal>
-					<table>
-						<thead>
-							<tr>
-								<th>Tier</th>
-								<th>Auth</th>
-								<th>repld dep?</th>
-								<th>When</th>
-							</tr>
-						</thead>
-						<tbody>
-							<tr>
-								<td class="lname">Standalone</td>
-								<td><code class="c">.env</code> tokens</td>
-								<td>No</td>
-								<td>Stable API, you have keys</td>
-							</tr>
-							<tr>
-								<td class="lname">Browser-backed</td>
-								<td><code class="c">browser.fetch()</code></td>
-								<td><code class="c">repld-tool[browser]</code></td>
-								<td>Session-auth APIs, no proper keys</td>
-							</tr>
-							<tr>
-								<td class="lname">Hybrid</td>
-								<td>Token + browser fallback</td>
-								<td>Optional</td>
-								<td>Token when available, browser otherwise</td>
-							</tr>
-						</tbody>
-					</table>
-				</div>
-			</section>
+			</div>
+			<CodeCard code={envSnippet} lang="bash" />
+		</div>
+	</Section>
 
-			<!-- ==================== fastmcp ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>fastmcp</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">One line to<br />an MCP tool.</h2>
-						<p class="body-text">
-							<code class="c">mcp.add_tool()</code> generates the input schema from type hints
-							and the description from the docstring. If your core function's signature already
-							matches, this is all you need.
-						</p>
-					</div>
-					<div class="code-stack-sm" data-reveal>
-						<div class="code-card">
-							<Code code={fastmcpSnippet} lang="python" theme={vesper} />
-						</div>
-						<div class="code-card">
-							<Code code={fastmcpDecoratorSnippet} lang="python" theme={vesper} />
-						</div>
-					</div>
-				</div>
-			</section>
+	<!-- ==================== three tiers ==================== -->
+	<Section label="graduation tiers">
+		<h2 class="display sm">Pick the tier that fits.</h2>
+		<p class="body-text">
+			Not every gist needs the same production setup. Some use public APIs with tokens, some need
+			the browser's authenticated session, some use both.
+		</p>
+		<div class="table-wrap" data-reveal>
+			<table>
+				<thead>
+					<tr>
+						<th>Tier</th>
+						<th>Auth</th>
+						<th>repld dep?</th>
+						<th>When</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td class="lname">Standalone</td>
+						<td><code class="c">.env</code> tokens</td>
+						<td>No</td>
+						<td>Stable API, you have keys</td>
+					</tr>
+					<tr>
+						<td class="lname">Browser-backed</td>
+						<td><code class="c">browser.fetch()</code></td>
+						<td><code class="c">repld-tool[browser]</code></td>
+						<td>Session-auth APIs, no proper keys</td>
+					</tr>
+					<tr>
+						<td class="lname">Hybrid</td>
+						<td>Token + browser fallback</td>
+						<td>Optional</td>
+						<td>Token when available, browser otherwise</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</Section>
 
-			<!-- ==================== fastapi ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>fastapi</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">Same function,<br />HTTP endpoint.</h2>
-						<p class="body-text">
-							Wrap the core function with a route decorator. FastAPI handles validation,
-							serialization, and OpenAPI docs. The gist doesn't change.
-						</p>
-					</div>
-					<div class="code-card" data-reveal>
-						<Code code={fastapiSnippet} lang="python" theme={vesper} />
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== scaffolding ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>scaffolding</div>
-				<h2 class="display sm">Seven commands to a running service.</h2>
+	<!-- ==================== fastmcp ==================== -->
+	<Section label="fastmcp">
+		<div class="split">
+			<div>
+				<h2 class="display sm">One line to<br />an MCP tool.</h2>
 				<p class="body-text">
-					Create a project, add deps, copy gists, run. The <code class="c">__repld_tools__</code>
-					 layer stays behind — <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
-					 replaces it.
+					<code class="c">mcp.add_tool()</code> generates the input schema from type hints and the description
+					from the docstring. If your core function's signature already matches, this is all you need.
 				</p>
-				<div class="code-card wide" data-reveal>
-					<Code code={scaffoldSnippet} lang="bash" theme={vesper} />
-				</div>
-			</section>
+			</div>
+			<div class="code-stack-sm" data-reveal>
+				<CodeCard code={fastmcpSnippet} />
+				<CodeCard code={fastmcpDecoratorSnippet} />
+			</div>
+		</div>
+	</Section>
 
-			<!-- ==================== what stays / what goes ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>what stays, what goes</div>
-				<h2 class="display sm">The seam is clean.</h2>
-				<div class="compare" data-reveal>
-					<div class="compare-col stays">
-						<h3 class="compare-head accent">Stays <span class="dim">(portable)</span></h3>
-						<ul>
-							<li>Core async functions</li>
-							<li>Type hints + docstrings</li>
-							<li><code class="c">os.environ["TOKEN"]</code></li>
-							<li>Data parsing helpers</li>
-							<li><code class="c">__repld_deps__</code> <span class="dim">(as reference)</span></li>
-						</ul>
-					</div>
-					<div class="compare-col goes">
-						<h3 class="compare-head">Goes <span class="dim">(repld-specific)</span></h3>
-						<ul>
-							<li><code class="c">__repld_tools__</code> list</li>
-							<li><code class="c">_tool_*</code> handler functions</li>
-							<li><code class="c">import repld</code> <span class="dim">(in wiring)</span></li>
-							<li><code class="c">tab.fetch</code> / <code class="c">browser.get</code></li>
-							<li><code class="c">__repld_usage__</code></li>
-						</ul>
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== nudge claude ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>nudge claude</div>
-				<h2 class="display sm">Say this when you're ready.</h2>
+	<!-- ==================== fastapi ==================== -->
+	<Section label="fastapi">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Same function,<br />HTTP endpoint.</h2>
 				<p class="body-text">
-					Claude reads the production guide on demand. One line sets the context
-					for the whole graduation conversation.
+					Wrap the core function with a route decorator. FastAPI handles validation, serialization,
+					and OpenAPI docs. The gist doesn't change.
 				</p>
-				<div class="nudge-grid" data-reveal>
-					<div class="nudge">
-						<p class="nudge-when">Starting the conversation</p>
-						<p class="nudge-say">"Read repld://docs/production — let's graduate this gist"</p>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Standalone service</p>
-						<p class="nudge-say">"Set up a FastMCP server for this gist — no browser needed"</p>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Browser-backed service</p>
-						<p class="nudge-say">"Graduate this to FastAPI with repld-tool[browser]"</p>
-					</div>
-				</div>
-			</section>
+			</div>
+			<CodeCard code={fastapiSnippet} />
+		</div>
+	</Section>
 
-			<!-- ==================== outro ==================== -->
-			<section class="outro" data-anim>
-				<blockquote data-reveal>
-					The gist is the seam between discovery and production. You prototype
-					interactively — poking at APIs, reverse-engineering traffic, shaping the
-					data. When it works, you copy the file, swap the wiring, and run it
-					headless. Nothing is rewritten. The playbook's progression doesn't end at
-					the REPL — it ends at a running service.
-				</blockquote>
-				<div class="back-links" data-reveal>
-					<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
-					<a href={`${base}quickstart`}>quickstart <Icon name="right-arrow" size="1em" /></a>
-				</div>
-			</section>
-		</main>
+	<!-- ==================== scaffolding ==================== -->
+	<Section label="scaffolding">
+		<h2 class="display sm">Seven commands to a running service.</h2>
+		<p class="body-text">
+			Create a project, add deps, copy gists, run. The <code class="c">__repld_tools__</code>
+			layer stays behind — <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
+			replaces it.
+		</p>
+		<CodeCard code={scaffoldSnippet} lang="bash" class="wide" />
+	</Section>
 
-		<footer class="ft">
-			<span class="wordmark sm-wm">repld<span class="blink"></span></span>
-			<nav class="links">
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</footer>
+	<!-- ==================== what stays / what goes ==================== -->
+	<Section label="what stays, what goes">
+		<h2 class="display sm">The seam is clean.</h2>
+		<div class="compare" data-reveal>
+			<div class="compare-col stays">
+				<h3 class="compare-head accent">Stays <span class="dim">(portable)</span></h3>
+				<ul>
+					<li>Core async functions</li>
+					<li>Type hints + docstrings</li>
+					<li><code class="c">os.environ["TOKEN"]</code></li>
+					<li>Data parsing helpers</li>
+					<li><code class="c">__repld_deps__</code> <span class="dim">(as reference)</span></li>
+				</ul>
+			</div>
+			<div class="compare-col goes">
+				<h3 class="compare-head">Goes <span class="dim">(repld-specific)</span></h3>
+				<ul>
+					<li><code class="c">__repld_tools__</code> list</li>
+					<li><code class="c">_tool_*</code> handler functions</li>
+					<li><code class="c">import repld</code> <span class="dim">(in wiring)</span></li>
+					<li><code class="c">tab.fetch</code> / <code class="c">browser.get</code></li>
+					<li><code class="c">__repld_usage__</code></li>
+				</ul>
+			</div>
+		</div>
+	</Section>
 
-		<script>
-			import gsap from 'gsap';
-			import { ScrollTrigger } from 'gsap/ScrollTrigger';
-			import { SplitText } from 'gsap/SplitText';
-			import Lenis from 'lenis';
+	<!-- ==================== nudge claude ==================== -->
+	<Section label="nudge claude">
+		<h2 class="display sm">Say this when you're ready.</h2>
+		<p class="body-text">
+			Claude reads the production guide on demand. One line sets the context for the whole
+			graduation conversation.
+		</p>
+		<div class="nudge-grid" data-reveal>
+			<NudgeCard
+				when="Starting the conversation"
+				say="Read repld://docs/production — let's graduate this gist"
+			/>
+			<NudgeCard
+				when="Standalone service"
+				say="Set up a FastMCP server for this gist — no browser needed"
+			/>
+			<NudgeCard
+				when="Browser-backed service"
+				say="Graduate this to FastAPI with repld-tool[browser]"
+			/>
+		</div>
+	</Section>
 
-			gsap.registerPlugin(ScrollTrigger, SplitText);
-			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	<!-- ==================== outro ==================== -->
+	<section class="outro" data-anim>
+		<blockquote data-reveal>
+			The gist is the seam between discovery and production. You prototype interactively — poking at
+			APIs, reverse-engineering traffic, shaping the data. When it works, you copy the file, swap
+			the wiring, and run it headless. Nothing is rewritten. The playbook's progression doesn't end
+			at the REPL — it ends at a running service.
+		</blockquote>
+		<div class="back-links" data-reveal>
+			<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
+			<a href={`${base}quickstart`}>quickstart <Icon name="right-arrow" size="1em" /></a>
+		</div>
+	</section>
+</BaseLayout>
 
-			if (!reduced) {
-				const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
-				lenis.on('scroll', ScrollTrigger.update);
-				gsap.ticker.add((t) => lenis.raf(t * 1000));
-				gsap.ticker.lagSmoothing(0);
+<script>
+	import gsap from 'gsap';
+	import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
-				document.fonts.ready.then(() => {
-					const heroSplit = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
-					gsap.from(heroSplit.lines, {
-						yPercent: 115,
-						duration: 0.9,
-						stagger: 0.09,
-						ease: 'power4.out',
-						onComplete: () => heroSplit.revert(),
-					});
-					gsap.from('.tag', { y: 16, autoAlpha: 0, duration: 0.5, ease: 'power3.out' });
-					gsap.from('.hero-sub', {
-						y: 22,
-						autoAlpha: 0,
-						duration: 0.7,
-						ease: 'power3.out',
-						delay: 0.3,
-					});
+	gsap.registerPlugin(ScrollTrigger);
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-					document.querySelectorAll<HTMLElement>('[data-anim] h2').forEach((el) => {
-						const s = SplitText.create(el, { type: 'lines', mask: 'lines' });
-						gsap.from(s.lines, {
-							yPercent: 115,
-							duration: 0.85,
-							stagger: 0.09,
-							ease: 'power4.out',
-							scrollTrigger: { trigger: el, start: 'top 82%' },
-							onComplete: () => s.revert(),
-						});
-					});
-				});
+	if (!reduced) {
+		// The graduation-seam dot travels left→right as the seam scrolls past —
+		// the moment the wiring is shed and the core graduates.
+		const seam = document.querySelector<HTMLElement>('.seam');
+		const dot = document.querySelector<HTMLElement>('.seam-dot');
+		if (seam && dot) {
+			gsap.fromTo(
+				dot,
+				{ left: '0%', autoAlpha: 0 },
+				{
+					left: '100%',
+					autoAlpha: 1,
+					ease: 'none',
+					scrollTrigger: {
+						trigger: seam,
+						start: 'top 88%',
+						end: 'top 32%',
+						scrub: 0.5,
+					},
+				},
+			);
+		}
 
-				document.querySelectorAll<HTMLElement>('[data-anim]').forEach((sect) => {
-					const els = sect.querySelectorAll('[data-reveal], .body-text, .section-label');
-					if (!els.length) return;
-					gsap.from(els, {
-						y: 26,
-						autoAlpha: 0,
-						duration: 0.7,
-						stagger: 0.1,
-						ease: 'power3.out',
-						scrollTrigger: { trigger: sect, start: 'top 72%' },
-					});
-				});
-			}
-		</script>
+		// Tier rows light up their left edge as they enter.
+		gsap.utils.toArray<HTMLElement>('tbody tr').forEach((row) => {
+			gsap.from(row, {
+				autoAlpha: 0,
+				x: -16,
+				duration: 0.5,
+				ease: 'power2.out',
+				scrollTrigger: { trigger: row, start: 'top 90%' },
+			});
+		});
+	}
+</script>
 
-		<style>
-			/* ========== tokens (page-scoped) ========== */
-			main {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 0 24px;
-			}
+<style>
+	/* code stacks — page-specific composition of shared cards */
+	.code-stack {
+		display: flex;
+		flex-direction: column;
+	}
+	.code-stack :global(.code-card.keeps) {
+		border-bottom-left-radius: 0;
+		border-bottom-right-radius: 0;
+		border-bottom: none;
+		border-color: var(--accent-line);
+	}
+	.code-stack :global(.code-card.sheds) {
+		border-top-left-radius: 0;
+		border-top-right-radius: 0;
+		opacity: 0.45;
+		filter: saturate(0.4);
+		transition:
+			opacity 0.5s ease,
+			filter 0.5s ease;
+	}
+	/* sheds "re-attaches" on hover — the wiring is still there, just dormant */
+	.code-stack:hover :global(.code-card.sheds) {
+		opacity: 0.8;
+		filter: saturate(0.8);
+	}
 
-			.display {
-				font-family: var(--font-display);
-				font-weight: 800;
-				color: var(--color-bright);
-				letter-spacing: -0.02em;
-				line-height: 1.05;
-			}
-			.display.sm {
-				font-size: clamp(1.9rem, 3.6vw, 2.9rem);
-				margin-bottom: 18px;
-			}
-			.dim {
-				color: var(--color-muted);
-			}
-			.accent {
-				color: var(--color-accent);
-			}
-			code.c {
-				color: var(--color-accent);
-				background: rgb(60 232 130 / 0.07);
-				border: 1px solid rgb(60 232 130 / 0.18);
-				border-radius: 4px;
-				padding: 0 5px;
-				font-size: 0.92em;
-			}
-			.body-text {
-				color: var(--color-muted);
-				max-width: 52ch;
-				margin-bottom: 32px;
-				line-height: 1.75;
-			}
+	/* the graduation seam — where wiring is shed */
+	.seam {
+		position: relative;
+		height: 0;
+		border-top: 1px dashed var(--accent-glow);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background:
+			linear-gradient(var(--color-panel-2), var(--color-panel-2)) padding-box,
+			repeating-linear-gradient(90deg, var(--accent-glow) 0 6px, transparent 6px 12px);
+	}
+	.seam-label {
+		position: absolute;
+		transform: translateY(-50%);
+		top: 0;
+		background: var(--color-ink);
+		color: var(--color-accent);
+		font-size: 10px;
+		letter-spacing: 0.2em;
+		text-transform: uppercase;
+		padding: 3px 12px;
+		border: 1px solid var(--accent-line);
+		border-radius: 999px;
+	}
+	.seam-dot {
+		position: absolute;
+		left: 0;
+		top: 0;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--color-accent);
+		box-shadow: 0 0 12px 2px var(--color-accent);
+		transform: translate(-50%, -50%);
+		opacity: 0;
+	}
+	.code-stack-sm {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	:global(.code-card.wide) {
+		max-width: 680px;
+	}
 
-			/* ========== nav ========== */
-			.nav {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 22px 24px;
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-			}
-			.wordmark {
-				font-weight: 700;
-				font-size: 19px;
-				color: var(--color-bright);
-				text-decoration: none;
-			}
-			.sm-wm {
-				font-size: 15px;
-			}
-			.blink {
-				display: inline-block;
-				width: 9px;
-				height: 1em;
-				margin-left: 2px;
-				vertical-align: text-bottom;
-				background: var(--color-accent);
-				animation: blink 1.06s steps(1) infinite;
-			}
-			@keyframes blink {
-				50% {
-					opacity: 0;
-				}
-			}
-			.links {
-				display: flex;
-				gap: 24px;
-			}
-			.links a,
-			.back-links a {
-				color: var(--color-muted);
-				text-decoration: none;
-				font-size: 13.5px;
-				letter-spacing: 0.04em;
-				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left
-					bottom / 0% 1px;
-				transition:
-					color 0.18s,
-					background-size 0.25s;
-				padding-bottom: 2px;
-			}
-			.links a:hover,
-			.back-links a:hover {
-				color: var(--color-accent);
-				background-size: 100% 1px;
-			}
+	/* tier table */
+	.table-wrap {
+		overflow-x: auto;
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 13.5px;
+	}
+	th {
+		text-align: left;
+		color: var(--color-muted);
+		font-weight: 500;
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		padding: 12px 14px;
+		border-bottom: 1px solid var(--color-line);
+	}
+	tbody tr {
+		transition: background 0.2s;
+	}
+	tbody tr:hover {
+		background: rgb(60 232 130 / 0.03);
+	}
+	td {
+		padding: 14px;
+		color: var(--color-fg);
+		border-bottom: 1px solid rgb(28 36 47 / 0.3);
+		vertical-align: top;
+	}
+	.lname {
+		color: var(--color-bright);
+		font-weight: 500;
+		white-space: nowrap;
+		border-left: 2px solid transparent;
+		padding-left: 12px;
+		margin-left: -14px;
+		transition: border-color 0.2s;
+	}
+	tbody tr:hover .lname {
+		border-color: var(--color-accent);
+	}
 
-			/* ========== hero ========== */
-			.hero {
-				padding: 72px 0 76px;
-				max-width: 680px;
-				position: relative;
-			}
-			.hero::before {
-				content: '';
-				position: absolute;
-				top: -20%;
-				right: -50%;
-				width: 80%;
-				height: 100%;
-				background: radial-gradient(
-					ellipse at center,
-					rgb(60 232 130 / 0.05),
-					transparent 65%
-				);
-				pointer-events: none;
-			}
-			.tag {
-				color: var(--color-accent);
-				font-size: 12px;
-				letter-spacing: 0.22em;
-				text-transform: uppercase;
-				margin-bottom: 22px;
-			}
-			.hero h1 {
-				font-size: clamp(3rem, 6vw, 5rem);
-				margin-bottom: 28px;
-			}
-			.hero-sub {
-				color: var(--color-muted);
-				font-size: 16px;
-				line-height: 1.8;
-				max-width: 56ch;
-			}
+	/* comparison */
+	.compare {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 16px;
+		max-width: 720px;
+	}
+	.compare-col {
+		border: 1px solid var(--color-line);
+		border-radius: 10px;
+		padding: 24px 22px;
+		background: var(--color-panel);
+	}
+	.compare-col.stays {
+		border-color: rgb(60 232 130 / 0.25);
+	}
+	.compare-head {
+		font-family: var(--font-display);
+		font-weight: 700;
+		font-size: 14px;
+		margin-bottom: 16px;
+		color: var(--color-bright);
+	}
+	.compare-col ul {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.compare-col li {
+		color: var(--color-fg);
+		font-size: 13.5px;
+		padding-left: 16px;
+		position: relative;
+	}
+	.compare-col li::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 8px;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+	}
+	.stays li::before {
+		background: var(--color-accent);
+	}
+	.goes li::before {
+		background: var(--color-muted);
+		opacity: 0.5;
+	}
 
-			/* ========== sections ========== */
-			.section {
-				padding: 84px 0;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-			}
-			.section-label {
-				display: flex;
-				align-items: center;
-				gap: 10px;
-				color: var(--color-muted);
-				font-size: 12px;
-				letter-spacing: 0.2em;
-				text-transform: uppercase;
-				margin-bottom: 38px;
-			}
-			.dot {
-				width: 9px;
-				height: 9px;
-				border-radius: 50%;
-				border: 1px solid var(--color-muted);
-			}
+	/* nudge grid */
+	.nudge-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 14px;
+		margin-top: 8px;
+	}
 
-			/* ========== split layout ========== */
-			.split {
-				display: grid;
-				grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
-				gap: 48px;
-				align-items: start;
-			}
+	/* outro back-links */
+	.back-links {
+		margin-top: 32px;
+		display: flex;
+		gap: 32px;
+	}
+	.back-links a {
+		font-size: 15px;
+		color: var(--color-accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.back-links a :global(svg) {
+		width: 1em;
+		height: 1em;
+	}
 
-			/* ========== code cards ========== */
-			.code-card {
-				border: 1px solid var(--color-line);
-				border-radius: 10px;
-				overflow: hidden;
-				background: var(--color-panel-2);
-				position: relative;
-			}
-			.code-card :global(pre) {
-				padding: 20px 22px;
-				font-size: 13.5px;
-				line-height: 1.8;
-				background: transparent !important;
-				overflow-x: auto;
-			}
-			.code-card.wide {
-				max-width: 680px;
-			}
-			.code-label {
-				position: absolute;
-				top: 12px;
-				right: 16px;
-				font-size: 10px;
-				letter-spacing: 0.18em;
-				text-transform: uppercase;
-				z-index: 1;
-			}
-
-			/* stacked code cards */
-			.code-stack {
-				display: flex;
-				flex-direction: column;
-				gap: 0;
-			}
-			.code-stack .code-card.keeps {
-				border-bottom-left-radius: 0;
-				border-bottom-right-radius: 0;
-				border-bottom: none;
-				border-color: rgb(60 232 130 / 0.2);
-			}
-			.code-stack .code-card.sheds {
-				border-top-left-radius: 0;
-				border-top-right-radius: 0;
-				border-color: var(--color-line);
-				opacity: 0.6;
-			}
-			.code-stack-sm {
-				display: flex;
-				flex-direction: column;
-				gap: 12px;
-			}
-
-			/* ========== table ========== */
-			.table-wrap {
-				overflow-x: auto;
-			}
-			table {
-				width: 100%;
-				border-collapse: collapse;
-				font-size: 13.5px;
-			}
-			th {
-				text-align: left;
-				color: var(--color-muted);
-				font-weight: 500;
-				font-size: 11px;
-				letter-spacing: 0.12em;
-				text-transform: uppercase;
-				padding: 12px 14px;
-				border-bottom: 1px solid var(--color-line);
-			}
-			td {
-				padding: 14px;
-				color: var(--color-fg);
-				border-bottom: 1px solid rgb(28 36 47 / 0.3);
-				vertical-align: top;
-			}
-			.lname {
-				color: var(--color-bright);
-				font-weight: 500;
-				white-space: nowrap;
-			}
-
-			/* ========== comparison ========== */
-			.compare {
-				display: grid;
-				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-				gap: 16px;
-				max-width: 720px;
-			}
-			.compare-col {
-				border: 1px solid var(--color-line);
-				border-radius: 10px;
-				padding: 24px 22px;
-				background: var(--color-panel);
-			}
-			.compare-col.stays {
-				border-color: rgb(60 232 130 / 0.25);
-			}
-			.compare-head {
-				font-family: var(--font-display);
-				font-weight: 700;
-				font-size: 14px;
-				margin-bottom: 16px;
-				color: var(--color-bright);
-			}
-			.compare-col ul {
-				list-style: none;
-				padding: 0;
-				margin: 0;
-				display: flex;
-				flex-direction: column;
-				gap: 10px;
-			}
-			.compare-col li {
-				color: var(--color-fg);
-				font-size: 13.5px;
-				padding-left: 16px;
-				position: relative;
-			}
-			.compare-col li::before {
-				content: '';
-				position: absolute;
-				left: 0;
-				top: 8px;
-				width: 6px;
-				height: 6px;
-				border-radius: 50%;
-			}
-			.stays li::before {
-				background: var(--color-accent);
-			}
-			.goes li::before {
-				background: var(--color-muted);
-				opacity: 0.5;
-			}
-
-			/* ========== nudge grid ========== */
-			.nudge-grid {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				gap: 14px;
-				margin-top: 8px;
-			}
-			.nudge {
-				border: 1px solid var(--color-line);
-				background: var(--color-panel);
-				border-radius: 10px;
-				padding: 20px 18px;
-				display: flex;
-				flex-direction: column;
-				gap: 10px;
-				transition:
-					border-color 0.2s,
-					transform 0.2s;
-			}
-			.nudge:hover {
-				border-color: rgb(60 232 130 / 0.35);
-				transform: translateY(-2px);
-			}
-			.nudge-when {
-				font-size: 11px;
-				letter-spacing: 0.14em;
-				text-transform: uppercase;
-				color: var(--color-muted);
-			}
-			.nudge-say {
-				color: var(--color-bright);
-				font-size: 14px;
-				line-height: 1.5;
-				font-style: italic;
-			}
-
-			/* ========== outro ========== */
-			.outro {
-				padding: 72px 0 120px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-			}
-			blockquote {
-				color: var(--color-muted);
-				font-size: 15px;
-				font-style: italic;
-				line-height: 1.8;
-				padding: 28px 32px;
-				border: 1px solid var(--color-line);
-				border-left: 3px solid var(--color-accent);
-				border-radius: 10px;
-				background: var(--color-panel);
-				max-width: 640px;
-				margin: 0;
-			}
-			.back-links {
-				margin-top: 32px;
-				display: flex;
-				gap: 32px;
-			}
-			.back-links a {
-				font-size: 15px;
-				color: var(--color-accent);
-				display: inline-flex;
-				align-items: center;
-				gap: 6px;
-			}
-			.back-links a :global(svg) {
-				width: 1em;
-				height: 1em;
-			}
-
-			/* ========== footer ========== */
-			.ft {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 26px 24px 34px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				gap: 18px;
-				font-size: 13px;
-			}
-
-			/* ========== responsive ========== */
-			@media (max-width: 900px) {
-				.split {
-					grid-template-columns: minmax(0, 1fr);
-					gap: 28px;
-				}
-				.compare,
-				.nudge-grid {
-					grid-template-columns: minmax(0, 1fr);
-				}
-				.hero {
-					padding: 44px 0 52px;
-				}
-				.section {
-					padding: 60px 0;
-				}
-			}
-			@media (max-width: 560px) {
-				.ft {
-					flex-direction: column;
-				}
-				.code-card :global(pre) {
-					font-size: 12px;
-					padding: 16px;
-				}
-				.back-links {
-					flex-direction: column;
-					gap: 16px;
-				}
-			}
-		</style>
-	</body>
-</html>
+	@media (max-width: 900px) {
+		.compare,
+		.nudge-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+</style>

@@ -1,0 +1,95 @@
+---
+interface Props {
+	active?: 'quickstart' | 'playbook' | 'production' | 'docs';
+}
+
+const { active } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const links = [
+	{ key: 'quickstart', label: 'quickstart', href: `${base}quickstart` },
+	{ key: 'playbook', label: 'playbook', href: `${base}playbook` },
+	{ key: 'production', label: 'production', href: `${base}production` },
+	{ key: 'docs', label: 'docs', href: `${base}docs/` },
+	{ key: 'github', label: 'github', href: 'https://github.com/angelsen/repld' },
+];
+---
+
+<header class="nav" id="nav">
+	<a class="wordmark" href={base}>repld<span class="cursor"></span></a>
+	<nav class="nav-links">
+		{
+			links.map((l) => (
+				<a href={l.href} class:list={[{ current: active === l.key }]}>
+					{l.label}
+				</a>
+			))
+		}
+	</nav>
+</header>
+
+<style>
+	.nav {
+		max-width: var(--shell-w);
+		margin: 0 auto;
+		padding: 22px 24px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+	.wordmark {
+		font-weight: 700;
+		font-size: 19px;
+		color: var(--color-bright);
+		text-decoration: none;
+		letter-spacing: -0.01em;
+	}
+	.cursor {
+		display: inline-block;
+		width: 9px;
+		height: 1em;
+		margin-left: 2px;
+		vertical-align: text-bottom;
+		background: var(--color-accent);
+		animation: blink 1.06s steps(1) infinite;
+	}
+	@keyframes blink {
+		50% {
+			opacity: 0;
+		}
+	}
+	.nav-links {
+		display: flex;
+		gap: 26px;
+	}
+	.nav-links a {
+		color: var(--color-muted);
+		text-decoration: none;
+		font-size: 13.5px;
+		letter-spacing: 0.04em;
+		background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left bottom / 0%
+			1px;
+		transition:
+			color 0.18s,
+			background-size 0.25s;
+		padding-bottom: 2px;
+	}
+	.nav-links a:hover {
+		color: var(--color-accent);
+		background-size: 100% 1px;
+	}
+	.nav-links a.current {
+		color: var(--color-accent);
+		background-size: 100% 1px;
+	}
+	@media (max-width: 560px) {
+		.nav {
+			flex-wrap: wrap;
+			gap: 12px 18px;
+		}
+		.nav-links {
+			gap: 18px;
+			flex-wrap: wrap;
+		}
+	}
+</style>

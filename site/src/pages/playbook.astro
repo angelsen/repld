@@ -1,9 +1,8 @@
 ---
-import { Font } from 'astro:assets';
-import { Code } from 'astro:components';
 import { Icon } from '@astrojs/starlight/components';
-import vesper from '@shikijs/themes/vesper';
-import '../styles/global.css';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Section from '../components/Section.astro';
+import CodeCard from '../components/CodeCard.astro';
 
 const gistSnippet = `gists/                  # pure Python, no framework dependency
   inventory.py         # ERP lookup, sheet write
@@ -20,715 +19,375 @@ const gateSnippet = `# auto stages fill themselves; human stages wait
 [Auto]   Status       → Pending → Done`;
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const principles = [
+	{
+		t: 'One service, one job',
+		d: 'Each function takes input, returns output. They compose through data, not shared frameworks.',
+	},
+	{
+		t: 'UI is a view, not the system',
+		d: 'Pipeline state lives in plain data. Any UI can read or write it. Swap the view without touching the pipeline.',
+	},
+	{
+		t: 'Prototype interactive, harden headless',
+		d: 'Start by doing it manually. Each ad-hoc action becomes a gist. Each gist becomes a callable stage.',
+	},
+	{
+		t: 'Human gates are just empty fields',
+		d: 'A column waiting for input, a DB field set to null, a waitForEvent — same concept. The pipeline pauses until a human fills it.',
+	},
+	{
+		t: 'State is plain data',
+		d: 'JSON in, JSON out. Spreadsheet columns, DB columns, and pipeline inputs are the same thing.',
+	},
+	{
+		t: "Discover, don't design",
+		d: "Do the work manually first. Extract stages only when you've done the same thing three times.",
+	},
+];
+
+const layers = [
+	['Capture', 'Web app, phone camera, manual entry', 'Same, or webhook / API trigger'],
+	['AI reasoning', 'Claude Code (human steers)', 'Claude API (prompt hardened)'],
+	['Glue', 'repld gist (ad-hoc, stateful)', 'FastAPI / Inngest (durable)'],
+	['State / UI', 'Spreadsheet, DB, file dump', 'Same — UI is just a view'],
+	['Integration', 'MCP tools (browser, APIs)', 'Same MCP tools, called from code'],
+];
+
+const steps = [
+	{
+		t: 'Interactive',
+		d: 'You and Claude work a task in repld. Poke at the browser, hit an API, inspect the result. No plan — just doing.',
+	},
+	{
+		t: 'Scripted',
+		d: 'You repeated it three times. Extract a gist — a plain Python file the kernel hot-reloads. Same code, now importable.',
+	},
+	{
+		t: 'Semi-auto',
+		d: 'Wire a trigger: @every, a webhook, a queue. Human gates where ambiguity requires judgment.',
+	},
+	{
+		t: 'Production',
+		d: 'Event-driven, durable, monitored. Gists from phase 2 are now production steps. Nothing was thrown away.',
+	},
+];
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="generator" content={Astro.generator} />
-		<title>The Playbook — repld</title>
-		<meta
-			name="description"
-			content="How automation actually gets built: do it by hand, extract a gist, wire a trigger, ship it headless. The method is the same regardless of the tools."
-		/>
-		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-		<Font cssVariable="--font-geist-mono" preload />
-		<Font cssVariable="--font-bricolage" preload />
-	</head>
-	<body>
-		<header class="nav">
-			<a class="wordmark" href={base}>repld<span class="blink"></span></a>
-			<nav class="links">
-				<a href={base}>home</a>
-				<a href={`${base}quickstart`}>quickstart</a>
-				<a href={`${base}production`}>production</a>
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</header>
+<BaseLayout
+	title="The Playbook — repld"
+	description="How automation actually gets built: do it by hand, extract a gist, wire a trigger, ship it headless. The method is the same regardless of the tools."
+	active="playbook"
+>
+	<!-- ==================== hero ==================== -->
+	<section class="hero">
+		<p class="tag">how we build</p>
+		<h1 class="display">The Playbook</h1>
+		<p class="hero-sub">
+			Discovered through practice, not designed upfront. Works for any automation — fully automatic
+			pipelines, human-in-the-loop processes, AI-augmented flows, or plain data transforms.
+		</p>
+	</section>
 
-		<main>
-			<!-- ==================== hero ==================== -->
-			<section class="hero">
-				<p class="tag">how we build</p>
-				<h1 class="display">The Playbook</h1>
-				<p class="hero-sub">
-					Discovered through practice, not designed upfront. Works for any automation — fully
-					automatic pipelines, human-in-the-loop processes, AI-augmented flows, or plain data
-					transforms.
-				</p>
-			</section>
+	<!-- ==================== principles ==================== -->
+	<Section label="principles">
+		<div class="cards-grid">
+			{
+				principles.map((p) => (
+					<div class="card">
+						<h3>{p.t}</h3>
+						<p>{p.d}</p>
+					</div>
+				))
+			}
+		</div>
+	</Section>
 
-			<!-- ==================== principles ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>principles</div>
-				<div class="cards-grid">
-					<div class="card">
-						<h3>One service, one job</h3>
-						<p>
-							Each function takes input, returns output. They compose through data, not shared
-							frameworks.
-						</p>
-					</div>
-					<div class="card">
-						<h3>UI is a view, not the system</h3>
-						<p>
-							Pipeline state lives in plain data. Any UI can read or write it. Swap the view without
-							touching the pipeline.
-						</p>
-					</div>
-					<div class="card">
-						<h3>Prototype interactive, harden headless</h3>
-						<p>
-							Start by doing it manually. Each ad-hoc action becomes a gist. Each gist becomes a
-							callable stage.
-						</p>
-					</div>
-					<div class="card">
-						<h3>Human gates are just empty fields</h3>
-						<p>
-							A column waiting for input, a DB field set to null, a <code class="c"
-								>waitForEvent</code
-							> — same concept. The pipeline pauses until a human fills it.
-						</p>
-					</div>
-					<div class="card">
-						<h3>State is plain data</h3>
-						<p>
-							JSON in, JSON out. Spreadsheet columns, DB columns, and pipeline inputs are the same
-							thing.
-						</p>
-					</div>
-					<div class="card">
-						<h3>Discover, don't design</h3>
-						<p>
-							Do the work manually first. Extract stages only when you've done the same thing three
-							times.
-						</p>
-					</div>
-				</div>
-			</section>
+	<!-- ==================== layers ==================== -->
+	<Section label="layers">
+		<h2 class="display sm">Same code, different context.</h2>
+		<p class="body-text">
+			The interactive prototype and the production system share layers. What changes is the glue —
+			not the logic.
+		</p>
+		<div class="table-wrap" data-reveal>
+			<table>
+				<thead>
+					<tr><th>Layer</th><th>Interactive</th><th>Production</th></tr>
+				</thead>
+				<tbody>
+					{
+						layers.map(([l, i, p]) => (
+							<tr>
+								<td class="lname">{l}</td>
+								<td>{i}</td>
+								<td>{p}</td>
+							</tr>
+						))
+					}
+				</tbody>
+			</table>
+		</div>
+	</Section>
 
-			<!-- ==================== layers ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>layers</div>
-				<h2 class="display sm">Same code, different context.</h2>
+	<!-- ==================== the gist ==================== -->
+	<Section label="portable unit">
+		<div class="split">
+			<div>
+				<h2 class="display sm">The gist is the seam.</h2>
 				<p class="body-text">
-					The interactive prototype and the production system share layers. What changes is the glue
-					— not the logic.
+					A plain Python file. Data in, data out. repld for prototyping, FastAPI for production,
+					Inngest for durable workflows. Same file, different harness.
 				</p>
-				<div class="table-wrap" data-reveal>
-					<table>
-						<thead>
-							<tr><th>Layer</th><th>Interactive</th><th>Production</th></tr>
-						</thead>
-						<tbody>
-							<tr>
-								<td class="lname">Capture</td>
-								<td>Web app, phone camera, manual entry</td>
-								<td>Same, or webhook / API trigger</td>
-							</tr>
-							<tr>
-								<td class="lname">AI reasoning</td>
-								<td>Claude Code <span class="dim">(human steers)</span></td>
-								<td>Claude API <span class="dim">(prompt hardened)</span></td>
-							</tr>
-							<tr>
-								<td class="lname">Glue</td>
-								<td>repld gist <span class="dim">(ad-hoc, stateful)</span></td>
-								<td>FastAPI / Inngest <span class="dim">(durable)</span></td>
-							</tr>
-							<tr>
-								<td class="lname">State / UI</td>
-								<td>Spreadsheet, DB, file dump</td>
-								<td>Same — UI is just a view</td>
-							</tr>
-							<tr>
-								<td class="lname">Integration</td>
-								<td>MCP tools <span class="dim">(browser, APIs)</span></td>
-								<td>Same MCP tools, called from code</td>
-							</tr>
-						</tbody>
-					</table>
-				</div>
-			</section>
-
-			<!-- ==================== the gist ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>portable unit</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">The gist is the seam.</h2>
-						<p class="body-text">
-							A plain Python file. Data in, data out. repld for prototyping, FastAPI for production,
-							Inngest for durable workflows. Same file, different harness.
-						</p>
-					</div>
-					<div class="code-card" data-reveal>
-						<Code code={gistSnippet} lang="bash" theme={vesper} />
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== human gates ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>human gates</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">The pipeline pauses for you.</h2>
-						<p class="body-text">
-							A human gate is just an empty field. Auto stages fill themselves; human stages wait.
-							The UI can be anything — a spreadsheet, a dashboard, a Slack message, or nothing at
-							all.
-						</p>
-					</div>
-					<div class="code-card" data-reveal>
-						<Code code={gateSnippet} lang="python" theme={vesper} />
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== the progression ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>the progression</div>
-				<h2 class="display sm">Every tool starts as a conversation.</h2>
-				<p class="body-text">
-					Not every workflow needs every phase. Some jump to production, some stay semi-auto
-					forever. Each phase reuses the previous one's artifacts.
-				</p>
-				<ol class="steps" data-reveal>
-					<li class="step">
-						<span class="step-n">1</span>
-						<div>
-							<strong>Interactive</strong>
-							<p>
-								You and Claude work a task in repld. Poke at the browser, hit an API, inspect the
-								result. No plan — just doing.
-							</p>
-						</div>
-					</li>
-					<li class="step">
-						<span class="step-n">2</span>
-						<div>
-							<strong>Scripted</strong>
-							<p>
-								You repeated it three times. Extract a gist — a plain Python file the kernel
-								hot-reloads. Same code, now importable.
-							</p>
-						</div>
-					</li>
-					<li class="step">
-						<span class="step-n">3</span>
-						<div>
-							<strong>Semi-auto</strong>
-							<p>
-								Wire a trigger: <code class="c">@every</code>, a webhook, a queue. Human gates where
-								ambiguity requires judgment.
-							</p>
-						</div>
-					</li>
-					<li class="step">
-						<span class="step-n">4</span>
-						<div>
-							<strong>Production</strong>
-							<p>
-								Event-driven, durable, monitored. Gists from phase 2 are now production steps.
-								Nothing was thrown away.
-							</p>
-						</div>
-					</li>
-				</ol>
-			</section>
-
-			<!-- ==================== outro ==================== -->
-			<section class="outro" data-anim>
-				<blockquote data-reveal>
-					This playbook emerged from doing the work, not from planning it. Started as manual data
-					entry and ad-hoc Claude sessions. By end of each project: multi-stage pipelines with OCR,
-					AI enrichment, system sync, and human-in-the-loop gates — all built from gists that
-					started as throwaway REPL code.
-				</blockquote>
-				<div class="back" data-reveal>
-				<a href={base}><Icon name="left-arrow" size="1em" /> back to repld</a>
-				<a href={`${base}production`}>graduating to production <Icon name="right-arrow" size="1em" /></a>
 			</div>
-			</section>
-		</main>
+			<CodeCard code={gistSnippet} lang="bash" />
+		</div>
+	</Section>
 
-		<footer class="ft">
-			<span class="wordmark sm-wm">repld<span class="blink"></span></span>
-			<nav class="links">
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</footer>
+	<!-- ==================== human gates ==================== -->
+	<Section label="human gates">
+		<div class="split">
+			<div>
+				<h2 class="display sm">The pipeline pauses for you.</h2>
+				<p class="body-text">
+					A human gate is just an empty field. Auto stages fill themselves; human stages wait. The
+					UI can be anything — a spreadsheet, a dashboard, a Slack message, or nothing at all.
+				</p>
+			</div>
+			<CodeCard code={gateSnippet} lang="python" />
+		</div>
+	</Section>
 
-		<script>
-			import gsap from 'gsap';
-			import { ScrollTrigger } from 'gsap/ScrollTrigger';
-			import { SplitText } from 'gsap/SplitText';
-			import Lenis from 'lenis';
+	<!-- ==================== the progression ==================== -->
+	<Section label="the progression">
+		<h2 class="display sm">Every tool starts as a conversation.</h2>
+		<p class="body-text">
+			Not every workflow needs every phase. Some jump to production, some stay semi-auto forever.
+			Each phase reuses the previous one's artifacts.
+		</p>
+		<ol class="steps" data-reveal>
+			{
+				steps.map((s, i) => (
+					<li class="step">
+						<span class="step-n">{i + 1}</span>
+						<div>
+							<strong>{s.t}</strong>
+							<p>{s.d}</p>
+						</div>
+					</li>
+				))
+			}
+		</ol>
+	</Section>
 
-			gsap.registerPlugin(ScrollTrigger, SplitText);
-			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	<!-- ==================== outro ==================== -->
+	<section class="outro" data-anim>
+		<blockquote data-reveal>
+			This playbook emerged from doing the work, not from planning it. Started as manual data entry
+			and ad-hoc Claude sessions. By end of each project: multi-stage pipelines with OCR, AI
+			enrichment, system sync, and human-in-the-loop gates — all built from gists that started as
+			throwaway REPL code.
+		</blockquote>
+		<div class="back-links" data-reveal>
+			<a href={base}><Icon name="left-arrow" size="1em" /> back to repld</a>
+			<a href={`${base}production`}
+				>graduating to production <Icon name="right-arrow" size="1em" /></a
+			>
+		</div>
+	</section>
+</BaseLayout>
 
-			if (!reduced) {
-				const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
-				lenis.on('scroll', ScrollTrigger.update);
-				gsap.ticker.add((t) => lenis.raf(t * 1000));
-				gsap.ticker.lagSmoothing(0);
+<script>
+	import gsap from 'gsap';
+	import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
-				document.fonts.ready.then(() => {
-					const heroSplit = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
-					gsap.from(heroSplit.lines, {
-						yPercent: 115,
-						duration: 0.9,
-						stagger: 0.09,
-						ease: 'power4.out',
-						onComplete: () => heroSplit.revert(),
-					});
-					gsap.from('.tag', { y: 16, autoAlpha: 0, duration: 0.5, ease: 'power3.out' });
-					gsap.from('.hero-sub', {
-						y: 22,
-						autoAlpha: 0,
-						duration: 0.7,
-						ease: 'power3.out',
-						delay: 0.3,
-					});
+	gsap.registerPlugin(ScrollTrigger);
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	if (!reduced) {
+		document.querySelectorAll<HTMLElement>('.step').forEach((step) => {
+			ScrollTrigger.create({
+				trigger: step,
+				start: 'top 68%',
+				onEnter: () => step.classList.add('lit'),
+				onLeaveBack: () => step.classList.remove('lit'),
+			});
+		});
+	}
+</script>
 
-					document.querySelectorAll<HTMLElement>('[data-anim] h2').forEach((el) => {
-						const s = SplitText.create(el, { type: 'lines', mask: 'lines' });
-						gsap.from(s.lines, {
-							yPercent: 115,
-							duration: 0.85,
-							stagger: 0.09,
-							ease: 'power4.out',
-							scrollTrigger: { trigger: el, start: 'top 82%' },
-							onComplete: () => s.revert(),
-						});
-					});
-				});
+<style>
+	/* principle cards */
+	.cards-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 14px;
+	}
+	.card {
+		border: 1px solid var(--color-line);
+		background: var(--color-panel);
+		border-radius: 10px;
+		padding: 24px 22px;
+		display: flex;
+		flex-direction: column;
+		transition:
+			border-color 0.2s,
+			transform 0.2s;
+	}
+	.card:hover {
+		border-color: var(--accent-glow);
+		transform: translateY(-2px);
+	}
+	.card h3 {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 15.5px;
+		margin-bottom: 10px;
+		line-height: 1.4;
+	}
+	.card p {
+		color: var(--color-muted);
+		font-size: 13px;
+		line-height: 1.7;
+		flex: 1;
+	}
 
-				document.querySelectorAll<HTMLElement>('[data-anim]').forEach((sect) => {
-					const els = sect.querySelectorAll('[data-reveal], .body-text, .section-label');
-					if (!els.length) return;
-					gsap.from(els, {
-						y: 26,
-						autoAlpha: 0,
-						duration: 0.7,
-						stagger: 0.1,
-						ease: 'power3.out',
-						scrollTrigger: { trigger: sect, start: 'top 72%' },
-					});
-				});
+	/* layers table */
+	.table-wrap {
+		overflow-x: auto;
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 13.5px;
+	}
+	th {
+		text-align: left;
+		color: var(--color-muted);
+		font-weight: 500;
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		padding: 12px 14px;
+		border-bottom: 1px solid var(--color-line);
+	}
+	td {
+		padding: 14px;
+		color: var(--color-fg);
+		border-bottom: 1px solid rgb(28 36 47 / 0.3);
+		vertical-align: top;
+	}
+	.lname {
+		color: var(--color-bright);
+		font-weight: 500;
+		white-space: nowrap;
+	}
 
-				document.querySelectorAll<HTMLElement>('.step').forEach((step) => {
-					ScrollTrigger.create({
-						trigger: step,
-						start: 'top 68%',
-						onEnter: () => step.classList.add('lit'),
-						onLeaveBack: () => step.classList.remove('lit'),
-					});
-				});
-			}
-		</script>
+	/* progression steps */
+	.steps {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		border-left: 1px solid var(--color-line);
+		margin-left: 18px;
+	}
+	.step {
+		display: flex;
+		gap: 20px;
+		align-items: flex-start;
+		padding: 20px 0 20px 28px;
+		position: relative;
+		transition: background 0.3s;
+	}
+	.step-n {
+		flex-shrink: 0;
+		width: 36px;
+		height: 36px;
+		border-radius: 50%;
+		border: 1px solid var(--color-line);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 14px;
+		font-weight: 700;
+		color: var(--color-muted);
+		position: relative;
+		transition: all 0.4s;
+	}
+	.step::before {
+		content: '';
+		position: absolute;
+		left: -5px;
+		top: 32px;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		border: 1px solid var(--color-line);
+		background: var(--color-ink);
+		transition: all 0.4s;
+	}
+	.step.lit::before {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 10px rgb(60 232 130 / 0.6);
+	}
+	.step.lit .step-n {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		color: var(--color-ink);
+		box-shadow: 0 0 16px rgb(60 232 130 / 0.5);
+	}
+	.step strong {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 16px;
+		display: block;
+		margin-bottom: 4px;
+	}
+	.step p {
+		color: var(--color-muted);
+		font-size: 13.5px;
+		line-height: 1.7;
+		max-width: 48ch;
+		margin: 0;
+	}
 
-		<style>
-			/* ========== tokens (page-scoped) ========== */
-			main {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 0 24px;
-			}
+	/* outro back-links */
+	.back-links {
+		margin-top: 32px;
+		display: flex;
+		gap: 32px;
+	}
+	.back-links a {
+		font-size: 15px;
+		color: var(--color-accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.back-links a :global(svg) {
+		width: 1em;
+		height: 1em;
+	}
 
-			.display {
-				font-family: var(--font-display);
-				font-weight: 800;
-				color: var(--color-bright);
-				letter-spacing: -0.02em;
-				line-height: 1.05;
-			}
-			.display.sm {
-				font-size: clamp(1.9rem, 3.6vw, 2.9rem);
-				margin-bottom: 18px;
-			}
-			.dim {
-				color: var(--color-muted);
-			}
-			code.c {
-				color: var(--color-accent);
-				background: rgb(60 232 130 / 0.07);
-				border: 1px solid rgb(60 232 130 / 0.18);
-				border-radius: 4px;
-				padding: 0 5px;
-				font-size: 0.92em;
-			}
-			.body-text {
-				color: var(--color-muted);
-				max-width: 52ch;
-				margin-bottom: 32px;
-				line-height: 1.75;
-			}
-
-			/* ========== nav ========== */
-			.nav {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 22px 24px;
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-			}
-			.wordmark {
-				font-weight: 700;
-				font-size: 19px;
-				color: var(--color-bright);
-				text-decoration: none;
-			}
-			.sm-wm {
-				font-size: 15px;
-			}
-			.blink {
-				display: inline-block;
-				width: 9px;
-				height: 1em;
-				margin-left: 2px;
-				vertical-align: text-bottom;
-				background: var(--color-accent);
-				animation: blink 1.06s steps(1) infinite;
-			}
-			@keyframes blink {
-				50% {
-					opacity: 0;
-				}
-			}
-			.links {
-				display: flex;
-				gap: 24px;
-			}
-			.links a,
-			.back a {
-				color: var(--color-muted);
-				text-decoration: none;
-				font-size: 13.5px;
-				letter-spacing: 0.04em;
-				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left
-					bottom / 0% 1px;
-				transition:
-					color 0.18s,
-					background-size 0.25s;
-				padding-bottom: 2px;
-			}
-			.links a:hover,
-			.back a:hover {
-				color: var(--color-accent);
-				background-size: 100% 1px;
-			}
-
-			/* ========== hero ========== */
-			.hero {
-				padding: 72px 0 76px;
-				max-width: 680px;
-				position: relative;
-			}
-			.hero::before {
-				content: '';
-				position: absolute;
-				top: -20%;
-				right: -50%;
-				width: 80%;
-				height: 100%;
-				background: radial-gradient(ellipse at center, rgb(60 232 130 / 0.05), transparent 65%);
-				pointer-events: none;
-			}
-			.tag {
-				color: var(--color-accent);
-				font-size: 12px;
-				letter-spacing: 0.22em;
-				text-transform: uppercase;
-				margin-bottom: 22px;
-			}
-			.hero h1 {
-				font-size: clamp(3rem, 6vw, 5rem);
-				margin-bottom: 28px;
-			}
-			.hero-sub {
-				color: var(--color-muted);
-				font-size: 16px;
-				line-height: 1.8;
-				max-width: 56ch;
-			}
-
-			/* ========== sections ========== */
-			.section {
-				padding: 84px 0;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-			}
-			.section-label {
-				display: flex;
-				align-items: center;
-				gap: 10px;
-				color: var(--color-muted);
-				font-size: 12px;
-				letter-spacing: 0.2em;
-				text-transform: uppercase;
-				margin-bottom: 38px;
-			}
-			.dot {
-				width: 9px;
-				height: 9px;
-				border-radius: 50%;
-				border: 1px solid var(--color-muted);
-			}
-
-			/* ========== principle cards ========== */
-			.cards-grid {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				gap: 14px;
-			}
-			.card {
-				border: 1px solid var(--color-line);
-				background: var(--color-panel);
-				border-radius: 10px;
-				padding: 24px 22px;
-				display: flex;
-				flex-direction: column;
-				transition:
-					border-color 0.2s,
-					transform 0.2s;
-			}
-			.card:hover {
-				border-color: rgb(60 232 130 / 0.4);
-				transform: translateY(-2px);
-			}
-			.card h3 {
-				font-family: var(--font-display);
-				font-weight: 700;
-				color: var(--color-bright);
-				font-size: 15.5px;
-				margin-bottom: 10px;
-				line-height: 1.4;
-			}
-			.card p {
-				color: var(--color-muted);
-				font-size: 13px;
-				line-height: 1.7;
-				flex: 1;
-			}
-
-			/* ========== split layout ========== */
-			.split {
-				display: grid;
-				grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
-				gap: 48px;
-				align-items: start;
-			}
-
-			/* ========== table ========== */
-			.table-wrap {
-				overflow-x: auto;
-			}
-			table {
-				width: 100%;
-				border-collapse: collapse;
-				font-size: 13.5px;
-			}
-			th {
-				text-align: left;
-				color: var(--color-muted);
-				font-weight: 500;
-				font-size: 11px;
-				letter-spacing: 0.12em;
-				text-transform: uppercase;
-				padding: 12px 14px;
-				border-bottom: 1px solid var(--color-line);
-			}
-			td {
-				padding: 14px;
-				color: var(--color-fg);
-				border-bottom: 1px solid rgb(28 36 47 / 0.3);
-				vertical-align: top;
-			}
-			.lname {
-				color: var(--color-bright);
-				font-weight: 500;
-				white-space: nowrap;
-			}
-
-			/* ========== code card ========== */
-			.code-card {
-				border: 1px solid var(--color-line);
-				border-radius: 10px;
-				overflow: hidden;
-				background: var(--color-panel-2);
-			}
-			.code-card :global(pre) {
-				padding: 20px 22px;
-				font-size: 13.5px;
-				line-height: 1.8;
-				background: transparent !important;
-				overflow-x: auto;
-			}
-
-			/* ========== progression steps ========== */
-			.steps {
-				list-style: none;
-				padding: 0;
-				margin: 0;
-				display: flex;
-				flex-direction: column;
-				border-left: 1px solid var(--color-line);
-				margin-left: 18px;
-			}
-			.step {
-				display: flex;
-				gap: 20px;
-				align-items: flex-start;
-				padding: 20px 0 20px 28px;
-				position: relative;
-				transition: background 0.3s;
-			}
-			.step-n {
-				flex-shrink: 0;
-				width: 36px;
-				height: 36px;
-				border-radius: 50%;
-				border: 1px solid var(--color-line);
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				font-size: 14px;
-				font-weight: 700;
-				color: var(--color-muted);
-				position: relative;
-				transition: all 0.4s;
-			}
-			/* connector dot on the left border */
-			.step::before {
-				content: '';
-				position: absolute;
-				left: -5px;
-				top: 32px;
-				width: 9px;
-				height: 9px;
-				border-radius: 50%;
-				border: 1px solid var(--color-line);
-				background: var(--color-ink);
-				transition: all 0.4s;
-			}
-			.step.lit::before {
-				background: var(--color-accent);
-				border-color: var(--color-accent);
-				box-shadow: 0 0 10px rgb(60 232 130 / 0.6);
-			}
-			.step.lit .step-n {
-				background: var(--color-accent);
-				border-color: var(--color-accent);
-				color: var(--color-ink);
-				box-shadow: 0 0 16px rgb(60 232 130 / 0.5);
-			}
-			.step strong {
-				font-family: var(--font-display);
-				font-weight: 700;
-				color: var(--color-bright);
-				font-size: 16px;
-				display: block;
-				margin-bottom: 4px;
-			}
-			.step p {
-				color: var(--color-muted);
-				font-size: 13.5px;
-				line-height: 1.7;
-				max-width: 48ch;
-				margin: 0;
-			}
-
-			/* ========== outro ========== */
-			.outro {
-				padding: 72px 0 120px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-			}
-			blockquote {
-				color: var(--color-muted);
-				font-size: 15px;
-				font-style: italic;
-				line-height: 1.8;
-				padding: 28px 32px;
-				border: 1px solid var(--color-line);
-				border-left: 3px solid var(--color-accent);
-				border-radius: 10px;
-				background: var(--color-panel);
-				max-width: 640px;
-				margin: 0;
-			}
-			.back {
-				margin-top: 32px;
-				display: flex;
-				gap: 32px;
-			}
-			.back a {
-				font-size: 15px;
-				color: var(--color-accent);
-				display: inline-flex;
-				align-items: center;
-				gap: 6px;
-			}
-			.back a :global(svg) {
-				width: 1em;
-				height: 1em;
-			}
-
-			/* ========== footer ========== */
-			.ft {
-				max-width: 1080px;
-				margin: 0 auto;
-				padding: 26px 24px 34px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				gap: 18px;
-				font-size: 13px;
-			}
-
-			/* ========== responsive ========== */
-			@media (max-width: 900px) {
-				.split {
-					grid-template-columns: minmax(0, 1fr);
-					gap: 28px;
-				}
-				.cards-grid {
-					grid-template-columns: repeat(2, minmax(0, 1fr));
-				}
-				.hero {
-					padding: 44px 0 52px;
-				}
-				.section {
-					padding: 60px 0;
-				}
-			}
-			@media (max-width: 560px) {
-				.cards-grid {
-					grid-template-columns: minmax(0, 1fr);
-				}
-				.ft {
-					flex-direction: column;
-				}
-				.code-card :global(pre) {
-					font-size: 12px;
-					padding: 16px;
-				}
-				.steps {
-					margin-left: 10px;
-				}
-				.step {
-					padding-left: 20px;
-				}
-			}
-		</style>
-	</body>
-</html>
+	@media (max-width: 900px) {
+		.cards-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@media (max-width: 560px) {
+		.cards-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.steps {
+			margin-left: 10px;
+		}
+		.step {
+			padding-left: 20px;
+		}
+	}
+</style>

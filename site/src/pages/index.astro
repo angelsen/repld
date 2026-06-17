@@ -1,10 +1,11 @@
 ---
-import { Font } from 'astro:assets';
 import { Code } from 'astro:components';
 import { Icon } from '@astrojs/starlight/components';
 import vesper from '@shikijs/themes/vesper';
+import BaseHead from '../components/BaseHead.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
 import TerminalHero from '../components/TerminalHero.astro';
-import '../styles/global.css';
 
 const pushSnippet = `defer(acme.scan(watchlist), "account scan")  # task_id, immediately
 
@@ -28,17 +29,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 <!doctype html>
 <html lang="en">
 	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="generator" content={Astro.generator} />
-		<title>repld — a live Python kernel for your agent</title>
-		<meta
-			name="description"
-			content="repld runs a persistent Python kernel you and your agent share. Push notifications instead of polling, a scriptable browser, and one-off code that hardens into tools."
+		<BaseHead
+			title="repld — a live Python kernel for your agent"
+			description="repld runs a persistent Python kernel you and your agent share. Push notifications instead of polling, a scriptable browser, and one-off code that hardens into tools."
 		/>
-		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-		<Font cssVariable="--font-geist-mono" preload />
-		<Font cssVariable="--font-bricolage" preload />
 		<script is:inline>
 			document.documentElement.classList.add('js');
 		</script>
@@ -56,16 +50,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<!-- the wire: channel line running down the page -->
 		<div class="wire" aria-hidden="true"><div class="wire-fill" id="wire-fill"></div></div>
 
-		<header class="nav" id="nav">
-			<a class="wordmark" href={base}>repld<span class="block-cursor"></span></a>
-			<nav class="nav-links">
-				<a href={`${base}quickstart`}>quickstart</a>
-				<a href={`${base}playbook`}>playbook</a>
-				<a href={`${base}production`}>production</a>
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</header>
+		<Nav />
 
 		<main>
 			<!-- ============================ hero ============================ -->
@@ -203,7 +188,10 @@ linked (from other projects):
 							Do it by hand first. The workflow reveals itself through repetition — then hardens,
 							one phase at a time.
 						</p>
-						<p class="playbook-link"><a href={`${base}playbook`}>read the full playbook <Icon name="right-arrow" size="1em" /></a></p>
+						<p class="playbook-link">
+							<a href={`${base}playbook`}
+								>read the full playbook <Icon name="right-arrow" size="1em" /></a>
+						</p>
 					</div>
 					<div class="progression" data-reveal>
 						<div class="phase">
@@ -284,15 +272,7 @@ linked (from other projects):
 			</section>
 		</main>
 
-		<footer class="footer">
-			<span class="wordmark small">repld<span class="block-cursor"></span></span>
-			<nav>
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-			<span class="dim">built with repld, obviously</span>
-		</footer>
+		<Footer tagline="built with repld, obviously" />
 
 		<script>
 			import gsap from 'gsap';
@@ -480,9 +460,14 @@ linked (from other projects):
 		</script>
 
 		<style>
+			/* wider shell for the landing — cascades into Nav + Footer */
+			:global(:root) {
+				--shell-w: 1180px;
+			}
+
 			/* ---------- shell ---------- */
 			main {
-				max-width: 1180px;
+				max-width: var(--shell-w);
 				margin: 0 auto;
 				padding: 0 24px;
 			}
@@ -492,9 +477,6 @@ linked (from other projects):
 				color: var(--color-bright);
 				letter-spacing: -0.02em;
 				line-height: 1.02;
-			}
-			.dim {
-				color: var(--color-muted);
 			}
 			.b {
 				color: var(--color-bright);
@@ -535,7 +517,7 @@ linked (from other projects):
 			/* ---------- wire ---------- */
 			.wire {
 				position: fixed;
-				left: max(12px, calc((100vw - 1180px) / 2 - 48px));
+				left: max(12px, calc((100vw - var(--shell-w)) / 2 - 48px));
 				top: 0;
 				bottom: 0;
 				width: 1px;
@@ -554,67 +536,24 @@ linked (from other projects):
 				}
 			}
 
-			/* ---------- nav ---------- */
-			.nav {
-				max-width: 1180px;
-				margin: 0 auto;
-				padding: 22px 24px;
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-			}
-			.wordmark {
-				font-weight: 700;
-				font-size: 19px;
-				color: var(--color-bright);
-				text-decoration: none;
-				letter-spacing: -0.01em;
-			}
-			.wordmark.small {
-				font-size: 15px;
-			}
-			.block-cursor {
-				display: inline-block;
-				width: 9px;
-				height: 1em;
-				margin-left: 2px;
-				vertical-align: text-bottom;
-				background: var(--color-accent);
-				animation: blink 1.06s steps(1) infinite;
-			}
-			@keyframes blink {
-				50% {
-					opacity: 0;
-				}
-			}
-			.nav-links {
-				display: flex;
-				gap: 26px;
-			}
-			.nav-links a,
-			.footer a,
+			/* ---------- outro links (shared nav/footer live in components) ---------- */
 			.outro-links a {
 				color: var(--color-muted);
 				text-decoration: none;
-				font-size: 13.5px;
+				font-size: 15px;
 				letter-spacing: 0.04em;
-				transition: color 0.18s;
 				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left
 					bottom / 0% 1px;
 				transition:
 					color 0.18s,
 					background-size 0.25s;
 				padding-bottom: 2px;
+				display: inline-block; /* magnetic transform needs a box */
 			}
-			.nav-links a:hover,
-			.footer a:hover,
 			.outro-links a:hover {
 				color: var(--color-accent);
 				background-size: 100% 1px;
 			}
-			.outro-links a {
-				display: inline-block;
-			} /* magnetic transform needs a box */
 
 			/* ---------- hero ---------- */
 			.hero {
@@ -904,7 +843,9 @@ linked (from other projects):
 				display: flex;
 				flex-direction: column;
 				gap: 6px;
-				transition: border-color 0.2s, transform 0.2s;
+				transition:
+					border-color 0.2s,
+					transform 0.2s;
 			}
 			.journey-card:hover {
 				border-color: rgb(60 232 130 / 0.4);
@@ -939,27 +880,6 @@ linked (from other projects):
 			}
 			.outro-links {
 				margin-top: 28px;
-			}
-			.outro-links a {
-				font-size: 15px;
-				color: var(--color-accent);
-			}
-
-			/* footer */
-			.footer {
-				max-width: 1180px;
-				margin: 0 auto;
-				padding: 26px 24px 34px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				gap: 18px;
-				font-size: 13px;
-			}
-			.footer nav {
-				display: flex;
-				gap: 22px;
 			}
 
 			/* ---------- mobile ---------- */

@@ -1,0 +1,37 @@
+---
+import { Code } from 'astro:components';
+import vesper from '@shikijs/themes/vesper';
+
+interface Props {
+	code: string;
+	lang?: string;
+	label?: string;
+	labelTone?: 'accent' | 'dim';
+	class?: string;
+}
+
+const { code, lang = 'python', label, labelTone = 'dim', class: cls } = Astro.props;
+---
+
+<div class:list={['code-card', cls]} data-reveal>
+	{label && <span class:list={['code-label', labelTone]}>{label}</span>}
+	<Code code={code} lang={lang} theme={vesper} />
+</div>
+
+<style>
+	.code-label {
+		position: absolute;
+		top: 12px;
+		right: 16px;
+		font-size: 10px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		z-index: 1;
+	}
+	.code-label.accent {
+		color: var(--color-accent);
+	}
+	.code-label.dim {
+		color: var(--color-muted);
+	}
+</style>

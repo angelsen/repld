@@ -1,68 +1,45 @@
 ---
-import { Font } from 'astro:assets';
 import { Icon } from '@astrojs/starlight/components';
-import '../styles/global.css';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Section from '../components/Section.astro';
+import NudgeCard from '../components/NudgeCard.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Quickstart — repld</title>
-		<meta
-			name="description"
-			content="How to work with Claude when repld is connected. What to say, what to expect, how to think."
-		/>
-		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-		<Font cssVariable="--font-geist-mono" preload />
-		<Font cssVariable="--font-bricolage" preload />
-	</head>
-	<body>
-		<header class="nav">
-			<a class="wordmark" href={base}>repld<span class="blink"></span></a>
-			<nav class="links">
-				<a href={base}>home</a>
-				<a href={`${base}playbook`}>playbook</a>
-				<a href={`${base}production`}>production</a>
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</header>
+<BaseLayout
+	title="Quickstart — repld"
+	description="How to work with Claude when repld is connected. What to say, what to expect, how to think."
+	active="quickstart"
+>
+	<!-- ==================== hero ==================== -->
+	<section class="hero">
+		<p class="tag">getting started</p>
+		<h1 class="display">You talk.<br />Claude drives.</h1>
+		<p class="hero-sub">
+			repld gives Claude a live Python kernel, a scriptable browser, and push notifications. You
+			don't write code — you describe what you want, steer the results, and tell Claude when to
+			harden something into a tool.
+		</p>
+	</section>
 
-		<main>
-			<!-- ==================== hero ==================== -->
-			<section class="hero">
-				<p class="tag">getting started</p>
-				<h1 class="display">You talk.<br />Claude drives.</h1>
-				<p class="hero-sub">
-					repld gives Claude a live Python kernel, a scriptable browser, and
-					push notifications. You don't write code — you describe what you
-					want, steer the results, and tell Claude when to harden something
-					into a tool.
+	<!-- ==================== install ==================== -->
+	<Section label="setup">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Four commands.</h2>
+				<p class="body-text">
+					Install repld, scaffold the project, start the kernel, launch Claude with channel support.
+					That's it.
 				</p>
-			</section>
-
-			<!-- ==================== install ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>setup</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">Four commands.</h2>
-						<p class="body-text">
-							Install repld, scaffold the project, start the kernel, launch
-							Claude with channel support. That's it.
-						</p>
-					</div>
-					<div class="term" data-reveal>
-						<div class="term-bar">
-							<span class="td td-r"></span><span class="td td-y"></span><span class="td td-g"></span>
-							<span class="term-title">terminal</span>
-						</div>
-						<pre class="term-body"><span class="dim">$</span> uv tool install repld-tool
+			</div>
+			<div class="term" data-reveal>
+				<div class="term-bar">
+					<span class="td td-r"></span><span class="td td-y"></span><span class="td td-g"></span>
+					<span class="term-title">terminal</span>
+				</div>
+				<pre
+					class="term-body"><span class="dim">$</span> uv tool install repld-tool
 <span class="dim">$</span> cd your-project
 <span class="dim">$</span> repld init
 <span class="accent">✓</span> .mcp.json written
@@ -73,460 +50,351 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 
 <span class="dim"># in another terminal:</span>
 <span class="dim">$</span> claude --channels</pre>
-					</div>
-				</div>
-			</section>
+			</div>
+		</div>
+	</Section>
 
-			<!-- ==================== your browser is the API key ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>your browser is the api key</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">Log in like a human.<br />Automate like a machine.</h2>
-						<p class="body-text">
-							You're already logged into everything — Shopify, your bank,
-							internal dashboards, admin panels. Claude attaches to your
-							Chrome and inherits your sessions. No OAuth, no API keys, no
-							env vars, no secrets files.
-						</p>
-						<p class="body-text">
-							The traffic <em>is</em> the documentation. Claude discovers the
-							API surface from what the page actually does.
-						</p>
-					</div>
-					<div class="chat" data-reveal>
-						<div class="msg you">I'm logged into our Shopify admin in Chrome</div>
-						<div class="msg claude">
-							<p class="msg-label">Claude</p>
-							<p>I'll attach to your Shopify admin tab and discover the API surface from your traffic.</p>
-							<div class="msg-code">
-								<pre>tab = await browser.get("*admin.shopify*")
+	<!-- ==================== your browser is the API key ==================== -->
+	<Section label="your browser is the api key">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Log in like a human.<br />Automate like a machine.</h2>
+				<p class="body-text">
+					You're already logged into everything — Shopify, your bank, internal dashboards, admin
+					panels. Claude attaches to your Chrome and inherits your sessions. No OAuth, no API keys,
+					no env vars, no secrets files.
+				</p>
+				<p class="body-text">
+					The traffic <em>is</em> the documentation. Claude discovers the API surface from what the page
+					actually does.
+				</p>
+			</div>
+			<div class="chat" data-reveal>
+				<div class="msg you">I'm logged into our Shopify admin in Chrome</div>
+				<div class="msg claude">
+					<p class="msg-label">Claude</p>
+					<p>
+						I'll attach to your Shopify admin tab and discover the API surface from your traffic.
+					</p>
+					<div class="msg-code">
+						<pre>tab = await browser.get("*admin.shopify*")
 await tab.click("text=Orders")
 reqs = tab.network(url="*api*")
 # 14 API calls — REST admin + GraphQL</pre>
-							</div>
-							<p>Found the orders endpoint. Want me to pull recent orders?</p>
-						</div>
 					</div>
+					<p>Found the orders endpoint. Want me to pull recent orders?</p>
 				</div>
-			</section>
+			</div>
+		</div>
+	</Section>
 
-			<!-- ==================== how to talk to claude ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>how to talk to claude</div>
-				<h2 class="display sm">Describe intent, not implementation.</h2>
-				<p class="body-text">
-					You're steering, not scripting. Claude runs Python in the kernel — you
-					see the results and redirect. The conversation is the development
-					environment.
+	<!-- ==================== how to talk to claude ==================== -->
+	<Section label="how to talk to claude">
+		<h2 class="display sm">Describe intent, not implementation.</h2>
+		<p class="body-text">
+			You're steering, not scripting. Claude runs Python in the kernel — you see the results and
+			redirect. The conversation is the development environment.
+		</p>
+		<div class="prompts-grid" data-reveal>
+			<div class="prompt-card">
+				<p class="prompt-label accent">Discovery</p>
+				<p class="prompt-text">"What API calls does this page make when I click Export?"</p>
+				<p class="prompt-note">Claude attaches, you click, Claude reads the network delta.</p>
+			</div>
+			<div class="prompt-card">
+				<p class="prompt-label accent">Extraction</p>
+				<p class="prompt-text">"Pull all invoices from last month"</p>
+				<p class="prompt-note">
+					Claude uses your session to fetch, paginate, and structure the data.
 				</p>
-				<div class="prompts-grid" data-reveal>
-					<div class="prompt-card">
-						<p class="prompt-label accent">Discovery</p>
-						<p class="prompt-text">"What API calls does this page make when I click Export?"</p>
-						<p class="prompt-note">Claude attaches, you click, Claude reads the network delta.</p>
-					</div>
-					<div class="prompt-card">
-						<p class="prompt-label accent">Extraction</p>
-						<p class="prompt-text">"Pull all invoices from last month"</p>
-						<p class="prompt-note">Claude uses your session to fetch, paginate, and structure the data.</p>
-					</div>
-					<div class="prompt-card">
-						<p class="prompt-label accent">Automation</p>
-						<p class="prompt-text">"Check for new orders every 15 minutes and notify me"</p>
-						<p class="prompt-note">Claude wires <code class="c">@every</code> + <code class="c">notify()</code>. You get channel pushes.</p>
-					</div>
-					<div class="prompt-card">
-						<p class="prompt-label accent">Hardening</p>
-						<p class="prompt-text">"Let's make a gist for this app's API"</p>
-						<p class="prompt-note">Say this early. Claude explores interactively and writes the gist as it goes.</p>
-					</div>
-				</div>
-			</section>
-
-			<!-- ==================== nudge cheat sheet ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>nudge cheat sheet</div>
-				<h2 class="display sm">Say this first.</h2>
-				<p class="body-text">
-					Claude has MCP resources it can read on demand. A one-line nudge before
-					you start makes the difference between guessing and knowing.
+			</div>
+			<div class="prompt-card">
+				<p class="prompt-label accent">Automation</p>
+				<p class="prompt-text">"Check for new orders every 15 minutes and notify me"</p>
+				<p class="prompt-note">
+					Claude wires <code class="c">@every</code> + <code class="c">notify()</code>. You get
+					channel pushes.
 				</p>
-				<div class="nudge-grid" data-reveal>
-					<div class="nudge">
-						<p class="nudge-when">Before browser work</p>
-						<p class="nudge-say">"Read the browser guide first"</p>
-						<code class="c">repld://docs/browser</code>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Before writing a gist</p>
-						<p class="nudge-say">"Read the guide before you start"</p>
-						<code class="c">repld://docs/guide</code>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Before using an existing gist</p>
-						<p class="nudge-say">"Check the gist API first"</p>
-						<code class="c">repld://gists/{'{name}'}</code>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Before designing automation</p>
-						<p class="nudge-say">"Read the playbook"</p>
-						<code class="c">repld://docs/playbook</code>
-					</div>
-					<div class="nudge">
-						<p class="nudge-when">Before graduating to production</p>
-						<p class="nudge-say">"Read the production guide"</p>
-						<code class="c">repld://docs/production</code>
-					</div>
-				</div>
-			</section>
+			</div>
+			<div class="prompt-card">
+				<p class="prompt-label accent">Hardening</p>
+				<p class="prompt-text">"Let's make a gist for this app's API"</p>
+				<p class="prompt-note">
+					Say this early. Claude explores interactively and writes the gist as it goes.
+				</p>
+			</div>
+		</div>
+	</Section>
 
-			<!-- ==================== the gist instinct ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>the gist instinct</div>
-				<div class="split">
-					<div>
-						<h2 class="display sm">Say it early.</h2>
-						<p class="body-text">
-							You don't wait for repetition. When you know an app will be
-							useful long-term, tell Claude upfront: <em>"let's make a gist
-							for this."</em> Claude explores the API interactively and
-							writes the gist as it discovers the shape.
-						</p>
-						<p class="body-text">
-							The interactive session and the gist collapse into one
-							conversation. Discovery <em>is</em> development.
-						</p>
-					</div>
-					<div class="chat" data-reveal>
-						<div class="msg you">Let's reverse-engineer the company directory API and make a gist for lookups</div>
-						<div class="msg claude">
-							<p class="msg-label">Claude</p>
-							<p>I'll read the browser guide first, then attach to your tab and discover the API.</p>
-							<div class="msg-code">
-								<pre><span class="dim"># reads repld://docs/browser</span>
+	<!-- ==================== nudge cheat sheet ==================== -->
+	<Section label="nudge cheat sheet">
+		<h2 class="display sm">Say this first.</h2>
+		<p class="body-text">
+			Claude has MCP resources it can read on demand. A one-line nudge before you start makes the
+			difference between guessing and knowing.
+		</p>
+		<div class="nudge-grid" data-reveal>
+			<NudgeCard
+				when="Before browser work"
+				say={'"Read the browser guide first"'}
+				uri="repld://docs/browser"
+			/>
+			<NudgeCard
+				when="Before writing a gist"
+				say={'"Read the guide before you start"'}
+				uri="repld://docs/guide"
+			/>
+			<NudgeCard
+				when="Before using an existing gist"
+				say={'"Check the gist API first"'}
+				uri="repld://gists/{name}"
+			/>
+			<NudgeCard
+				when="Before designing automation"
+				say={'"Read the playbook"'}
+				uri="repld://docs/playbook"
+			/>
+			<NudgeCard
+				when="Before graduating to production"
+				say={'"Read the production guide"'}
+				uri="repld://docs/production"
+			/>
+		</div>
+	</Section>
+
+	<!-- ==================== the gist instinct ==================== -->
+	<Section label="the gist instinct">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Say it early.</h2>
+				<p class="body-text">
+					You don't wait for repetition. When you know an app will be useful long-term, tell Claude
+					upfront: <em>"let's make a gist for this."</em> Claude explores the API interactively and writes
+					the gist as it discovers the shape.
+				</p>
+				<p class="body-text">
+					The interactive session and the gist collapse into one conversation. Discovery <em>is</em> development.
+				</p>
+			</div>
+			<div class="chat" data-reveal>
+				<div class="msg you">
+					Let's reverse-engineer the company directory API and make a gist for lookups
+				</div>
+				<div class="msg claude">
+					<p class="msg-label">Claude</p>
+					<p>I'll read the browser guide first, then attach to your tab and discover the API.</p>
+					<div class="msg-code">
+						<pre><span class="dim"># reads repld://docs/browser</span>
 <span class="dim"># reads repld://gists/_registry</span>
 tab = await browser.get("*directory.example.com*")
 <span class="dim"># discovers search, company, financials endpoints</span>
 <span class="dim"># writes gists/acme.py with Acme class</span></pre>
-							</div>
-							<p>Created <code>gists/acme.py</code> — try <code>from acme import Acme</code>.</p>
-						</div>
 					</div>
+					<p>Created <code>gists/acme.py</code> — try <code>from acme import Acme</code>.</p>
 				</div>
-			</section>
-
-			<!-- ==================== state is alive ==================== -->
-			<section class="section" data-anim>
-				<div class="section-label"><span class="dot"></span>state is alive</div>
-				<h2 class="display sm">Nothing restarts.</h2>
-				<p class="body-text narrow">
-					The kernel doesn't reset between messages. Variables persist. Auth
-					persists. Background tasks keep running. Claude picks up exactly where
-					it left off — and so do you. Open <code class="c">repld exec</code> in
-					another terminal to inspect anything Claude created.
-				</p>
-			</section>
-
-			<!-- ==================== outro ==================== -->
-			<section class="outro" data-anim>
-				<blockquote data-reveal>
-					repld is a collaboration tool, not an automation framework. You bring
-					the context — which apps matter, what the data means, when something
-					looks wrong. Claude brings the hands — executing, fetching, wiring,
-					writing code. The kernel is where you meet.
-				</blockquote>
-				<div class="back" data-reveal>
-				<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
-				<a href={`${base}production`}>graduating to production <Icon name="right-arrow" size="1em" /></a>
 			</div>
-			</section>
-		</main>
+		</div>
+	</Section>
 
-		<footer class="ft">
-			<span class="wordmark sm-wm">repld<span class="blink"></span></span>
-			<nav class="links">
-				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
-				<a href="https://github.com/angelsen/repld">github</a>
-			</nav>
-		</footer>
+	<!-- ==================== state is alive ==================== -->
+	<Section label="state is alive">
+		<h2 class="display sm">Nothing restarts.</h2>
+		<p class="body-text narrow">
+			The kernel doesn't reset between messages. Variables persist. Auth persists. Background tasks
+			keep running. Claude picks up exactly where it left off — and so do you. Open <code class="c"
+				>repld exec</code
+			> in another terminal to inspect anything Claude created.
+		</p>
+	</Section>
 
-		<script>
-			import gsap from 'gsap';
-			import { ScrollTrigger } from 'gsap/ScrollTrigger';
-			import { SplitText } from 'gsap/SplitText';
-			import Lenis from 'lenis';
+	<!-- ==================== outro ==================== -->
+	<section class="outro" data-anim>
+		<blockquote data-reveal>
+			repld is a collaboration tool, not an automation framework. You bring the context — which apps
+			matter, what the data means, when something looks wrong. Claude brings the hands — executing,
+			fetching, wiring, writing code. The kernel is where you meet.
+		</blockquote>
+		<div class="back-links" data-reveal>
+			<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
+			<a href={`${base}production`}
+				>graduating to production <Icon name="right-arrow" size="1em" /></a
+			>
+		</div>
+	</section>
+</BaseLayout>
 
-			gsap.registerPlugin(ScrollTrigger, SplitText);
-			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+<style>
+	/* terminal mock */
+	.term {
+		background: var(--color-panel-2);
+		border: 1px solid var(--color-line);
+		border-radius: 10px;
+		overflow: hidden;
+	}
+	.term-bar {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 10px 14px;
+		border-bottom: 1px solid var(--color-line);
+		background: var(--color-panel);
+	}
+	.td {
+		width: 11px;
+		height: 11px;
+		border-radius: 50%;
+		opacity: 0.85;
+	}
+	.td-r {
+		background: #ff5f57;
+	}
+	.td-y {
+		background: #febc2e;
+	}
+	.td-g {
+		background: #28c840;
+	}
+	.term-title {
+		margin-left: 10px;
+		font-size: 12px;
+		color: var(--color-muted);
+	}
+	.term-body {
+		padding: 18px;
+		font-size: 13px;
+		line-height: 1.9;
+		color: var(--color-fg);
+	}
 
-			if (!reduced) {
-				const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
-				lenis.on('scroll', ScrollTrigger.update);
-				gsap.ticker.add((t) => lenis.raf(t * 1000));
-				gsap.ticker.lagSmoothing(0);
+	/* chat mock */
+	.chat {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+	}
+	.msg {
+		border: 1px solid var(--color-line);
+		border-radius: 10px;
+		padding: 16px 18px;
+		font-size: 13.5px;
+		line-height: 1.7;
+	}
+	.msg.you {
+		color: var(--color-bright);
+		background: var(--color-panel);
+		border-color: rgb(255 180 84 / 0.3);
+		align-self: flex-end;
+		max-width: 90%;
+	}
+	.msg.claude {
+		background: var(--color-panel-2);
+		color: var(--color-fg);
+	}
+	.msg.claude p {
+		margin-bottom: 10px;
+	}
+	.msg.claude p:last-child {
+		margin-bottom: 0;
+	}
+	.msg-label {
+		font-size: 11px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--color-accent);
+		margin-bottom: 8px !important;
+	}
+	.msg-code {
+		background: rgb(0 0 0 / 0.3);
+		border-radius: 6px;
+		padding: 12px 14px;
+		margin: 10px 0;
+	}
+	.msg-code pre {
+		font-size: 12.5px;
+		line-height: 1.8;
+		color: var(--color-fg);
+	}
+	.msg-code code {
+		color: var(--color-fg);
+	}
 
-				document.fonts.ready.then(() => {
-					const heroSplit = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
-					gsap.from(heroSplit.lines, {
-						yPercent: 115, duration: 0.9, stagger: 0.09, ease: 'power4.out',
-						onComplete: () => heroSplit.revert(),
-					});
-					gsap.from('.tag', { y: 16, autoAlpha: 0, duration: 0.5, ease: 'power3.out' });
-					gsap.from('.hero-sub', { y: 22, autoAlpha: 0, duration: 0.7, ease: 'power3.out', delay: 0.3 });
+	/* prompt cards */
+	.prompts-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 14px;
+		margin-top: 8px;
+	}
+	.prompt-card {
+		border: 1px solid var(--color-line);
+		background: var(--color-panel);
+		border-radius: 10px;
+		padding: 20px 18px;
+		transition:
+			border-color 0.2s,
+			transform 0.2s;
+	}
+	.prompt-card:hover {
+		border-color: var(--accent-glow);
+		transform: translateY(-2px);
+	}
+	.prompt-label {
+		font-size: 11px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		margin-bottom: 10px;
+	}
+	.prompt-text {
+		color: var(--color-bright);
+		font-size: 14.5px;
+		line-height: 1.5;
+		margin-bottom: 10px;
+		font-style: italic;
+	}
+	.prompt-note {
+		color: var(--color-muted);
+		font-size: 12.5px;
+		line-height: 1.6;
+	}
 
-					document.querySelectorAll<HTMLElement>('[data-anim] h2').forEach((el) => {
-						const s = SplitText.create(el, { type: 'lines', mask: 'lines' });
-						gsap.from(s.lines, {
-							yPercent: 115, duration: 0.85, stagger: 0.09, ease: 'power4.out',
-							scrollTrigger: { trigger: el, start: 'top 82%' },
-							onComplete: () => s.revert(),
-						});
-					});
-				});
+	/* nudge cheat sheet */
+	.nudge-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 14px;
+		margin-top: 8px;
+	}
 
-				document.querySelectorAll<HTMLElement>('[data-anim]').forEach((sect) => {
-					const els = sect.querySelectorAll('[data-reveal], .body-text, .section-label, .narrow');
-					if (!els.length) return;
-					gsap.from(els, {
-						y: 26, autoAlpha: 0, duration: 0.7, stagger: 0.1, ease: 'power3.out',
-						scrollTrigger: { trigger: sect, start: 'top 72%' },
-					});
-				});
-			}
-		</script>
+	/* outro back-links */
+	.back-links {
+		margin-top: 32px;
+		display: flex;
+		gap: 32px;
+	}
+	.back-links a {
+		font-size: 15px;
+		color: var(--color-accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.back-links a :global(svg) {
+		width: 1em;
+		height: 1em;
+	}
 
-		<style>
-			main { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-
-			.display {
-				font-family: var(--font-display); font-weight: 800;
-				color: var(--color-bright); letter-spacing: -0.02em; line-height: 1.05;
-			}
-			.display.sm { font-size: clamp(1.9rem, 3.6vw, 2.9rem); margin-bottom: 18px; }
-			.dim { color: var(--color-muted); }
-			.accent { color: var(--color-accent); }
-			code.c {
-				color: var(--color-accent);
-				background: rgb(60 232 130 / 0.07);
-				border: 1px solid rgb(60 232 130 / 0.18);
-				border-radius: 4px; padding: 0 5px; font-size: 0.88em;
-			}
-			.body-text {
-				color: var(--color-muted); max-width: 52ch;
-				margin-bottom: 24px; line-height: 1.75;
-			}
-			.body-text em { font-style: normal; color: var(--color-bright); }
-			.narrow { max-width: 60ch; }
-
-			/* nav */
-			.nav {
-				max-width: 1080px; margin: 0 auto; padding: 22px 24px;
-				display: flex; align-items: center; justify-content: space-between;
-			}
-			.wordmark { font-weight: 700; font-size: 19px; color: var(--color-bright); text-decoration: none; }
-			.sm-wm { font-size: 15px; }
-			.blink {
-				display: inline-block; width: 9px; height: 1em; margin-left: 2px;
-				vertical-align: text-bottom; background: var(--color-accent);
-				animation: blink 1.06s steps(1) infinite;
-			}
-			@keyframes blink { 50% { opacity: 0; } }
-			.links { display: flex; gap: 24px; }
-			.links a, .back a {
-				color: var(--color-muted); text-decoration: none; font-size: 13.5px;
-				letter-spacing: 0.04em;
-				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left bottom / 0% 1px;
-				transition: color 0.18s, background-size 0.25s; padding-bottom: 2px;
-			}
-			.links a:hover, .back a:hover { color: var(--color-accent); background-size: 100% 1px; }
-
-			/* hero */
-			.hero {
-				padding: 72px 0 76px; max-width: 680px; position: relative;
-			}
-			.hero::before {
-				content: ''; position: absolute;
-				top: -20%; right: -50%; width: 80%; height: 100%;
-				background: radial-gradient(ellipse at center, rgb(60 232 130 / 0.05), transparent 65%);
-				pointer-events: none;
-			}
-			.tag {
-				color: var(--color-accent); font-size: 12px;
-				letter-spacing: 0.22em; text-transform: uppercase; margin-bottom: 22px;
-			}
-			.hero h1 { font-size: clamp(3rem, 6vw, 5rem); margin-bottom: 28px; }
-			.hero-sub { color: var(--color-muted); font-size: 16px; line-height: 1.8; max-width: 56ch; }
-
-			/* sections */
-			.section { padding: 84px 0; border-top: 1px solid rgb(28 36 47 / 0.55); }
-			.section-label {
-				display: flex; align-items: center; gap: 10px;
-				color: var(--color-muted); font-size: 12px;
-				letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 38px;
-			}
-			.dot {
-				width: 9px; height: 9px; border-radius: 50%;
-				border: 1px solid var(--color-muted);
-			}
-
-			/* split */
-			.split {
-				display: grid;
-				grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
-				gap: 48px; align-items: start;
-			}
-
-			/* terminal mock */
-			.term {
-				background: var(--color-panel-2);
-				border: 1px solid var(--color-line);
-				border-radius: 10px; overflow: hidden;
-			}
-			.term-bar {
-				display: flex; align-items: center; gap: 7px;
-				padding: 10px 14px; border-bottom: 1px solid var(--color-line);
-				background: var(--color-panel);
-			}
-			.td { width: 11px; height: 11px; border-radius: 50%; opacity: 0.85; }
-			.td-r { background: #ff5f57; }
-			.td-y { background: #febc2e; }
-			.td-g { background: #28c840; }
-			.term-title { margin-left: 10px; font-size: 12px; color: var(--color-muted); }
-			.term-body {
-				padding: 18px; font-size: 13px; line-height: 1.9; color: var(--color-fg);
-			}
-
-			/* chat mock */
-			.chat {
-				display: flex; flex-direction: column; gap: 14px;
-			}
-			.msg {
-				border: 1px solid var(--color-line); border-radius: 10px;
-				padding: 16px 18px; font-size: 13.5px; line-height: 1.7;
-			}
-			.msg.you {
-				color: var(--color-bright);
-				background: var(--color-panel);
-				border-color: rgb(255 180 84 / 0.3);
-				align-self: flex-end;
-				max-width: 90%;
-			}
-			.msg.claude {
-				background: var(--color-panel-2);
-				color: var(--color-fg);
-			}
-			.msg.claude p { margin-bottom: 10px; }
-			.msg.claude p:last-child { margin-bottom: 0; }
-			.msg-label {
-				font-size: 11px; letter-spacing: 0.14em;
-				text-transform: uppercase; color: var(--color-accent);
-				margin-bottom: 8px !important;
-			}
-			.msg-code {
-				background: rgb(0 0 0 / 0.3); border-radius: 6px;
-				padding: 12px 14px; margin: 10px 0;
-			}
-			.msg-code pre {
-				font-size: 12.5px; line-height: 1.8; color: var(--color-fg);
-			}
-			.msg-code code { color: var(--color-fg); }
-
-			/* prompt cards */
-			.prompts-grid {
-				display: grid;
-				grid-template-columns: repeat(2, minmax(0, 1fr));
-				gap: 14px; margin-top: 8px;
-			}
-			.prompt-card {
-				border: 1px solid var(--color-line);
-				background: var(--color-panel);
-				border-radius: 10px; padding: 20px 18px;
-			}
-			.prompt-label {
-				font-size: 11px; letter-spacing: 0.14em;
-				text-transform: uppercase; margin-bottom: 10px;
-			}
-			.prompt-text {
-				color: var(--color-bright); font-size: 14.5px;
-				line-height: 1.5; margin-bottom: 10px;
-				font-style: italic;
-			}
-			.prompt-note {
-				color: var(--color-muted); font-size: 12.5px; line-height: 1.6;
-			}
-
-			/* nudge cheat sheet */
-			.nudge-grid {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				gap: 14px; margin-top: 8px;
-			}
-			.nudge {
-				border: 1px solid var(--color-line);
-				background: var(--color-panel);
-				border-radius: 10px; padding: 20px 18px;
-				display: flex; flex-direction: column; gap: 10px;
-				transition: border-color 0.2s, transform 0.2s;
-			}
-			.nudge:hover {
-				border-color: rgb(60 232 130 / 0.35);
-				transform: translateY(-2px);
-			}
-			.nudge-when {
-				font-size: 11px; letter-spacing: 0.14em;
-				text-transform: uppercase; color: var(--color-muted);
-			}
-			.nudge-say {
-				color: var(--color-bright); font-size: 14px;
-				line-height: 1.5; font-style: italic; flex: 1;
-			}
-			.nudge code { display: block; margin-top: auto; }
-
-			/* outro */
-			.outro {
-				padding: 72px 0 120px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-			}
-			blockquote {
-				color: var(--color-muted); font-size: 15px;
-				font-style: italic; line-height: 1.8;
-				padding: 28px 32px;
-				border: 1px solid var(--color-line);
-				border-left: 3px solid var(--color-accent);
-				border-radius: 10px; background: var(--color-panel);
-				max-width: 640px; margin: 0;
-			}
-			.back { margin-top: 32px; display: flex; gap: 32px; }
-			.back a {
-				font-size: 15px; color: var(--color-accent);
-				display: inline-flex; align-items: center; gap: 6px;
-			}
-			.back a :global(svg) { width: 1em; height: 1em; }
-
-			/* footer */
-			.ft {
-				max-width: 1080px; margin: 0 auto;
-				padding: 26px 24px 34px;
-				border-top: 1px solid rgb(28 36 47 / 0.55);
-				display: flex; align-items: center;
-				justify-content: space-between; gap: 18px; font-size: 13px;
-			}
-
-			/* responsive */
-			@media (max-width: 900px) {
-				.split { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-				.prompts-grid { grid-template-columns: minmax(0, 1fr); }
-				.nudge-grid { grid-template-columns: minmax(0, 1fr); }
-				.hero { padding: 44px 0 52px; }
-				.section { padding: 60px 0; }
-			}
-			@media (max-width: 560px) {
-				.ft { flex-direction: column; }
-				.msg.you { max-width: 100%; }
-				.msg-code pre { font-size: 11.5px; }
-			}
-		</style>
-	</body>
-</html>
+	@media (max-width: 900px) {
+		.prompts-grid,
+		.nudge-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+	@media (max-width: 560px) {
+		.msg.you {
+			max-width: 100%;
+		}
+		.msg-code pre {
+			font-size: 11.5px;
+		}
+	}
+</style>

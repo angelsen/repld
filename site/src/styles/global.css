@@ -77,3 +77,195 @@ body::after {
 	opacity: 0.035;
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
+
+/* =========================================================================
+   Shared design system — used across editorial pages via BaseLayout.
+   Defined globally so pages don't redeclare them. Page-specific widgets
+   (chat mock, terminal mock, tier table, etc.) stay scoped in the page.
+   ========================================================================= */
+
+:root {
+	--shell-w: 1080px;
+	--rule: 1px solid rgb(28 36 47 / 0.55);
+	--accent-soft: rgb(60 232 130 / 0.07);
+	--accent-line: rgb(60 232 130 / 0.18);
+	--accent-glow: rgb(60 232 130 / 0.4);
+}
+
+/* ---- typography utilities ---- */
+.display {
+	font-family: var(--font-display);
+	font-weight: 800;
+	color: var(--color-bright);
+	letter-spacing: -0.02em;
+	line-height: 1.05;
+}
+.display.sm {
+	font-size: clamp(1.9rem, 3.6vw, 2.9rem);
+	margin-bottom: 18px;
+}
+.body-text {
+	color: var(--color-muted);
+	max-width: 52ch;
+	margin-bottom: 32px;
+	line-height: 1.75;
+}
+.body-text em {
+	font-style: normal;
+	color: var(--color-bright);
+}
+.narrow {
+	max-width: 60ch;
+}
+.dim {
+	color: var(--color-muted);
+}
+.accent {
+	color: var(--color-accent);
+}
+code.c {
+	color: var(--color-accent);
+	background: var(--accent-soft);
+	border: 1px solid var(--accent-line);
+	border-radius: 4px;
+	padding: 0 5px;
+	font-size: 0.9em;
+}
+
+/* ---- editorial shell: hero + sections ---- */
+.editorial main {
+	max-width: var(--shell-w);
+	margin: 0 auto;
+	padding: 0 24px;
+}
+.editorial .hero {
+	padding: 72px 0 76px;
+	max-width: 680px;
+	position: relative;
+}
+.editorial .hero::before {
+	content: '';
+	position: absolute;
+	top: -20%;
+	right: -50%;
+	width: 80%;
+	height: 100%;
+	background: radial-gradient(ellipse at center, rgb(60 232 130 / 0.05), transparent 65%);
+	pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.editorial .hero::before {
+		animation: hero-breathe 9s ease-in-out infinite;
+	}
+	@keyframes hero-breathe {
+		0%,
+		100% {
+			opacity: 1;
+			transform: scale(1);
+		}
+		50% {
+			opacity: 0.55;
+			transform: scale(1.08);
+		}
+	}
+}
+.editorial .tag {
+	color: var(--color-accent);
+	font-size: 12px;
+	letter-spacing: 0.22em;
+	text-transform: uppercase;
+	margin-bottom: 22px;
+}
+.editorial .hero h1 {
+	font-size: clamp(3rem, 6vw, 5rem);
+	margin-bottom: 28px;
+}
+.editorial .hero-sub {
+	color: var(--color-muted);
+	font-size: 16px;
+	line-height: 1.8;
+	max-width: 56ch;
+}
+.editorial .section {
+	padding: 84px 0;
+	border-top: var(--rule);
+}
+.editorial .section-label {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--color-muted);
+	font-size: 12px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	margin-bottom: 38px;
+}
+.editorial .section-label .dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	border: 1px solid var(--color-muted);
+}
+.editorial .split {
+	display: grid;
+	grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+	gap: 48px;
+	align-items: start;
+}
+
+/* ---- shared code card ---- */
+.code-card {
+	border: 1px solid var(--color-line);
+	border-radius: 10px;
+	overflow: hidden;
+	background: var(--color-panel-2);
+	position: relative;
+}
+.code-card :global(pre),
+.code-card pre {
+	padding: 20px 22px;
+	font-size: 13.5px;
+	line-height: 1.8;
+	background: transparent !important;
+	overflow-x: auto;
+}
+
+/* ---- outro (editorial) ---- */
+.editorial .outro {
+	padding: 72px 0 120px;
+	border-top: var(--rule);
+}
+.editorial blockquote {
+	color: var(--color-muted);
+	font-size: 15px;
+	font-style: italic;
+	line-height: 1.8;
+	padding: 28px 32px;
+	border: 1px solid var(--color-line);
+	border-left: 3px solid var(--color-accent);
+	border-radius: 10px;
+	background: var(--color-panel);
+	max-width: 640px;
+	margin: 0;
+}
+
+/* ---- editorial responsive ---- */
+@media (max-width: 900px) {
+	.editorial .split {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 28px;
+	}
+	.editorial .hero {
+		padding: 44px 0 52px;
+	}
+	.editorial .section {
+		padding: 60px 0;
+	}
+}
+@media (max-width: 560px) {
+	.code-card :global(pre),
+	.code-card pre {
+		font-size: 12px;
+		padding: 16px;
+	}
+}
