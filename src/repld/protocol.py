@@ -339,7 +339,7 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a PNG screenshot of a tab. Saves to disk, returns path. Use Read to view.",
+        "description": "Capture a JPEG screenshot of a tab, pre-sized for the vision API. Saves to disk, returns path. Use Read to view.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -738,10 +738,21 @@ class Dispatcher:
 
     def _bh_screenshot(self, browser, args):
         tab = self._get_tab(browser, args)
-        path = self._run_async(
+        info = self._run_async(
             tab.screenshot(full_page=bool(args.get("full_page", False)))
         )
-        return f"Screenshot saved to {path}\nUse Read to view it."
+        src = info["source"]
+        tgt = info["target"]
+        lines = [
+            f"Screenshot saved to {info['path']}",
+            f"Source: {src['width']}x{src['height']}  →  Target: {tgt['width']}x{tgt['height']}  (scale {info['scale']}, {info['bytes'] // 1024}KB JPEG)",
+            "Use Read to view it.",
+        ]
+        if info["scale"] < 1.0:
+            lines.append(
+                f"Coordinates: multiply by {1 / info['scale']:.2f} to map back to page pixels."
+            )
+        return "\n".join(lines)
 
     def _bh_cdp(self, browser, args):
         tab = self._get_tab(browser, args)

@@ -26,6 +26,36 @@ from .selector import resolve as _resolve_selector
 __all__ = ["Tab", "BrowserJSError"]
 
 # ---------------------------------------------------------------------------
+# Anthropic vision API resize — ported from resize.rs via nanokvm client.
+# Pre-sizes to the API's token grid so the model sees exactly what we send.
+# ---------------------------------------------------------------------------
+_MAX_PX = 1568
+_PX_PER_TOKEN = 28
+_MAX_TOKENS = 1568
+
+
+def _model_dims(w: int, h: int) -> tuple[int, int]:
+    def _tok(px: int) -> int:
+        return (px - 1) // _PX_PER_TOKEN + 1
+
+    if w <= _MAX_PX and h <= _MAX_PX and _tok(w) * _tok(h) <= _MAX_TOKENS:
+        return (w, h)
+    if h > w:
+        rw, rh = _model_dims(h, w)
+        return (rh, rw)
+    aspect = w / h
+    lo, hi = 1, w
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        mid_h = max(round(mid / aspect), 1)
+        if mid <= _MAX_PX and _tok(mid) * _tok(mid_h) <= _MAX_TOKENS:
+            lo = mid
+        else:
+            hi = mid
+    return (lo, max(round(lo / aspect), 1))
+
+
+# ---------------------------------------------------------------------------
 # Pill JS/CSS blob — injected via Runtime.evaluate on tab.pin()
 # ---------------------------------------------------------------------------
 _PIN_JS = r"""
@@ -1086,29 +1116,61 @@ class Tab:
         await self._wait_ready()
 
     async def screenshot(
-        self, *, full_page: bool = False, path: str | None = None
-    ) -> pathlib.Path:
-        """Capture a PNG screenshot, save to disk, return the path.
+        self,
+        *,
+        full_page: bool = False,
+        path: str | None = None,
+        quality: int = 80,
+    ) -> dict:
+        """Capture a JPEG screenshot compressed for the Anthropic vision API.
 
-        path: explicit save location. Default: $XDG_RUNTIME_DIR/repld/screenshot-{target}-{ts}.png
+        Returns dict with path, source/target dims, and scale factor.
+        Downsizes to fit the API's token grid (max 1568px per side) via CDP's
+        clip.scale — no Python image library needed.
         """
         import time
 
         from ..tasks import SPILL_DIR, _ensure_spill_dir
 
-        params: dict = {"format": "png"}
+        params: dict = {"format": "jpeg", "quality": quality}
         if full_page:
             params["captureBeyondViewport"] = True
+
+        metrics = await self._session.execute("Page.getLayoutMetrics", {})
+        vp = metrics.get("cssVisualViewport", {})
+        src_w = int(vp.get("clientWidth", 0))
+        src_h = int(vp.get("clientHeight", 0))
+
+        scale = 1.0
+        tgt_w, tgt_h = src_w, src_h
+        if src_w > 0 and src_h > 0:
+            tgt_w, tgt_h = _model_dims(src_w, src_h)
+            if tgt_w < src_w or tgt_h < src_h:
+                scale = min(tgt_w / src_w, tgt_h / src_h)
+                params["clip"] = {
+                    "x": 0,
+                    "y": 0,
+                    "width": src_w,
+                    "height": src_h,
+                    "scale": scale,
+                }
+
         result = await self._session.execute("Page.captureScreenshot", params)
-        png_bytes = base64.b64decode(result.get("data", ""))
+        img_bytes = base64.b64decode(result.get("data", ""))
         if path:
             out = pathlib.Path(path)
         else:
             _ensure_spill_dir()
             tid = self.target_id.replace(":", "-")
-            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
-        out.write_bytes(png_bytes)
-        return out
+            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.jpg"
+        out.write_bytes(img_bytes)
+        return {
+            "path": str(out),
+            "source": {"width": src_w, "height": src_h},
+            "target": {"width": tgt_w, "height": tgt_h},
+            "scale": round(scale, 4),
+            "bytes": len(img_bytes),
+        }
 
     # ------------------------------------------------------------------
     # Query methods (sync DuckDB)
