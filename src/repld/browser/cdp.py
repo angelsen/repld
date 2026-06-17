@@ -76,10 +76,12 @@ class CDPSession:
         # Paused-request counter (Fetch.requestPaused increments, continue decrements)
         self.paused_count = 0
 
-        # Whether to capture response/request bodies via Fetch
-        self.capture_bodies: bool = True
+        # Fetch body capture state.  False by default — enabled by get()/open(),
+        # or explicitly via tab.capture_bodies = True / tab.enable_capture().
+        self.capture_bodies: bool = False
+        self._fetch_enabled: bool = False
 
-        # Fetch handler (set by FetchCapture.enable)
+        # Fetch handler (set by capture.enable, cleared by capture.disable)
         self._fetch_handler: Any | None = None
 
         # Binding handler (set by Tab._setup_binding)
@@ -104,9 +106,13 @@ class CDPSession:
         _create_views(self.db.execute)
 
     async def _enable_domains(self) -> None:
-        """Enable required CDP domains on attach."""
-        from .capture import enable as fetch_enable
+        """Enable required CDP domains on attach.
 
+        Fire-and-forget — all enables are sent over the single multiplexed
+        WebSocket without awaiting Chrome's ack.  This keeps attach near-instant
+        even with many concurrent tabs.  Fetch interception is separate
+        (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
+        """
         for method in (
             "Inspector.enable",
             "DOM.enable",
@@ -115,24 +121,37 @@ class CDPSession:
             "Runtime.enable",
             "Log.enable",
             "Accessibility.enable",
+            "Page.setLifecycleEventsEnabled",
         ):
             try:
-                await self.execute(method)
+                params = (
+                    {"enabled": True}
+                    if method == "Page.setLifecycleEventsEnabled"
+                    else None
+                )
+                await self.send_nowait(method, params)
             except Exception as exc:
                 logger.debug("Domain enable %s: %s", method, exc)
 
-        # Lifecycle events require a separate enable (Page.enable alone is not enough)
-        try:
-            await self.execute("Page.setLifecycleEventsEnabled", {"enabled": True})
-        except Exception as exc:
-            logger.debug("Page.setLifecycleEventsEnabled: %s", exc)
+    async def enable_fetch(self) -> None:
+        """Enable Fetch body capture on this session. Idempotent."""
+        if self._fetch_enabled:
+            return
+        from .capture import enable as fetch_enable
 
-        # Enable Fetch body capture
-        if self.capture_bodies:
-            try:
-                await fetch_enable(self)
-            except Exception as exc:
-                logger.debug("Fetch.enable: %s", exc)
+        await fetch_enable(self)
+        self.capture_bodies = True
+        self._fetch_enabled = True
+
+    async def disable_fetch(self) -> None:
+        """Disable Fetch body capture on this session. Idempotent."""
+        if not self._fetch_enabled:
+            return
+        from .capture import disable as fetch_disable
+
+        self.capture_bodies = False
+        await fetch_disable(self)
+        self._fetch_enabled = False
 
     # ------------------------------------------------------------------
     # Command execution
@@ -191,17 +210,16 @@ class CDPSession:
                         name=f"repld-binding-{params.get('name', '?')}",
                     )
 
-            # Periodic pruning
+            # Periodic pruning — async task to avoid blocking the recv loop
             if self._event_count % PRUNE_CHECK_INTERVAL == 0:
-                self._prune_if_needed()
+                if self._event_count > MAX_EVENTS:
+                    asyncio.create_task(self._async_prune(), name="repld-prune")
 
         except Exception as exc:
             logger.debug("_handle_event error: %s", exc)
 
-    def _prune_if_needed(self) -> None:
-        """FIFO prune if event count exceeds MAX_EVENTS."""
-        if self._event_count <= MAX_EVENTS:
-            return
+    async def _async_prune(self) -> None:
+        """FIFO prune oldest events. Runs as a task to avoid blocking recv."""
         excess = self._event_count - MAX_EVENTS
         delete_count = max(excess, PRUNE_BATCH_SIZE)
         try:

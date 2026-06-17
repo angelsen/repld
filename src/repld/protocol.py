@@ -62,6 +62,8 @@ TOOLS = [
         "description": (
             "Watch Chrome tabs matching a URL glob pattern (e.g. '*github.com*'). "
             "Currently-matching tabs attach immediately; future matching tabs auto-attach. "
+            "Watched tabs are lightweight (events only, no body capture). "
+            "Use browser.get() for a tab with full body capture, or opt in per tab with tab.capture_bodies = True. "
             "Gists call this in connect() to establish persistent tab access."
         ),
         "inputSchema": {
@@ -160,7 +162,7 @@ TOOLS = [
     },
     {
         "name": "browser_body",
-        "description": "Fetch the response body for a captured request by request_id.",
+        "description": "Fetch the response body for a request by request_id. Works on any attached tab (uses Network.getResponseBody on demand; pre-captured in DuckDB on get/open tabs).",
         "inputSchema": {
             "type": "object",
             "properties": {

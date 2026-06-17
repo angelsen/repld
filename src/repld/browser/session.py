@@ -207,7 +207,11 @@ class BrowserSession:
                         cdp._session_id = new_sid
                         self._sessions[new_sid] = cdp
                         self._session_remap[old_sid] = new_sid
+                        had_fetch = cdp._fetch_enabled
+                        cdp._fetch_enabled = False
                         await cdp._enable_domains()
+                        if had_fetch:
+                            await cdp.enable_fetch()
                     except Exception as exc:
                         logger.debug(
                             "reconnect: re-attach %s failed: %s", target_id, exc
@@ -435,6 +439,7 @@ class BrowserSession:
 
     async def _recv_loop(self) -> None:
         """Receive and dispatch all WebSocket messages from Chrome."""
+        count = 0
         try:
             async for raw in self._ws:  # type: ignore[union-attr]
                 try:
@@ -442,6 +447,9 @@ class BrowserSession:
                 except Exception:
                     continue
                 await self._dispatch(data)
+                count += 1
+                if count % 50 == 0:
+                    await asyncio.sleep(0)
         except Exception as exc:
             logger.debug("recv_loop ended: %s", exc)
             # Fail any remaining pending futures

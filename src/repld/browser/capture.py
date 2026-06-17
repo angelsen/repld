@@ -15,7 +15,7 @@ import time
 
 from .cdp import CDPSession, _json_dumps_safe
 
-__all__ = ["enable", "handle_paused"]
+__all__ = ["enable", "disable", "handle_paused"]
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,16 @@ async def enable(session: CDPSession) -> None:
     )
     session._fetch_handler = handle_paused
     logger.debug("Fetch capture enabled on %s", session.chrome_target_id)
+
+
+async def disable(session: CDPSession) -> None:
+    """Disable Fetch interception on a CDPSession."""
+    try:
+        await session.execute("Fetch.disable")
+    except Exception as exc:
+        logger.debug("Fetch.disable on %s: %s", session.chrome_target_id, exc)
+    session._fetch_handler = None
+    logger.debug("Fetch capture disabled on %s", session.chrome_target_id)
 
 
 async def handle_paused(session: CDPSession, params: dict) -> None:

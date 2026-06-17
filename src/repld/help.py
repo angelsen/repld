@@ -46,6 +46,7 @@ _BROWSER_MODEL = (
     "Mutations (click/type/navigate/key/open) settle then return "
     "tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
+    "get()/open() capture request/response bodies; watch() attaches lightweight. "
     "Read workflow: network → request → body. "
     "browser object available in exec for chaining. "
     "For repeated browser interactions, write a gist (gists/*.py) to capture "
@@ -298,7 +299,7 @@ All of the above plus: request_headers, post_data, response_headers, mime_type,
   tab.type           str   "page", "iframe", "service_worker", etc.
   tab.target_id      str   short ID in "{port}:{6-hex}" format, stable across nav
   tab.parent_frame_id str  parent frame for iframes
-  tab.capture_bodies bool  toggle Fetch-domain body capture (default True)
+  tab.capture_bodies bool  toggle Fetch body capture (True on get/open tabs, False on watch tabs)
 
 Staleness: tab.url and tab.title are read from a cached target_info dict,
 updated only on Target.targetInfoChanged events.  They can be briefly stale
@@ -351,29 +352,34 @@ Auto-wait: all selectors auto-wait up to 2s (click/type_text) or the specified
 
 === Network body capture ===
 
-Fetch domain interception captures request and response bodies proactively.
-Enabled by default (tab.capture_bodies = True).
+Two tiers of body access:
 
-Request stage: ALL requests are intercepted.  POST/PUT/PATCH bodies are captured
-  via Fetch.getRequestPostData and stored as synthetic Network.requestBodyCaptured
-  events in DuckDB.  This gets the full un-truncated body (Network.requestWillBeSent
-  .postData caps at ~64KB).
+  Tier 1 — on-demand (all tabs):
+    tab.body(request_id) calls Network.getResponseBody, a CDP call that fetches
+    the body from Chrome's resource cache.  Works on any attached tab without
+    Fetch enabled.  Best-effort: Chrome may evict the response from cache during
+    rapid redirect chains or high-traffic flows.
 
-Response stage: ALL responses are intercepted.  Bodies are captured when:
-    - Status is not a redirect (301-308 — Chrome puts redirects in
-      kRedirectReceived state; Fetch.getResponseBody errors on them)
-    - Content-type is not text/event-stream (SSE is an infinite stream —
-      Fetch.getResponseBody would block forever)
-    - Content-length is under 500KB (_MAX_BODY_SIZE = 500,000 bytes)
+  Tier 2 — proactive Fetch capture (get/open tabs):
+    browser.get() and browser.open() enable Fetch domain interception
+    automatically.  browser.watch() tabs are lightweight — no Fetch overhead.
 
-  Captured bodies are replayed to the page via Fetch.fulfillRequest (because
-  Fetch.getResponseBody consumes the internal buffer).
+    When enabled, Fetch intercepts all requests/responses:
+    - Request stage: POST/PUT/PATCH bodies captured via Fetch.getRequestPostData
+      (full body, not the ~64KB-truncated Network.requestWillBeSent.postData)
+    - Response stage: bodies under 500KB stored in DuckDB as synthetic
+      Network.responseBodyCaptured events.  Skips redirects (CDP limitation)
+      and SSE (infinite stream).  Captured bodies replayed via fulfillRequest.
+    - Non-captured responses use fire-and-forget continue commands (no roundtrip)
 
-  Non-captured responses (assets, redirects, SSE) use fire-and-forget continue
-  commands (no roundtrip wait).  Body captures still await the CDP response.
+    tab.body() checks DuckDB first (microsecond lookup), falls back to
+    Network.getResponseBody if not proactively captured.
 
-  tab.capture_bodies = False disables Fetch interception entirely — all requests
-  pass through without pausing.
+  Opt-in/out on any tab:
+    tab.capture_bodies = True            # fire-and-forget Fetch enable
+    tab.capture_bodies = False           # fire-and-forget Fetch.disable
+    await tab.enable_capture()           # awaitable enable
+    await tab.disable_capture()          # awaitable disable
 
 === Settle loop ===
 
@@ -700,10 +706,14 @@ Tab (sync — DuckDB queries):
 
   row.body()                             → dict (response body for a Row)
 
+Tab (async — Fetch capture control):
+  await tab.enable_capture()                                             → None
+  await tab.disable_capture()                                            → None
+
 Tab properties:
   tab.url / tab.title / tab.type         str   target info (type: page/iframe/worker)
   tab.target_id / tab.parent_frame_id    str   short ID; parent frame for iframes
-  tab.capture_bodies = False             bool  toggle Fetch-domain body capture
+  tab.capture_bodies                      bool  Fetch body capture (True on get/open, False on watch)
 
 Browser:
   Browser.from_profile(path)                     → Browser  (read port from DevToolsActivePort)

@@ -126,6 +126,8 @@ class Browser:
         **ready**: CSS selector or JS expression that must be truthy before
         the Tab is returned. Also used for auto-recovery on HMR/navigation.
         Default (None) uses ``document.readyState === 'complete'``.
+
+        Enables proactive Fetch body capture on freshly attached tabs.
         """
         if _is_target_id(target):
             return await self._get_by_id(target, ready=ready)
@@ -147,6 +149,7 @@ class Browser:
             if tid and tid[:6].lower() == prefix:
                 cdp = await self._session.attach(tid)
                 if cdp is not None:
+                    await cdp.enable_fetch()
                     return Tab(cdp, tid, self.port, ready=ready)
 
         attached = [
@@ -198,6 +201,7 @@ class Browser:
                 if fnmatch.fnmatch(url, pattern) and tid and tid not in exclude:
                     cdp = await self._session.attach(tid)
                     if cdp is not None:
+                        await cdp.enable_fetch()
                         return Tab(cdp, tid, self.port, ready=ready)
 
             if deadline is None or asyncio.get_running_loop().time() >= deadline:
@@ -276,13 +280,15 @@ class Browser:
     async def open(self, url: str) -> "Tab":
         """Create a new tab and attach to it.
 
-        Target.createTarget → attach → return Tab.
+        Target.createTarget → attach → enable Fetch → return Tab.
         """
         await self._ensure_connected()
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
         await self._session.attach(tid)
-        return self._resolve_attached(make_target(self.port, tid))
+        tab = self._resolve_attached(make_target(self.port, tid))
+        await tab._session.enable_fetch()
+        return tab
 
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""

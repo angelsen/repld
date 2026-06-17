@@ -315,6 +315,35 @@ _PIN_JS = r"""
 """
 
 
+# ---------------------------------------------------------------------------
+# Label JS — injected via Page.addScriptToEvaluateOnNewDocument
+# ---------------------------------------------------------------------------
+_LABEL_JS = r"""
+(function() {
+  if (document.getElementById('__repld_label_bar')) return;
+  var el = document.createElement('div');
+  el.id = '__repld_label_bar';
+  el.textContent = %TEXT%;
+  el.style.cssText = 'position:fixed;top:0;left:0;right:0;height:24px;'
+    + 'background:%COLOR%;color:#fff;font:bold 12px system-ui;'
+    + 'display:flex;align-items:center;justify-content:center;'
+    + 'z-index:2147483647;pointer-events:none;';
+  document.body.style.paddingTop = '24px';
+  document.body.appendChild(el);
+})();
+"""
+
+_LABEL_PALETTE = ["#ef4444", "#3b82f6", "#22c55e", "#a855f7", "#f59e0b", "#06b6d4"]
+_label_color_index = 0
+
+
+def _next_label_color() -> str:
+    global _label_color_index
+    color = _LABEL_PALETTE[_label_color_index % len(_LABEL_PALETTE)]
+    _label_color_index += 1
+    return color
+
+
 async def _handle_binding(session, params: dict) -> None:
     """Handle __repld_resolve callback from pill UI."""
     payload_str = params.get("payload", "{}")
@@ -365,6 +394,9 @@ class Tab:
         self._pin_reason: str = ""
         self._pin_origin: str = ""
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._label_text: str | None = None
+        self._label_color: str | None = None
+        self._label_script_id: str | None = None
 
     @property
     def target_id(self) -> str:
@@ -396,6 +428,86 @@ class Tab:
     @capture_bodies.setter
     def capture_bodies(self, value: bool) -> None:
         self._session.capture_bodies = value
+        loop = self._session._loop or asyncio.get_event_loop()
+        if value:
+            loop.create_task(
+                self._session.enable_fetch(),
+                name=f"repld-fetch-enable-{self._chrome_target_id[:8]}",
+            )
+        else:
+            loop.create_task(
+                self._session.disable_fetch(),
+                name=f"repld-fetch-disable-{self._chrome_target_id[:8]}",
+            )
+
+    async def enable_capture(self) -> None:
+        """Enable proactive Fetch body capture. Awaitable."""
+        await self._session.enable_fetch()
+
+    async def disable_capture(self) -> None:
+        """Disable proactive Fetch body capture. Awaitable."""
+        await self._session.disable_fetch()
+
+    # ------------------------------------------------------------------
+    # Label API
+    # ------------------------------------------------------------------
+
+    @property
+    def label(self) -> str | None:
+        """Current label text, or None."""
+        return self._label_text
+
+    @label.setter
+    def label(self, value: str | tuple[str, str] | None) -> None:
+        """Set or clear the label bar. Async work is scheduled internally.
+
+        Usage:
+            tab.label = "Skantz Tools"              # auto-color
+            tab.label = ("Skantz Tools", "#3b82f6")  # explicit color
+            tab.label = None                         # remove
+        """
+        loop = self._session._loop or asyncio.get_event_loop()
+        loop.create_task(self._set_label(value), name="repld-label-set")
+
+    async def _set_label(self, value: str | tuple[str, str] | None) -> None:
+        """Apply or remove the label bar."""
+        # Remove existing label script + DOM
+        if self._label_script_id is not None:
+            try:
+                await self._session.execute(
+                    "Page.removeScriptToEvaluateOnNewDocument",
+                    {"identifier": self._label_script_id},
+                )
+            except Exception:
+                pass
+            try:
+                await self.js(
+                    "var el = document.getElementById('__repld_label_bar');"
+                    "if (el) { el.remove(); document.body.style.paddingTop = ''; }"
+                )
+            except Exception:
+                pass
+            self._label_script_id = None
+            self._label_text = None
+            self._label_color = None
+
+        if value is None:
+            return
+
+        if isinstance(value, tuple):
+            text, color = value
+        else:
+            text, color = value, _next_label_color()
+
+        js = _LABEL_JS.replace("%TEXT%", json.dumps(text)).replace("%COLOR%", color)
+
+        result = await self._session.execute(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": js, "runImmediately": True},
+        )
+        self._label_script_id = result.get("identifier")
+        self._label_text = text
+        self._label_color = color
 
     # ------------------------------------------------------------------
     # Pin API
