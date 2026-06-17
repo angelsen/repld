@@ -15,7 +15,7 @@ The browser is a first-class object: attach to your logged-in Chrome tabs, disco
 
 ```
 Terminal 1:  repld                    # kernel (asyncio loop, unix socket)
-Terminal 2:  claude --channels        # agent connects via MCP bridge
+Terminal 2:  claude --dangerously-load-development-channels server:repld
 Terminal 3:  repld exec               # you — same namespace, same state
 ```
 

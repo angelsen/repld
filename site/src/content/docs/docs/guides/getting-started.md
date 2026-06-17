@@ -45,7 +45,7 @@ The kernel writes `.pyrepl.lock` with its PID and socket path, then listens for 
 Launch Claude Code with channel support:
 
 ```bash
-claude --channels
+claude --dangerously-load-development-channels server:repld
 ```
 
 Claude Code reads `.mcp.json`, spawns `repld bridge` as a stdio subprocess, and the bridge connects to the running kernel over the unix socket. The agent can now call `exec` to run Python.

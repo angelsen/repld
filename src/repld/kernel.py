@@ -123,7 +123,7 @@ def _banner(socket_path: Path, watchdog_threshold: float, kill_threshold: float)
         f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
         f"(REPLD_LOOP_KILL_THRESHOLD)\n"
         f"  register:  claude mcp add -s project repld -- repld bridge\n"
-        f"  launch:    claude --channels\n"
+        f"  launch:    claude --dangerously-load-development-channels server:repld\n"
         f"  human:     repld exec   # interactive REPL (state shared with agent)\033[0m"
     )
 
