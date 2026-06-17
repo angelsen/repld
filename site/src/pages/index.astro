@@ -1,0 +1,937 @@
+---
+import { Font } from 'astro:assets';
+import { Code } from 'astro:components';
+import vesper from '@shikijs/themes/vesper';
+import TerminalHero from '../components/TerminalHero.astro';
+import '../styles/global.css';
+
+const pushSnippet = `defer(scrape_all(targets), "portfolio sweep")  # task_id, immediately
+
+@every(900)
+async def watch_inbox():
+    new = await gmail.unread()
+    if new:
+        notify(f"{len(new)} new — {new[0].subject}")`;
+
+const browserSnippet = `tab = await browser.get("admin.shopify.com")
+await tab.click("#export-csv")
+
+# every mutation settles, then reports what changed:
+#   tree Δ     dialog "Export products" · 2 buttons
+#   network Δ  POST /admin/api/exports → 201
+#   console Δ  (clean)`;
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="generator" content={Astro.generator} />
+		<title>repld — a live Python kernel for your agent</title>
+		<meta
+			name="description"
+			content="repld runs a persistent Python kernel you and your agent share. Push notifications instead of polling, a scriptable browser, and one-off code that hardens into tools."
+		/>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<Font cssVariable="--font-geist-mono" preload />
+		<Font cssVariable="--font-bricolage" preload />
+		<script is:inline>
+			document.documentElement.classList.add('js');
+		</script>
+	</head>
+	<body>
+		<!-- kernel boot preloader (only rendered when JS is on; removed after play) -->
+		<div id="boot" aria-hidden="true">
+			<div class="boot-inner">
+				<p class="boot-line">repld ▸ starting kernel</p>
+				<p class="boot-line">▸ .pyrepl.lock written · socket ready</p>
+				<p class="boot-line"><span class="boot-ok">▸ channel open</span></p>
+			</div>
+		</div>
+
+		<!-- the wire: channel line running down the page -->
+		<div class="wire" aria-hidden="true"><div class="wire-fill" id="wire-fill"></div></div>
+
+		<header class="nav" id="nav">
+			<a class="wordmark" href="/">repld<span class="block-cursor"></span></a>
+			<nav class="nav-links">
+				<a href="/docs/">docs</a>
+				<a href="https://pypi.org/project/repld-tool/">pypi</a>
+				<a href="https://github.com/angelsen/repld">github</a>
+			</nav>
+		</header>
+
+		<main>
+			<!-- ============================ hero ============================ -->
+			<section class="hero">
+				<div class="hero-copy">
+					<p class="kicker" data-hero>research preview · mcp</p>
+					<h1 class="display" data-hero>
+						Your agent gets a<br />
+						<em>live</em> Python process.
+					</h1>
+					<p class="sub" data-hero>
+						repld runs a persistent kernel in your project. You and Claude share one namespace —
+						long jobs push back over the channel, the browser is an object, and throwaway code
+						hardens into tools.
+					</p>
+					<div class="install" data-hero>
+						<code id="install-cmd"><span class="dim">$</span> uv tool install repld-tool</code>
+						<button id="copy-btn" aria-label="Copy install command">copy</button>
+					</div>
+				</div>
+				<div class="hero-term" data-hero>
+					<TerminalHero />
+				</div>
+			</section>
+
+			<!-- ============================ 01 shared namespace ============================ -->
+			<section class="sect" data-sect>
+				<p class="sect-label"><span class="node"></span>01 · shared namespace</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">Two hands.<br />One kernel.</h2>
+						<p>
+							The agent execs into <code class="inline">__main__</code> — the same module dict your REPL
+							reads. No sandbox between you: inspect its dataframes, patch its functions, take over mid-task.
+						</p>
+					</div>
+					<div class="panes" data-reveal>
+						<div class="pane">
+							<p class="pane-title accent">agent · mcp exec</p>
+							<pre>&gt;&gt;&gt; orders = await sd.orders(status="open")
+&gt;&gt;&gt; len(orders)
+<span class="b">317</span></pre>
+						</div>
+						<div class="pane">
+							<p class="pane-title amber">you · repld exec</p>
+							<pre>&gt;&gt;&gt; orders[0].customer
+<span class="b">'Nordlys Kafé AS'</span>
+&gt;&gt;&gt; orders[0].total
+<span class="b">2 480,00 kr</span></pre>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 02 push ============================ -->
+			<section class="sect" id="sect-channel" data-sect>
+				<p class="sect-label"><span class="node"></span>02 · channel</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">Push,<br />don't poll.</h2>
+						<p>
+							<code class="inline">exec</code> returns fast or defers. Long jobs, file watchers, webhooks
+							and timers all land back in the conversation as channel notifications — the agent never
+							busy-waits.
+						</p>
+					</div>
+					<div class="code-stack" data-reveal>
+						<div class="code-card">
+							<Code code={pushSnippet} lang="python" theme={vesper} />
+						</div>
+						<div class="toast" id="toast">
+							<span class="zap">⚡ channel</span> · every · watch_inbox — "3 new — Re: term sheet"
+						</div>
+						<div class="toast toast-2" id="toast2">
+							<span class="zap">⚡ channel</span> · task_done · portfolio sweep — 142 rows · 38s
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 03 browser ============================ -->
+			<section class="sect" data-sect>
+				<p class="sect-label"><span class="node"></span>03 · browser</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">The browser<br />is an object.</h2>
+						<p>
+							CDP underneath, Python on top. Every mutation settles, then returns the accessibility
+							tree, the network delta and the console delta — the agent sees exactly what its click
+							changed.
+						</p>
+					</div>
+					<div class="code-stack" data-reveal>
+						<div class="code-card">
+							<Code code={browserSnippet} lang="python" theme={vesper} />
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 04 gists ============================ -->
+			<section class="sect" data-sect>
+				<p class="sect-label"><span class="node"></span>04 · gists</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">Code that<br />hardens into tools.</h2>
+						<p>
+							A gist is a Python file the kernel hot-reloads. Reverse-engineer an internal API once
+							— import it forever, link it across projects, register it as an MCP tool.
+						</p>
+					</div>
+					<div class="pane wide" data-reveal>
+						<p class="pane-title accent">↪ repld gist list</p>
+						<pre
+							class="gistlist">local (./gists):
+  <span class="b">brreg</span>        Brreg() <span class="dim">[async]</span>      <span class="dim">Norwegian business registry</span>
+  <span class="b">gmail</span>        Gmail()              <span class="dim">read, search, send</span>
+  <span class="b">linkedin</span>     LI(tab, csrf) <span class="dim">[async]</span> <span class="dim">people + company search</span>
+  <span class="b">meny</span>         Meny(tab) <span class="dim">[async]</span>    <span class="dim">groceries, prices, recipes</span>
+  <span class="b">proff</span>        Proff(tab) <span class="dim">[async]</span>   <span class="dim">financials, roles</span>
+  <span class="b">shopify_sd</span>   SD(tab) <span class="dim">[async]</span>      <span class="dim">search &amp; discovery admin</span>
+linked (from other projects):
+  <span class="b">emulator</span>     Device() <span class="dim">[async]</span>     <span class="dim">android driver — adb + CDP</span></pre>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 05 progression ============================ -->
+			<section class="sect" data-sect>
+				<p class="sect-label"><span class="node"></span>05 · the progression</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">Every tool<br />starts as a<br />conversation.</h2>
+						<p>
+							Do it by hand first. The workflow reveals itself through repetition — then hardens,
+							one phase at a time.
+						</p>
+						<p class="playbook-link"><a href="/playbook">read the full playbook →</a></p>
+					</div>
+					<div class="progression" data-reveal>
+						<div class="phase">
+							<div class="phase-num">1</div>
+							<div class="phase-body">
+								<h3>Interactive</h3>
+								<p>
+									You and Claude work a task in repld. Poke at the browser, hit an API, inspect the
+									result. No plan — just doing.
+								</p>
+							</div>
+						</div>
+						<div class="phase-line" aria-hidden="true"></div>
+						<div class="phase">
+							<div class="phase-num">2</div>
+							<div class="phase-body">
+								<h3>Scripted</h3>
+								<p>
+									You repeated it three times. Extract a gist — a plain Python file the kernel
+									hot-reloads. Same code, now importable.
+								</p>
+							</div>
+						</div>
+						<div class="phase-line" aria-hidden="true"></div>
+						<div class="phase">
+							<div class="phase-num">3</div>
+							<div class="phase-body">
+								<h3>Semi-auto</h3>
+								<p>
+									Wire a trigger: <code class="inline">@every</code>, a webhook, a spreadsheet
+									column waiting for a human decision. The gist is the stage.
+								</p>
+							</div>
+						</div>
+						<div class="phase-line" aria-hidden="true"></div>
+						<div class="phase">
+							<div class="phase-num">4</div>
+							<div class="phase-body">
+								<h3>Production</h3>
+								<p>
+									The same gist now runs in FastAPI or Inngest — event-driven, durable. Nothing was
+									thrown away.
+								</p>
+							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ outro ============================ -->
+			<section class="outro" data-sect>
+				<h2 class="display">Give your agent<br />a kernel.</h2>
+				<div class="install big" data-reveal>
+					<code><span class="dim">$</span> uv tool install repld-tool</code>
+				</div>
+				<p class="outro-links" data-reveal>
+					<a href="/docs/">read the docs →</a>
+				</p>
+			</section>
+		</main>
+
+		<footer class="footer">
+			<span class="wordmark small">repld<span class="block-cursor"></span></span>
+			<nav>
+				<a href="/docs/">docs</a>
+				<a href="https://pypi.org/project/repld-tool/">pypi</a>
+				<a href="https://github.com/angelsen/repld">github</a>
+			</nav>
+			<span class="dim">built with repld, obviously</span>
+		</footer>
+
+		<script>
+			import gsap from 'gsap';
+			import { ScrollTrigger } from 'gsap/ScrollTrigger';
+			import { SplitText } from 'gsap/SplitText';
+			import Lenis from 'lenis';
+
+			gsap.registerPlugin(ScrollTrigger, SplitText);
+
+			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+			const finePointer = window.matchMedia('(pointer: fine)').matches;
+
+			// ---------- smooth scroll (Lenis ↔ ScrollTrigger sync) ----------
+			if (!reduced) {
+				const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
+				lenis.on('scroll', ScrollTrigger.update);
+				gsap.ticker.add((t) => lenis.raf(t * 1000));
+				gsap.ticker.lagSmoothing(0);
+			}
+
+			// ---------- kernel boot preloader ----------
+			const boot = document.getElementById('boot')!;
+			const heroReady = () => {
+				(window as any).__heroReady = true;
+				window.dispatchEvent(new Event('repld:heroready'));
+			};
+
+			if (reduced || sessionStorage.getItem('repld-booted')) {
+				boot.remove();
+				heroReady();
+			} else {
+				gsap
+					.timeline({
+						onComplete: () => {
+							boot.remove();
+							ScrollTrigger.refresh();
+						},
+					})
+					.to('.boot-line', { opacity: 1, duration: 0.16, stagger: 0.18, ease: 'none' })
+					.to(boot, { yPercent: -100, duration: 0.65, ease: 'power4.inOut', delay: 0.35 })
+					.add(heroReady, '-=0.5');
+			}
+			sessionStorage.setItem('repld-booted', '1');
+
+			// ---------- hero entrance (masked headline lines) ----------
+			function playHero() {
+				if (reduced) return;
+				document.fonts.ready.then(() => {
+					const split = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
+					gsap
+						.timeline()
+						.from('.kicker', { y: 18, autoAlpha: 0, duration: 0.5, ease: 'power3.out' })
+						.from(
+							split.lines,
+							{
+								yPercent: 115,
+								duration: 0.9,
+								stagger: 0.09,
+								ease: 'power4.out',
+								onComplete: () => split.revert(), // restore glow/text-shadow
+							},
+							0.05,
+						)
+						.from(
+							['.sub', '.hero .install'],
+							{ y: 24, autoAlpha: 0, duration: 0.7, stagger: 0.12, ease: 'power3.out' },
+							0.45,
+						)
+						.from('.hero-term', { y: 30, autoAlpha: 0, duration: 0.8, ease: 'power3.out' }, 0.55);
+				});
+			}
+			if ((window as any).__heroReady) playHero();
+			else addEventListener('repld:heroready', playHero, { once: true });
+
+			if (!reduced) {
+				// ---------- section heading reveals: masked line slides ----------
+				document.fonts.ready.then(() => {
+					document.querySelectorAll<HTMLElement>('.sect h2, .outro h2').forEach((el) => {
+						const split = SplitText.create(el, { type: 'lines', mask: 'lines' });
+						gsap.from(split.lines, {
+							yPercent: 115,
+							duration: 0.85,
+							stagger: 0.09,
+							ease: 'power4.out',
+							scrollTrigger: { trigger: el, start: 'top 82%' },
+							onComplete: () => split.revert(),
+						});
+					});
+				});
+
+				// ---------- section body reveals ----------
+				document.querySelectorAll<HTMLElement>('[data-sect]').forEach((sect) => {
+					const targets = sect.querySelectorAll(
+						'.sect-label, .sect-copy p, [data-reveal], .outro-links',
+					);
+					if (!targets.length) return;
+					gsap.from(targets, {
+						y: 30,
+						autoAlpha: 0,
+						duration: 0.8,
+						stagger: 0.12,
+						ease: 'power3.out',
+						scrollTrigger: { trigger: sect, start: 'top 72%' },
+					});
+				});
+
+				// ---------- 02: pinned, scroll-told channel sequence ----------
+				const mm = gsap.matchMedia();
+				mm.add('(min-width: 901px)', () => {
+					const tl = gsap.timeline({
+						scrollTrigger: {
+							trigger: '#sect-channel',
+							start: 'center 55%',
+							end: '+=110%',
+							pin: true,
+							scrub: 0.6,
+						},
+					});
+					tl.from('#toast', { x: 90, autoAlpha: 0, duration: 0.35, ease: 'power2.out' }, 0.1)
+						.from('#toast2', { x: 90, autoAlpha: 0, duration: 0.35, ease: 'power2.out' }, 0.55)
+						.to({}, { duration: 0.2 }); // hold before unpin
+				});
+				mm.add('(max-width: 900px)', () => {
+					gsap.from(['#toast', '#toast2'], {
+						x: 60,
+						autoAlpha: 0,
+						duration: 0.6,
+						stagger: 0.25,
+						ease: 'back.out(1.6)',
+						scrollTrigger: { trigger: '#toast', start: 'top 85%' },
+					});
+				});
+
+				// ---------- the wire fills as you scroll ----------
+				gsap.to('#wire-fill', {
+					height: '100%',
+					ease: 'none',
+					scrollTrigger: { trigger: 'main', start: 'top top', end: 'bottom bottom', scrub: 0.4 },
+				});
+				document.querySelectorAll<HTMLElement>('.node').forEach((node) => {
+					ScrollTrigger.create({
+						trigger: node,
+						start: 'top 60%',
+						onEnter: () => node.classList.add('lit'),
+						onLeaveBack: () => node.classList.remove('lit'),
+					});
+				});
+
+				// ---------- micro-interactions (mouse only) ----------
+				if (finePointer) {
+					// magnetic pull on the copy button + outro link
+					document.querySelectorAll<HTMLElement>('#copy-btn, .outro-links a').forEach((el) => {
+						const xTo = gsap.quickTo(el, 'x', { duration: 0.4, ease: 'power3' });
+						const yTo = gsap.quickTo(el, 'y', { duration: 0.4, ease: 'power3' });
+						el.addEventListener('pointermove', (e) => {
+							const r = el.getBoundingClientRect();
+							xTo((e.clientX - (r.left + r.width / 2)) * 0.45);
+							yTo((e.clientY - (r.top + r.height / 2)) * 0.45);
+						});
+						el.addEventListener('pointerleave', () => {
+							xTo(0);
+							yTo(0);
+						});
+					});
+
+					// progression phases light up on scroll
+					document.querySelectorAll<HTMLElement>('.phase').forEach((phase) => {
+						ScrollTrigger.create({
+							trigger: phase,
+							start: 'top 70%',
+							onEnter: () => phase.classList.add('lit'),
+							onLeaveBack: () => phase.classList.remove('lit'),
+						});
+					});
+				}
+			}
+
+			// ---------- copy button ----------
+			const btn = document.getElementById('copy-btn');
+			btn?.addEventListener('click', async () => {
+				await navigator.clipboard.writeText('uv tool install repld-tool');
+				btn.textContent = 'copied';
+				setTimeout(() => (btn.textContent = 'copy'), 1500);
+			});
+		</script>
+
+		<style>
+			/* ---------- shell ---------- */
+			main {
+				max-width: 1180px;
+				margin: 0 auto;
+				padding: 0 24px;
+			}
+			.display {
+				font-family: var(--font-display);
+				font-weight: 800;
+				color: var(--color-bright);
+				letter-spacing: -0.02em;
+				line-height: 1.02;
+			}
+			.dim {
+				color: var(--color-muted);
+			}
+			.b {
+				color: var(--color-bright);
+			}
+			code.inline {
+				color: var(--color-accent);
+				background: rgb(60 232 130 / 0.07);
+				border: 1px solid rgb(60 232 130 / 0.18);
+				border-radius: 4px;
+				padding: 0 5px;
+				font-size: 0.92em;
+			}
+
+			/* ---------- boot preloader ---------- */
+			#boot {
+				display: none; /* JS-on only — html.js flips it */
+				position: fixed;
+				inset: 0;
+				z-index: 40;
+				background: var(--color-ink);
+				align-items: center;
+				justify-content: center;
+			}
+			:global(html.js) #boot {
+				display: flex;
+			}
+			.boot-line {
+				opacity: 0;
+				font-size: 13.5px;
+				color: var(--color-muted);
+				letter-spacing: 0.04em;
+				line-height: 2.1;
+			}
+			.boot-ok {
+				color: var(--color-accent);
+			}
+
+			/* ---------- wire ---------- */
+			.wire {
+				position: fixed;
+				left: max(12px, calc((100vw - 1180px) / 2 - 48px));
+				top: 0;
+				bottom: 0;
+				width: 1px;
+				background: rgb(28 36 47 / 0.8);
+				z-index: 1;
+			}
+			.wire-fill {
+				width: 100%;
+				height: 0;
+				background: linear-gradient(to bottom, transparent, var(--color-accent));
+				box-shadow: 0 0 12px rgb(60 232 130 / 0.5);
+			}
+			@media (max-width: 1320px) {
+				.wire {
+					display: none;
+				}
+			}
+
+			/* ---------- nav ---------- */
+			.nav {
+				max-width: 1180px;
+				margin: 0 auto;
+				padding: 22px 24px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+			}
+			.wordmark {
+				font-weight: 700;
+				font-size: 19px;
+				color: var(--color-bright);
+				text-decoration: none;
+				letter-spacing: -0.01em;
+			}
+			.wordmark.small {
+				font-size: 15px;
+			}
+			.block-cursor {
+				display: inline-block;
+				width: 9px;
+				height: 1em;
+				margin-left: 2px;
+				vertical-align: text-bottom;
+				background: var(--color-accent);
+				animation: blink 1.06s steps(1) infinite;
+			}
+			@keyframes blink {
+				50% {
+					opacity: 0;
+				}
+			}
+			.nav-links {
+				display: flex;
+				gap: 26px;
+			}
+			.nav-links a,
+			.footer a,
+			.outro-links a {
+				color: var(--color-muted);
+				text-decoration: none;
+				font-size: 13.5px;
+				letter-spacing: 0.04em;
+				transition: color 0.18s;
+				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left
+					bottom / 0% 1px;
+				transition:
+					color 0.18s,
+					background-size 0.25s;
+				padding-bottom: 2px;
+			}
+			.nav-links a:hover,
+			.footer a:hover,
+			.outro-links a:hover {
+				color: var(--color-accent);
+				background-size: 100% 1px;
+			}
+			.outro-links a {
+				display: inline-block;
+			} /* magnetic transform needs a box */
+
+			/* ---------- hero ---------- */
+			.hero {
+				display: grid;
+				grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+				gap: 56px;
+				align-items: center;
+				padding: 72px 0 120px;
+				position: relative;
+			}
+			.hero::before {
+				content: '';
+				position: absolute;
+				top: -10%;
+				right: -15%;
+				width: 70%;
+				height: 90%;
+				background: radial-gradient(ellipse at center, rgb(60 232 130 / 0.07), transparent 65%);
+				pointer-events: none;
+			}
+			.kicker {
+				color: var(--color-accent);
+				font-size: 12px;
+				letter-spacing: 0.22em;
+				text-transform: uppercase;
+				margin-bottom: 22px;
+			}
+			.hero h1 {
+				font-size: clamp(2.6rem, 5.4vw, 4.3rem);
+				margin-bottom: 24px;
+			}
+			.hero h1 em {
+				font-style: normal;
+				color: var(--color-accent);
+				text-shadow: 0 0 28px rgb(60 232 130 / 0.45);
+			}
+			.sub {
+				color: var(--color-muted);
+				max-width: 46ch;
+				margin-bottom: 34px;
+			}
+			.install {
+				display: inline-flex;
+				align-items: center;
+				gap: 14px;
+				border: 1px solid var(--color-line);
+				background: var(--color-panel);
+				border-radius: 8px;
+				padding: 12px 16px;
+			}
+			.install code {
+				font-size: 14px;
+				color: var(--color-bright);
+			}
+			.install.big {
+				padding: 18px 26px;
+			}
+			.install.big code {
+				font-size: clamp(14px, 2.6vw, 19px);
+			}
+			.install button {
+				font-family: var(--font-mono);
+				font-size: 12px;
+				letter-spacing: 0.08em;
+				color: var(--color-accent);
+				background: rgb(60 232 130 / 0.08);
+				border: 1px solid rgb(60 232 130 / 0.3);
+				border-radius: 5px;
+				padding: 4px 10px;
+				cursor: pointer;
+				transition: background 0.15s;
+			}
+			.install button:hover {
+				background: rgb(60 232 130 / 0.18);
+			}
+
+			/* ---------- sections ---------- */
+			.sect {
+				padding: 96px 0;
+				border-top: 1px solid rgb(28 36 47 / 0.55);
+			}
+			.sect-label {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				color: var(--color-muted);
+				font-size: 12px;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+				margin-bottom: 42px;
+			}
+			.node {
+				width: 9px;
+				height: 9px;
+				border-radius: 50%;
+				border: 1px solid var(--color-muted);
+				transition: all 0.4s;
+			}
+			.node.lit {
+				background: var(--color-accent);
+				border-color: var(--color-accent);
+				box-shadow: 0 0 14px rgb(60 232 130 / 0.7);
+			}
+			.sect-grid {
+				display: grid;
+				grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+				gap: 56px;
+				align-items: start;
+			}
+			.sect h2 {
+				font-size: clamp(1.9rem, 3.6vw, 2.9rem);
+				margin-bottom: 20px;
+			}
+			.sect-copy p {
+				color: var(--color-muted);
+				max-width: 44ch;
+			}
+
+			/* panes */
+			.panes {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+				gap: 16px;
+			}
+			.pane {
+				background: var(--color-panel-2);
+				border: 1px solid var(--color-line);
+				border-radius: 10px;
+				padding: 16px 18px;
+				overflow-x: auto;
+			}
+			.pane-title {
+				font-size: 11px;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				margin-bottom: 12px;
+			}
+			.pane-title.accent {
+				color: var(--color-accent);
+			}
+			.pane-title.amber {
+				color: var(--color-amber);
+			}
+			.pane pre {
+				font-size: 13px;
+				line-height: 1.85;
+				color: var(--color-fg);
+			}
+			.gistlist {
+				white-space: pre;
+			}
+
+			/* code cards */
+			.code-stack {
+				position: relative;
+			}
+			.code-card {
+				border: 1px solid var(--color-line);
+				border-radius: 10px;
+				overflow: hidden;
+				background: var(--color-panel-2);
+			}
+			.code-card :global(pre) {
+				padding: 20px 22px;
+				font-size: 13.5px;
+				line-height: 1.8;
+				background: transparent !important;
+				overflow-x: auto;
+			}
+			.toast {
+				position: absolute;
+				right: -14px;
+				bottom: -26px;
+				border: 1px solid rgb(255 180 84 / 0.4);
+				background: rgb(20 17 12 / 0.96);
+				border-radius: 8px;
+				padding: 10px 16px;
+				font-size: 13px;
+				box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+			}
+			.toast-2 {
+				right: 22px;
+				bottom: 28px;
+				border-color: rgb(60 232 130 / 0.4);
+				background: rgb(12 20 15 / 0.96);
+			}
+			.toast-2 .zap {
+				color: var(--color-accent);
+			}
+			.zap {
+				color: var(--color-amber);
+				font-weight: 700;
+			}
+
+			/* progression */
+			.progression {
+				display: flex;
+				flex-direction: column;
+				gap: 0;
+			}
+			.phase {
+				display: flex;
+				gap: 18px;
+				align-items: flex-start;
+			}
+			.phase-num {
+				flex-shrink: 0;
+				width: 34px;
+				height: 34px;
+				border-radius: 50%;
+				border: 1px solid var(--color-line);
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-size: 13px;
+				font-weight: 700;
+				color: var(--color-muted);
+				margin-top: 2px;
+				transition: all 0.4s;
+			}
+			.phase:hover .phase-num,
+			.phase.lit .phase-num {
+				background: var(--color-accent);
+				border-color: var(--color-accent);
+				color: var(--color-ink);
+				box-shadow: 0 0 14px rgb(60 232 130 / 0.5);
+			}
+			.phase-body h3 {
+				font-family: var(--font-display);
+				font-weight: 700;
+				color: var(--color-bright);
+				font-size: 17px;
+				margin-bottom: 6px;
+			}
+			.phase-body p {
+				color: var(--color-muted);
+				font-size: 13.5px;
+				max-width: 42ch;
+			}
+			.phase-line {
+				width: 1px;
+				height: 28px;
+				margin-left: 17px;
+				background: var(--color-line);
+			}
+			.playbook-link {
+				margin-top: 20px;
+			}
+			.playbook-link a {
+				color: var(--color-accent);
+				text-decoration: none;
+				font-size: 14px;
+				background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left
+					bottom / 0% 1px;
+				transition: background-size 0.25s;
+				padding-bottom: 2px;
+			}
+			.playbook-link a:hover {
+				background-size: 100% 1px;
+			}
+
+			/* outro */
+			.outro {
+				text-align: center;
+				padding: 140px 0 150px;
+				border-top: 1px solid rgb(28 36 47 / 0.55);
+			}
+			.outro h2 {
+				font-size: clamp(2.4rem, 5vw, 4rem);
+				margin-bottom: 40px;
+			}
+			.outro-links {
+				margin-top: 28px;
+			}
+			.outro-links a {
+				font-size: 15px;
+				color: var(--color-accent);
+			}
+
+			/* footer */
+			.footer {
+				max-width: 1180px;
+				margin: 0 auto;
+				padding: 26px 24px 34px;
+				border-top: 1px solid rgb(28 36 47 / 0.55);
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 18px;
+				font-size: 13px;
+			}
+			.footer nav {
+				display: flex;
+				gap: 22px;
+			}
+
+			/* ---------- mobile ---------- */
+			@media (max-width: 900px) {
+				.hero {
+					grid-template-columns: minmax(0, 1fr);
+					gap: 44px;
+					padding: 40px 0 80px;
+				}
+				.sect {
+					padding: 64px 0;
+				}
+				.sect-grid {
+					grid-template-columns: minmax(0, 1fr);
+					gap: 32px;
+				}
+				.toast {
+					right: 0;
+					bottom: -34px;
+				}
+				.toast-2 {
+					right: 10px;
+					bottom: 24px;
+				}
+			}
+			@media (max-width: 560px) {
+				.panes {
+					grid-template-columns: minmax(0, 1fr);
+				}
+				.code-card :global(pre) {
+					font-size: 12px;
+					padding: 16px 16px;
+				}
+				.pane pre {
+					font-size: 12px;
+				}
+				.footer {
+					flex-direction: column;
+				}
+				.hero .install {
+					width: 100%;
+					justify-content: space-between;
+				}
+				.install.big {
+					justify-content: center;
+				}
+			}
+		</style>
+	</body>
+</html>

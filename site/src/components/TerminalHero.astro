@@ -1,0 +1,243 @@
+---
+// The living-kernel terminal. Lines are rendered server-side (SEO / no-JS),
+// then replayed as a typewriter timeline on the client. Line kinds:
+//   type   — typed at the prompt, char by char
+//   out    — kernel output, appears at once
+//   chan   — channel notification, slides in
+---
+
+<div class="term" id="hero-term" aria-label="repld session demo">
+	<div class="term-bar">
+		<span class="dot dot-r"></span>
+		<span class="dot dot-y"></span>
+		<span class="dot dot-g"></span>
+		<span class="term-title">repld — kernel · ~/projects/deals</span>
+		<span class="term-live"><span class="pulse"></span>live</span>
+	</div>
+	<div class="term-body" id="term-body">
+		<div class="tline" data-kind="type" data-who="agent">
+			<span class="p p-agent">agent ❯</span><span class="txt">from proff import Proff</span>
+		</div>
+		<div class="tline" data-kind="out">
+			<span class="txt dim">Proff(tab) — company financials, roles, search</span>
+		</div>
+		<div class="tline" data-kind="type" data-who="agent">
+			<span class="p p-agent">agent ❯</span><span class="txt"
+				>sweep = defer(p.portfolio(targets), "portfolio sweep")</span
+			>
+		</div>
+		<div class="tline" data-kind="out">
+			<span class="txt dim">⇢ task a91f · backgrounded — kernel stays free</span>
+		</div>
+		<div class="tline" data-kind="chan">
+			<span class="txt"
+				><span class="zap">⚡ channel</span> · task_done · portfolio sweep — 142 rows · 38s</span
+			>
+		</div>
+		<div class="tline" data-kind="type" data-who="you">
+			<span class="p p-you">you&nbsp;&nbsp; ❯</span><span class="txt">sweep.result[:1]</span>
+		</div>
+		<div class="tline" data-kind="out">
+			<span class="txt">[Company('Viking Venture XII AS', ebit=412_000_000)]</span>
+		</div>
+		<div class="tline" data-kind="type" data-who="you">
+			<span class="p p-you">you&nbsp;&nbsp; ❯</span><span class="txt"></span>
+		</div>
+	</div>
+</div>
+
+<style>
+	.term {
+		background: var(--color-panel-2);
+		border: 1px solid var(--color-line);
+		border-radius: 10px;
+		box-shadow:
+			0 0 0 1px rgb(0 0 0 / 0.4),
+			0 24px 80px -24px rgb(60 232 130 / 0.18),
+			0 8px 40px rgb(0 0 0 / 0.55);
+		overflow: hidden;
+		position: relative;
+	}
+	/* scanlines */
+	.term::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		background: repeating-linear-gradient(
+			0deg,
+			transparent 0px,
+			transparent 2px,
+			rgb(255 255 255 / 0.012) 3px
+		);
+	}
+	.term-bar {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 10px 14px;
+		border-bottom: 1px solid var(--color-line);
+		background: var(--color-panel);
+	}
+	.dot {
+		width: 11px;
+		height: 11px;
+		border-radius: 50%;
+		opacity: 0.85;
+	}
+	.dot-r {
+		background: #ff5f57;
+	}
+	.dot-y {
+		background: #febc2e;
+	}
+	.dot-g {
+		background: #28c840;
+	}
+	.term-title {
+		margin-left: 10px;
+		font-size: 12px;
+		color: var(--color-muted);
+		letter-spacing: 0.02em;
+	}
+	.term-live {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		color: var(--color-accent);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+	.pulse {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--color-accent);
+		animation: pulse 2s ease-in-out infinite;
+	}
+	@keyframes pulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 rgb(60 232 130 / 0.55);
+		}
+		50% {
+			box-shadow: 0 0 0 5px rgb(60 232 130 / 0);
+		}
+	}
+	.term-body {
+		padding: 18px 18px 22px;
+		font-size: 13.5px;
+		line-height: 1.9;
+		min-height: 285px;
+	}
+	.tline {
+		white-space: pre-wrap;
+		word-break: break-word;
+		visibility: hidden;
+	}
+	.tline.shown {
+		visibility: visible;
+	}
+	.p {
+		margin-right: 10px;
+		font-weight: 700;
+	}
+	.p-agent {
+		color: var(--color-accent);
+	}
+	.p-you {
+		color: var(--color-amber);
+	}
+	.dim {
+		color: var(--color-muted);
+	}
+	.tline[data-kind='chan'] .txt {
+		display: inline-block;
+		border: 1px solid rgb(255 180 84 / 0.35);
+		background: rgb(255 180 84 / 0.07);
+		border-radius: 6px;
+		padding: 2px 10px;
+		margin: 4px 0;
+	}
+	.zap {
+		color: var(--color-amber);
+		font-weight: 700;
+	}
+
+	:global(.cursor) {
+		display: inline-block;
+		width: 8px;
+		height: 1.1em;
+		vertical-align: text-bottom;
+		background: var(--color-accent);
+		animation: blink 1.06s steps(1) infinite;
+	}
+	@keyframes blink {
+		50% {
+			opacity: 0;
+		}
+	}
+
+	@media (max-width: 640px) {
+		.term-body {
+			font-size: 11.5px;
+			padding: 14px 12px 16px;
+			min-height: 250px;
+		}
+	}
+</style>
+
+<script>
+	const body = document.getElementById('term-body')!;
+	const lines = [...body.querySelectorAll<HTMLElement>('.tline')];
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+	const cursor = document.createElement('span');
+	cursor.className = 'cursor';
+
+	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+	async function typeLine(line: HTMLElement) {
+		const txt = line.querySelector<HTMLElement>('.txt')!;
+		const full = txt.textContent ?? '';
+		txt.textContent = '';
+		line.classList.add('shown');
+		txt.appendChild(cursor);
+		for (const ch of full) {
+			cursor.insertAdjacentText('beforebegin', ch);
+			await sleep(18 + Math.random() * 40);
+		}
+		await sleep(260);
+	}
+
+	async function play() {
+		if (reduced) {
+			lines.forEach((l) => l.classList.add('shown'));
+			lines.at(-1)?.querySelector('.txt')?.appendChild(cursor);
+			return;
+		}
+		// wait for the boot preloader to finish (fallback timeout if it never fires)
+		if (!(window as any).__heroReady) {
+			await new Promise<void>((res) => {
+				addEventListener('repld:heroready', () => res(), { once: true });
+				setTimeout(res, 3000);
+			});
+		}
+		await sleep(700); // let the hero reveal land first
+		for (const line of lines) {
+			const kind = line.dataset.kind;
+			if (kind === 'type') {
+				await typeLine(line);
+			} else {
+				line.classList.add('shown');
+				await sleep(kind === 'chan' ? 700 : 420);
+			}
+		}
+		// park the cursor on the final empty prompt
+		lines.at(-1)?.querySelector('.txt')?.appendChild(cursor);
+	}
+
+	play();
+</script>
