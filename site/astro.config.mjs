@@ -7,8 +7,8 @@ import tailwindcss from '@tailwindcss/vite';
 
 // https://astro.build/config
 export default defineConfig({
-	// TODO: replace with the real domain before deploy (needed for sitemap + canonical URLs)
-	site: 'https://repld.dev',
+	site: 'https://angelsen.github.io',
+	base: '/repld',
 
 	prefetch: {
 		prefetchAll: true,

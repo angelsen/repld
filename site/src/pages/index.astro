@@ -20,6 +20,8 @@ await tab.click("#export-csv")
 #   tree Δ     dialog "Export products" · 2 buttons
 #   network Δ  POST /admin/api/exports → 201
 #   console Δ  (clean)`;
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 
 <!doctype html>
@@ -33,7 +35,7 @@ await tab.click("#export-csv")
 			name="description"
 			content="repld runs a persistent Python kernel you and your agent share. Push notifications instead of polling, a scriptable browser, and one-off code that hardens into tools."
 		/>
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
 		<Font cssVariable="--font-geist-mono" preload />
 		<Font cssVariable="--font-bricolage" preload />
 		<script is:inline>
@@ -54,9 +56,9 @@ await tab.click("#export-csv")
 		<div class="wire" aria-hidden="true"><div class="wire-fill" id="wire-fill"></div></div>
 
 		<header class="nav" id="nav">
-			<a class="wordmark" href="/">repld<span class="block-cursor"></span></a>
+			<a class="wordmark" href={base}>repld<span class="block-cursor"></span></a>
 			<nav class="nav-links">
-				<a href="/docs/">docs</a>
+				<a href={`${base}docs/`}>docs</a>
 				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>
@@ -198,7 +200,7 @@ linked (from other projects):
 							Do it by hand first. The workflow reveals itself through repetition — then hardens,
 							one phase at a time.
 						</p>
-						<p class="playbook-link"><a href="/playbook">read the full playbook →</a></p>
+						<p class="playbook-link"><a href={`${base}playbook`}>read the full playbook →</a></p>
 					</div>
 					<div class="progression" data-reveal>
 						<div class="phase">
@@ -255,7 +257,7 @@ linked (from other projects):
 					<code><span class="dim">$</span> uv tool install repld-tool</code>
 				</div>
 				<p class="outro-links" data-reveal>
-					<a href="/docs/">read the docs →</a>
+					<a href={`${base}docs/`}>read the docs →</a>
 				</p>
 			</section>
 		</main>
@@ -263,7 +265,7 @@ linked (from other projects):
 		<footer class="footer">
 			<span class="wordmark small">repld<span class="block-cursor"></span></span>
 			<nav>
-				<a href="/docs/">docs</a>
+				<a href={`${base}docs/`}>docs</a>
 				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>

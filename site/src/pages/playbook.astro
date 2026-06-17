@@ -17,6 +17,8 @@ const gateSnippet = `# auto stages fill themselves; human stages wait
 [Human]  Decision     → human reviews, writes action        # ← gate
 [Auto]   Execution    → system executes the action
 [Auto]   Status       → Pending → Done`;
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 
 <!doctype html>
@@ -30,16 +32,16 @@ const gateSnippet = `# auto stages fill themselves; human stages wait
 			name="description"
 			content="How automation actually gets built: do it by hand, extract a gist, wire a trigger, ship it headless. The method is the same regardless of the tools."
 		/>
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
 		<Font cssVariable="--font-geist-mono" preload />
 		<Font cssVariable="--font-bricolage" preload />
 	</head>
 	<body>
 		<header class="nav">
-			<a class="wordmark" href="/">repld<span class="blink"></span></a>
+			<a class="wordmark" href={base}>repld<span class="blink"></span></a>
 			<nav class="links">
-				<a href="/">home</a>
-				<a href="/docs/">docs</a>
+				<a href={base}>home</a>
+				<a href={`${base}docs/`}>docs</a>
 				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>
@@ -246,14 +248,14 @@ const gateSnippet = `# auto stages fill themselves; human stages wait
 					AI enrichment, system sync, and human-in-the-loop gates — all built from gists that
 					started as throwaway REPL code.
 				</blockquote>
-				<p class="back" data-reveal><a href="/">← back to repld</a></p>
+				<p class="back" data-reveal><a href={base}>← back to repld</a></p>
 			</section>
 		</main>
 
 		<footer class="ft">
 			<span class="wordmark sm-wm">repld<span class="blink"></span></span>
 			<nav class="links">
-				<a href="/docs/">docs</a>
+				<a href={`${base}docs/`}>docs</a>
 				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>

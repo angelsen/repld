@@ -25,4 +25,6 @@
 ## Infra
 
 - [ ] CI + lint pass
-- [ ] Docs/marketing site (Astro/Starlight)
+- [x] Docs/marketing site (Astro/Starlight) — landing + playbook + Starlight scaffold in `site/`
+- [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
+- [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
