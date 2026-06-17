@@ -11,19 +11,19 @@
 		<span class="dot dot-r"></span>
 		<span class="dot dot-y"></span>
 		<span class="dot dot-g"></span>
-		<span class="term-title">repld — kernel · ~/projects/deals</span>
+		<span class="term-title">repld — kernel · ~/my-project</span>
 		<span class="term-live"><span class="pulse"></span>live</span>
 	</div>
 	<div class="term-body" id="term-body">
 		<div class="tline" data-kind="type" data-who="agent">
-			<span class="p p-agent">agent ❯</span><span class="txt">from proff import Proff</span>
+			<span class="p p-agent">agent ❯</span><span class="txt">from acme import Acme</span>
 		</div>
 		<div class="tline" data-kind="out">
-			<span class="txt dim">Proff(tab) — company financials, roles, search</span>
+			<span class="txt dim">Acme(tab) — company lookup, financials, search</span>
 		</div>
 		<div class="tline" data-kind="type" data-who="agent">
 			<span class="p p-agent">agent ❯</span><span class="txt"
-				>sweep = defer(p.portfolio(targets), "portfolio sweep")</span
+				>job = defer(acme.scan(watchlist), "account scan")</span
 			>
 		</div>
 		<div class="tline" data-kind="out">
@@ -31,14 +31,14 @@
 		</div>
 		<div class="tline" data-kind="chan">
 			<span class="txt"
-				><span class="zap">⚡ channel</span> · task_done · portfolio sweep — 142 rows · 38s</span
+				><span class="zap">⚡ channel</span> · task_done · account scan — 142 rows · 38s</span
 			>
 		</div>
 		<div class="tline" data-kind="type" data-who="you">
-			<span class="p p-you">you&nbsp;&nbsp; ❯</span><span class="txt">sweep.result[:1]</span>
+			<span class="p p-you">you&nbsp;&nbsp; ❯</span><span class="txt">job.result[:1]</span>
 		</div>
 		<div class="tline" data-kind="out">
-			<span class="txt">[Company('Viking Venture XII AS', ebit=412_000_000)]</span>
+			<span class="txt">[Company('Acme Corp', revenue=4_200_000, status='active')]</span>
 		</div>
 		<div class="tline" data-kind="type" data-who="you">
 			<span class="p p-you">you&nbsp;&nbsp; ❯</span><span class="txt"></span>

@@ -6,7 +6,7 @@ import vesper from '@shikijs/themes/vesper';
 import TerminalHero from '../components/TerminalHero.astro';
 import '../styles/global.css';
 
-const pushSnippet = `defer(scrape_all(targets), "portfolio sweep")  # task_id, immediately
+const pushSnippet = `defer(acme.scan(watchlist), "account scan")  # task_id, immediately
 
 @every(900)
 async def watch_inbox():
@@ -140,7 +140,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 							<span class="zap">⚡ channel</span> · every · watch_inbox — "3 new — Re: term sheet"
 						</div>
 						<div class="toast toast-2" id="toast2">
-							<span class="zap">⚡ channel</span> · task_done · portfolio sweep — 142 rows · 38s
+							<span class="zap">⚡ channel</span> · task_done · account scan — 142 rows · 38s
 						</div>
 					</div>
 				</div>
