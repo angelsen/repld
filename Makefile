@@ -3,7 +3,8 @@ ROOT := $(shell git rev-parse --show-toplevel)
 .PHONY: deploy site-build site-preview
 
 deploy: site-build
-	@tmpdir=$$(mktemp -d)/gh-pages && \
+	@git branch -D gh-pages 2>/dev/null || true && \
+	tmpdir=$$(mktemp -d)/gh-pages && \
 	git worktree add --detach "$$tmpdir" && \
 	cd "$$tmpdir" && \
 	git checkout --orphan gh-pages && \
