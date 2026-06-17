@@ -14,6 +14,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+## [0.0.14] - 2026-06-17
+
+### Added
+
+- `repld://docs/playbook` MCP resource — workflow methodology (interactive → gist → trigger → production) readable by the agent before designing automation
+- Playbook one-liner in INSTRUCTIONS (always loaded): sets the agent's default instinct to prototype first, extract later
+
+### Fixed
+
+- Kernel banner: stale `--dangerously-load-development-channels server:repld` → `--channels`
+
 ## [0.0.13] - 2026-06-17
 
 ### Added
