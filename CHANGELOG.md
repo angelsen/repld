@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Kernel banner and site docs showed `claude --channels` which errors — corrected to `claude --dangerously-load-development-channels server:repld` (custom MCP servers require the development flag with `server:` prefix)
+
 ### Removed
 
 ## [0.0.15] - 2026-06-17
