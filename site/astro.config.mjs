@@ -36,6 +36,10 @@ export default defineConfig({
 			customCss: ['./src/styles/starlight-theme.css'],
 			expressiveCode: {
 				themes: ['vesper'],
+				// Single dark theme by design. The build prints a harmless advisory
+				// ("provide a dark + light theme for contrast") — ignored on purpose:
+				// this is an intentionally dark-only site, and keeping Starlight's UI
+				// colors gives the docs code frames their proper dark background.
 				useStarlightUiThemeColors: true,
 				styleOverrides: {
 					borderRadius: '8px',
@@ -45,9 +49,7 @@ export default defineConfig({
 					},
 				},
 			},
-			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/angelsen/repld' },
-			],
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/angelsen/repld' }],
 			sidebar: [
 				{
 					label: 'Start here',

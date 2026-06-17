@@ -370,55 +370,66 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		border-bottom: none;
 		border-color: var(--accent-line);
 	}
+	/* sheds stays fully legible — the seam + label + muted border carry the
+	   "removed on graduation" meaning, not opacity. */
 	.code-stack :global(.code-card.sheds) {
 		border-top-left-radius: 0;
 		border-top-right-radius: 0;
-		opacity: 0.45;
-		filter: saturate(0.4);
-		transition:
-			opacity 0.5s ease,
-			filter 0.5s ease;
-	}
-	/* sheds "re-attaches" on hover — the wiring is still there, just dormant */
-	.code-stack:hover :global(.code-card.sheds) {
-		opacity: 0.8;
-		filter: saturate(0.8);
+		border-top: none;
 	}
 
-	/* the graduation seam — where wiring is shed */
+	/* the graduation seam — an amber transition band between keeps & sheds.
+	   Diagonal caution-hatch + amber to read as "cut line", distinct from the
+	   green "keep" zone. Real height so the label never clips against the cards. */
 	.seam {
 		position: relative;
-		height: 0;
-		border-top: 1px dashed var(--accent-glow);
+		height: 46px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		overflow: hidden;
+		border-left: 1px solid var(--color-line);
+		border-right: 1px solid var(--color-line);
 		background:
-			linear-gradient(var(--color-panel-2), var(--color-panel-2)) padding-box,
-			repeating-linear-gradient(90deg, var(--accent-glow) 0 6px, transparent 6px 12px);
+			repeating-linear-gradient(45deg, rgb(255 180 84 / 0.13) 0 1px, transparent 1px 10px),
+			var(--color-panel-2);
+	}
+	.seam::before,
+	.seam::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		height: 1px;
+		background: rgb(255 180 84 / 0.28);
+	}
+	.seam::before {
+		top: 0;
+	}
+	.seam::after {
+		bottom: 0;
 	}
 	.seam-label {
-		position: absolute;
-		transform: translateY(-50%);
-		top: 0;
+		position: relative;
+		z-index: 1;
 		background: var(--color-ink);
-		color: var(--color-accent);
+		color: var(--color-amber);
 		font-size: 10px;
 		letter-spacing: 0.2em;
 		text-transform: uppercase;
-		padding: 3px 12px;
-		border: 1px solid var(--accent-line);
+		padding: 4px 14px;
+		border: 1px solid rgb(255 180 84 / 0.35);
 		border-radius: 999px;
 	}
 	.seam-dot {
 		position: absolute;
 		left: 0;
-		top: 0;
+		top: 50%;
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: var(--color-accent);
-		box-shadow: 0 0 12px 2px var(--color-accent);
+		background: var(--color-amber);
+		box-shadow: 0 0 12px 2px var(--color-amber);
 		transform: translate(-50%, -50%);
 		opacity: 0;
 	}
