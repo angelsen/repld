@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Screenshot switched from JPEG back to PNG — the API tokenizes on pixel count, not file size; PNG is lossless (no artifacts blurring text in screenshots)
+
 ### Fixed
 
 ### Removed
