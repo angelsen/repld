@@ -10,11 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `tab.screenshot()` now captures JPEG (quality 80) pre-sized for the Anthropic vision API (max 1568px per side) via CDP `clip.scale` — no Python image library needed. Returns `{path, source, target, scale, bytes}` with coordinate mapping info. Algorithm ported from Anthropic's `resize.rs` via the nanokvm client. Previously captured raw PNG which could be rejected by the API at larger viewport sizes
-
 ### Fixed
 
 ### Removed
+
+## [0.0.17] - 2026-06-17
+
+### Changed
+
+- `tab.screenshot()` now captures JPEG (quality 80) pre-sized for the Anthropic vision API (max 1568px per side) via CDP `clip.scale` — no Python image library needed. Returns `{path, source, target, scale, bytes}` with coordinate mapping info. Algorithm ported from Anthropic's `resize.rs` via the nanokvm client. Previously captured raw PNG which could be rejected by the API at larger viewport sizes
+
 
 ## [0.0.16] - 2026-06-17
 
