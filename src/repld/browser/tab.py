@@ -1122,11 +1122,12 @@ class Tab:
         path: str | None = None,
         quality: int = 80,
     ) -> dict:
-        """Capture a JPEG screenshot compressed for the Anthropic vision API.
+        """Capture a JPEG screenshot for the Anthropic vision API.
 
-        Returns dict with path, source/target dims, and scale factor.
-        Downsizes to fit the API's token grid (max 1568px per side) via CDP's
-        clip.scale — no Python image library needed.
+        Captures at full viewport resolution (no CDP clip.scale — that races
+        the compositor and can produce blank frames). The API resizes to its
+        own token grid server-side. We report what the model will see so the
+        agent can map coordinates.
         """
         import time
 
@@ -1141,20 +1142,6 @@ class Tab:
         src_w = int(vp.get("clientWidth", 0))
         src_h = int(vp.get("clientHeight", 0))
 
-        scale = 1.0
-        tgt_w, tgt_h = src_w, src_h
-        if src_w > 0 and src_h > 0:
-            tgt_w, tgt_h = _model_dims(src_w, src_h)
-            if tgt_w < src_w or tgt_h < src_h:
-                scale = min(tgt_w / src_w, tgt_h / src_h)
-                params["clip"] = {
-                    "x": 0,
-                    "y": 0,
-                    "width": src_w,
-                    "height": src_h,
-                    "scale": scale,
-                }
-
         result = await self._session.execute("Page.captureScreenshot", params)
         img_bytes = base64.b64decode(result.get("data", ""))
         if path:
@@ -1164,10 +1151,19 @@ class Tab:
             tid = self.target_id.replace(":", "-")
             out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.jpg"
         out.write_bytes(img_bytes)
+
+        tgt_w, tgt_h = (
+            _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)
+        )
+        scale = (
+            min(tgt_w / src_w, tgt_h / src_h)
+            if src_w > 0 and src_h > 0 and (tgt_w < src_w or tgt_h < src_h)
+            else 1.0
+        )
         return {
             "path": str(out),
             "source": {"width": src_w, "height": src_h},
-            "target": {"width": tgt_w, "height": tgt_h},
+            "model": {"width": tgt_w, "height": tgt_h},
             "scale": round(scale, 4),
             "bytes": len(img_bytes),
         }

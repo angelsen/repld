@@ -742,10 +742,10 @@ class Dispatcher:
             tab.screenshot(full_page=bool(args.get("full_page", False)))
         )
         src = info["source"]
-        tgt = info["target"]
+        mdl = info["model"]
         lines = [
             f"Screenshot saved to {info['path']}",
-            f"Source: {src['width']}x{src['height']}  →  Target: {tgt['width']}x{tgt['height']}  (scale {info['scale']}, {info['bytes'] // 1024}KB JPEG)",
+            f"Captured: {src['width']}x{src['height']} ({info['bytes'] // 1024}KB JPEG)  →  Model sees: {mdl['width']}x{mdl['height']} (API resizes server-side)",
             "Use Read to view it.",
         ]
         if info["scale"] < 1.0:
