@@ -480,9 +480,9 @@ Convention: add data-testid to your root layout component.
       Wait for network idle.  Returns settle time in ms.
       See "Settle loop" below for what "idle" means.
 
-  tab.screenshot(*, full_page=False, path=None, quality=80)   → dict
-      Capture JPEG screenshot pre-sized for the vision API (max 1568px per side).
-      Returns {path, source:{w,h}, target:{w,h}, scale, bytes}.
+  tab.screenshot(*, full_page=False, path=None)               → dict
+      Capture PNG screenshot. Returns {path, source:{w,h}, model:{w,h}, scale, bytes}.
+      Model dims show what the API will resize to for its token grid.
       When scale < 1, multiply coordinates by 1/scale to map back to page pixels.
 
   tab.cookies()                                               → list[dict]
@@ -974,7 +974,7 @@ Tab (async unless noted):
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body}
   tab.navigate(url)                                → None
   tab.reload()                                     → None
-  tab.screenshot(full_page=, quality=80)            → dict {path, source, target, scale, bytes}
+  tab.screenshot(full_page=)                        → dict {path, source, model, scale, bytes}
   tab.cookies()                                    → list[dict]
   tab.cdp(method, **params)                        → dict
 

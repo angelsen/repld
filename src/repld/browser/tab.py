@@ -1120,20 +1120,17 @@ class Tab:
         *,
         full_page: bool = False,
         path: str | None = None,
-        quality: int = 80,
     ) -> dict:
-        """Capture a JPEG screenshot for the Anthropic vision API.
+        """Capture a PNG screenshot. Reports model dimensions for coordinate mapping.
 
-        Captures at full viewport resolution (no CDP clip.scale — that races
-        the compositor and can produce blank frames). The API resizes to its
-        own token grid server-side. We report what the model will see so the
-        agent can map coordinates.
+        Full viewport resolution, no client-side downscaling (CDP clip.scale
+        races the compositor). The API resizes to its token grid server-side.
         """
         import time
 
         from ..tasks import SPILL_DIR, _ensure_spill_dir
 
-        params: dict = {"format": "jpeg", "quality": quality}
+        params: dict = {"format": "png"}
         if full_page:
             params["captureBeyondViewport"] = True
 
@@ -1149,7 +1146,7 @@ class Tab:
         else:
             _ensure_spill_dir()
             tid = self.target_id.replace(":", "-")
-            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.jpg"
+            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
         out.write_bytes(img_bytes)
 
         tgt_w, tgt_h = (

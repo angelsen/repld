@@ -339,7 +339,7 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a JPEG screenshot of a tab, pre-sized for the vision API. Saves to disk, returns path. Use Read to view.",
+        "description": "Capture a PNG screenshot of a tab. Saves to disk, returns path + model dimensions for coordinate mapping. Use Read to view.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -745,7 +745,7 @@ class Dispatcher:
         mdl = info["model"]
         lines = [
             f"Screenshot saved to {info['path']}",
-            f"Captured: {src['width']}x{src['height']} ({info['bytes'] // 1024}KB JPEG)  →  Model sees: {mdl['width']}x{mdl['height']} (API resizes server-side)",
+            f"Captured: {src['width']}x{src['height']} ({info['bytes'] // 1024}KB PNG)  →  Model sees: {mdl['width']}x{mdl['height']} (API resizes server-side)",
             "Use Read to view it.",
         ]
         if info["scale"] < 1.0:
