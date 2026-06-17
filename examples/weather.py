@@ -52,9 +52,11 @@ class Weather:
         rows = []
         for ts in fc["properties"]["timeseries"][:hours]:
             d = ts["data"]["instant"]["details"]
-            rows.append({
-                "time": ts["time"],
-                "temp_c": d.get("air_temperature"),
-                "wind_m_s": d.get("wind_speed"),
-            })
+            rows.append(
+                {
+                    "time": ts["time"],
+                    "temp_c": d.get("air_temperature"),
+                    "wind_m_s": d.get("wind_speed"),
+                }
+            )
         return rows

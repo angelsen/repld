@@ -59,8 +59,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<a class="wordmark" href={base}>repld<span class="block-cursor"></span></a>
 			<nav class="nav-links">
 				<a href={`${base}quickstart`}>quickstart</a>
+				<a href={`${base}playbook`}>playbook</a>
+				<a href={`${base}production`}>production</a>
 				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>
 		</header>
@@ -179,11 +180,11 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 						<p class="pane-title accent">↪ repld gist list</p>
 						<pre
 							class="gistlist">local (./gists):
-  <span class="b">brreg</span>        Brreg() <span class="dim">[async]</span>      <span class="dim">Norwegian business registry</span>
+  <span class="b">crm</span>          CRM(tab) <span class="dim">[async]</span>     <span class="dim">contacts, deals, pipeline</span>
   <span class="b">gmail</span>        Gmail()              <span class="dim">read, search, send</span>
   <span class="b">linkedin</span>     LI(tab, csrf) <span class="dim">[async]</span> <span class="dim">people + company search</span>
-  <span class="b">meny</span>         Meny(tab) <span class="dim">[async]</span>    <span class="dim">groceries, prices, recipes</span>
-  <span class="b">proff</span>        Proff(tab) <span class="dim">[async]</span>   <span class="dim">financials, roles</span>
+  <span class="b">stripe</span>       Stripe()             <span class="dim">invoices, subscriptions</span>
+  <span class="b">acme</span>         Acme(tab) <span class="dim">[async]</span>    <span class="dim">company lookup, financials</span>
   <span class="b">shopify_sd</span>   SD(tab) <span class="dim">[async]</span>      <span class="dim">search &amp; discovery admin</span>
 linked (from other projects):
   <span class="b">emulator</span>     Device() <span class="dim">[async]</span>     <span class="dim">android driver — adb + CDP</span></pre>

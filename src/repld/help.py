@@ -14,6 +14,8 @@ no overlap:
                             browser API reference, internals, and workflows
   PLAYBOOK                → MCP resource (repld://docs/playbook) — workflow
                             methodology: interactive → gist → trigger → production
+  PRODUCTION              → MCP resource (repld://docs/production) — graduation
+                            guide: gist → FastMCP/FastAPI with wiring examples
 """
 
 import json
@@ -76,7 +78,7 @@ _PLAYBOOK = (
     "Read repld://docs/playbook for the full methodology."
 )
 
-_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns and gist conventions. Read repld://docs/browser for the full browser API and internals."
+_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns and gist conventions. Read repld://docs/browser for the full browser API and internals.\nRead repld://docs/production when graduating gists to FastMCP/FastAPI."
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +195,175 @@ or plain data transforms.
 
   Never skip phases. Never design the pipeline before doing the work.
   The workflow reveals itself through repetition.
+
+  Read repld://docs/production for concrete wiring patterns when
+  graduating gists to FastMCP or FastAPI.
+"""
+
+# ---------------------------------------------------------------------------
+# PRODUCTION (repld://docs/production resource — graduation guide)
+# ---------------------------------------------------------------------------
+
+PRODUCTION = """\
+Graduating gists to production
+
+A gist is a plain Python file that runs in repld during prototyping. The same
+code runs in production — FastMCP, FastAPI, or any framework. This guide shows
+how to wire it.
+
+== The two-layer pattern ==
+
+Write gists with two layers: core logic (portable) and repld wiring (shed on
+graduation). The core function moves to production unchanged; the wiring gets
+replaced by the target framework's decorator.
+
+  Core logic — top of file:
+
+    import os
+    import httpx
+
+    async def lookup(company_id: str) -> dict:
+        \"""Look up a company. -> {name, address, ...}\"""
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(
+                f"https://api.example.com/company/{company_id}",
+                headers={"Authorization": f"Bearer {os.environ['API_TOKEN']}"},
+            )
+            return resp.json()
+
+  Browser-auth variant — accept a fetch callable so the core function works
+  both with browser session auth (no token) and standalone (token from env):
+
+    async def lookup(company_id: str, *, fetch=None) -> dict:
+        \"""Look up a company. -> {name, address, ...}\"""
+        if fetch is not None:
+            return (await fetch(f"/api/company/{company_id}"))["body"]
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(
+                f"https://api.example.com/company/{company_id}",
+                headers={"Authorization": f"Bearer {os.environ['API_TOKEN']}"},
+            )
+            return resp.json()
+
+  repld wiring — bottom of file (shed on graduation):
+
+    __repld_tools__ = [
+        {"name": "lookup", "description": "Look up a company",
+         "inputSchema": {"type": "object",
+                         "properties": {"company_id": {"type": "string"}},
+                         "required": ["company_id"]}},
+    ]
+
+    async def _tool_lookup(args: dict) -> str:
+        import json, repld
+        try:
+            tab = await repld.browser.get("*example.com*")
+            result = await lookup(args["company_id"], fetch=tab.fetch)
+        except RuntimeError:
+            result = await lookup(args["company_id"])
+        return json.dumps(result)
+
+== Secrets and .env ==
+
+Core logic reads secrets from os.environ — never hardcode tokens.
+
+  token = os.environ["API_TOKEN"]
+
+Where the env var comes from depends on context:
+  - Interactive (repld): .env at project root, loaded at kernel boot
+  - Production (FastAPI/FastMCP): .env at project root, loaded by framework
+  - CI/deploy: platform secrets (Fly.io, Railway, etc.)
+
+repld loads .env from the project directory (same place as the socket and
+gists/) at kernel boot. Existing env vars are never overwritten.
+
+For browser-auth APIs — no token at all. The browser session IS the
+credential. Use the fetch= callable pattern above.
+
+== Three graduation tiers ==
+
+  Standalone (no repld dependency):
+    Gist uses public APIs with token auth. No browser needed.
+    Production deps: just the gist's __repld_deps__ (httpx, etc.)
+
+  Browser-backed (repld dependency):
+    Gist relies on browser session auth. Production service runs alongside
+    repld + Chrome.
+    Production deps: uv add repld-tool[browser]
+
+  Hybrid (token + browser fallback):
+    Token auth when available, browser fallback when not. The fetch=
+    parameter pattern enables this — core logic doesn't care which path.
+
+== FastMCP wiring ==
+
+Shortest path — register the core function directly:
+
+  from fastmcp import FastMCP
+  from gists.acme import lookup
+
+  mcp = FastMCP("my-service")
+  mcp.add_tool(lookup)
+
+FastMCP generates the input schema from type hints and the tool description
+from the docstring. If the core function's signature already matches what
+you want the tool to look like, this is all you need.
+
+When you need a different name or want to adapt parameters:
+
+  @mcp.tool
+  async def company_lookup(company_id: str) -> dict:
+      \"""Look up a company.\"""
+      return await lookup(company_id)
+
+== FastAPI wiring ==
+
+  from fastapi import APIRouter
+  from gists.acme import lookup
+
+  router = APIRouter()
+
+  @router.get("/company/{company_id}")
+  async def company_lookup(company_id: str):
+      return await lookup(company_id)
+
+Same core function, different framework. Data in, data out.
+
+== Scaffolding a production project ==
+
+  # 1. Create the project
+  uv init my-service && cd my-service
+
+  # 2. Add framework
+  uv add fastmcp                         # or: uv add fastapi uvicorn
+
+  # 3. Add gist deps (from __repld_deps__)
+  uv add httpx                           # each package the gist declared
+
+  # 4. If browser-backed:
+  uv add repld-tool[browser]
+
+  # 5. Copy gists (vendor them)
+  mkdir -p gists
+  cp ~/other-project/gists/lookup.py gists/
+
+  # 6. Write server.py — import core functions, wrap with decorators
+  #    The __repld_tools__ + _tool_* layer stays behind in the gist file.
+  #    @mcp.tool / @router.get replaces it.
+
+  # 7. Run
+  uv run fastmcp run server.py           # FastMCP
+  uv run uvicorn main:app                # FastAPI
+
+== What stays, what goes ==
+
+  Stays (portable):              Goes (repld-specific):
+  ────────────────               ──────────────────────
+  Core async functions           __repld_tools__ list
+  __repld_deps__ (as reference)  _tool_* handler functions
+  os.environ["TOKEN"]            import repld (in wiring)
+  Data parsing helpers           tab.fetch / browser.get
+  Type hints, docstrings         __repld_usage__
 """
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1396,23 @@ output, stable downstream code, and a shape that fits in a docstring.
 Module-level state resets on reload. Globals (clients, caches) re-initialize
 when the gist auto-reloads; stale connections are not closed. Keep such
 state disposable — lazy-init clients, caches that can rebuild.
+
+=== Writing portable gists ===
+
+When a gist might graduate to production (FastMCP, FastAPI), use the two-layer
+pattern: core logic as pure async functions at the top of the file, repld
+wiring (__repld_tools__ + _tool_*) at the bottom. The core functions move
+to production unchanged; the wiring gets replaced by @mcp.tool or @router.get.
+
+For secrets, use os.environ["TOKEN"] — never hardcode. The kernel loads .env
+from the project root at boot.
+
+For browser-auth APIs, accept a fetch= callable parameter in the core function.
+In repld, pass tab.fetch. In production, pass an httpx client or use token
+auth instead. The core function doesn't care which path.
+
+Read repld://docs/production for the full graduation guide with wiring
+examples and scaffolding steps.
 
 === Multi-tab gists (embedded apps) ===
 

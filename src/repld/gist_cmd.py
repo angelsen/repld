@@ -11,8 +11,20 @@ _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
 import json
+import os
 
 # __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
+
+# --- core logic (portable — keeps on graduation) ---
+
+
+async def example(id: int) -> dict:
+    """TODO: what this does. -> {{id, ...}}"""
+    # token = os.environ["API_TOKEN"]  # secrets via env vars, never hardcode
+    return {{"id": id}}
+
+
+# --- repld wiring (shed on graduation — replace with @mcp.tool or @router.get) ---
 
 __repld_tools__ = [
     {{
@@ -30,8 +42,9 @@ __repld_tools__ = [
 
 
 async def _tool_{name}_example(args: dict) -> str:
-    """TODO: what this returns. Document the shape: -> {{id, ...}}"""
-    return json.dumps({{"id": args["id"]}})
+    """TODO: what this returns."""
+    result = await example(args["id"])
+    return json.dumps(result)
 '''
 
 
@@ -81,9 +94,10 @@ def _gist_new(argv: list[str]) -> int:
     print(f"created: {path}")
     print()
     print("Next steps:")
-    print(f"  1. Edit {path} — rename the example tool, add your own")
-    print("  2. Tools appear in tools/list automatically on next MCP call")
-    print("  3. Handler convention: _tool_{tool_name}(args: dict) -> str | dict")
+    print(f"  1. Edit {path} — rename the example tool, add your logic")
+    print("  2. Core functions at top (portable), repld wiring at bottom (shed later)")
+    print("  3. Tools appear in tools/list automatically on next MCP call")
+    print("  4. Read repld://docs/production when ready to graduate")
     return 0
 
 

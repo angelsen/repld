@@ -406,6 +406,12 @@ _DOC_RESOURCES = [
         "description": "Workflow methodology: prototype interactive → extract gists → wire triggers → production. Read before designing automation.",
         "mimeType": "text/plain",
     },
+    {
+        "uri": "repld://docs/production",
+        "name": "repld-production",
+        "description": "Graduation guide: move gists to FastMCP or FastAPI with the two-layer pattern, .env secrets, and concrete wiring examples.",
+        "mimeType": "text/plain",
+    },
 ]
 
 _BROWSER_RESOURCES = [
@@ -910,6 +916,10 @@ class Dispatcher:
                 from .help import PLAYBOOK
 
                 text = PLAYBOOK
+            elif uri == "repld://docs/production":
+                from .help import PRODUCTION
+
+                text = PRODUCTION
             elif uri == "repld://browser/tabs":
                 text = self._resource_tabs()
             elif uri == "repld://browser/network":

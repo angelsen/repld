@@ -25,8 +25,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<a class="wordmark" href={base}>repld<span class="blink"></span></a>
 			<nav class="links">
 				<a href={base}>home</a>
+				<a href={`${base}playbook`}>playbook</a>
+				<a href={`${base}production`}>production</a>
 				<a href={`${base}docs/`}>docs</a>
-				<a href="https://pypi.org/project/repld-tool/">pypi</a>
 				<a href="https://github.com/angelsen/repld">github</a>
 			</nav>
 		</header>
@@ -168,6 +169,10 @@ reqs = tab.network(url="*api*")
 							<p>Workflow methodology — when to extract, when to automate</p>
 						</div>
 						<div class="resource">
+							<code class="c">repld://docs/production</code>
+							<p>Graduation guide — move gists to FastMCP or FastAPI</p>
+						</div>
+						<div class="resource">
 							<code class="c">repld://gists/{'{name}'}</code>
 							<p>Full API of any loaded gist — constructor args, methods, patterns</p>
 						</div>
@@ -193,18 +198,18 @@ reqs = tab.network(url="*api*")
 						</p>
 					</div>
 					<div class="chat" data-reveal>
-						<div class="msg you">Let's reverse-engineer the Proff.no API and make a gist for company lookups</div>
+						<div class="msg you">Let's reverse-engineer the company directory API and make a gist for lookups</div>
 						<div class="msg claude">
 							<p class="msg-label">Claude</p>
-							<p>I'll read the browser guide first, then attach to your Proff tab and discover the API.</p>
+							<p>I'll read the browser guide first, then attach to your tab and discover the API.</p>
 							<div class="msg-code">
 								<pre><span class="dim"># reads repld://docs/browser</span>
 <span class="dim"># reads repld://gists/_registry</span>
-tab = await browser.get("*proff.no*")
+tab = await browser.get("*directory.example.com*")
 <span class="dim"># discovers search, company, financials endpoints</span>
-<span class="dim"># writes gists/proff.py with Proff class</span></pre>
+<span class="dim"># writes gists/acme.py with Acme class</span></pre>
 							</div>
-							<p>Created <code>gists/proff.py</code> — try <code>from proff import Proff</code>.</p>
+							<p>Created <code>gists/acme.py</code> — try <code>from acme import Acme</code>.</p>
 						</div>
 					</div>
 				</div>
@@ -230,7 +235,10 @@ tab = await browser.get("*proff.no*")
 					looks wrong. Claude brings the hands — executing, fetching, wiring,
 					writing code. The kernel is where you meet.
 				</blockquote>
-				<p class="back" data-reveal><a href={base}>← back to repld</a></p>
+				<div class="back" data-reveal>
+				<a href={`${base}playbook`}>← the playbook</a>
+				<a href={`${base}production`}>graduating to production →</a>
+			</div>
 			</section>
 		</main>
 
@@ -474,7 +482,7 @@ tab = await browser.get("*proff.no*")
 				border-radius: 10px; background: var(--color-panel);
 				max-width: 640px; margin: 0;
 			}
-			.back { margin-top: 32px; }
+			.back { margin-top: 32px; display: flex; gap: 32px; }
 			.back a { font-size: 15px; color: var(--color-accent); display: inline-block; }
 
 			/* footer */

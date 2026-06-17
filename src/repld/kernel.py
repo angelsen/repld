@@ -70,6 +70,37 @@ def _write_lockfile(socket_path: Path) -> None:
 _active_lock_path: Path | None = None
 
 
+# ---------------------------------------------------------------------------
+# .env loading
+# ---------------------------------------------------------------------------
+
+
+def _load_dotenv(path: Path | None = None) -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ (stdlib only).
+
+    Skips comments, blank lines, and export prefixes. Strips surrounding
+    quotes. Does NOT override existing env vars.
+    """
+    p = path or Path.cwd() / ".env"
+    if not p.is_file():
+        return
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+            val = val[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
 def _cleanup_lockfile() -> None:
     if _active_lock_path is None:
         return
@@ -590,7 +621,10 @@ def run_kernel(
     events.init_event_queue()
     install_tee()
 
-    # 2b. Set up gist directories on sys.path with auto-reload.
+    # 2b. Load .env from project root (same dir as socket/lockfile/gists).
+    _load_dotenv()
+
+    # 2c. Set up gist directories on sys.path with auto-reload.
     from . import gists as _gists
 
     _gists.install(
@@ -600,7 +634,7 @@ def run_kernel(
         ]
     )
 
-    # 2c. Check gist dependencies before IPC starts (interactive prompt).
+    # 2d. Check gist dependencies before IPC starts (interactive prompt).
     missing = _gists.scan_deps()
     if missing:
         _gists.install_deps(missing)
