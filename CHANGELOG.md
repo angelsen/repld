@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Screenshot blank white captures — CDP's `clip.scale` races the compositor (`SetSize` fires before a new frame is composited). Removed client-side downscaling; captures full-res JPEG and lets the API resize server-side. Model dimensions still reported for coordinate mapping
+
 ### Removed
 
 ## [0.0.18] - 2026-06-17
