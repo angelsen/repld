@@ -19,3 +19,4 @@ docs/*-brief.html
 .pyrepl.lock
 .pyrepl.sock
 network.db*
+docs/network-intelligence.md
