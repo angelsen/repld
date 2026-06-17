@@ -400,6 +400,12 @@ _DOC_RESOURCES = [
         "description": "Browser API reference, internals (capture, settle, selectors, session recovery), and workflow patterns.",
         "mimeType": "text/plain",
     },
+    {
+        "uri": "repld://docs/playbook",
+        "name": "repld-playbook",
+        "description": "Workflow methodology: prototype interactive → extract gists → wire triggers → production. Read before designing automation.",
+        "mimeType": "text/plain",
+    },
 ]
 
 _BROWSER_RESOURCES = [
@@ -900,6 +906,10 @@ class Dispatcher:
                 from .help import BROWSER_GUIDE
 
                 text = BROWSER_GUIDE
+            elif uri == "repld://docs/playbook":
+                from .help import PLAYBOOK
+
+                text = PLAYBOOK
             elif uri == "repld://browser/tabs":
                 text = self._resource_tabs()
             elif uri == "repld://browser/network":

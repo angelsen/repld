@@ -10,8 +10,10 @@ no overlap:
   Topics                  → pure API reference for the human user
   GUIDE                   → MCP resource (repld://docs/guide) — working guide
                             with patterns and conventions; read on demand
-  BROWSER_GUIDE            → MCP resource (repld://docs/browser) — comprehensive
+  BROWSER_GUIDE           → MCP resource (repld://docs/browser) — comprehensive
                             browser API reference, internals, and workflows
+  PLAYBOOK                → MCP resource (repld://docs/playbook) — workflow
+                            methodology: interactive → gist → trigger → production
 """
 
 import json
@@ -68,8 +70,130 @@ _GISTS_MODEL = (
     "user can link one in with `repld gist add <name>` (no copy)."
 )
 
+_PLAYBOOK = (
+    "Playbook: prototype interactive → extract gists from repetition → wire triggers "
+    "when the pattern stabilizes → same gist runs headless in production. "
+    "Read repld://docs/playbook for the full methodology."
+)
+
 _REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns and gist conventions. Read repld://docs/browser for the full browser API and internals."
 
+
+# ---------------------------------------------------------------------------
+# PLAYBOOK (repld://docs/playbook resource — workflow methodology)
+# ---------------------------------------------------------------------------
+
+PLAYBOOK = """\
+The Playbook — how composable workflows get built
+
+Discovered through practice, not designed upfront. Works for any automation —
+fully automatic pipelines, human-in-the-loop processes, AI-augmented flows,
+or plain data transforms.
+
+== Principles ==
+
+  One service, one job.
+    Each function takes input, returns output. They compose through data,
+    not through shared frameworks.
+
+  UI is a view, not the system.
+    Pipeline state lives in plain data: DB rows, JSON, spreadsheet cells.
+    Any UI can read or write it. Swap the view without touching the pipeline.
+
+  Prototype interactive, harden headless.
+    Start with Claude Code + repld doing it manually. Each ad-hoc action
+    becomes a gist. Each gist becomes a callable stage. Wire triggers when
+    the pattern stabilizes. The gist is the portable unit — same code in
+    repld (interactive) and FastAPI/Inngest (production).
+
+  Human gates are just empty fields.
+    A spreadsheet column waiting for input, a DB field set to null, a
+    waitForEvent in a workflow engine — same concept. The pipeline pauses,
+    a human fills in a value, the next stage picks it up.
+
+  State is plain data.
+    JSON in, JSON out. Spreadsheet columns, DB columns, and pipeline
+    stage inputs are the same thing.
+
+  Discover, don't design.
+    Do the work manually first. The pipeline reveals itself through
+    repetition. Extract stages only when you've done the same thing
+    three times. Premature automation encodes the wrong workflow.
+
+== Layers ==
+
+  Layer          Interactive (prototype)         Production (headless)
+  ─────          ──────────────────────          ────────────────────
+  Capture        Web app, phone, manual entry    Same, or webhook/API trigger
+  AI reasoning   Claude Code (human steers)      Claude API (prompt hardened)
+  Glue           repld gist (ad-hoc, stateful)   FastAPI/Inngest (durable)
+  State/UI       Spreadsheet, DB, file dump      Same — UI is just a view
+  Integration    MCP tools (browser, APIs)       Same tools, called from code
+
+== The portable unit: the gist ==
+
+  A gist is a plain Python file with no framework dependency. Data in,
+  data out. Where it runs doesn't matter:
+
+    gists/                  # pure Python, no repld/fastapi dependency
+      inventory.py          # ERP lookup, sheet write
+      notify.py             # Slack / email dispatch
+
+    repld                   # imports gists for interactive prototyping
+    fastapi                 # imports gists for production endpoints
+    inngest                 # calls gists as durable step functions
+
+== Human gates ==
+
+  Auto stages fill themselves; human stages wait. The UI can be anything:
+  a spreadsheet column, a dashboard, a Slack message, or nothing at all.
+
+    [Auto]   Finding      → system analyzes, writes result
+    [Human]  Decision     → human reviews, writes action        # ← gate
+    [Auto]   Execution    → system executes the action
+    [Auto]   Status       → Pending → Done
+
+== The progression ==
+
+  Every workflow starts interactive and hardens incrementally. Not every
+  workflow needs every phase. Each phase reuses the previous one's artifacts.
+
+  1. Interactive
+     You and Claude work a task in repld. Poke at the browser, hit an API,
+     inspect the result. No plan — just doing.
+
+  2. Scripted
+     You repeated it three times. Extract a gist — a plain Python file the
+     kernel hot-reloads. Same code, now importable.
+
+  3. Semi-auto
+     Wire a trigger: @every, a webhook, a queue. Human gates where ambiguity
+     requires judgment.
+
+  4. Production
+     Event-driven, durable, monitored. Gists from phase 2 are now production
+     steps. Nothing was thrown away.
+
+== Applying the playbook ==
+
+  When the user asks you to automate something, follow this progression:
+
+  - Phase 1: Do it interactively first. Use exec, browser, fetch to
+    understand the task. Don't write a gist yet.
+
+  - Phase 2: If you've done the same sequence three times, suggest
+    extracting a gist. The user decides; don't force it.
+
+  - Phase 3: If the gist works reliably, suggest wiring a trigger —
+    @every for polling, a webhook, a spreadsheet gate. Match the trigger
+    to the cadence of the real workflow.
+
+  - Phase 4: When the user is ready to go headless, the gist moves to
+    FastAPI/Inngest unchanged. The repld session becomes the test harness.
+
+  Never skip phases. Never design the pipeline before doing the work.
+  The workflow reveals itself through repetition.
+"""
 
 # ---------------------------------------------------------------------------
 # BROWSER_GUIDE (repld://docs/browser resource — comprehensive browser reference)
@@ -589,6 +713,7 @@ def build_instructions() -> str:
             "Stdlib and pre-installed packages are always available."
         )
 
+    parts.append(_PLAYBOOK)
     parts.append(_REFERENCE)
     return "\n\n".join(parts)
 
