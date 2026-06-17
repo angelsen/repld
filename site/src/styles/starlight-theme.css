@@ -1,0 +1,78 @@
+/* Terminal-noir theme for Starlight — matches the landing page identity. */
+
+:root {
+	--sl-color-white: #eef4fb;
+	--sl-color-gray-1: #c7d3e2;
+	--sl-color-gray-2: #9baab9;
+	--sl-color-gray-3: #66758a;
+	--sl-color-gray-4: #1c242f;
+	--sl-color-gray-5: #10151c;
+	--sl-color-gray-6: #0d1117;
+	--sl-color-black: #0a0d12;
+
+	--sl-color-accent-low: #0f2418;
+	--sl-color-accent: #3ce882;
+	--sl-color-accent-high: #d0fce3;
+
+	--sl-color-text: #c7d3e2;
+	--sl-color-text-accent: #3ce882;
+
+	--sl-color-bg: #0a0d12;
+	--sl-color-bg-nav: #10151c;
+	--sl-color-bg-sidebar: #0d1117;
+	--sl-color-bg-inline-code: rgb(60 232 130 / 0.07);
+
+	--sl-color-hairline-light: rgb(28 36 47 / 0.4);
+	--sl-color-hairline: #1c242f;
+	--sl-color-hairline-shade: #0a0d12;
+
+	--sl-font: var(--font-bricolage), system-ui, sans-serif;
+	--sl-font-mono: var(--font-geist-mono), ui-monospace, 'SFMono-Regular', monospace;
+
+	--sl-line-height: 1.7;
+}
+
+/* inline code accent styling */
+:not(pre) > code {
+	color: var(--sl-color-accent) !important;
+	border: 1px solid rgb(60 232 130 / 0.18);
+	border-radius: 4px;
+	padding: 0.1em 0.35em;
+	font-size: 0.88em;
+}
+
+/* scrollbars */
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--sl-color-gray-4) transparent;
+	}
+}
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+	background: transparent;
+}
+::-webkit-scrollbar-button {
+	display: none;
+}
+::-webkit-scrollbar-thumb {
+	background-color: var(--sl-color-gray-4);
+	border: 2px solid transparent;
+	background-clip: padding-box;
+	border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background-color: var(--sl-color-gray-3);
+}
+
+/* sidebar active item glow */
+[data-current='true'] > a {
+	text-shadow: 0 0 12px rgb(60 232 130 / 0.4);
+}
+
+/* heading anchors */
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+	letter-spacing: -0.01em;
+}

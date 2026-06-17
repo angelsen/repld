@@ -33,9 +33,35 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'repld',
+			customCss: ['./src/styles/starlight-theme.css'],
+			expressiveCode: {
+				themes: ['vesper'],
+				useStarlightUiThemeColors: true,
+				styleOverrides: {
+					borderRadius: '8px',
+					frames: {
+						editorBackground: '#0d1117',
+						terminalBackground: '#0d1117',
+					},
+				},
+			},
+			social: [
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/angelsen/repld' },
+			],
 			sidebar: [
-				{ label: 'Guides', items: [{ autogenerate: { directory: 'docs/guides' } }] },
-				{ label: 'Reference', items: [{ autogenerate: { directory: 'docs/reference' } }] },
+				{
+					label: 'Start here',
+					items: [
+						{ slug: 'docs' },
+						{ slug: 'docs/guides/getting-started' },
+						{ slug: 'docs/guides/browser' },
+						{ slug: 'docs/guides/gists' },
+					],
+				},
+				{
+					label: 'Reference',
+					items: [{ autogenerate: { directory: 'docs/reference' } }],
+				},
 			],
 		}),
 	],

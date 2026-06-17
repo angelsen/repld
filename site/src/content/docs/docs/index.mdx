@@ -1,12 +1,39 @@
 ---
-title: repld documentation
+title: What is repld?
 description: A live Python kernel for your agent — shared namespace, channel push, browser automation, gists.
 ---
 
-repld gives your agent a long-running Python kernel in your project directory:
-shared `__main__` namespace between you and the agent, push notifications
-instead of polling, a real browser as an object, and gists — integration code
-that hardens into tools.
+repld is a persistent Python kernel that runs in your project directory. You and your agent share one namespace — the same `__main__`, the same variables, the same running state.
 
-- [Getting started](/docs/guides/getting-started/)
-- [Reference](/docs/reference/help-topics/)
+## The idea
+
+Most agent-tool setups are stateless: execute a script, get output, start over. repld is the opposite. The kernel stays up. Auth tokens persist. Background jobs keep running. Long tasks push notifications back to the agent instead of blocking.
+
+The browser is a first-class object: attach to your logged-in Chrome tabs, discover API surfaces from your traffic, and reverse-engineer anything into a callable gist.
+
+## How it works
+
+```
+Terminal 1:  repld                    # kernel (asyncio loop, unix socket)
+Terminal 2:  claude --channels        # agent connects via MCP bridge
+Terminal 3:  repld exec               # you — same namespace, same state
+```
+
+The agent calls `exec` to run Python. Short code returns inline; long-running tasks return a `task_id` and push a channel notification when done. You can inspect or modify anything the agent created from your own REPL.
+
+## Core primitives
+
+| Primitive | What it does |
+|-----------|-------------|
+| `exec` | Run Python in the shared kernel |
+| `defer(coro)` | Fire-and-forget background task, pushes channel on completion |
+| `@every(seconds)` | Periodic ticker — survives past the exec that started it |
+| `notify(content)` | Push a channel notification to the agent |
+| `browser.get(glob)` | Attach to a Chrome tab by URL pattern |
+| `tab.fetch(url)` | In-page fetch — inherits the browser's session |
+
+## Next steps
+
+- [Getting started](/repld/docs/guides/getting-started/) — install, start the kernel, connect Claude Code
+- [Browser guide](/repld/docs/guides/browser/) — CDP, the observe pipeline, API discovery
+- [Gists guide](/repld/docs/guides/gists/) — writing, linking, and promoting gists to MCP tools
