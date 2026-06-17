@@ -8,7 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `.env` loading at kernel boot — reads `KEY=VALUE` pairs from project root `.env` into `os.environ` (stdlib only, no new deps, does not override existing vars)
+- `repld://docs/production` MCP resource — graduation guide: two-layer gist pattern, three tiers (standalone / browser-backed / hybrid), FastMCP + FastAPI wiring examples, `.env` secrets story
+- Gist template (`repld gist new`) now scaffolds the two-layer portable pattern: core logic at top, repld wiring at bottom
+- Production resource pointer in `_REFERENCE` instructions (agent sees it when relevant)
+
 ### Changed
+
+- GUIDE: new "Writing portable gists" subsection with `fetch=` callable pattern and `.env` guidance
+- PLAYBOOK: phase 4 now points to `repld://docs/production` for concrete wiring patterns
 
 ### Fixed
 
