@@ -10,14 +10,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `browser_navigate` on an iframe target (without `force`) now returns a proper MCP error instead of a success result containing `{"error": ...}` JSON — same guidance text, consistent error signaling
+### Fixed
+
+### Removed
+
+## [0.0.13] - 2026-06-17
+
+### Added
+
+- `Browser.from_profile(path)` — connect to Chrome by user-data-dir instead of requiring a port number
+- `tab.lifecycle()` — query `Page.lifecycleEvent` entries (DOMContentLoaded, load, networkIdle, etc.) via DuckDB
+- `tab.label` — human-readable tab identifier (title truncated, with target ID)
+- SSE (Server-Sent Events) capture — event stream messages stored in DuckDB, queryable alongside network/console rows
+- `repld://docs/browser` MCP resource — full browser API reference, internals, and workflow patterns; agent reads on demand before writing browser code
+- `"."` gist self-dep — `__repld_deps__ = ["."]` installs the gist's own project as editable into the tool venv (target-based install for tool mode)
+
+### Changed
+
+- `browser_js` / `tab.js()` now evaluates with REPL semantics (`replMode` + `awaitPromise`): top-level `await` works in multi-statement code, promise results resolve to their value instead of `{}`, `let`/`const` can be redeclared across calls. Code is never re-evaluated — the old auto-detect path re-ran side effects on every promise retry
+- `browser_navigate` on an iframe target (without `force`) returns a proper MCP error instead of `{"error": ...}` JSON
+- Fetch interception is now lazy (enabled per-tab on first body access) and fire-and-forget for domain enablement — faster attach, no blocking on slow tabs
+- Capture overhaul: body capture is selective (API calls only, not assets), CDP commands use `send_nowait` for non-blocking event acknowledgment
+- Dropped response-stage Fetch interception — request-stage only, simpler and avoids double-pause edge cases
+- Console row repr: 200-char budget (was 60) with source URL and line number appended
+- Gist introspection renders default values, `*args`/`**kwargs`, and bare `*` in AST signatures
+- Gist link resolution probes every resolved dir for unregistered siblings
 
 ### Fixed
 
-- `browser_js` / `tab.js()` now evaluates with REPL semantics like the DevTools console: top-level `await` works in multi-statement code (was a SyntaxError), and promise results — bare promises, async IIFEs — resolve to their value instead of `{}`. Evaluation preserves object identity and awaits via `Runtime.awaitPromise`, so code is never re-evaluated (the old auto-detect re-ran side effects). `let`/`const` can be redeclared across calls
-- Console row repr no longer cuts messages at 60 chars and now appends the source URL/line — "Failed to load resource" entries finally say *which* resource
-
-### Removed
+- Settle loop correctness — selective body capture avoids hanging on asset-heavy pages
+- `tab.fetch()` body parsing — response bodies now decode correctly
+- Corrupt `.links` manifest and gone registry paths fail loudly instead of silently skipping
+- Malformed gist declarations (`__repld_tools__` / `__repld_deps__`) error at boot instead of silently hiding the gist
+- Redundant `Path` import in `help.py` shadowing the module-level binding
+- `_get_tab` helper extracted in protocol.py — missing `target` param now returns a clear MCP error instead of a KeyError
 
 ## [0.0.12] - 2026-06-10
 
