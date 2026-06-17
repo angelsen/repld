@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Screenshot resize ceiling lowered from 1568px/1568 tokens to 1440px/1716 tokens — targets the recommended 1440x900 computer-use resolution, halving token cost for typical viewports while keeping text readable
+
 ### Fixed
 
 ### Removed
