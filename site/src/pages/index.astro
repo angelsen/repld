@@ -1,6 +1,7 @@
 ---
 import { Font } from 'astro:assets';
 import { Code } from 'astro:components';
+import { Icon } from '@astrojs/starlight/components';
 import vesper from '@shikijs/themes/vesper';
 import TerminalHero from '../components/TerminalHero.astro';
 import '../styles/global.css';
@@ -202,7 +203,7 @@ linked (from other projects):
 							Do it by hand first. The workflow reveals itself through repetition — then hardens,
 							one phase at a time.
 						</p>
-						<p class="playbook-link"><a href={`${base}playbook`}>read the full playbook →</a></p>
+						<p class="playbook-link"><a href={`${base}playbook`}>read the full playbook <Icon name="right-arrow" size="1em" /></a></p>
 					</div>
 					<div class="progression" data-reveal>
 						<div class="phase">
@@ -259,7 +260,7 @@ linked (from other projects):
 					<code><span class="dim">$</span> uv tool install repld-tool</code>
 				</div>
 				<p class="outro-links" data-reveal>
-					<a href={`${base}docs/`}>read the docs →</a>
+					<a href={`${base}docs/`}>read the docs <Icon name="right-arrow" size="1em" /></a>
 				</p>
 			</section>
 		</main>
