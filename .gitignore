@@ -19,4 +19,7 @@ docs/*-brief.html
 .pyrepl.lock
 .pyrepl.sock
 network.db*
+
+# User content (gists are personal — examples/ has showcase patterns)
+gists/
 docs/network-intelligence.md
