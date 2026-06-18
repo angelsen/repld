@@ -129,7 +129,6 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<div class="code-stack" data-reveal>
 			<CodeCard code={twoLayerCore} label="keeps" labelTone="accent" class="keeps" />
 			<div class="seam" aria-hidden="true">
-				<span class="seam-dot"></span>
 				<span class="seam-label">graduation seam</span>
 			</div>
 			<CodeCard code={twoLayerWiring} label="sheds" labelTone="dim" class="sheds" />
@@ -323,28 +322,6 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 	if (!reduced) {
-		// The graduation-seam dot travels left→right as the seam scrolls past —
-		// the moment the wiring is shed and the core graduates.
-		const seam = document.querySelector<HTMLElement>('.seam');
-		const dot = document.querySelector<HTMLElement>('.seam-dot');
-		if (seam && dot) {
-			gsap.fromTo(
-				dot,
-				{ left: '0%', autoAlpha: 0 },
-				{
-					left: '100%',
-					autoAlpha: 1,
-					ease: 'none',
-					scrollTrigger: {
-						trigger: seam,
-						start: 'top 88%',
-						end: 'top 32%',
-						scrub: 0.5,
-					},
-				},
-			);
-		}
-
 		// Tier rows light up their left edge as they enter.
 		gsap.utils.toArray<HTMLElement>('tbody tr').forEach((row) => {
 			gsap.from(row, {
@@ -370,47 +347,30 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		border-bottom: none;
 		border-color: var(--accent-line);
 	}
-	/* sheds stays fully legible — the seam + label + muted border carry the
-	   "removed on graduation" meaning, not opacity. */
+	/* sheds — amber caution treatment on the whole disposable block */
 	.code-stack :global(.code-card.sheds) {
 		border-top-left-radius: 0;
 		border-top-right-radius: 0;
 		border-top: none;
+		border-color: rgb(255 180 84 / 0.25);
+		background:
+			repeating-linear-gradient(45deg, rgb(255 180 84 / 0.06) 0 1px, transparent 1px 10px),
+			var(--color-panel-2);
 	}
 
-	/* the graduation seam — an amber transition band between keeps & sheds.
-	   Diagonal caution-hatch + amber to read as "cut line", distinct from the
-	   green "keep" zone. Real height so the label never clips against the cards. */
+	/* the graduation seam — a thin amber line between keeps & sheds */
 	.seam {
 		position: relative;
-		height: 46px;
+		height: 0;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		overflow: hidden;
+		border-top: 1px solid rgb(255 180 84 / 0.35);
 		border-left: 1px solid var(--color-line);
 		border-right: 1px solid var(--color-line);
-		background:
-			repeating-linear-gradient(45deg, rgb(255 180 84 / 0.13) 0 1px, transparent 1px 10px),
-			var(--color-panel-2);
-	}
-	.seam::before,
-	.seam::after {
-		content: '';
-		position: absolute;
-		left: 0;
-		right: 0;
-		height: 1px;
-		background: rgb(255 180 84 / 0.28);
-	}
-	.seam::before {
-		top: 0;
-	}
-	.seam::after {
-		bottom: 0;
 	}
 	.seam-label {
-		position: relative;
+		position: absolute;
 		z-index: 1;
 		background: var(--color-ink);
 		color: var(--color-amber);
@@ -420,18 +380,6 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		padding: 4px 14px;
 		border: 1px solid rgb(255 180 84 / 0.35);
 		border-radius: 999px;
-	}
-	.seam-dot {
-		position: absolute;
-		left: 0;
-		top: 50%;
-		width: 7px;
-		height: 7px;
-		border-radius: 50%;
-		background: var(--color-amber);
-		box-shadow: 0 0 12px 2px var(--color-amber);
-		transform: translate(-50%, -50%);
-		opacity: 0;
 	}
 	.code-stack-sm {
 		display: flex;

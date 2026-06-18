@@ -1,6 +1,6 @@
 ---
 interface Props {
-	active?: 'quickstart' | 'playbook' | 'production' | 'docs';
+	active?: 'quickstart' | 'playbook' | 'controls' | 'production' | 'docs';
 }
 
 const { active } = Astro.props;
@@ -9,6 +9,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const links = [
 	{ key: 'quickstart', label: 'quickstart', href: `${base}quickstart` },
 	{ key: 'playbook', label: 'playbook', href: `${base}playbook` },
+	{ key: 'controls', label: 'controls', href: `${base}controls` },
 	{ key: 'production', label: 'production', href: `${base}production` },
 	{ key: 'docs', label: 'docs', href: `${base}docs/` },
 	{ key: 'github', label: 'github', href: 'https://github.com/angelsen/repld' },

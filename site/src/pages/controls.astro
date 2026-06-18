@@ -1,0 +1,504 @@
+---
+import { Code } from 'astro:components';
+import { Icon } from '@astrojs/starlight/components';
+import vesper from '@shikijs/themes/vesper';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Section from '../components/Section.astro';
+import CodeCard from '../components/CodeCard.astro';
+
+const schemaSnippet = `# browser_controls → window.controls.describeAll()
+
+auth:
+  actions:
+    login(email, password, partyId)  → void
+    logout()                         → void
+  properties:
+    user        → { id, email, role } | null
+    partyId     → string | null
+
+thread:
+  actions:
+    send(message, threadId?)         → { status: 201 }
+    goto(threadId)                   → void
+  properties:
+    threads     → string[]           # all thread IDs
+    active      → string | null
+
+ai:
+  actions:
+    accept()                         → void
+    dismiss()                        → void
+  properties:
+    count       → number             # pending suggestions
+    lastClassification → string | null`;
+
+const invokeSnippet = `# browser_invoke(target, "thread", "send", {message: "test"})
+
+{
+  "returned":    { "status": 201 },
+  "stateBefore": { "threads": ["a1", "b2"], "active": "a1" },
+  "stateAfter":  { "threads": ["a1", "b2"], "active": "a1" },
+  "duration":    142
+}
+
+# + observation pipeline: tree Δ + network Δ + console Δ`;
+
+const loopSnippet = `# the full loop — send, watch, verify
+
+controls.invoke("thread", "send", {message: "test"})
+  # → [controls] thread.send → 201 (142ms)
+
+# channel pushes arrive in real-time:
+  # → [ai] classify: reply (0.92)
+  # → [ai] posted suggestion in branch 6107
+
+controls.invoke("ai", "count")
+  # → 1
+
+psql("SELECT sender_id FROM events ORDER BY id DESC LIMIT 1")
+  # → AI_USER_ID  ✓`;
+
+const everySnippet = `@every(300)
+async def smoke():
+    tab = await browser.get("localhost:3000")
+    await tab.invoke("thread", "send", {"message": "health check"})
+    # wait for pipeline notification
+    await asyncio.sleep(5)
+    schema = await tab.controls()
+    if schema["ai"]["properties"]["count"]["value"] == 0:
+        notify("smoke FAIL: no suggestion after 5s", kind="alert")`;
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const diagRows = [
+	{
+		see: 'No [ai] classify notification',
+		failed: 'Dispatcher didn’t fire — duplicate event, self-skip wrong, or HMR double-mount',
+	},
+	{
+		see: '[ai] classify: none',
+		failed: 'Classifier rejected — message wasn’t actionable. Not a bug.',
+	},
+	{
+		see: '[ai] classify but no [ai] suggest',
+		failed: 'Confidence too low, or API error on the suggestion call',
+	},
+	{
+		see: '[error] API 400: schema invalid',
+		failed: 'Schema mismatch — exact error message, exact field path',
+	},
+	{
+		see: '[ai] posted but no card',
+		failed: 'SSE delivery or client-side parse/render issue',
+	},
+	{
+		see: 'Card appears but ai.count wrong',
+		failed: 'UI state bug — managed flag, dedup, or reactivity failure',
+	},
+];
+---
+
+<BaseLayout
+	title="Controls — repld"
+	description="Expose your UI state machines as typed APIs. See exactly where invisible pipelines break — in real-time, not after the fact."
+	active="controls"
+>
+	<!-- ==================== hero ==================== -->
+	<section class="hero">
+		<p class="tag">observability</p>
+		<h1 class="display">See what your<br />app is doing.</h1>
+		<p class="hero-sub">
+			Your server-side pipeline has ten stages. The symptom is always <em>"it didn't work."</em>
+			Without observability, you can't tell which stage broke. Controls expose every UI
+			state machine as a typed, invocable API — and repld makes the whole chain visible.
+		</p>
+	</section>
+
+	<!-- ==================== the diagnostic table ==================== -->
+	<Section label="the signal">
+		<h2 class="display sm">One notification<br />replaces an hour of guessing.</h2>
+		<p class="body-text">
+			A chat app with an AI pipeline: message in, classify, suggest, insert, deliver, render.
+			Each notification pinpoints exactly where the chain broke.
+		</p>
+		<div class="table-wrap" data-reveal>
+			<table>
+				<thead>
+					<tr><th>What you see</th><th>What failed</th></tr>
+				</thead>
+				<tbody>
+					{
+						diagRows.map((r) => (
+							<tr>
+								<td class="see">{r.see}</td>
+								<td>{r.failed}</td>
+							</tr>
+						))
+					}
+				</tbody>
+			</table>
+		</div>
+		<p class="body-text contrast">
+			Without this: <em>"cards don't appear sometimes"</em> — days of guessing.
+			With it: <code class="c">ZodError</code> at <code class="c">events.4.senderId</code> — fixed in minutes.
+		</p>
+	</Section>
+
+	<!-- ==================== the timeline ==================== -->
+	<Section label="error correlation">
+		<h2 class="display sm">The timeline arrives in order.</h2>
+		<p class="body-text">
+			Multiple channel notifications give you a causal chain.
+			You don't search logs — the cause-effect is obvious.
+		</p>
+		<div class="timeline" data-reveal>
+			<div class="tl-row">
+				<span class="tl-ts">09:25:34</span>
+				<span class="tl-tag accent">[controls]</span>
+				<span class="tl-msg">thread.send &rarr; 201</span>
+			</div>
+			<div class="tl-row">
+				<span class="tl-ts">09:25:37</span>
+				<span class="tl-tag accent">[ai]</span>
+				<span class="tl-msg">classify: reply (0.92)</span>
+			</div>
+			<div class="tl-row err">
+				<span class="tl-ts">09:25:38</span>
+				<span class="tl-tag amber">[error]</span>
+				<span class="tl-msg">API 400: <code class="c">oneOf</code> not supported in structured output</span>
+			</div>
+			<div class="tl-row">
+				<span class="tl-ts">09:25:38</span>
+				<span class="tl-tag dim">[ai]</span>
+				<span class="tl-msg">no suggestion posted</span>
+			</div>
+		</div>
+		<p class="body-text contrast">
+			The error arrived <em>before the page froze</em>. Page-hang bugs push to the channel
+			the instant they happen — not when someone notices.
+		</p>
+	</Section>
+
+	<!-- ==================== what controls are ==================== -->
+	<Section label="the protocol">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Your app<br />becomes an API.</h2>
+				<p class="body-text">
+					Controls aren't test helpers bolted on after the fact — they're the actual UI state
+					machines, exposed. Each control has typed actions and observable properties.
+					<code class="c">browser_controls</code> discovers them;
+					<code class="c">browser_invoke</code> acts.
+				</p>
+			</div>
+			<CodeCard code={schemaSnippet} lang="yaml" />
+		</div>
+	</Section>
+
+	<!-- ==================== invoke + observe ==================== -->
+	<Section label="invoke + observe">
+		<div class="split">
+			<div>
+				<h2 class="display sm">Every action<br />records its own diff.</h2>
+				<p class="body-text">
+					<code class="c">browser_invoke</code> runs the full observation pipeline:
+					settle, accessibility tree, network delta, console delta. Plus
+					<code class="c">stateBefore</code> / <code class="c">stateAfter</code> /
+					<code class="c">duration</code> on every call.
+				</p>
+			</div>
+			<CodeCard code={invokeSnippet} lang="python" />
+		</div>
+	</Section>
+
+	<!-- ==================== the feedback loop ==================== -->
+	<Section label="the loop">
+		<div class="split">
+			<div>
+				<h2 class="display sm">End-to-end<br />in one turn.</h2>
+				<p class="body-text">
+					Invoke via controls. Watch the pipeline stages arrive as channel notifications.
+					Verify the result with controls again — or with a direct DB query. The full loop
+					without leaving the conversation.
+				</p>
+			</div>
+			<CodeCard code={loopSnippet} lang="python" />
+		</div>
+	</Section>
+
+	<!-- ==================== where it heads ==================== -->
+	<Section label="where it heads">
+		<h2 class="display sm">From reactive to proactive.</h2>
+		<p class="body-text">
+			Today, controls tell you <em>what broke and where</em>.
+			The infrastructure is in place to tell you <em>that something broke</em> — before you notice.
+		</p>
+		<div class="futures" data-reveal>
+			<div class="future-card">
+				<h3>Structured assertions</h3>
+				<p>
+					Every invocation records <code class="c">stateBefore</code>, <code class="c">stateAfter</code>,
+					<code class="c">duration</code>. Assert on transitions: count went <em>up</em> after dismiss?
+					Action took 3s instead of 200ms? State bug, caught immediately.
+				</p>
+			</div>
+			<div class="future-card">
+				<h3>Living health checks</h3>
+				<p>
+					A <code class="c">@every</code> ticker that sends a message, waits for the pipeline
+					notification, and alerts if it doesn't arrive. A continuous smoke test — not a suite
+					you run before deploy.
+				</p>
+			</div>
+			<div class="future-card">
+				<h3>Pre-merge verification</h3>
+				<p>
+					Run the controls sequence against the dev server before pushing. If the pipeline
+					still produces correct results after your change — ship it. Controls are the test API.
+				</p>
+			</div>
+		</div>
+		<div class="code-every" data-reveal>
+			<CodeCard code={everySnippet} lang="python" />
+		</div>
+	</Section>
+
+	<!-- ==================== outro ==================== -->
+	<section class="outro" data-anim>
+		<blockquote data-reveal>
+			The progression: manual inspection &rarr; programmable controls &rarr; observation bridge
+			&rarr; notification-driven development. Each session builds on the previous one's
+			infrastructure. Controls aren't test tooling — they're how the UI state is structured,
+			and repld makes it observable.
+		</blockquote>
+		<div class="back-links" data-reveal>
+			<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
+			<a href={`${base}production`}
+				>graduating to production <Icon name="right-arrow" size="1em" /></a
+			>
+		</div>
+	</section>
+</BaseLayout>
+
+<script>
+	import gsap from 'gsap';
+	import { ScrollTrigger } from 'gsap/ScrollTrigger';
+
+	gsap.registerPlugin(ScrollTrigger);
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+	if (!reduced) {
+		// timeline rows stagger in
+		gsap.utils.toArray<HTMLElement>('.tl-row').forEach((row, i) => {
+			gsap.from(row, {
+				x: -24,
+				autoAlpha: 0,
+				duration: 0.5,
+				delay: i * 0.12,
+				ease: 'power2.out',
+				scrollTrigger: { trigger: row, start: 'top 90%' },
+			});
+		});
+
+		// diagnostic table rows
+		gsap.utils.toArray<HTMLElement>('tbody tr').forEach((row) => {
+			gsap.from(row, {
+				autoAlpha: 0,
+				x: -16,
+				duration: 0.5,
+				ease: 'power2.out',
+				scrollTrigger: { trigger: row, start: 'top 90%' },
+			});
+		});
+
+		// future cards
+		gsap.utils.toArray<HTMLElement>('.future-card').forEach((card, i) => {
+			gsap.from(card, {
+				y: 20,
+				autoAlpha: 0,
+				duration: 0.6,
+				delay: i * 0.1,
+				ease: 'power3.out',
+				scrollTrigger: { trigger: card, start: 'top 85%' },
+			});
+		});
+	}
+</script>
+
+<style>
+	/* diagnostic table */
+	.table-wrap {
+		overflow-x: auto;
+		margin-bottom: 32px;
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 13.5px;
+	}
+	th {
+		text-align: left;
+		color: var(--color-muted);
+		font-weight: 500;
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		padding: 12px 14px;
+		border-bottom: 1px solid var(--color-line);
+	}
+	th:first-child {
+		width: 42%;
+	}
+	td {
+		padding: 14px;
+		color: var(--color-fg);
+		border-bottom: 1px solid rgb(28 36 47 / 0.3);
+		vertical-align: top;
+	}
+	.see {
+		color: var(--color-bright);
+		font-weight: 500;
+		font-family: var(--font-mono);
+		font-size: 12.5px;
+	}
+	tbody tr {
+		transition: background 0.2s;
+	}
+	tbody tr:hover {
+		background: rgb(60 232 130 / 0.03);
+	}
+	.contrast {
+		margin-top: 8px;
+	}
+
+	/* timeline */
+	.timeline {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		border-left: 2px solid var(--color-line);
+		margin-left: 8px;
+		margin-bottom: 28px;
+	}
+	.tl-row {
+		display: flex;
+		align-items: baseline;
+		gap: 14px;
+		padding: 10px 0 10px 20px;
+		position: relative;
+		font-size: 13.5px;
+	}
+	.tl-row::before {
+		content: '';
+		position: absolute;
+		left: -5px;
+		top: 16px;
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--color-line);
+		transition: all 0.3s;
+	}
+	.tl-row.err::before {
+		background: var(--color-amber);
+		box-shadow: 0 0 10px rgb(255 180 84 / 0.6);
+	}
+	.tl-ts {
+		color: var(--color-muted);
+		font-size: 12px;
+		flex-shrink: 0;
+		font-variant-numeric: tabular-nums;
+	}
+	.tl-tag {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		flex-shrink: 0;
+	}
+	.tl-tag.accent {
+		color: var(--color-accent);
+	}
+	.tl-tag.amber {
+		color: var(--color-amber);
+	}
+	.tl-tag.dim {
+		color: var(--color-muted);
+	}
+	.tl-msg {
+		color: var(--color-fg);
+	}
+	.tl-row.err .tl-msg {
+		color: var(--color-amber);
+	}
+
+	/* future cards */
+	.futures {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 14px;
+		margin-bottom: 28px;
+	}
+	.future-card {
+		border: 1px solid var(--color-line);
+		background: var(--color-panel);
+		border-radius: 10px;
+		padding: 24px 22px;
+		transition:
+			border-color 0.2s,
+			transform 0.2s;
+	}
+	.future-card:hover {
+		border-color: var(--accent-glow);
+		transform: translateY(-2px);
+	}
+	.future-card h3 {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 15.5px;
+		margin-bottom: 10px;
+		line-height: 1.4;
+	}
+	.future-card p {
+		color: var(--color-muted);
+		font-size: 13px;
+		line-height: 1.7;
+	}
+	.code-every {
+		max-width: 600px;
+	}
+
+	/* outro back-links */
+	.back-links {
+		margin-top: 32px;
+		display: flex;
+		gap: 32px;
+	}
+	.back-links a {
+		font-size: 15px;
+		color: var(--color-accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.back-links a :global(svg) {
+		width: 1em;
+		height: 1em;
+	}
+
+	@media (max-width: 900px) {
+		.futures {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@media (max-width: 560px) {
+		.futures {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.tl-row {
+			flex-wrap: wrap;
+			gap: 4px 10px;
+			padding-left: 16px;
+		}
+	}
+</style>

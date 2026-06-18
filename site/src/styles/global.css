@@ -221,7 +221,6 @@ code.c {
 	background: var(--color-panel-2);
 	position: relative;
 }
-.code-card :global(pre),
 .code-card pre {
 	padding: 20px 22px;
 	font-size: 13.5px;
