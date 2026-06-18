@@ -8,17 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.22] - 2026-06-18
+
+### Added
+
 - Dashboard: browser control panel served on ephemeral HTTP port from the kernel. Tabbed UI (Browser/Targets/Console/Network) for managing Chrome connections, watch patterns, and viewing console/network snapshots — without going through exec or MCP tools. Actions push channel messages so the agent sees state changes
 - BrowserPool: multi-browser support — connect to multiple Chrome instances simultaneously. Target IDs route by port prefix (e.g. `42829:abc123`). `watch`/`get`/`tabs`/`pages` fan out across all connected instances. Auto-connects to default port on first use
 - Dashboard port reuse across kernel restarts via `.pyrepl.dashboard` hint file
 - Hash routing in dashboard (`#browser`, `#targets`, `#console`, `#network`)
 - Browser GUIDE: clarified auto-wait / settle flow — MCP mutations settle before returning, so the next call's 2s auto-wait is a safety net
 
-### Changed
-
-### Fixed
-
-### Removed
 
 ## [0.0.21] - 2026-06-18
 
