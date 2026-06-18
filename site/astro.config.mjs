@@ -57,6 +57,7 @@ export default defineConfig({
 						{ slug: 'docs' },
 						{ slug: 'docs/guides/getting-started' },
 						{ slug: 'docs/guides/browser' },
+						{ slug: 'docs/guides/controls' },
 						{ slug: 'docs/guides/gists' },
 					],
 				},
