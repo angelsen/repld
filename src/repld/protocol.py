@@ -478,6 +478,12 @@ _BROWSER_RESOURCES = [
         "description": "Console messages captured across all attached browser tabs.",
         "mimeType": "text/plain",
     },
+    {
+        "uri": "repld://browser/controls",
+        "name": "browser-controls",
+        "description": "Controls exposed by window.controls on attached tabs — actions with param schemas, properties, state.",
+        "mimeType": "application/json",
+    },
 ]
 
 
@@ -1006,6 +1012,8 @@ class Dispatcher:
                 text = self._resource_network()
             elif uri == "repld://browser/console":
                 text = self._resource_console()
+            elif uri == "repld://browser/controls":
+                text = self._resource_controls()
             elif uri == "repld://gists/_registry":
                 from . import gists
 
@@ -1053,6 +1061,17 @@ class Dispatcher:
             for r in rows:
                 lines.append(repr(r))
         return "\n".join(lines) if lines else "(no console events captured)"
+
+    def _resource_controls(self) -> str:
+        browser = self._get_browser()
+        result: dict = {}
+        for tab in browser.tabs:
+            controls = self._run_async(tab.controls())
+            if controls:
+                result[tab.target_id] = controls
+        if not result:
+            return "(no controls found on attached tabs)"
+        return json.dumps(result, indent=2)
 
     def _resource_gist(self, name: str) -> str:
         from . import gists

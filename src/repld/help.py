@@ -47,6 +47,7 @@ _EXEC_MODEL = (
 _BROWSER_MODEL = (
     "Browser model: "
     "Watch by URL pattern. Short target IDs (9222:a1b2c3). "
+    "Multi-browser: browser.connect(port) adds Chrome instances; target IDs route by port prefix. "
     "Mutations (click/type/navigate/key/open) settle then return "
     "tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
@@ -56,6 +57,9 @@ _BROWSER_MODEL = (
     "For repeated browser interactions, write a gist (gists/*.py) to capture "
     "the API pattern. tab.pin() guards the session; tab.confirm()/choose() "
     "gate mutations in the browser. "
+    "Controls: apps exposing window.controls get browser_controls (discover) and "
+    "browser_invoke (act) MCP tools. Action observations push as channel messages. "
+    "Console errors from watched tabs push as [console:error] channel messages automatically. "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
@@ -601,6 +605,55 @@ Staleness: tab.url and tab.title are read from a cached target_info dict,
 updated only on Target.targetInfoChanged events.  They can be briefly stale
 after navigation — if you need the live URL, use tab.js("location.href").
 
+== Multi-browser ==
+
+browser.connect(port) adds a Chrome instance to the pool.  Call it multiple
+  times for multi-browser setups (e.g. two test browsers on different ports).
+  Target IDs include the port prefix (42829:abc123 vs 43213:def456), so all
+  tab-scoped tools route to the right Chrome automatically.
+
+  await browser.connect(42829)
+  await browser.connect(43213)
+  await browser.watch("*localhost:5200*")   # watches across both
+  browser.tabs                              # tabs from all instances
+
+Browser state (connected ports + watch patterns) persists in .pyrepl.dashboard
+  across kernel restarts.  On boot, repld auto-reconnects and re-watches.
+
+== Controls protocol ==
+
+Apps exposing window.controls (a ControlRegistry) get automatic discovery
+  and invocation from repld.
+
+  tab.controls()                            → dict | None
+      Snapshot window.controls.describeAll().  Returns full schema: actions
+      with param types, properties with current values, state per control.
+      Returns None if the tab has no controls.
+
+  tab.invoke(control, action, args=None)    → dict
+      Call window.controls.invoke(control, action, args).  Returns
+      {returned, stateBefore, stateAfter, duration}.  Async.
+
+  tab.control_observations()               → list[dict]
+      Parsed __controls__ observations from console.debug messages.
+      History of actions that fired, with state transitions.
+
+MCP tools:
+  browser_controls(target)                   Discover controls on a tab
+  browser_invoke(target, control, action, args)  Invoke with observation pipeline
+
+Channel push: apps that wire setObservationSink to console.debug('__controls__',
+  JSON.stringify(obs)) push action observations as channel messages automatically:
+    [controls] thread.goto(id: "abc") — state: "none" → "abc" (42ms)
+
+== Console error push ==
+
+Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
+  from watched tabs push as [console:error] channel messages immediately.
+  No polling needed — the agent sees errors the moment they happen.
+
+    [console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
+
 == Selectors ==
 
 Same syntax across click, tap, type_text, wait_for:
@@ -966,6 +1019,11 @@ Channel kinds:
   loop_blocked          asyncio loop blocked > 5s
   loop_kill             watchdog cancelled a stuck task
   init_error            --init file failed
+  browser_connect       dashboard connected to Chrome (port in meta)
+  browser_watch         dashboard watched a pattern (pattern in meta)
+  browser_unwatch       dashboard unwatched a pattern
+  controls              window.controls action observation (control, action, state in meta)
+  console_error         console.error or uncaught exception from watched tab
 """,
     "browser": """\
 Tab (async unless noted):
@@ -1006,6 +1064,9 @@ Tab (sync — DuckDB queries):
   tab.sse(url=, event_name=, since=)                                   → Rows
   tab.lifecycle(name=, since=)                                         → Rows
   tab.clear()                                                          → None
+  tab.controls()                                                       → dict | None
+  tab.invoke(control, action, args=)                                   → dict (async)
+  tab.control_observations()                                           → list[dict]
 
   row.body()                             → dict (response body for a Row)
 
