@@ -115,17 +115,29 @@ def _cleanup_lockfile() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _banner(socket_path: Path, watchdog_threshold: float, kill_threshold: float) -> str:
-    return (
-        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {_lock_for(socket_path).name})\n"
+def _banner(
+    socket_path: Path,
+    watchdog_threshold: float,
+    kill_threshold: float,
+    dashboard_port: int | None = None,
+) -> str:
+    lines = [
+        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {_lock_for(socket_path).name})",
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
-        f"(REPLD_LOOP_BLOCK_THRESHOLD)\n"
+        f"(REPLD_LOOP_BLOCK_THRESHOLD)",
         f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
-        f"(REPLD_LOOP_KILL_THRESHOLD)\n"
-        f"  register:  claude mcp add -s project repld -- repld bridge\n"
-        f"  launch:    claude --dangerously-load-development-channels server:repld\n"
-        f"  human:     repld exec   # interactive REPL (state shared with agent)\033[0m"
-    )
+        f"(REPLD_LOOP_KILL_THRESHOLD)",
+    ]
+    if dashboard_port is not None:
+        lines.append(
+            f"  dashboard: \033[0m\033[4mhttp://localhost:{dashboard_port}\033[0m\033[90m"
+        )
+    lines += [
+        "  register:  claude mcp add -s project repld -- repld bridge",
+        "  launch:    claude --dangerously-load-development-channels server:repld",
+        "  human:     repld exec   # interactive REPL (state shared with agent)\033[0m",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -673,11 +685,9 @@ def run_kernel(
         def _browser_cleanup() -> None:
             b = getattr(__main__, "browser", None)
             real = getattr(b, "_real", None) if hasattr(b, "_real") else b
-            if real is not None and hasattr(real, "_session"):
+            if real is not None and hasattr(real, "disconnect"):
                 try:
-                    fut = asyncio.run_coroutine_threadsafe(
-                        real._session.disconnect(), loop
-                    )
+                    fut = asyncio.run_coroutine_threadsafe(real.disconnect(), loop)
                     fut.result(timeout=5)
                 except Exception:
                     pass
@@ -700,6 +710,19 @@ def run_kernel(
     atexit.register(_cleanup_lockfile)
     atexit.register(ipc.stop_server)
 
+    # 4b. Dashboard HTTP server on ephemeral port.
+    from . import dashboard
+
+    _kernel_start_time = time.monotonic()
+    dashboard_port: int | None = None
+    try:
+        dashboard_port = dashboard.start_dashboard(
+            loop, str(sock_path), _kernel_start_time
+        )
+        atexit.register(dashboard.stop_dashboard)
+    except Exception:
+        pass
+
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
@@ -713,7 +736,9 @@ def run_kernel(
     #    active watchdog threshold so users know what to expect.
     stderr = sys.__stderr__
     if stderr is not None:
-        stderr.write(_banner(sock_path, threshold, kill_threshold) + "\n")
+        stderr.write(
+            _banner(sock_path, threshold, kill_threshold, dashboard_port) + "\n"
+        )
         stderr.flush()
     threading.Thread(
         target=_loop_watchdog,

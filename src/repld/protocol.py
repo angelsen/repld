@@ -759,11 +759,18 @@ class Dispatcher:
         params = args.get("params") or {}
         return self._run_async(tab.cdp(args["method"], **params))
 
+    def _session_for(self, browser, tab):
+        """Get the BrowserSession that owns this tab (multi-browser aware)."""
+        if hasattr(browser, "browser_for"):
+            return browser.browser_for(tab.target_id)._session
+        return browser._session
+
     def _bh_tree(self, browser, args):
         from .browser.observe import compose_tree
 
         tab = self._get_tab(browser, args)
-        lines, _ = self._run_async(compose_tree(tab, browser._session))
+        session = self._session_for(browser, tab)
+        lines, _ = self._run_async(compose_tree(tab, session))
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -774,11 +781,10 @@ class Dispatcher:
         """Run pre_observe → mutate() → post_observe around a tab mutation."""
         from .browser.observe import post_observe, pre_observe
 
-        pre = self._run_async(pre_observe(tab, browser._session))
+        session = self._session_for(browser, tab)
+        pre = self._run_async(pre_observe(tab, session))
         mutate()
-        return self._run_async(
-            post_observe(tab, browser._session, pre, timeout=timeout)
-        )
+        return self._run_async(post_observe(tab, session, pre, timeout=timeout))
 
     def _bh_navigate(self, browser, args):
         tab = self._get_tab(browser, args)
@@ -808,7 +814,7 @@ class Dispatcher:
         from .browser.observe import PreObservation, post_observe
 
         tab = self._run_async(browser.open(args["url"]))
-        # New tab — all activity is the delta, so snapshot at 0.
+        session = self._session_for(browser, tab)
         key = tab.target_id
         pre = PreObservation(
             iframe_children=[],
@@ -818,7 +824,7 @@ class Dispatcher:
         return self._run_async(
             post_observe(
                 tab,
-                browser._session,
+                session,
                 pre,
                 timeout=8.0,
                 extra_header=f"target: {tab.target_id}",

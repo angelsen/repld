@@ -26,7 +26,7 @@ from .session import WORKER_TYPES
 from .row import Rows
 from .tab import Tab
 
-__all__ = ["Browser", "LazyBrowser"]
+__all__ = ["Browser", "BrowserPool", "LazyBrowser"]
 
 logger = logging.getLogger(__name__)
 
@@ -426,19 +426,201 @@ class Browser:
         return f"<Browser port={self.port} tabs={n} patterns={self.patterns}>"
 
 
-class LazyBrowser:
-    """Lazy descriptor injected into __main__.
+class BrowserPool:
+    """Manages multiple Browser instances across Chrome ports.
 
-    On first attribute access, bootstraps the real Browser object and
-    replaces itself in __main__.__dict__.
+    Delegates watch/get/tabs/pages across all connected instances.
+    Target IDs (e.g. ``42829:abc123``) route to the right Browser by port prefix.
     """
 
     def __init__(self) -> None:
-        self._real: Browser | None = None
+        self._browsers: dict[int, Browser] = {}
 
-    def _bootstrap(self) -> Browser:
+    async def _ensure_any(self) -> None:
+        """Auto-connect to the default port if no browsers are connected."""
+        if not any(b._connected for b in self._browsers.values()):
+            await self.connect()
+
+    async def connect(self, port: int = 9222) -> Browser:
+        """Connect to a Chrome instance. Returns the Browser (new or existing)."""
+        if port in self._browsers and self._browsers[port]._connected:
+            return self._browsers[port]
+        b = Browser(port=port)
+        await b._ensure_connected()
+        self._browsers[port] = b
+        return b
+
+    async def disconnect(self, port: int | None = None) -> None:
+        """Disconnect one or all browsers."""
+        if port is not None:
+            b = self._browsers.pop(port, None)
+            if b:
+                await b.disconnect()
+        else:
+            for b in self._browsers.values():
+                try:
+                    await b.disconnect()
+                except Exception:
+                    pass
+            self._browsers.clear()
+
+    def browser_for(self, target: str) -> Browser:
+        """Resolve a target ID like '42829:abc123' to its Browser instance."""
+        port_str = target.split(":")[0]
+        try:
+            port = int(port_str)
+        except ValueError:
+            raise RuntimeError(f"Invalid target ID: {target}")
+        b = self._browsers.get(port)
+        if b is None:
+            raise RuntimeError(
+                f"No browser on port {port}. Connected: {list(self._browsers.keys())}"
+            )
+        return b
+
+    @property
+    def ports(self) -> list[int]:
+        return list(self._browsers.keys())
+
+    @property
+    def tabs(self) -> Rows:
+        """Tabs from all connected browsers."""
+        all_tabs = []
+        for b in self._browsers.values():
+            if b._connected:
+                all_tabs.extend(b.tabs)
+        return Rows(all_tabs)
+
+    @property
+    def patterns(self) -> list[str]:
+        """Watch patterns from all connected browsers."""
+        result = []
+        for b in self._browsers.values():
+            if b._connected:
+                result.extend(b.patterns)
+        return result
+
+    async def pages(self) -> list[dict]:
+        """All Chrome targets across all connected browsers."""
+        await self._ensure_any()
+        result = []
+        for b in self._browsers.values():
+            if b._connected:
+                result.extend(await b.pages())
+        return result
+
+    async def watch(self, pattern: str) -> str:
+        """Watch a pattern across all connected browsers."""
+        await self._ensure_any()
+        results = []
+        for b in self._browsers.values():
+            results.append(await b.watch(pattern))
+        return "\n".join(results)
+
+    async def detach(self, pattern: str | None = None) -> str:
+        """Detach tabs across all connected browsers."""
+        results = []
+        for b in self._browsers.values():
+            results.append(await b.detach(pattern))
+        return "\n".join(results)
+
+    async def get(
+        self,
+        target: str,
+        *,
+        timeout: float | None = None,
+        fresh: bool = False,
+        ready: str | None = None,
+    ) -> Tab:
+        """Find a tab by target ID or URL glob across all browsers."""
+        if _is_target_id(target):
+            b = self.browser_for(target)
+            return await b.get(target, ready=ready)
+        await self._ensure_any()
+        for b in self._browsers.values():
+            if not b._connected:
+                continue
+            try:
+                return await b.get(target, timeout=timeout, fresh=fresh, ready=ready)
+            except RuntimeError:
+                continue
+        raise RuntimeError(
+            f"No tab matching '{target}' across {len(self._browsers)} browser(s)"
+        )
+
+    async def open(self, url: str) -> Tab:
+        """Open a URL in the first connected browser."""
+        await self._ensure_any()
+        for b in self._browsers.values():
+            if b._connected:
+                return await b.open(url)
+        raise RuntimeError("No browsers connected")
+
+    def clear(self, target: str | None = None) -> str:
+        if target is not None:
+            b = self.browser_for(target)
+            return b.clear(target)
+        results = []
+        for b in self._browsers.values():
+            results.append(b.clear())
+        return "\n".join(results)
+
+    def format_tabs_nested(self) -> str:
+        parts = []
+        for b in self._browsers.values():
+            if b._connected:
+                text = b.format_tabs_nested()
+                if text != "(no attached tabs)":
+                    parts.append(text)
+        return "\n".join(parts) if parts else "(no attached tabs)"
+
+    @property
+    def port(self) -> int:
+        """Port of the first connected browser (backwards compat)."""
+        for b in self._browsers.values():
+            return b.port
+        return int(os.environ.get("REPLD_CHROME_PORT", "9222"))
+
+    @property
+    def _connected(self) -> bool:
+        return any(b._connected for b in self._browsers.values())
+
+    @property
+    def _session(self):
+        """Session of the first browser (backwards compat for protocol.py)."""
+        for b in self._browsers.values():
+            if b._connected:
+                return b._session
+        raise RuntimeError("No browsers connected")
+
+    def help(self) -> None:
+        from ..help import _TOPICS
+
+        print(_TOPICS["browser"])
+
+    def __repr__(self) -> str:
+        if not self._browsers:
+            return "<BrowserPool (no connections)>"
+        parts = []
+        for port, b in self._browsers.items():
+            n = len(b._session._sessions) if b._connected else 0
+            parts.append(f"{port}({n})")
+        return f"<BrowserPool [{', '.join(parts)}] patterns={self.patterns}>"
+
+
+class LazyBrowser:
+    """Lazy descriptor injected into __main__.
+
+    On first attribute access, bootstraps a BrowserPool and connects
+    to the default Chrome port.
+    """
+
+    def __init__(self) -> None:
+        self._real: BrowserPool | None = None
+
+    def _bootstrap(self) -> BrowserPool:
         if self._real is None:
-            self._real = Browser()
+            self._real = BrowserPool()
         return self._real
 
     def help(self) -> None:
@@ -453,7 +635,7 @@ class LazyBrowser:
     def __repr__(self) -> str:
         if self._real is not None:
             return repr(self._real)
-        return "<Browser (lazy — call browser.watch() to connect)>"
+        return "<Browser (lazy — call browser.connect() to connect)>"
 
     def __reduce__(self):  # type: ignore[override]
         raise TypeError("LazyBrowser is not serializable")
