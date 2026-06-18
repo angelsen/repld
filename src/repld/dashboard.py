@@ -403,7 +403,7 @@ _HTML = """\
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --bg: #0e0e10; --surface: #16161a; --border: #27272a;
-  --text: #e4e4e7; --dim: #71717a; --accent: #22d3ee;
+  --text: #e4e4e7; --dim: #71717a; --accent: #3ce882;
   --green: #4ade80; --red: #f87171; --amber: #fbbf24;
   --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
