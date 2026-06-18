@@ -26,7 +26,7 @@ def _mcp_entry(cwd: Path) -> dict:
     }
 
 
-_GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock"]
+_GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock", ".pyrepl.dashboard"]
 
 _CLAUDE_MD_BLOCK = """\
 <!-- repld:start -->

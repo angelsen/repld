@@ -350,23 +350,33 @@ async def _handle_connection(
 
 
 async def _start(
-    loop: asyncio.AbstractEventLoop, socket_path: str, start_time: float
+    loop: asyncio.AbstractEventLoop,
+    socket_path: str,
+    start_time: float,
+    preferred_port: int,
 ) -> int:
     global _start_time, _socket_path, _server
     _start_time = start_time
     _socket_path = socket_path
 
-    _server = await asyncio.start_server(_handle_connection, "127.0.0.1", 0)
+    port = preferred_port
+    try:
+        _server = await asyncio.start_server(_handle_connection, "127.0.0.1", port)
+    except OSError:
+        _server = await asyncio.start_server(_handle_connection, "127.0.0.1", 0)
     port = _server.sockets[0].getsockname()[1]
     return port
 
 
 def start_dashboard(
-    loop: asyncio.AbstractEventLoop, socket_path: str, start_time: float
+    loop: asyncio.AbstractEventLoop,
+    socket_path: str,
+    start_time: float,
+    preferred_port: int = 0,
 ) -> int:
     """Start the dashboard HTTP server. Returns the bound port."""
     future = asyncio.run_coroutine_threadsafe(
-        _start(loop, socket_path, start_time), loop
+        _start(loop, socket_path, start_time, preferred_port), loop
     )
     return future.result(timeout=5.0)
 
@@ -403,9 +413,15 @@ body { display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; 
 
 /* --- header --- */
 .header { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.header h1 { font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -0.5px; }
+.header .logo { font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -0.5px; color: var(--text); text-decoration: none; }
+.header .logo:hover { color: var(--accent); }
+.header .logo .cursor { display: inline-block; width: 2px; height: 14px; background: var(--green); margin-left: 1px; vertical-align: middle; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
 .header .meta { font-family: var(--mono); font-size: 11px; color: var(--dim); }
 .header .spacer { flex: 1; }
+.header-links { display: flex; gap: 16px; font-family: var(--mono); font-size: 11px; margin-right: 12px; }
+.header-links a { color: var(--dim); text-decoration: none; }
+.header-links a:hover { color: var(--text); }
 .header .kernel-info { display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
 
 /* --- tab bar --- */
@@ -413,7 +429,7 @@ body { display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; 
 .tab-bar button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--dim); font-family: var(--mono); font-size: 12px; padding: 8px 16px; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
 .tab-bar button:hover { color: var(--text); }
 .tab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); }
-.tab-bar .badge { display: inline-block; background: var(--border); color: var(--dim); font-size: 10px; padding: 1px 5px; border-radius: 8px; margin-left: 4px; vertical-align: middle; }
+.tab-bar .badge { display: inline-block; background: var(--border); color: var(--dim); font-size: 10px; padding: 1px 5px; border-radius: 0; margin-left: 4px; vertical-align: middle; }
 
 /* --- content --- */
 .content { flex: 1; overflow-y: auto; padding: 16px 20px; }
@@ -430,11 +446,14 @@ body { display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; 
 
 .connect-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 
-input[type=number], input[type=text] { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 4px; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number], input[type=text] { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 0; height: 28px; }
 input:focus { outline: none; border-color: var(--accent); }
 input[type=number] { width: 72px; }
 
-button { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 12px; border-radius: 4px; cursor: pointer; transition: border-color 0.15s; }
+button { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 12px; border-radius: 0; cursor: pointer; transition: border-color 0.15s; height: 28px; }
 button:hover { border-color: var(--accent); }
 button:active { background: var(--border); }
 button.sm { padding: 2px 8px; font-size: 10px; }
@@ -470,20 +489,24 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
 .empty { color: var(--dim); font-style: italic; font-size: 12px; padding: 12px 0; }
 
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 4px 8px; border-radius: 4px; }
+.toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 4px 8px; border-radius: 0; }
 .toolbar select:focus { outline: none; border-color: var(--accent); }
 
-.toast { position: fixed; bottom: 16px; right: 16px; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+.toast { position: fixed; bottom: 16px; right: 16px; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 8px 14px; border-radius: 0; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
 .toast.show { opacity: 1; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>repld</h1>
+  <a href="https://angelsen.github.io/repld/" class="logo">repld<span class="cursor"></span></a>
   <span class="meta" id="hdr-pid"></span>
   <span class="meta" id="hdr-uptime"></span>
   <span class="spacer"></span>
+  <div class="header-links">
+    <a href="https://angelsen.github.io/repld/docs/">docs</a>
+    <a href="https://github.com/angelsen/repld">github</a>
+  </div>
   <div class="kernel-info">
     <span id="ki-tasks"></span>
     <span id="ki-tickers"></span>
@@ -515,7 +538,10 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
           <input type="text" id="watch-input" placeholder="*example.com*">
           <button id="btn-watch">Watch</button>
         </div>
-        <ul class="pattern-list" id="pattern-list"></ul>
+        <table id="pattern-table" hidden>
+          <thead><tr><th>pattern</th><th class="size">tabs</th><th class="actions"></th></tr></thead>
+          <tbody id="pattern-body"></tbody>
+        </table>
 
         <div class="section-label">attached tabs</div>
         <table id="tabs-table">
@@ -531,9 +557,6 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
   <div class="tab-pane" id="pane-targets">
     <div class="toolbar">
       <button id="btn-refresh-targets">Refresh</button>
-      <label style="font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="chk-show-iframes"> show iframes
-      </label>
     </div>
     <table id="targets-table" hidden>
       <thead><tr><th class="type">type</th><th>url</th><th class="actions"></th></tr></thead>
@@ -584,13 +607,15 @@ let targets = null;
 let activeTab = 'browser';
 
 // --- tabs ---
-$$('#tab-bar button').forEach(btn => {
-  btn.onclick = () => {
-    activeTab = btn.dataset.tab;
-    $$('#tab-bar button').forEach(b => b.classList.toggle('active', b === btn));
-    $$('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + activeTab));
-  };
-});
+function switchTab(name) {
+  activeTab = name;
+  location.hash = name;
+  $$('#tab-bar button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  $$('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+}
+$$('#tab-bar button').forEach(btn => { btn.onclick = () => switchTab(btn.dataset.tab); });
+window.addEventListener('hashchange', () => { if (location.hash) switchTab(location.hash.slice(1)); });
+if (location.hash) switchTab(location.hash.slice(1));
 
 // --- RPC ---
 async function rpc(method, params = {}) {
@@ -607,6 +632,11 @@ async function rpc(method, params = {}) {
 async function refreshState() {
   state = await rpc('state');
   render();
+}
+
+async function reload() {
+  await refreshState();
+  if (state?.browser?.connected) await refreshTargets();
 }
 
 function render() {
@@ -647,18 +677,21 @@ function render() {
   }
 
   // patterns
-  const pl = $('#pattern-list');
-  pl.innerHTML = '';
+  const ptBody = $('#pattern-body');
+  ptBody.innerHTML = '';
+  $('#pattern-table').hidden = b.patterns.length === 0;
   for (const p of b.patterns) {
     const count = b.tabs.filter(t => matchGlob(t.url, p)).length;
-    const li = document.createElement('li');
-    li.innerHTML = '<span class="glob">' + esc(p) + '</span> <span class="count">' + count + ' tab' + (count !== 1 ? 's' : '') + '</span> ';
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + esc(p) + '</td>'
+      + '<td class="size">' + count + '</td>'
+      + '<td class="actions"></td>';
     const btn = document.createElement('button');
     btn.className = 'sm danger';
     btn.textContent = '\\u00d7';
-    btn.onclick = () => rpc('browser.unwatch', { pattern: p });
-    li.appendChild(btn);
-    pl.appendChild(li);
+    btn.onclick = async () => { await rpc('browser.unwatch', { pattern: p }); await reload(); };
+    tr.querySelector('.actions').appendChild(btn);
+    ptBody.appendChild(tr);
   }
 
   // attached tabs
@@ -700,13 +733,12 @@ async function refreshTargets() {
 
 function renderTargets() {
   if (!targets || !state?.browser) return;
-  const showIframes = $('#chk-show-iframes').checked;
-  const filtered = showIframes ? targets : targets.filter(t => t.type !== 'iframe');
+  const filtered = targets;
   const tbody = $('#targets-body');
   tbody.innerHTML = '';
   $('#targets-table').hidden = filtered.length === 0;
   $('#targets-empty').hidden = filtered.length > 0;
-  if (!filtered.length) { $('#targets-empty').textContent = showIframes ? 'no targets' : 'no targets (iframes hidden)'; }
+  if (!filtered.length) { $('#targets-empty').textContent = 'no targets'; }
 
   const attachedIds = new Set((state.browser.tabs || []).map(t => t.target_id));
 
@@ -730,13 +762,12 @@ function renderTargets() {
       try {
         const r = await rpc('browser.watch', { pattern });
         toast(r.result);
-        refreshTargets();
+        await reload();
       } catch (e) { /* toast shown */ }
     };
   });
 }
 
-$('#chk-show-iframes').onchange = () => renderTargets();
 $('#btn-refresh-targets').onclick = refreshTargets;
 
 // --- console ---
@@ -792,8 +823,7 @@ $('#btn-connect').onclick = async () => {
   try {
     await rpc('browser.connect', { port });
     toast('Connected to port ' + port);
-    await refreshState();
-    refreshTargets();
+    await reload();
   } catch (e) { /* toast shown */ }
 };
 
@@ -805,8 +835,7 @@ $('#btn-watch').onclick = async () => {
     const r = await rpc('browser.watch', { pattern });
     toast(r.result);
     input.value = '';
-    await refreshState();
-    refreshTargets();
+    await reload();
   } catch (e) { /* toast shown */ }
 };
 
@@ -831,12 +860,12 @@ function formatSize(b) {
 }
 function formatTs(ts) {
   if (!ts) return '';
-  try { const d = new Date(parseFloat(ts) * 1000); return d.toLocaleTimeString(); } catch { return ''; }
+  try { const d = new Date(parseFloat(ts) * 1000); return d.toLocaleTimeString(undefined, {hour12: false}); } catch { return ''; }
 }
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function truncUrl(url, n) { return url.length > n ? url.slice(0, n - 1) + '\\u2026' : url; }
 function urlOrigin(url) {
-  try { const u = new URL(url); return u.hostname; } catch { return ''; }
+  try { const u = new URL(url); return u.host; } catch { return ''; }
 }
 function matchGlob(str, pattern) {
   const re = new RegExp('^' + pattern.replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\*/g, '.*').replace(/\\?/g, '.') + '$');

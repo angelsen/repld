@@ -57,13 +57,15 @@ def _check_existing_kernel(socket_path: Path) -> None:
         )
 
 
-def _write_lockfile(socket_path: Path) -> None:
-    info = {
+def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> None:
+    info: dict[str, object] = {
         "pid": os.getpid(),
         "socket_path": str(socket_path),
         "cwd": os.getcwd(),
         "started": time.time(),
     }
+    if dashboard_port is not None:
+        info["dashboard_port"] = dashboard_port
     _lock_for(socket_path).write_text(json.dumps(info))
 
 
@@ -705,23 +707,33 @@ def run_kernel(
         return dispatcher.handle(req, session)
 
     ipc.start_server(sock_path, _handler)
-    _write_lockfile(sock_path)
-    _active_lock_path = _lock_for(sock_path)
-    atexit.register(_cleanup_lockfile)
-    atexit.register(ipc.stop_server)
 
-    # 4b. Dashboard HTTP server on ephemeral port.
+    # 4b. Dashboard HTTP server — reuse previous port from a persistent hint file
+    #     (the lockfile gets cleaned up on exit, so we use a separate file).
     from . import dashboard
 
     _kernel_start_time = time.monotonic()
+    dash_hint = sock_path.with_suffix(".dashboard")
+    prev_dash_port = 0
+    try:
+        prev_dash_port = int(dash_hint.read_text().strip())
+    except (OSError, ValueError):
+        pass
+
     dashboard_port: int | None = None
     try:
         dashboard_port = dashboard.start_dashboard(
-            loop, str(sock_path), _kernel_start_time
+            loop, str(sock_path), _kernel_start_time, preferred_port=prev_dash_port
         )
+        dash_hint.write_text(str(dashboard_port))
         atexit.register(dashboard.stop_dashboard)
     except Exception:
         pass
+
+    _write_lockfile(sock_path, dashboard_port=dashboard_port)
+    _active_lock_path = _lock_for(sock_path)
+    atexit.register(_cleanup_lockfile)
+    atexit.register(ipc.stop_server)
 
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
