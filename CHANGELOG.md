@@ -10,11 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Screenshot now resized client-side with a pure-stdlib nearest-neighbor PNG scaler (`struct` + `zlib`, ~40 lines). Captures full-res from CDP (no `clip.scale` race), resizes in Python to the vision API token grid (max 1440px/1716 tokens). No external deps
-
 ### Fixed
 
 ### Removed
+
+## [0.0.21] - 2026-06-18
+
+### Changed
+
+- Screenshot now resized client-side with a pure-stdlib nearest-neighbor PNG scaler (`struct` + `zlib`, ~40 lines). Captures full-res from CDP (no `clip.scale` race), resizes in Python to the vision API token grid (max 1440px/1716 tokens). No external deps
+
 
 ## [0.0.20] - 2026-06-17
 
