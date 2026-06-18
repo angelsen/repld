@@ -642,7 +642,11 @@ label= resolution: finds <label> by text, then resolves to the input via
   htmlFor attribute or querySelector within the label element.
 
 Auto-wait: all selectors auto-wait up to 2s (click/type_text) or the specified
-  timeout (wait_for), polling every 100ms.
+  timeout (wait_for), polling every 100ms.  Under MCP tools the previous
+  mutation already settled the page (network idle + tree rebuilt), so the 2s
+  poll is just a safety net for DOM that lags behind network quiet (lazy
+  renders, setTimeout callbacks).  For first interactions or known-slow
+  elements, call wait_for(selector, timeout=10) before click/type_text.
 
 == Internals ==
 
@@ -699,7 +703,9 @@ wait_for_idle() and the MCP observation pipeline use the same settle logic:
 MCP browser tools (browser_click, browser_type, browser_navigate, etc.) run
   the full observation pipeline: pre_observe → mutate → settle → post_observe.
   They automatically wait for network idle and return tree + network delta +
-  console delta.
+  console delta.  This means each MCP call returns only after the page is
+  stable — the next call's auto-wait (2s) rarely fires because the element
+  is already in the DOM.
 
 exec-based mutations (calling tab.click(), tab.type_text() etc. in Python code)
   do NOT auto-settle.  The method returns as soon as the CDP command completes.
