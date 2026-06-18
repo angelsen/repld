@@ -441,6 +441,15 @@ class BrowserPool:
         if not any(b._connected for b in self._browsers.values()):
             await self.connect()
 
+    @staticmethod
+    def _save_hint() -> None:
+        try:
+            from ..dashboard import save_hint
+
+            save_hint()
+        except Exception:
+            pass
+
     async def connect(self, port: int = 9222) -> Browser:
         """Connect to a Chrome instance. Returns the Browser (new or existing)."""
         if port in self._browsers and self._browsers[port]._connected:
@@ -448,6 +457,7 @@ class BrowserPool:
         b = Browser(port=port)
         await b._ensure_connected()
         self._browsers[port] = b
+        self._save_hint()
         return b
 
     async def disconnect(self, port: int | None = None) -> None:
@@ -515,6 +525,7 @@ class BrowserPool:
         results = []
         for b in self._browsers.values():
             results.append(await b.watch(pattern))
+        self._save_hint()
         return "\n".join(results)
 
     async def detach(self, pattern: str | None = None) -> str:
@@ -522,6 +533,7 @@ class BrowserPool:
         results = []
         for b in self._browsers.values():
             results.append(await b.detach(pattern))
+        self._save_hint()
         return "\n".join(results)
 
     async def get(

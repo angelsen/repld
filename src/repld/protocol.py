@@ -385,6 +385,51 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "browser_controls",
+        "description": (
+            "Discover controls exposed by window.controls on a tab. "
+            "Returns schema: actions with param types, properties with values, state. "
+            "Apps using the controls protocol register named controls (auth, thread, etc.) "
+            "with typed actions the agent can invoke."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "browser_invoke",
+        "description": (
+            "Invoke a control action on a tab. Returns {returned, stateBefore, stateAfter, duration}. "
+            "Runs the full observation pipeline (settle + tree + network + console delta) after the action."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Chrome target_id from browser_tabs",
+                },
+                "control": {
+                    "type": "string",
+                    "description": "Control name (e.g. 'auth', 'thread')",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action name (e.g. 'login', 'goto')",
+                },
+                "args": {"type": "object", "description": "Action parameters"},
+            },
+            "required": ["target", "control", "action"],
+        },
+    },
 ]
 
 _DOC_RESOURCES = [
@@ -689,6 +734,22 @@ class Dispatcher:
     def _bh_clear(self, browser, args):
         return {"result": browser.clear(args.get("target"))}
 
+    def _bh_controls(self, browser, args):
+        tab = self._get_tab(browser, args)
+        result = self._run_async(tab.controls())
+        if result is None:
+            return {"controls": None, "message": "No window.controls on this tab"}
+        return result
+
+    def _bh_invoke(self, browser, args):
+        tab = self._get_tab(browser, args)
+        invoke_args = args.get("args")
+
+        def mutate():
+            self._run_async(tab.invoke(args["control"], args["action"], invoke_args))
+
+        return self._observed_mutation(browser, tab, mutate, timeout=3.0)
+
     # ------------------------------------------------------------------
     # Browser handlers — tab read-only
     # ------------------------------------------------------------------
@@ -889,6 +950,8 @@ class Dispatcher:
         "browser_key": _bh_key,
         "browser_click": _bh_click,
         "browser_type": _bh_type,
+        "browser_controls": _bh_controls,
+        "browser_invoke": _bh_invoke,
     }
 
     # ------------------------------------------------------------------

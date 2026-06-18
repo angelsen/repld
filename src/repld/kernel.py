@@ -708,27 +708,49 @@ def run_kernel(
 
     ipc.start_server(sock_path, _handler)
 
-    # 4b. Dashboard HTTP server — reuse previous port from a persistent hint file
-    #     (the lockfile gets cleaned up on exit, so we use a separate file).
+    # 4b. Dashboard HTTP server — reuse previous state from persistent hint file.
     from . import dashboard
 
     _kernel_start_time = time.monotonic()
     dash_hint = sock_path.with_suffix(".dashboard")
-    prev_dash_port = 0
+    hint: dict = {}
     try:
-        prev_dash_port = int(dash_hint.read_text().strip())
-    except (OSError, ValueError):
+        hint = json.loads(dash_hint.read_text())
+    except (OSError, json.JSONDecodeError):
         pass
 
     dashboard_port: int | None = None
     try:
         dashboard_port = dashboard.start_dashboard(
-            loop, str(sock_path), _kernel_start_time, preferred_port=prev_dash_port
+            loop,
+            str(sock_path),
+            _kernel_start_time,
+            preferred_port=hint.get("dashboard_port", 0),
+            hint_path=dash_hint,
         )
-        dash_hint.write_text(str(dashboard_port))
         atexit.register(dashboard.stop_dashboard)
     except Exception:
         pass
+
+    # Auto-reconnect saved Chrome ports and re-watch patterns.
+    _lazy_browser = getattr(__main__, "browser", None)
+    if _lazy_browser is not None:
+        for port in hint.get("chrome_ports", []):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _lazy_browser.connect(port), loop
+                ).result(timeout=5)
+            except Exception:
+                pass
+        for pattern in hint.get("patterns", []):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _lazy_browser.watch(pattern), loop
+                ).result(timeout=5)
+            except Exception:
+                pass
+        if hint.get("chrome_ports") or hint.get("patterns"):
+            dashboard.save_hint()
 
     _write_lockfile(sock_path, dashboard_port=dashboard_port)
     _active_lock_path = _lock_for(sock_path)

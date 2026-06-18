@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from . import tasks
@@ -17,6 +18,7 @@ from . import tasks
 _start_time: float = 0.0
 _socket_path: str = ""
 _server: asyncio.Server | None = None
+_hint_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +113,26 @@ def _resolve_tab(target_id: str):
     raise RuntimeError(f"tab not attached: {target_id}")
 
 
+def save_hint() -> None:
+    """Persist dashboard port + browser state to .pyrepl.dashboard."""
+    if _hint_path is None:
+        return
+    browser = getattr(__main__, "browser", None)
+    pool = getattr(browser, "_real", None) if browser else None
+    hint: dict[str, Any] = {
+        "dashboard_port": _server.sockets[0].getsockname()[1]
+        if _server and _server.sockets
+        else 0,
+    }
+    if pool and hasattr(pool, "_browsers"):
+        hint["chrome_ports"] = [p for p, b in pool._browsers.items() if b._connected]
+        hint["patterns"] = pool.patterns
+    try:
+        _hint_path.write_text(json.dumps(hint))
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # JSON-RPC dispatch
 # ---------------------------------------------------------------------------
@@ -134,11 +156,17 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 
             pool = BrowserPool()
             browser._real = pool
-        await pool.connect(port)
-        push_channel(
-            f"[dashboard] connected to Chrome on port {port}",
-            {"kind": "browser_connect", "port": str(port)},
-        )
+        b = await pool.connect(port)
+        targets = await b.pages()
+        page_lines = [
+            f"  {port}:{t.get('targetId', '')[:6]}  {t.get('url', '')}"
+            for t in targets
+            if t.get("type") == "page"
+        ]
+        summary = f"[dashboard] connected to Chrome on port {port} — {len(page_lines)} page(s)"
+        if page_lines:
+            summary += "\n" + "\n".join(page_lines[:10])
+        push_channel(summary, {"kind": "browser_connect", "port": str(port)})
         return {"connected": True, "port": port}
 
     if method == "browser.targets":
@@ -162,10 +190,17 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
         if not pattern:
             raise RuntimeError("pattern is required")
         result = await browser.watch(pattern)
-        push_channel(
-            f"[dashboard] watch '{pattern}': {result}",
-            {"kind": "browser_watch", "pattern": pattern},
-        )
+        import fnmatch
+
+        tab_lines = [
+            f"  {t.target_id}  {t.url}"
+            for t in browser.tabs
+            if fnmatch.fnmatch(t.url, pattern)
+        ]
+        summary = f"[dashboard] watch '{pattern}': {result}"
+        if tab_lines:
+            summary += "\n" + "\n".join(tab_lines[:10])
+        push_channel(summary, {"kind": "browser_watch", "pattern": pattern})
         return {"result": result}
 
     if method == "browser.unwatch":
@@ -373,8 +408,11 @@ def start_dashboard(
     socket_path: str,
     start_time: float,
     preferred_port: int = 0,
+    hint_path: Path | None = None,
 ) -> int:
     """Start the dashboard HTTP server. Returns the bound port."""
+    global _hint_path
+    _hint_path = hint_path
     future = asyncio.run_coroutine_threadsafe(
         _start(loop, socket_path, start_time, preferred_port), loop
     )

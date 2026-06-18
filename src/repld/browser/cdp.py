@@ -40,6 +40,101 @@ def _json_dumps_safe(data: Any) -> str:
     return s
 
 
+_CONTROLS_PREFIX = "__controls__"
+
+
+def _check_controls_observation(params: dict, target_id: str) -> None:
+    """Detect __controls__ console.debug messages and push as channel notifications."""
+    args = params.get("args", [])
+    if not args or params.get("type") != "debug":
+        return
+    first = args[0].get("value", "")
+    if first != _CONTROLS_PREFIX or len(args) < 2:
+        return
+    raw = args[1].get("value", "")
+    try:
+        obs = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return
+    control = obs.get("control", "?")
+    action = obs.get("action", "?")
+    summary = obs.get("summary", f"{control}.{action}()")
+    before = obs.get("stateBefore", "")
+    after = obs.get("stateAfter", "")
+    duration = obs.get("duration", 0)
+    error = obs.get("error")
+    line = f"[controls] {summary}"
+    if before != after:
+        line += f" — state: {before!r} → {after!r}"
+    if duration:
+        line += f" ({duration}ms)"
+    if error:
+        line += f" ERROR: {error}"
+    try:
+        from ..kernel import push_channel
+
+        meta: dict[str, str] = {
+            "kind": "controls",
+            "control": control,
+            "action": action,
+            "target": target_id,
+        }
+        if before:
+            meta["stateBefore"] = before
+        if after:
+            meta["stateAfter"] = after
+        push_channel(line, meta)
+    except Exception:
+        pass
+
+
+def _push_console_error(params: dict, target_id: str, port: int) -> None:
+    """Push console.error messages as channel notifications."""
+    args = params.get("args", [])
+    parts = []
+    for a in args:
+        val = (
+            a.get("value")
+            or a.get("description")
+            or a.get("preview", {}).get("description", "")
+        )
+        if val:
+            parts.append(str(val))
+    text = " ".join(parts)[:300]
+    if not text:
+        return
+    short_id = f"{port}:{target_id[:6]}"
+    try:
+        from ..kernel import push_channel
+
+        push_channel(
+            f"[console:error] {short_id}: {text}",
+            {"kind": "console_error", "target": short_id},
+        )
+    except Exception:
+        pass
+
+
+def _push_exception(params: dict, target_id: str, port: int) -> None:
+    """Push uncaught exceptions as channel notifications."""
+    details = params.get("exceptionDetails", {})
+    exc = details.get("exception", {})
+    text = exc.get("description") or details.get("text", "")
+    text = text[:300]
+    if not text:
+        return
+    short_id = f"{port}:{target_id[:6]}"
+    try:
+        from ..kernel import push_channel
+
+        push_channel(
+            f"[console:error] {short_id}: {text}",
+            {"kind": "console_error", "target": short_id},
+        )
+    except Exception:
+        pass
+
+
 class CDPSession:
     """Session-multiplexed CDP client with in-memory DuckDB event storage.
 
@@ -209,6 +304,14 @@ class CDPSession:
                         self._binding_handler(self, params),
                         name=f"repld-binding-{params.get('name', '?')}",
                     )
+
+            if method == "Runtime.consoleAPICalled":
+                _check_controls_observation(params, target_id)
+                if params.get("type") == "error":
+                    _push_console_error(params, target_id, self.port)
+
+            if method == "Runtime.exceptionThrown":
+                _push_exception(params, target_id, self.port)
 
             # Periodic pruning — async task to avoid blocking the recv loop
             if self._event_count % PRUNE_CHECK_INTERVAL == 0:

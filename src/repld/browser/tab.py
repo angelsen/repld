@@ -1297,6 +1297,56 @@ class Tab:
         )
         return Rows(_row_from_console(r, self._session) for r in rows)
 
+    # ------------------------------------------------------------------
+    # Controls protocol
+    # ------------------------------------------------------------------
+
+    async def controls(self) -> dict | None:
+        """Snapshot controls from window.controls.describeAll(). Returns None if absent."""
+        result = await self._exec(
+            "Runtime.evaluate",
+            {
+                "expression": "window.controls?.describeAll()",
+                "returnByValue": True,
+                "awaitPromise": False,
+            },
+        )
+        value = result.get("result", {}).get("value")
+        return value if isinstance(value, dict) else None
+
+    async def invoke(self, control: str, action: str, args: dict | None = None) -> dict:
+        """Invoke a control action via window.controls.invoke(). Returns InvokeResult."""
+        args_js = json.dumps(args) if args else "{}"
+        code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"
+        result = await self._exec(
+            "Runtime.evaluate",
+            {"expression": code, "returnByValue": True, "awaitPromise": True},
+        )
+        value = result.get("result", {}).get("value")
+        if value is None:
+            desc = result.get("result", {}).get("description", "")
+            raise RuntimeError(f"invoke failed: {desc}")
+        return value
+
+    def control_observations(self) -> list[dict]:
+        """Parsed __controls__ observations from console.debug messages."""
+        rows = self._session.query(
+            "SELECT text FROM console_entries WHERE level = 'debug' AND text LIKE '__controls__%' ORDER BY id DESC LIMIT 100"
+        )
+        results = []
+        for row in rows:
+            raw = row[0]
+            if not isinstance(raw, str):
+                continue
+            prefix = "__controls__ "
+            if raw.startswith(prefix):
+                raw = raw[len(prefix) :]
+            try:
+                results.append(json.loads(raw))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return results
+
     def sse(
         self,
         *,
