@@ -34,6 +34,55 @@ _PX_PER_TOKEN = 28
 _MAX_TOKENS = 1716  # ceil(1440/28) * ceil(900/28) = 52*33
 
 
+def _resize_png(data: bytes, tgt_w: int, tgt_h: int) -> bytes:
+    """Nearest-neighbor resize of an RGBA PNG. Pure stdlib (struct + zlib)."""
+    import struct
+    import zlib
+
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    ihdr = data[16:29]
+    src_w, src_h, bit_depth, color_type = struct.unpack(">IIbB", ihdr[:10])
+    if bit_depth != 8 or color_type not in (2, 6):
+        return data
+    bpp = 4 if color_type == 6 else 3
+    stride = 1 + src_w * bpp  # filter byte + pixels
+
+    idat = bytearray()
+    pos = 8
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos : pos + 4])[0]
+        ctype = data[pos + 4 : pos + 8]
+        if ctype == b"IDAT":
+            idat.extend(data[pos + 8 : pos + 8 + length])
+        pos += 12 + length
+
+    raw = zlib.decompress(bytes(idat))
+    rows = [raw[i * stride + 1 : (i + 1) * stride] for i in range(src_h)]
+
+    out_rows = bytearray()
+    for ty in range(tgt_h):
+        sy = ty * src_h // tgt_h
+        src_row = rows[sy]
+        out_rows.append(0)  # no filter
+        for tx in range(tgt_w):
+            sx = tx * src_w // tgt_w
+            out_rows.extend(src_row[sx * bpp : sx * bpp + bpp])
+
+    compressed = zlib.compress(bytes(out_rows))
+
+    def _chunk(ctype: bytes, body: bytes) -> bytes:
+        crc = zlib.crc32(ctype + body) & 0xFFFFFFFF
+        return struct.pack(">I", len(body)) + ctype + body + struct.pack(">I", crc)
+
+    new_ihdr = struct.pack(">IIbBbbb", tgt_w, tgt_h, 8, color_type, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", new_ihdr)
+        + _chunk(b"IDAT", compressed)
+        + _chunk(b"IEND", b"")
+    )
+
+
 def _model_dims(w: int, h: int) -> tuple[int, int]:
     def _tok(px: int) -> int:
         return (px - 1) // _PX_PER_TOKEN + 1
@@ -1121,10 +1170,10 @@ class Tab:
         full_page: bool = False,
         path: str | None = None,
     ) -> dict:
-        """Capture a PNG screenshot. Reports model dimensions for coordinate mapping.
+        """Capture a PNG screenshot, resized to the vision API token grid.
 
-        Full viewport resolution, no client-side downscaling (CDP clip.scale
-        races the compositor). The API resizes to its token grid server-side.
+        Captures full-res from CDP (no clip.scale — that races the compositor),
+        then resizes client-side with a pure-stdlib nearest-neighbor scaler.
         """
         import time
 
@@ -1141,6 +1190,18 @@ class Tab:
 
         result = await self._session.execute("Page.captureScreenshot", params)
         img_bytes = base64.b64decode(result.get("data", ""))
+
+        tgt_w, tgt_h = (
+            _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)
+        )
+        if tgt_w < src_w or tgt_h < src_h:
+            img_bytes = _resize_png(img_bytes, tgt_w, tgt_h)
+        scale = (
+            min(tgt_w / src_w, tgt_h / src_h)
+            if src_w > 0 and src_h > 0 and (tgt_w < src_w or tgt_h < src_h)
+            else 1.0
+        )
+
         if path:
             out = pathlib.Path(path)
         else:
@@ -1148,15 +1209,6 @@ class Tab:
             tid = self.target_id.replace(":", "-")
             out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
         out.write_bytes(img_bytes)
-
-        tgt_w, tgt_h = (
-            _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)
-        )
-        scale = (
-            min(tgt_w / src_w, tgt_h / src_h)
-            if src_w > 0 and src_h > 0 and (tgt_w < src_w or tgt_h < src_h)
-            else 1.0
-        )
         return {
             "path": str(out),
             "source": {"width": src_w, "height": src_h},
