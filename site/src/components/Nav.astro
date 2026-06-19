@@ -29,6 +29,63 @@ const links = [
 	</nav>
 </header>
 
+<!-- Mobile FAB + bottom sheet -->
+<button class="fab" id="nav-fab" aria-label="Menu" aria-expanded="false">
+	<svg class="fab-icon fab-open" width="20" height="20" viewBox="0 0 20 20" fill="none">
+		<rect y="3" width="20" height="1.5" rx=".75" fill="currentColor"/>
+		<rect y="9.25" width="20" height="1.5" rx=".75" fill="currentColor"/>
+		<rect y="15.5" width="20" height="1.5" rx=".75" fill="currentColor"/>
+	</svg>
+	<svg class="fab-icon fab-close" width="20" height="20" viewBox="0 0 20 20" fill="none">
+		<rect x="3.05" y="2" width="21" height="1.5" rx=".75" fill="currentColor" transform="rotate(45 3.05 2)"/>
+		<rect x="2" y="16.85" width="21" height="1.5" rx=".75" fill="currentColor" transform="rotate(-45 2 16.85)"/>
+	</svg>
+</button>
+
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+<div class="sheet" id="nav-sheet" aria-hidden="true">
+	<div class="sheet-handle"></div>
+	<nav class="sheet-links">
+		{
+			links.map((l) => (
+				<a href={l.href} class:list={[{ current: active === l.key }]}>
+					{l.label}
+				</a>
+			))
+		}
+	</nav>
+</div>
+
+<script>
+	const fab = document.getElementById('nav-fab')!;
+	const sheet = document.getElementById('nav-sheet')!;
+	const backdrop = document.getElementById('sheet-backdrop')!;
+
+	function open() {
+		sheet.classList.add('open');
+		backdrop.classList.add('open');
+		fab.setAttribute('aria-expanded', 'true');
+		fab.classList.add('active');
+	}
+
+	function close() {
+		sheet.classList.remove('open');
+		backdrop.classList.remove('open');
+		fab.setAttribute('aria-expanded', 'false');
+		fab.classList.remove('active');
+	}
+
+	fab.addEventListener('click', () => {
+		sheet.classList.contains('open') ? close() : open();
+	});
+
+	backdrop.addEventListener('click', close);
+
+	sheet.querySelectorAll('a').forEach((a) => {
+		a.addEventListener('click', close);
+	});
+</script>
+
 <style>
 	.nav {
 		max-width: var(--shell-w);
@@ -83,14 +140,120 @@ const links = [
 		color: var(--color-accent);
 		background-size: 100% 1px;
 	}
+
+	/* FAB + sheet — hidden on desktop */
+	.fab,
+	.sheet-backdrop,
+	.sheet {
+		display: none;
+	}
+
 	@media (max-width: 560px) {
-		.nav {
-			flex-wrap: wrap;
-			gap: 12px 18px;
-		}
 		.nav-links {
-			gap: 18px;
-			flex-wrap: wrap;
+			display: none;
+		}
+
+		/* --- FAB --- */
+		.fab {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			position: fixed;
+			bottom: 20px;
+			right: 20px;
+			width: 48px;
+			height: 48px;
+			border-radius: 50%;
+			border: 1px solid rgb(60 232 130 / 0.3);
+			background: rgb(14 14 16 / 0.92);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			color: var(--color-accent);
+			cursor: pointer;
+			z-index: 1001;
+			box-shadow: 0 4px 20px rgb(0 0 0 / 0.4);
+			transition: transform 0.2s, border-color 0.2s;
+		}
+		.fab:active {
+			transform: scale(0.92);
+		}
+		.fab .fab-close {
+			display: none;
+		}
+		.fab.active .fab-open {
+			display: none;
+		}
+		.fab.active .fab-close {
+			display: block;
+		}
+
+		/* --- Backdrop --- */
+		.sheet-backdrop {
+			display: block;
+			position: fixed;
+			inset: 0;
+			background: rgb(0 0 0 / 0.5);
+			z-index: 999;
+			opacity: 0;
+			pointer-events: none;
+			transition: opacity 0.25s;
+		}
+		.sheet-backdrop.open {
+			opacity: 1;
+			pointer-events: auto;
+		}
+
+		/* --- Bottom sheet --- */
+		.sheet {
+			display: block;
+			position: fixed;
+			bottom: 0;
+			left: 0;
+			right: 0;
+			background: rgb(18 18 22 / 0.98);
+			border-top: 1px solid rgb(60 232 130 / 0.15);
+			border-radius: 16px 16px 0 0;
+			padding: 12px 24px 36px;
+			z-index: 1000;
+			transform: translateY(100%);
+			transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+		}
+		.sheet.open {
+			transform: translateY(0);
+		}
+
+		.sheet-handle {
+			width: 36px;
+			height: 4px;
+			border-radius: 2px;
+			background: rgb(255 255 255 / 0.12);
+			margin: 0 auto 20px;
+		}
+
+		.sheet-links {
+			display: flex;
+			flex-direction: column;
+			gap: 0;
+		}
+		.sheet-links a {
+			display: block;
+			padding: 14px 0;
+			color: var(--color-muted);
+			text-decoration: none;
+			font-size: 15px;
+			letter-spacing: 0.03em;
+			border-bottom: 1px solid rgb(255 255 255 / 0.05);
+			transition: color 0.15s;
+		}
+		.sheet-links a:last-child {
+			border-bottom: none;
+		}
+		.sheet-links a:hover,
+		.sheet-links a:active {
+			color: var(--color-accent);
+		}
+		.sheet-links a.current {
+			color: var(--color-accent);
 		}
 	}
 </style>

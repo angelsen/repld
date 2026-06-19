@@ -142,6 +142,7 @@ code.c {
 	padding: 72px 0 76px;
 	max-width: 680px;
 	position: relative;
+	overflow: hidden;
 }
 .editorial .hero::before {
 	content: '';
