@@ -1,0 +1,1 @@
+import{g as t,S as r}from"./ScrollTrigger.a3sj5zmn.js";t.registerPlugin(r);window.matchMedia("(prefers-reduced-motion: reduce)").matches||document.querySelectorAll(".prog-step").forEach(e=>{r.create({trigger:e,start:"top 68%",onEnter:()=>e.classList.add("lit"),onLeaveBack:()=>e.classList.remove("lit")})});
