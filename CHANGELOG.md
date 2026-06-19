@@ -12,6 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Kernel boot no longer crashes on a stale or old-format `.pyrepl.dashboard` hint file. Older kernels wrote a bare port int there; the current code expects a JSON object and called `.get()` on it, raising `AttributeError` during startup. The output redirect swallowed the traceback, so the kernel exited 1 with no message. Non-dict hints are now ignored
+- `browser.open()` no longer races the tab attach. It now uses the session returned by `attach()` directly (the same way `get()` does), instead of a sync re-lookup that could raise `No attached tab` for a target that was just created
+- A malformed `__repld_tools__` in a gist can no longer take down MCP `initialize`. A non-list declaration, or list entries that aren't dicts, are skipped with a warning instead of raising in `tools/list`
+
 ### Removed
 
 ## [0.0.22] - 2026-06-18

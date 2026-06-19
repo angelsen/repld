@@ -715,7 +715,11 @@ def run_kernel(
     dash_hint = sock_path.with_suffix(".dashboard")
     hint: dict = {}
     try:
-        hint = json.loads(dash_hint.read_text())
+        loaded = json.loads(dash_hint.read_text())
+        # Older kernels wrote a bare port int here; current code expects an object.
+        # Ignore anything that isn't a dict so a stale hint can't crash boot.
+        if isinstance(loaded, dict):
+            hint = loaded
     except (OSError, json.JSONDecodeError):
         pass
 

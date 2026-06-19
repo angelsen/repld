@@ -285,10 +285,15 @@ class Browser:
         await self._ensure_connected()
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
-        await self._session.attach(tid)
-        tab = self._resolve_attached(make_target(self.port, tid))
-        await tab._session.enable_fetch()
-        return tab
+        # Use the session attach() returns directly (same as get()). The previous code
+        # re-looked-up the tab via the sync _resolve_attached(), which raced the attach:
+        # the new session isn't always registered with its targetId yet, so the lookup
+        # would fail with "No attached tab". attach()'s return value is authoritative.
+        cdp = await self._session.attach(tid)
+        if cdp is None:
+            raise RuntimeError(f"Failed to attach to new tab '{tid}'")
+        await cdp.enable_fetch()
+        return Tab(cdp, tid, self.port)
 
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""

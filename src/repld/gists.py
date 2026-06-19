@@ -611,17 +611,20 @@ def _extract_tools(path: Path) -> list[dict]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "__repld_tools__":
                     try:
-                        return ast.literal_eval(ast.unparse(node.value))
+                        value = ast.literal_eval(ast.unparse(node.value))
                     except Exception:
-                        key = f"{path}:__repld_tools__"
-                        if key not in _malformed_warned:
-                            _malformed_warned.add(key)
-                            print(
-                                f"repld: {path.name}: malformed __repld_tools__ "
-                                f"(not a valid literal) — skipped",
-                                file=sys.stderr,
-                            )
-                        return []
+                        value = None
+                    if isinstance(value, list):
+                        return value
+                    key = f"{path}:__repld_tools__"
+                    if key not in _malformed_warned:
+                        _malformed_warned.add(key)
+                        print(
+                            f"repld: {path.name}: malformed __repld_tools__ "
+                            f"(expected a list of tool dicts) — skipped",
+                            file=sys.stderr,
+                        )
+                    return []
     return []
 
 
@@ -653,6 +656,9 @@ def scan_tools() -> list[dict]:
     seen: set[str] = set()
     for p in _iter_gist_files():
         for tool in _extract_tools(p):
+            if not isinstance(tool, dict):
+                # A bad gist must not take down tools/list (and with it, initialize).
+                continue
             name = tool.get("name")
             if name and name not in seen:
                 seen.add(name)
@@ -667,7 +673,7 @@ def resolve_tool(name: str):
     if the gist declares the tool but has no matching handler function.
     """
     for p in _iter_gist_files():
-        tool_names = {t.get("name") for t in _extract_tools(p)}
+        tool_names = {t.get("name") for t in _extract_tools(p) if isinstance(t, dict)}
         if name in tool_names:
             mod_name = p.stem
             _check_reload(mod_name)
