@@ -1482,16 +1482,6 @@ auth instead. The core function doesn't care which path.
 Read repld://docs/production for the full graduation guide with wiring
 examples and scaffolding steps.
 
-=== Multi-tab gists (embedded apps) ===
-
-When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
-  - admin tab for navigation (host page)
-  - iframe tab for fetch/js (app context with auth)
-
-After navigating the admin tab, re-acquire the iframe with
-browser.get(pattern, timeout=10) — iframes reload on host navigation.
-Never navigate an iframe directly — it destroys the embedded session.
-
 == Background automation ==
 
 The kernel persists. One-shot work can become continuous:
