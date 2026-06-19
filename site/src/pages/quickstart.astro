@@ -358,35 +358,8 @@ tab = await browser.get("*directory.example.com*")
 		line-height: 1.6;
 	}
 
-	/* nudge cheat sheet */
-	.nudge-grid {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 14px;
-		margin-top: 8px;
-	}
-
-	/* outro back-links */
-	.back-links {
-		margin-top: 32px;
-		display: flex;
-		gap: 32px;
-	}
-	.back-links a {
-		font-size: 15px;
-		color: var(--color-accent);
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.back-links a :global(svg) {
-		width: 1em;
-		height: 1em;
-	}
-
 	@media (max-width: 900px) {
-		.prompts-grid,
-		.nudge-grid {
+		.prompts-grid {
 			grid-template-columns: minmax(0, 1fr);
 		}
 	}

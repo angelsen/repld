@@ -32,9 +32,6 @@ const structuredData = {
 	<head>
 		<BaseHead title={title} description={description} />
 		<script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData)} />
-		<script is:inline>
-			document.documentElement.classList.add('js');
-		</script>
 	</head>
 	<body>
 		<!-- kernel boot preloader (only rendered when JS is on; removed after play) -->

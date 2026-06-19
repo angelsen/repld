@@ -1,7 +1,5 @@
 ---
-import { Code } from 'astro:components';
 import { Icon } from '@astrojs/starlight/components';
-import vesper from '@shikijs/themes/vesper';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Section from '../components/Section.astro';
 import CodeCard from '../components/CodeCard.astro';
@@ -333,44 +331,16 @@ const diagRows = [
 <style>
 	/* diagnostic table */
 	.table-wrap {
-		overflow-x: auto;
 		margin-bottom: 32px;
-	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 13.5px;
-	}
-	th {
-		text-align: left;
-		color: var(--color-muted);
-		font-weight: 500;
-		font-size: 11px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-		padding: 12px 14px;
-		border-bottom: 1px solid var(--color-line);
 	}
 	th:first-child {
 		width: 42%;
-	}
-	td {
-		padding: 14px;
-		color: var(--color-fg);
-		border-bottom: 1px solid rgb(28 36 47 / 0.3);
-		vertical-align: top;
 	}
 	.see {
 		color: var(--color-bright);
 		font-weight: 500;
 		font-family: var(--font-mono);
 		font-size: 12.5px;
-	}
-	tbody tr {
-		transition: background 0.2s;
-	}
-	tbody tr:hover {
-		background: rgb(60 232 130 / 0.03);
 	}
 	.contrast {
 		margin-top: 8px;
@@ -471,24 +441,6 @@ const diagRows = [
 	}
 	.code-every {
 		max-width: 600px;
-	}
-
-	/* outro back-links */
-	.back-links {
-		margin-top: 32px;
-		display: flex;
-		gap: 32px;
-	}
-	.back-links a {
-		font-size: 15px;
-		color: var(--color-accent);
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.back-links a :global(svg) {
-		width: 1em;
-		height: 1em;
 	}
 
 	@media (max-width: 900px) {
