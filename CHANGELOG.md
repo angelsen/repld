@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.0.23] - 2026-06-19
+
+### Added
+
 - Controls protocol: apps exposing `window.controls` get `browser_controls` (discover) and `browser_invoke` (act) MCP tools. Action observations push as channel messages
 - Console errors from watched tabs push as `[console:error]` channel messages automatically
 - Browser state persistence: Chrome ports and watch patterns survive kernel restarts via `.pyrepl.dashboard` hint file
