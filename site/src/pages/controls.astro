@@ -99,8 +99,8 @@ const diagRows = [
 ---
 
 <BaseLayout
-	title="Controls — repld"
-	description="Expose your UI state machines as typed APIs. See exactly where invisible pipelines break — in real-time, not after the fact."
+	title="Controls — see what your app is doing — repld"
+	description="Expose your app's own actions as a typed API. Claude runs them and watches every stage land, so you see which stage failed the moment it fails."
 	active="controls"
 >
 	<!-- ==================== hero ==================== -->
@@ -109,8 +109,8 @@ const diagRows = [
 		<h1 class="display">See what your<br />app is doing.</h1>
 		<p class="hero-sub">
 			Your server-side pipeline has ten stages. The symptom is always <em>"it didn't work."</em>
-			Without observability, you can't tell which stage broke. Controls expose every UI
-			state machine as a typed, invocable API — and repld makes the whole chain visible.
+			Without observability, you can't tell which stage broke. Controls expose every UI state machine
+			as a typed, invocable API, so repld makes the whole chain visible.
 		</p>
 	</section>
 
@@ -118,8 +118,8 @@ const diagRows = [
 	<Section label="the signal">
 		<h2 class="display sm">One notification<br />replaces an hour of guessing.</h2>
 		<p class="body-text">
-			A chat app with an AI pipeline: message in, classify, suggest, insert, deliver, render.
-			Each notification pinpoints exactly where the chain broke.
+			A chat app with an AI pipeline: message in, classify, suggest, insert, deliver, render. Each
+			notification pinpoints exactly where the chain broke.
 		</p>
 		<div class="table-wrap" data-reveal>
 			<table>
@@ -139,8 +139,9 @@ const diagRows = [
 			</table>
 		</div>
 		<p class="body-text contrast">
-			Without this: <em>"cards don't appear sometimes"</em> — days of guessing.
-			With it: <code class="c">ZodError</code> at <code class="c">events.4.senderId</code> — fixed in minutes.
+			Without this, <em>"cards don't appear sometimes"</em> means days of guessing. With it, you get <code
+				class="c">ZodError</code
+			> at <code class="c">events.4.senderId</code> and fix it in minutes.
 		</p>
 	</Section>
 
@@ -148,8 +149,8 @@ const diagRows = [
 	<Section label="error correlation">
 		<h2 class="display sm">The timeline arrives in order.</h2>
 		<p class="body-text">
-			Multiple channel notifications give you a causal chain.
-			You don't search logs — the cause-effect is obvious.
+			Multiple channel notifications give you a causal chain. You don't search logs — the
+			cause-effect is obvious.
 		</p>
 		<div class="timeline" data-reveal>
 			<div class="tl-row">
@@ -165,7 +166,9 @@ const diagRows = [
 			<div class="tl-row err">
 				<span class="tl-ts">09:25:38</span>
 				<span class="tl-tag amber">[error]</span>
-				<span class="tl-msg">API 400: <code class="c">oneOf</code> not supported in structured output</span>
+				<span class="tl-msg"
+					>API 400: <code class="c">oneOf</code> not supported in structured output</span
+				>
 			</div>
 			<div class="tl-row">
 				<span class="tl-ts">09:25:38</span>
@@ -174,8 +177,8 @@ const diagRows = [
 			</div>
 		</div>
 		<p class="body-text contrast">
-			The error arrived <em>before the page froze</em>. Page-hang bugs push to the channel
-			the instant they happen — not when someone notices.
+			The error arrived <em>before the page froze</em>. Page-hang bugs push to the channel the
+			instant they happen, not when someone finally notices.
 		</p>
 	</Section>
 
@@ -185,10 +188,10 @@ const diagRows = [
 			<div>
 				<h2 class="display sm">Your app<br />becomes an API.</h2>
 				<p class="body-text">
-					Controls aren't test helpers bolted on after the fact — they're the actual UI state
-					machines, exposed. Each control has typed actions and observable properties.
-					<code class="c">browser_controls</code> discovers them;
-					<code class="c">browser_invoke</code> acts.
+					A control is one of your app's actual UI state machines, exposed for the agent to drive.
+					Each one has typed actions and observable properties.
+					<code class="c">browser_controls</code> discovers them.
+					<code class="c">browser_invoke</code> runs them.
 				</p>
 			</div>
 			<CodeCard code={schemaSnippet} lang="yaml" />
@@ -201,8 +204,8 @@ const diagRows = [
 			<div>
 				<h2 class="display sm">Every action<br />records its own diff.</h2>
 				<p class="body-text">
-					<code class="c">browser_invoke</code> runs the full observation pipeline:
-					settle, accessibility tree, network delta, console delta. Plus
+					<code class="c">browser_invoke</code> runs the full observation pipeline: settle, accessibility
+					tree, network delta, console delta. Plus
 					<code class="c">stateBefore</code> / <code class="c">stateAfter</code> /
 					<code class="c">duration</code> on every call.
 				</p>
@@ -217,9 +220,9 @@ const diagRows = [
 			<div>
 				<h2 class="display sm">End-to-end<br />in one turn.</h2>
 				<p class="body-text">
-					Invoke via controls. Watch the pipeline stages arrive as channel notifications.
-					Verify the result with controls again — or with a direct DB query. The full loop
-					without leaving the conversation.
+					Invoke via controls. Watch the pipeline stages arrive as channel notifications. Verify the
+					result with controls again, or with a direct DB query. The full loop without leaving the
+					conversation.
 				</p>
 			</div>
 			<CodeCard code={loopSnippet} lang="python" />
@@ -230,31 +233,33 @@ const diagRows = [
 	<Section label="where it heads">
 		<h2 class="display sm">From reactive to proactive.</h2>
 		<p class="body-text">
-			Today, controls tell you <em>what broke and where</em>.
-			The infrastructure is in place to tell you <em>that something broke</em> — before you notice.
+			Today, controls tell you <em>what broke and where</em>. The infrastructure is in place to tell
+			you <em>that something broke</em>, before you notice.
 		</p>
 		<div class="futures" data-reveal>
 			<div class="future-card">
 				<h3>Structured assertions</h3>
 				<p>
-					Every invocation records <code class="c">stateBefore</code>, <code class="c">stateAfter</code>,
-					<code class="c">duration</code>. Assert on transitions: count went <em>up</em> after dismiss?
+					Every invocation records <code class="c">stateBefore</code>, <code class="c"
+						>stateAfter</code
+					>,
+					<code class="c">duration</code>. Assert on the transitions. Count went <em>up</em> after dismiss?
 					Action took 3s instead of 200ms? State bug, caught immediately.
 				</p>
 			</div>
 			<div class="future-card">
 				<h3>Living health checks</h3>
 				<p>
-					A <code class="c">@every</code> ticker that sends a message, waits for the pipeline
-					notification, and alerts if it doesn't arrive. A continuous smoke test — not a suite
-					you run before deploy.
+					A <code class="c">@every</code> ticker that sends a message, waits for the pipeline notification,
+					and alerts if it doesn't arrive. A continuous smoke test that runs while you work, instead of
+					a suite you remember to run before deploy.
 				</p>
 			</div>
 			<div class="future-card">
 				<h3>Pre-merge verification</h3>
 				<p>
-					Run the controls sequence against the dev server before pushing. If the pipeline
-					still produces correct results after your change — ship it. Controls are the test API.
+					Run the controls sequence against the dev server before pushing. If the pipeline still
+					produces correct results after your change, ship it. Controls are the test API.
 				</p>
 			</div>
 		</div>
@@ -268,7 +273,7 @@ const diagRows = [
 		<blockquote data-reveal>
 			The progression: manual inspection &rarr; programmable controls &rarr; observation bridge
 			&rarr; notification-driven development. Each session builds on the previous one's
-			infrastructure. Controls aren't test tooling — they're how the UI state is structured,
+			infrastructure. Controls aren't test tooling, they're how the UI state is already structured,
 			and repld makes it observable.
 		</blockquote>
 		<div class="back-links" data-reveal>

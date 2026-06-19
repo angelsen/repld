@@ -1,38 +1,37 @@
 ---
-import { Code } from 'astro:components';
 import { Icon } from '@astrojs/starlight/components';
-import vesper from '@shikijs/themes/vesper';
 import BaseHead from '../components/BaseHead.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import TerminalHero from '../components/TerminalHero.astro';
 
-const pushSnippet = `defer(acme.scan(watchlist), "account scan")  # task_id, immediately
-
-@every(900)
-async def watch_inbox():
-    new = await gmail.unread()
-    if new:
-        notify(f"{len(new)} new — {new[0].subject}")`;
-
-const browserSnippet = `tab = await browser.get("admin.shopify.com")
-await tab.click("#export-csv")
-
-# every mutation settles, then reports what changed:
-#   tree Δ     dialog "Export products" · 2 buttons
-#   network Δ  POST /admin/api/exports → 201
-#   console Δ  (clean)`;
-
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const title = 'repld — AI that uses the apps you log into, and turns them into automations';
+const description =
+	'repld lets Claude use the web apps you already log into, reverse-engineer how they work, and turn them into automations you keep. It works even on apps with no public API.';
+
+const structuredData = {
+	'@context': 'https://schema.org',
+	'@type': 'SoftwareApplication',
+	name: 'repld',
+	applicationCategory: 'DeveloperApplication',
+	operatingSystem: 'Linux, macOS, Windows',
+	description,
+	url: new URL(base, Astro.site).toString(),
+	downloadUrl: 'https://pypi.org/project/repld-tool/',
+	softwareRequirements: 'Python 3.12+',
+	author: { '@type': 'Person', name: 'Fredrik Angelsen', url: 'https://github.com/angelsen' },
+	sameAs: ['https://github.com/angelsen/repld', 'https://pypi.org/project/repld-tool/'],
+	offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+};
 ---
 
 <!doctype html>
 <html lang="en">
 	<head>
-		<BaseHead
-			title="repld — a live Python kernel for your agent"
-			description="repld runs a persistent Python kernel you and your agent share. Push notifications instead of polling, a scriptable browser, and one-off code that hardens into tools."
-		/>
+		<BaseHead title={title} description={description} />
+		<script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData)} />
 		<script is:inline>
 			document.documentElement.classList.add('js');
 		</script>
@@ -41,7 +40,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<!-- kernel boot preloader (only rendered when JS is on; removed after play) -->
 		<div id="boot" aria-hidden="true">
 			<div class="boot-inner">
-				<p class="boot-line">repld ▸ starting kernel</p>
+				<p class="boot-line">repld ▸ starting up</p>
 				<p class="boot-line">▸ .pyrepl.lock written · socket ready</p>
 				<p class="boot-line"><span class="boot-ok">▸ channel open</span></p>
 			</div>
@@ -58,13 +57,14 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 				<div class="hero-copy">
 					<p class="kicker" data-hero>research preview · mcp</p>
 					<h1 class="display" data-hero>
-						Your agent gets a<br />
-						<em>live</em> Python process.
+						AI that actually<br />
+						<em>uses</em> your apps.
 					</h1>
 					<p class="sub" data-hero>
-						repld runs a persistent kernel in your project. You and Claude share one namespace —
-						long jobs push back over the channel, the browser is an object, and throwaway code
-						hardens into tools.
+						Most AI is stuck in a chat box. repld is a live workspace you and Claude share. Point it
+						at the apps you already log into, and Claude turns repetitive app-work into automations
+						you keep — then watches them run, pushes results back in the background, and graduates
+						them to production when you're ready.
 					</p>
 					<div class="install" data-hero>
 						<code id="install-cmd"><span class="dim">$</span> uv tool install repld-tool</code>
@@ -76,90 +76,94 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 				</div>
 			</section>
 
-			<!-- ============================ 01 shared namespace ============================ -->
+			<!-- ============================ 01 one live workspace ============================ -->
 			<section class="sect" data-sect>
-				<p class="sect-label"><span class="node"></span>01 · shared namespace</p>
+				<p class="sect-label"><span class="node"></span>01 · one live workspace</p>
 				<div class="sect-grid">
 					<div class="sect-copy">
-						<h2 class="display">Two hands.<br />One kernel.</h2>
+						<h2 class="display">You drive.<br />Claude codes.</h2>
 						<p>
-							The agent execs into <code class="inline">__main__</code> — the same module dict your REPL
-							reads. No sandbox between you: inspect its dataframes, patch its functions, take over mid-task.
+							You don't write Python. You use your apps and say what you want; Claude works in the
+							same live session and turns it into code that runs. It all shares one state, so you
+							can open anything it built.
 						</p>
 					</div>
-					<div class="panes" data-reveal>
-						<div class="pane">
-							<p class="pane-title accent">agent · mcp exec</p>
-							<pre>&gt;&gt;&gt; orders = await sd.orders(status="open")
-&gt;&gt;&gt; len(orders)
-<span class="b">317</span></pre>
-						</div>
-						<div class="pane">
-							<p class="pane-title amber">you · repld exec</p>
-							<pre>&gt;&gt;&gt; orders[0].customer
-<span class="b">'Nordlys Kafé AS'</span>
-&gt;&gt;&gt; orders[0].total
-<span class="b">2 480,00 kr</span></pre>
+					<div class="session-card" data-reveal>
+						<div class="sc-bar"><span class="sc-dot"></span>live session</div>
+						<div class="sc-body">
+							<div class="sc-line sc-you">
+								<span class="pr">you ❯</span><span class="sc-say"
+									>"pull the open orders from the admin"</span
+								>
+							</div>
+							<div class="sc-line sc-claude">
+								<span class="pr">claude ❯</span><span class="sc-act"
+									>orders = await sd.orders(status="open")</span
+								>
+							</div>
+							<div class="sc-line sc-out">⤷ <span class="hl">317</span> open orders</div>
+							<div class="sc-gap"></div>
+							<div class="sc-line sc-you">
+								<span class="pr">you ❯</span><span class="sc-say">"who's the biggest?"</span>
+							</div>
+							<div class="sc-line sc-claude">
+								<span class="pr">claude ❯</span><span class="sc-act"
+									>max(orders, key=lambda o: o.total)</span
+								>
+							</div>
+							<div class="sc-line sc-out">
+								⤷ <span class="hl">Nordlys Kafé AS</span> · 2 480,00 kr
+							</div>
 						</div>
 					</div>
 				</div>
 			</section>
 
-			<!-- ============================ 02 push ============================ -->
-			<section class="sect" id="sect-channel" data-sect>
-				<p class="sect-label"><span class="node"></span>02 · channel</p>
-				<div class="sect-grid">
-					<div class="sect-copy">
-						<h2 class="display">Push,<br />don't poll.</h2>
-						<p>
-							<code class="inline">exec</code> returns fast or defers. Long jobs, file watchers, webhooks
-							and timers all land back in the conversation as channel notifications — the agent never
-							busy-waits.
-						</p>
-					</div>
-					<div class="code-stack" data-reveal>
-						<div class="code-card">
-							<Code code={pushSnippet} lang="python" theme={vesper} />
-						</div>
-						<div class="toast" id="toast">
-							<span class="zap">⚡ channel</span> · every · watch_inbox — "3 new — Re: term sheet"
-						</div>
-						<div class="toast toast-2" id="toast2">
-							<span class="zap">⚡ channel</span> · task_done · account scan — 142 rows · 38s
-						</div>
-					</div>
-				</div>
-			</section>
-
-			<!-- ============================ 03 browser ============================ -->
+			<!-- ============================ 02 operate your apps ============================ -->
 			<section class="sect" data-sect>
-				<p class="sect-label"><span class="node"></span>03 · browser</p>
+				<p class="sect-label"><span class="node"></span>02 · operate your apps</p>
 				<div class="sect-grid">
 					<div class="sect-copy">
-						<h2 class="display">The browser<br />is an object.</h2>
+						<h2 class="display">In your real,<br />logged-in browser.</h2>
 						<p>
-							CDP underneath, Python on top. Every mutation settles, then returns the accessibility
-							tree, the network delta and the console delta — the agent sees exactly what its click
-							changed.
+							repld attaches to the Chrome you already use, logged into everything. Use the app
+							yourself or let Claude click. Either way it sees every request and response, and turns
+							what just happened into code.
 						</p>
 					</div>
 					<div class="code-stack" data-reveal>
-						<div class="code-card">
-							<Code code={browserSnippet} lang="python" theme={vesper} />
+						<div class="session-card">
+							<div class="sc-bar"><span class="sc-dot"></span>live session</div>
+							<div class="sc-body">
+								<div class="sc-line sc-you">
+									<span class="pr">you ❯</span><span class="sc-say"
+										>"export the products from the Shopify admin"</span
+									>
+								</div>
+								<div class="sc-gap"></div>
+								<div class="sc-line sc-claude">
+									<span class="pr">claude ❯</span><span class="sc-act">clicked Export</span>
+								</div>
+								<div class="sc-line sc-out">
+									⤷ POST /admin/exports <span class="hl">→ 201</span>
+								</div>
+								<div class="sc-line sc-out">⤷ 1,204 products · 2.1 MB</div>
+							</div>
 						</div>
 					</div>
 				</div>
 			</section>
 
-			<!-- ============================ 04 gists ============================ -->
+			<!-- ============================ 03 gists ============================ -->
 			<section class="sect" data-sect>
-				<p class="sect-label"><span class="node"></span>04 · gists</p>
+				<p class="sect-label"><span class="node"></span>03 · gists</p>
 				<div class="sect-grid">
 					<div class="sect-copy">
-						<h2 class="display">Code that<br />hardens into tools.</h2>
+						<h2 class="display">Reverse-engineer<br />once. Reuse forever.</h2>
 						<p>
-							A gist is a Python file the kernel hot-reloads. Reverse-engineer an internal API once
-							— import it forever, link it across projects, register it as an MCP tool.
+							A gist is a plain Python file repld reloads the moment you change it. Claude works out
+							a site's private API once and writes the client. Import it forever. Link it across
+							projects, or expose it as an MCP tool.
 						</p>
 					</div>
 					<div class="pane wide" data-reveal>
@@ -178,19 +182,98 @@ linked (from other projects):
 				</div>
 			</section>
 
-			<!-- ============================ 05 progression ============================ -->
+			<!-- ============================ 04 controls ============================ -->
 			<section class="sect" data-sect>
-				<p class="sect-label"><span class="node"></span>05 · the progression</p>
+				<p class="sect-label"><span class="node"></span>04 · controls</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">See what your<br />app is doing.</h2>
+						<p>
+							Expose your app's own actions as a typed API. Claude runs them and watches every stage
+							land, so when a pipeline breaks you see which stage failed the moment it fails, not an
+							hour later in the logs.
+						</p>
+					</div>
+					<div class="code-stack" data-reveal>
+						<div class="session-card">
+							<div class="sc-bar"><span class="sc-dot"></span>pipeline · live</div>
+							<div class="sc-body sc-timeline">
+								<div class="sc-stage">
+									<span class="t">09:25:34</span><span class="k">controls</span><span class="v"
+										>thread.send → 201</span
+									>
+								</div>
+								<div class="sc-stage">
+									<span class="t">09:25:37</span><span class="k">ai</span><span class="v"
+										>classify: reply (0.92)</span
+									>
+								</div>
+								<div class="sc-stage err">
+									<span class="t">09:25:38</span><span class="k">error</span><span class="v"
+										>API 400 <span class="note">← exactly where it broke</span></span
+									>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 05 background ============================ -->
+			<section class="sect" id="sect-channel" data-sect>
+				<p class="sect-label"><span class="node"></span>05 · background</p>
+				<div class="sect-grid">
+					<div class="sect-copy">
+						<h2 class="display">It keeps working<br />in the background.</h2>
+						<p>
+							Long jobs, watchers, webhooks and timers all run in the background and ping you when
+							something happens. Claude starts a task and moves on; the result lands in the
+							conversation when it's ready.
+						</p>
+					</div>
+					<div class="code-stack" data-reveal>
+						<div class="session-card">
+							<div class="sc-bar"><span class="sc-dot"></span>background</div>
+							<div class="sc-body">
+								<div class="sc-line sc-you">
+									<span class="pr">you ❯</span><span class="sc-say"
+										>"scan the watchlist, ping me when it's done"</span
+									>
+								</div>
+								<div class="sc-line sc-claude">
+									<span class="pr">claude ❯</span><span class="sc-act"
+										>defer(acme.scan(watchlist), "account scan")</span
+									>
+								</div>
+								<div class="sc-line sc-out">
+									⤷ task a91f · <span class="hl">running in the background</span>
+								</div>
+							</div>
+						</div>
+						<div class="toast" id="toast">
+							<span class="zap">⚡ channel</span> · every · watch_inbox — "3 new — Re: term sheet"
+						</div>
+						<div class="toast toast-2" id="toast2">
+							<span class="zap">⚡ channel</span> · task_done · account scan — 142 rows · 38s
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ============================ 06 progression ============================ -->
+			<section class="sect" data-sect>
+				<p class="sect-label"><span class="node"></span>06 · the progression</p>
 				<div class="sect-grid">
 					<div class="sect-copy">
 						<h2 class="display">Every tool<br />starts as a<br />conversation.</h2>
 						<p>
-							Do it by hand first. The workflow reveals itself through repetition — then hardens,
-							one phase at a time.
+							Do it by hand first. By the third repeat the steps are obvious, and you pull them into
+							a gist one phase at a time.
 						</p>
 						<p class="playbook-link">
 							<a href={`${base}playbook`}
-								>read the full playbook <Icon name="right-arrow" size="1em" /></a>
+								>read the full playbook <Icon name="right-arrow" size="1em" /></a
+							>
 						</p>
 					</div>
 					<div class="progression" data-reveal>
@@ -200,7 +283,7 @@ linked (from other projects):
 								<h3>Interactive</h3>
 								<p>
 									You and Claude work a task in repld. Poke at the browser, hit an API, inspect the
-									result. No plan — just doing.
+									result. No plan yet, just doing.
 								</p>
 							</div>
 						</div>
@@ -210,8 +293,8 @@ linked (from other projects):
 							<div class="phase-body">
 								<h3>Scripted</h3>
 								<p>
-									You repeated it three times. Extract a gist — a plain Python file the kernel
-									hot-reloads. Same code, now importable.
+									You repeated it three times. Pull it into a gist, a plain Python file repld
+									reloads on save. Same code, now importable.
 								</p>
 							</div>
 						</div>
@@ -232,8 +315,8 @@ linked (from other projects):
 							<div class="phase-body">
 								<h3>Production</h3>
 								<p>
-									The same gist now runs in FastAPI or Inngest — event-driven, durable. Nothing was
-									thrown away.
+									The same gist now runs in FastAPI or Inngest: event-driven and durable. Nothing
+									was thrown away.
 								</p>
 							</div>
 						</div>
@@ -243,7 +326,7 @@ linked (from other projects):
 
 			<!-- ============================ outro ============================ -->
 			<section class="outro" data-sect>
-				<h2 class="display">Give your agent<br />a kernel.</h2>
+				<h2 class="display">Give Claude<br />your apps.</h2>
 				<div class="install big" data-reveal>
 					<code><span class="dim">$</span> uv tool install repld-tool</code>
 				</div>
@@ -285,6 +368,16 @@ linked (from other projects):
 			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 			const finePointer = window.matchMedia('(pointer: fine)').matches;
 
+			// Gate heading reveals on just the heading font, not every font. Read the real
+			// hashed family off a heading so it survives Astro's per-build font hashing.
+			const headingFontReady = (): Promise<unknown> => {
+				const el = document.querySelector('.hero h1, .sect h2');
+				if (!el) return document.fonts.ready;
+				const cs = getComputedStyle(el);
+				const family = cs.fontFamily.split(',')[0].trim();
+				return document.fonts.load(`${cs.fontWeight || '800'} 1em ${family}`).catch(() => {});
+			};
+
 			// ---------- smooth scroll (Lenis ↔ ScrollTrigger sync) ----------
 			if (!reduced) {
 				const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
@@ -320,8 +413,9 @@ linked (from other projects):
 			// ---------- hero entrance (masked headline lines) ----------
 			function playHero() {
 				if (reduced) return;
-				document.fonts.ready.then(() => {
+				headingFontReady().then(() => {
 					const split = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
+					gsap.set('.hero h1', { visibility: 'visible' }); // lines masked offscreen — no flash
 					gsap
 						.timeline()
 						.from('.kicker', { y: 18, autoAlpha: 0, duration: 0.5, ease: 'power3.out' })
@@ -349,9 +443,10 @@ linked (from other projects):
 
 			if (!reduced) {
 				// ---------- section heading reveals: masked line slides ----------
-				document.fonts.ready.then(() => {
+				headingFontReady().then(() => {
 					document.querySelectorAll<HTMLElement>('.sect h2, .outro h2').forEach((el) => {
 						const split = SplitText.create(el, { type: 'lines', mask: 'lines' });
+						gsap.set(el, { visibility: 'visible' });
 						gsap.from(split.lines, {
 							yPercent: 115,
 							duration: 0.85,
@@ -723,6 +818,98 @@ linked (from other projects):
 				background: transparent !important;
 				overflow-x: auto;
 			}
+
+			/* ---------- session card (you ↔ claude scenes) ---------- */
+			.session-card {
+				border: 1px solid var(--color-line);
+				border-radius: 10px;
+				overflow: hidden;
+				background: var(--color-panel-2);
+				box-shadow:
+					0 0 0 1px rgb(0 0 0 / 0.4),
+					0 22px 60px -30px rgb(60 232 130 / 0.25),
+					0 8px 30px rgb(0 0 0 / 0.5);
+			}
+			.sc-bar {
+				display: flex;
+				align-items: center;
+				gap: 9px;
+				padding: 9px 15px;
+				border-bottom: 1px solid var(--color-line);
+				background: var(--color-panel);
+				font-size: 11px;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--color-muted);
+			}
+			.sc-dot {
+				width: 7px;
+				height: 7px;
+				border-radius: 50%;
+				background: var(--color-accent);
+				box-shadow: 0 0 9px rgb(60 232 130 / 0.7);
+			}
+			.sc-body {
+				padding: 17px 18px;
+				font-size: 13.5px;
+				line-height: 1.95;
+				overflow-x: auto;
+			}
+			.sc-line {
+				white-space: pre-wrap;
+				word-break: break-word;
+			}
+			.sc-you .pr {
+				color: var(--color-amber);
+				font-weight: 700;
+				margin-right: 8px;
+			}
+			.sc-claude .pr {
+				color: var(--color-accent);
+				font-weight: 700;
+				margin-right: 8px;
+			}
+			.sc-say {
+				color: var(--color-bright);
+			}
+			.sc-act {
+				color: var(--color-fg);
+			}
+			.sc-out {
+				color: var(--color-muted);
+				padding-left: 1.8em;
+			}
+			.sc-out .hl {
+				color: var(--color-accent);
+			}
+			.sc-gap {
+				height: 11px;
+			}
+			/* controls pipeline timeline */
+			.sc-timeline {
+				line-height: 2.3;
+			}
+			.sc-stage {
+				display: grid;
+				grid-template-columns: auto 76px 1fr;
+				gap: 16px;
+				white-space: pre;
+			}
+			.sc-stage .t {
+				color: var(--color-muted);
+			}
+			.sc-stage .k {
+				color: var(--color-accent);
+			}
+			.sc-stage.err .k {
+				color: #ff6b6b;
+			}
+			.sc-stage .v {
+				color: var(--color-fg);
+			}
+			.sc-stage .v .note {
+				color: var(--color-muted);
+			}
 			.toast {
 				position: absolute;
 				right: -14px;
@@ -926,6 +1113,16 @@ linked (from other projects):
 				}
 				.pane pre {
 					font-size: 12px;
+				}
+				.sc-body {
+					font-size: 12px;
+				}
+				.sc-stage {
+					grid-template-columns: auto 1fr;
+					gap: 6px 12px;
+				}
+				.sc-stage .v {
+					grid-column: 1 / -1;
 				}
 				.footer {
 					flex-direction: column;

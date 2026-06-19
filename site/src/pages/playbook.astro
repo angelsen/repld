@@ -22,28 +22,28 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 
 const principles = [
 	{
-		t: 'One service, one job',
-		d: 'Each function takes input, returns output. They compose through data, not shared frameworks.',
+		t: 'One function, one job',
+		d: 'Each function takes input and returns output. They connect through the data they pass, so you can rearrange them without rewiring a framework.',
 	},
 	{
 		t: 'UI is a view, not the system',
-		d: 'Pipeline state lives in plain data. Any UI can read or write it. Swap the view without touching the pipeline.',
+		d: 'Pipeline state lives in plain data. Any UI can read or write it, so you can swap the view without touching the pipeline underneath.',
 	},
 	{
-		t: 'Prototype interactive, harden headless',
-		d: 'Start by doing it manually. Each ad-hoc action becomes a gist. Each gist becomes a callable stage.',
+		t: 'Prototype by hand, then go headless',
+		d: 'Start by doing the task manually with Claude. Each repeated action becomes a gist, and each gist becomes a stage you can call.',
 	},
 	{
-		t: 'Human gates are just empty fields',
-		d: 'A column waiting for input, a DB field set to null, a waitForEvent — same concept. The pipeline pauses until a human fills it.',
+		t: 'A human gate is an empty field',
+		d: 'A column waiting for input, a DB field left null, a waitForEvent. They are the same idea: the pipeline pauses until a person fills it in.',
 	},
 	{
 		t: 'State is plain data',
-		d: 'JSON in, JSON out. Spreadsheet columns, DB columns, and pipeline inputs are the same thing.',
+		d: 'JSON in, JSON out. A spreadsheet column, a DB column, and a pipeline input are the same thing wearing different clothes.',
 	},
 	{
 		t: "Discover, don't design",
-		d: "Do the work manually first. Extract stages only when you've done the same thing three times.",
+		d: "Do the work by hand first. Pull out a stage only once you've done the same thing three times.",
 	},
 ];
 
@@ -58,26 +58,26 @@ const layers = [
 const steps = [
 	{
 		t: 'Interactive',
-		d: 'You and Claude work a task in repld. Poke at the browser, hit an API, inspect the result. No plan — just doing.',
+		d: 'You and Claude work a task in the live workspace. Poke at the browser, hit an API, look at what comes back. No plan yet, just doing the thing.',
 	},
 	{
 		t: 'Scripted',
-		d: 'You repeated it three times. Extract a gist — a plain Python file the kernel hot-reloads. Same code, now importable.',
+		d: "You've done it three times and the steps are obvious. Pull them into a gist, a plain Python file repld hot-reloads. Same code, now importable.",
 	},
 	{
 		t: 'Semi-auto',
-		d: 'Wire a trigger: @every, a webhook, a queue. Human gates where ambiguity requires judgment.',
+		d: 'Wire a trigger so it runs on its own: @every, a webhook, or a queue. Add a human gate wherever a call needs judgment.',
 	},
 	{
 		t: 'Production',
-		d: 'Event-driven, durable, monitored. Gists from phase 2 are now production steps. Nothing was thrown away.',
+		d: 'Event-driven, durable, monitored. The gists from the scripted phase are now production steps. Nothing got thrown away.',
 	},
 ];
 ---
 
 <BaseLayout
-	title="The Playbook — repld"
-	description="How automation actually gets built: do it by hand, extract a gist, wire a trigger, ship it headless. The method is the same regardless of the tools."
+	title="The Playbook — building automations with repld"
+	description="How an automation actually gets built with Claude: do the task by hand, pull the steps into a gist, wire a trigger, then run it headless. The same code graduates to production."
 	active="playbook"
 >
 	<!-- ==================== hero ==================== -->
@@ -85,8 +85,9 @@ const steps = [
 		<p class="tag">how we build</p>
 		<h1 class="display">The Playbook</h1>
 		<p class="hero-sub">
-			Discovered through practice, not designed upfront. Works for any automation — fully automatic
-			pipelines, human-in-the-loop processes, AI-augmented flows, or plain data transforms.
+			How automations get built when you and Claude work side by side. Do the task by hand, watch
+			the steps settle, then pull them into code one phase at a time. The same method covers fully
+			automatic pipelines, human-in-the-loop processes, and plain data transforms.
 		</p>
 	</section>
 
@@ -108,8 +109,8 @@ const steps = [
 	<Section label="layers">
 		<h2 class="display sm">Same code, different context.</h2>
 		<p class="body-text">
-			The interactive prototype and the production system share layers. What changes is the glue —
-			not the logic.
+			The interactive prototype and the production system share the same layers. The logic stays
+			put. What changes is the glue that runs it.
 		</p>
 		<div class="table-wrap" data-reveal>
 			<table>
@@ -135,10 +136,11 @@ const steps = [
 	<Section label="portable unit">
 		<div class="split">
 			<div>
-				<h2 class="display sm">The gist is the seam.</h2>
+				<h2 class="display sm">One gist, many harnesses.</h2>
 				<p class="body-text">
-					A plain Python file. Data in, data out. repld for prototyping, FastAPI for production,
-					Inngest for durable workflows. Same file, different harness.
+					A gist is a plain Python file: data in, data out. Import it into repld while you
+					prototype, into FastAPI to serve it, into Inngest for durable workflows. The file never
+					changes, only what runs it.
 				</p>
 			</div>
 			<CodeCard code={gistSnippet} lang="bash" />
@@ -151,8 +153,9 @@ const steps = [
 			<div>
 				<h2 class="display sm">The pipeline pauses for you.</h2>
 				<p class="body-text">
-					A human gate is just an empty field. Auto stages fill themselves; human stages wait. The
-					UI can be anything — a spreadsheet, a dashboard, a Slack message, or nothing at all.
+					A human gate is an empty field. Auto stages fill themselves in; human stages wait. The
+					field can live anywhere a person can reach it: a spreadsheet cell, a dashboard, a Slack
+					message, or a prompt in the workspace.
 				</p>
 			</div>
 			<CodeCard code={gateSnippet} lang="python" />
@@ -163,8 +166,8 @@ const steps = [
 	<Section label="the progression">
 		<h2 class="display sm">Every tool starts as a conversation.</h2>
 		<p class="body-text">
-			Not every workflow needs every phase. Some jump to production, some stay semi-auto forever.
-			Each phase reuses the previous one's artifacts.
+			Not every workflow needs every phase. Some jump straight to production. Some stay semi-auto
+			for good. Whichever path it takes, each phase reuses what the last one produced.
 		</p>
 		<ol class="steps" data-reveal>
 			{
@@ -184,10 +187,10 @@ const steps = [
 	<!-- ==================== outro ==================== -->
 	<section class="outro" data-anim>
 		<blockquote data-reveal>
-			This playbook emerged from doing the work, not from planning it. Started as manual data entry
-			and ad-hoc Claude sessions. By end of each project: multi-stage pipelines with OCR, AI
-			enrichment, system sync, and human-in-the-loop gates — all built from gists that started as
-			throwaway REPL code.
+			This playbook came out of real projects, not a whiteboard. Each one started as manual data
+			entry and a few Claude sessions. By the end it was a multi-stage pipeline: OCR, AI enrichment,
+			a sync back to the system of record, and human gates where someone had to make the call. All
+			of it grew from gists that began as throwaway REPL code.
 		</blockquote>
 		<div class="back-links" data-reveal>
 			<a href={base}><Icon name="left-arrow" size="1em" /> back to repld</a>

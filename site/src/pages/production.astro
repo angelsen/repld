@@ -102,8 +102,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 
 <BaseLayout
-	title="Production — repld"
-	description="Graduate gists from interactive prototyping to production services. FastMCP, FastAPI — same code, different harness."
+	title="Production — graduate a gist to a running service"
+	description="The Python Claude wrote during prototyping runs in production unchanged. Wrap it in FastMCP or FastAPI and swap the few lines that connect it."
 	active="production"
 >
 	<!-- ==================== hero ==================== -->
@@ -111,8 +111,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<p class="tag">production</p>
 		<h1 class="display">From gist<br />to service.</h1>
 		<p class="hero-sub">
-			A gist is a plain Python file. It runs in repld during prototyping and in FastMCP or FastAPI
-			in production. Same code, different harness. This page shows how to wire it.
+			A gist is a plain Python file. The same file runs in repld while you and Claude prototype,
+			then in FastMCP or FastAPI once it ships. You swap the few lines that connect it. This page
+			shows how.
 		</p>
 	</section>
 
@@ -120,16 +121,15 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<Section label="the two-layer pattern">
 		<h2 class="display sm">Core logic stays.<br />Wiring gets replaced.</h2>
 		<p class="body-text">
-			Write gists with two layers: core logic at the top (portable, moves to production unchanged)
-			and repld wiring at the bottom (<code class="c">__repld_tools__</code> +
-			<code class="c">_tool_*</code> — shed on graduation, replaced by <code class="c"
-				>@mcp.tool</code
-			> or <code class="c">@router.get</code>).
+			Write gists in two layers. The core logic sits at the top and moves to production untouched.
+			The repld wiring sits at the bottom: <code class="c">__repld_tools__</code> and
+			<code class="c">_tool_*</code>. That bottom layer drops away when the gist graduates, and a
+			<code class="c">@mcp.tool</code> or <code class="c">@router.get</code> takes its place.
 		</p>
 		<div class="code-stack" data-reveal>
 			<CodeCard code={twoLayerCore} label="keeps" labelTone="accent" class="keeps" />
 			<div class="seam" aria-hidden="true">
-				<span class="seam-label">graduation seam</span>
+				<span class="seam-label">graduation line</span>
 			</div>
 			<CodeCard code={twoLayerWiring} label="sheds" labelTone="dim" class="sheds" />
 		</div>
@@ -141,9 +141,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">The browser is the credential.</h2>
 				<p class="body-text">
-					For APIs with session auth (no API key), accept a <code class="c">fetch=</code>
-					callable. In repld, pass <code class="c">tab.fetch</code>. In production, pass an httpx
-					client or switch to token auth. The core function doesn't care which path.
+					Some APIs only authenticate through your logged-in browser session, with no API key to
+					hand out. For those, accept a <code class="c">fetch=</code> callable. In repld you pass
+					<code class="c">tab.fetch</code>, which rides your live session. In production you pass an
+					httpx client or switch to a token. The core function reads the same data either way.
 				</p>
 			</div>
 			<CodeCard code={fetchPattern} />
@@ -156,10 +157,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">One <code class="c">.env</code>,<br />both contexts.</h2>
 				<p class="body-text">
-					Core logic reads <code class="c">os.environ</code> — never hardcode tokens. repld loads <code
-						class="c">.env</code
-					> from the project root at kernel boot. Production frameworks load the same file their own way.
-					The gist code is identical.
+					Core logic reads tokens from <code class="c">os.environ</code>, so nothing is hardcoded.
+					repld loads <code class="c">.env</code> from the project root when the session starts. Your
+					production framework loads the same file its own way. The gist code stays identical.
 				</p>
 			</div>
 			<CodeCard code={envSnippet} lang="bash" />
@@ -170,8 +170,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<Section label="graduation tiers">
 		<h2 class="display sm">Pick the tier that fits.</h2>
 		<p class="body-text">
-			Not every gist needs the same production setup. Some use public APIs with tokens, some need
-			the browser's authenticated session, some use both.
+			Gists don't all need the same production setup. Some hit public APIs with a token. Others need
+			your browser's authenticated session. A few want both.
 		</p>
 		<div class="table-wrap" data-reveal>
 			<table>
@@ -213,8 +213,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">One line to<br />an MCP tool.</h2>
 				<p class="body-text">
-					<code class="c">mcp.add_tool()</code> generates the input schema from type hints and the description
-					from the docstring. If your core function's signature already matches, this is all you need.
+					<code class="c">mcp.add_tool()</code> reads the input schema off your type hints and the description
+					off the docstring. If the core function's signature already fits, that one line is the whole
+					integration.
 				</p>
 			</div>
 			<div class="code-stack-sm" data-reveal>
@@ -230,8 +231,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">Same function,<br />HTTP endpoint.</h2>
 				<p class="body-text">
-					Wrap the core function with a route decorator. FastAPI handles validation, serialization,
-					and OpenAPI docs. The gist doesn't change.
+					Wrap the core function in a route decorator and FastAPI takes it from there: request
+					validation, JSON serialization, OpenAPI docs. The gist itself doesn't change.
 				</p>
 			</div>
 			<CodeCard code={fastapiSnippet} />
@@ -242,16 +243,16 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<Section label="scaffolding">
 		<h2 class="display sm">Seven commands to a running service.</h2>
 		<p class="body-text">
-			Create a project, add deps, copy gists, run. The <code class="c">__repld_tools__</code>
-			layer stays behind — <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
-			replaces it.
+			Create a project, add the dependencies, copy the gist in, run it. The
+			<code class="c">__repld_tools__</code> layer stays behind. A <code class="c">@mcp.tool</code> or
+			<code class="c">@router.get</code> replaces it.
 		</p>
 		<CodeCard code={scaffoldSnippet} lang="bash" class="wide" />
 	</Section>
 
 	<!-- ==================== what stays / what goes ==================== -->
 	<Section label="what stays, what goes">
-		<h2 class="display sm">The seam is clean.</h2>
+		<h2 class="display sm">What moves, what stays put.</h2>
 		<div class="compare" data-reveal>
 			<div class="compare-col stays">
 				<h3 class="compare-head accent">Stays <span class="dim">(portable)</span></h3>
@@ -280,7 +281,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<Section label="nudge claude">
 		<h2 class="display sm">Say this when you're ready.</h2>
 		<p class="body-text">
-			Claude reads the production guide on demand. One line sets the context for the whole
+			Claude reads the production guide on demand. One line gives it the context for the whole
 			graduation conversation.
 		</p>
 		<div class="nudge-grid" data-reveal>
@@ -302,10 +303,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<!-- ==================== outro ==================== -->
 	<section class="outro" data-anim>
 		<blockquote data-reveal>
-			The gist is the seam between discovery and production. You prototype interactively — poking at
-			APIs, reverse-engineering traffic, shaping the data. When it works, you copy the file, swap
-			the wiring, and run it headless. Nothing is rewritten. The playbook's progression doesn't end
-			at the REPL — it ends at a running service.
+			The same file carries you from discovery to production. You and Claude prototype live: poking
+			at APIs, reverse-engineering the traffic, shaping the data into clean Python. Once it works,
+			you copy the file, swap the few lines that connect it, and run it headless. Nothing gets
+			rewritten. The progression doesn't stop at the REPL. It ends at a running service.
 		</blockquote>
 		<div class="back-links" data-reveal>
 			<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>

@@ -1,21 +1,47 @@
 ---
 import { Font } from 'astro:assets';
 import '../styles/global.css';
+import SEO, { type Image } from './SEO.astro';
 
 interface Props {
 	title: string;
 	description: string;
+	image?: Image;
+	pageType?: 'website' | 'article';
 }
 
-const { title, description } = Astro.props;
+const { title, description, image, pageType = 'website' } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+// Placeholder social card until the real OG image lands (see TODO: astro-og-canvas).
+// favicon.svg is a valid absolute URL, so the tag is never broken.
+const card = image ?? { src: `${base}favicon.svg`, alt: 'repld' };
+const resolvedImage = { src: new URL(card.src, Astro.site).toString(), alt: card.alt };
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 ---
 
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="generator" content={Astro.generator} />
+<meta name="theme-color" content="#0a0d12" />
+<script is:inline>
+	document.documentElement.classList.add('js');
+</script>
 <title>{title}</title>
-<meta name="description" content={description} />
 <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-<Font cssVariable="--font-geist-mono" preload />
-<Font cssVariable="--font-bricolage" preload />
+
+<SEO
+	name="repld"
+	title={title}
+	description={description}
+	image={resolvedImage}
+	canonicalURL={canonicalURL}
+	og={{ type: pageType }}
+/>
+
+{
+	/* Preload only the above-the-fold critical weights (body 400 = FCP, heading 800 = LCP).
+    The other declared weights load via font-display:swap, off the critical path. */
+}
+<Font cssVariable="--font-geist-mono" preload={[{ weight: 400 }]} />
+<Font cssVariable="--font-bricolage" preload={[{ weight: 800 }]} />

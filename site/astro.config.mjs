@@ -2,6 +2,7 @@
 import { defineConfig, fontProviders } from 'astro/config';
 
 import starlight from '@astrojs/starlight';
+import sitemap from '@astrojs/sitemap';
 
 import tailwindcss from '@tailwindcss/vite';
 
@@ -12,7 +13,7 @@ export default defineConfig({
 
 	prefetch: {
 		prefetchAll: true,
-		defaultStrategy: 'viewport',
+		defaultStrategy: 'hover',
 	},
 
 	fonts: [
@@ -31,6 +32,7 @@ export default defineConfig({
 	],
 
 	integrations: [
+		sitemap(),
 		starlight({
 			title: 'repld',
 			customCss: ['./src/styles/starlight-theme.css'],

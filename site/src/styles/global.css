@@ -268,3 +268,22 @@ code.c {
 		padding: 16px;
 	}
 }
+
+/* Animated content only ever appears via its GSAP reveal — never a flash before it.
+   The landing relies on its boot preloader for the same effect; editorial pages have
+   no cover, so every reveal target (headings + body) gets pre-hidden here instead.
+   Gated on JS + motion so reduced-motion and no-JS visitors always see everything. */
+@media (prefers-reduced-motion: no-preference) {
+	html.js .hero h1,
+	html.js .sect h2,
+	html.js .outro h2,
+	html.js [data-anim] h2,
+	html.js .editorial .tag,
+	html.js .editorial .hero-sub,
+	html.js [data-anim] [data-reveal],
+	html.js [data-anim] .body-text,
+	html.js [data-anim] .section-label,
+	html.js [data-anim] .narrow {
+		visibility: hidden;
+	}
+}

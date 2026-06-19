@@ -1,10 +1,11 @@
 ---
 import { Code } from 'astro:components';
+import type { ComponentProps } from 'astro/types';
 import vesper from '@shikijs/themes/vesper';
 
 interface Props {
 	code: string;
-	lang?: string;
+	lang?: ComponentProps<typeof Code>['lang'];
 	label?: string;
 	labelTone?: 'accent' | 'dim';
 	class?: string;

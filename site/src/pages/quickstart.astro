@@ -9,7 +9,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 
 <BaseLayout
 	title="Quickstart — repld"
-	description="How to work with Claude when repld is connected. What to say, what to expect, how to think."
+	description="How to work with Claude once repld is connected: point it at the apps you log into, describe what you want, and keep the Python it writes to automate them."
 	active="quickstart"
 >
 	<!-- ==================== hero ==================== -->
@@ -17,9 +17,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<p class="tag">getting started</p>
 		<h1 class="display">You talk.<br />Claude drives.</h1>
 		<p class="hero-sub">
-			repld gives Claude a live Python kernel, a scriptable browser, and push notifications. You
-			don't write code — you describe what you want, steer the results, and tell Claude when to
-			harden something into a tool.
+			repld is a live workspace you and Claude share: a Python session, your real Chrome, and push
+			notifications. You describe what you want and steer the results. Claude writes the code, and
+			when something earns its keep, you tell it to turn that into a reusable tool.
 		</p>
 	</section>
 
@@ -29,8 +29,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">Four commands.</h2>
 				<p class="body-text">
-					Install repld, scaffold the project, start the kernel, launch Claude with channel support.
-					That's it.
+					Install repld and scaffold the project. Start the workspace, then launch Claude with
+					channel support. That's the whole setup.
 				</p>
 			</div>
 			<div class="term" data-reveal>
@@ -60,22 +60,20 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div>
 				<h2 class="display sm">Log in like a human.<br />Automate like a machine.</h2>
 				<p class="body-text">
-					You're already logged into everything — Shopify, your bank, internal dashboards, admin
-					panels. Claude attaches to your Chrome and inherits your sessions. No OAuth, no API keys,
-					no env vars, no secrets files.
+					You're already logged into the apps that matter: your CRM, your bank, internal dashboards,
+					admin panels. Claude attaches to your Chrome and inherits those sessions. There's no OAuth
+					dance, no API keys to provision, nothing to put in a secrets file.
 				</p>
 				<p class="body-text">
-					The traffic <em>is</em> the documentation. Claude discovers the API surface from what the page
-					actually does.
+					The traffic <em>is</em> the documentation. Claude watches what the page does and reads the private
+					API right off the wire.
 				</p>
 			</div>
 			<div class="chat" data-reveal>
 				<div class="msg you">I'm logged into our Shopify admin in Chrome</div>
 				<div class="msg claude">
 					<p class="msg-label">Claude</p>
-					<p>
-						I'll attach to your Shopify admin tab and discover the API surface from your traffic.
-					</p>
+					<p>I'll attach to your Shopify admin tab and read the API surface off your traffic.</p>
 					<div class="msg-code">
 						<pre>tab = await browser.get("*admin.shopify*")
 await tab.click("text=Orders")
@@ -90,22 +88,22 @@ reqs = tab.network(url="*api*")
 
 	<!-- ==================== how to talk to claude ==================== -->
 	<Section label="how to talk to claude">
-		<h2 class="display sm">Describe intent, not implementation.</h2>
+		<h2 class="display sm">Say what you want. Claude builds it.</h2>
 		<p class="body-text">
-			You're steering, not scripting. Claude runs Python in the kernel — you see the results and
-			redirect. The conversation is the development environment.
+			You steer, you don't script. Claude runs Python in the live session, you see the results, and
+			you redirect from there. The conversation is the development environment.
 		</p>
 		<div class="prompts-grid" data-reveal>
 			<div class="prompt-card">
 				<p class="prompt-label accent">Discovery</p>
 				<p class="prompt-text">"What API calls does this page make when I click Export?"</p>
-				<p class="prompt-note">Claude attaches, you click, Claude reads the network delta.</p>
+				<p class="prompt-note">Claude attaches, you click, and it reads the network delta.</p>
 			</div>
 			<div class="prompt-card">
 				<p class="prompt-label accent">Extraction</p>
 				<p class="prompt-text">"Pull all invoices from last month"</p>
 				<p class="prompt-note">
-					Claude uses your session to fetch, paginate, and structure the data.
+					Claude uses your session to fetch and paginate, then hands back structured data.
 				</p>
 			</div>
 			<div class="prompt-card">
@@ -117,10 +115,10 @@ reqs = tab.network(url="*api*")
 				</p>
 			</div>
 			<div class="prompt-card">
-				<p class="prompt-label accent">Hardening</p>
+				<p class="prompt-label accent">Keep it</p>
 				<p class="prompt-text">"Let's make a gist for this app's API"</p>
 				<p class="prompt-note">
-					Say this early. Claude explores interactively and writes the gist as it goes.
+					Say this early. Claude explores the app and writes the reusable Python as it goes.
 				</p>
 			</div>
 		</div>
@@ -130,8 +128,8 @@ reqs = tab.network(url="*api*")
 	<Section label="nudge cheat sheet">
 		<h2 class="display sm">Say this first.</h2>
 		<p class="body-text">
-			Claude has MCP resources it can read on demand. A one-line nudge before you start makes the
-			difference between guessing and knowing.
+			Claude can pull up repld's own docs on demand. A one-line nudge before you start is the
+			difference between Claude guessing and Claude knowing.
 		</p>
 		<div class="nudge-grid" data-reveal>
 			<NudgeCard
@@ -168,12 +166,14 @@ reqs = tab.network(url="*api*")
 			<div>
 				<h2 class="display sm">Say it early.</h2>
 				<p class="body-text">
-					You don't wait for repetition. When you know an app will be useful long-term, tell Claude
-					upfront: <em>"let's make a gist for this."</em> Claude explores the API interactively and writes
-					the gist as it discovers the shape.
+					You don't have to wait until you've done a thing three times. When you know an app will
+					matter long-term, tell Claude upfront: <em>"let's make a gist for this."</em> It pokes at the
+					API live and writes the gist as the shape of it becomes clear.
 				</p>
 				<p class="body-text">
-					The interactive session and the gist collapse into one conversation. Discovery <em>is</em> development.
+					Exploring the app and building the gist happen in the same conversation. Discovery <em
+						>is</em
+					> development.
 				</p>
 			</div>
 			<div class="chat" data-reveal>
@@ -182,7 +182,7 @@ reqs = tab.network(url="*api*")
 				</div>
 				<div class="msg claude">
 					<p class="msg-label">Claude</p>
-					<p>I'll read the browser guide first, then attach to your tab and discover the API.</p>
+					<p>I'll read the browser guide first, then attach to your tab and map the API.</p>
 					<div class="msg-code">
 						<pre><span class="dim"># reads repld://docs/browser</span>
 <span class="dim"># reads repld://gists/_registry</span>
@@ -200,8 +200,8 @@ tab = await browser.get("*directory.example.com*")
 	<Section label="state is alive">
 		<h2 class="display sm">Nothing restarts.</h2>
 		<p class="body-text narrow">
-			The kernel doesn't reset between messages. Variables persist. Auth persists. Background tasks
-			keep running. Claude picks up exactly where it left off — and so do you. Open <code class="c"
+			The session doesn't reset between messages. Variables stay, logins stay, and background tasks
+			keep running. Claude picks up exactly where it left off, and so do you. Open <code class="c"
 				>repld exec</code
 			> in another terminal to inspect anything Claude created.
 		</p>
@@ -210,9 +210,10 @@ tab = await browser.get("*directory.example.com*")
 	<!-- ==================== outro ==================== -->
 	<section class="outro" data-anim>
 		<blockquote data-reveal>
-			repld is a collaboration tool, not an automation framework. You bring the context — which apps
-			matter, what the data means, when something looks wrong. Claude brings the hands — executing,
-			fetching, wiring, writing code. The kernel is where you meet.
+			repld is a place you and Claude work together, not a framework you configure and walk away
+			from. You bring the context: which apps matter, what the data means, when something looks
+			wrong. Claude brings the hands, executing and fetching and wiring and writing the code. The
+			shared session is where you meet.
 		</blockquote>
 		<div class="back-links" data-reveal>
 			<a href={`${base}playbook`}><Icon name="left-arrow" size="1em" /> the playbook</a>
