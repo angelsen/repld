@@ -8,15 +8,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Controls protocol: apps exposing `window.controls` get `browser_controls` (discover) and `browser_invoke` (act) MCP tools. Action observations push as channel messages
+- Console errors from watched tabs push as `[console:error]` channel messages automatically
+- Browser state persistence: Chrome ports and watch patterns survive kernel restarts via `.pyrepl.dashboard` hint file
+- `browser_screenshot` tool description now suggests `Emulation.setDeviceMetricsOverride` at 1440×900 (desktop) or 390×844 (mobile) with `deviceScaleFactor: 1` for crisp text on HiDPI displays
+
 ### Changed
+
+- GUIDE and BROWSER_GUIDE doc surfaces deduplicated (multi-tab gists section)
 
 ### Fixed
 
+- PNG screenshot resize: `_resize_png` now correctly unfilters scanlines before nearest-neighbor sampling. Chrome's PNG encoder uses Sub/Up/Average/Paeth row filters; the previous code read filtered delta bytes as raw pixel data, producing garbled screenshots on every resize since v0.0.20
 - Kernel boot no longer crashes on a stale or old-format `.pyrepl.dashboard` hint file. Older kernels wrote a bare port int there; the current code expects a JSON object and called `.get()` on it, raising `AttributeError` during startup. The output redirect swallowed the traceback, so the kernel exited 1 with no message. Non-dict hints are now ignored
 - `browser.open()` no longer races the tab attach. It now uses the session returned by `attach()` directly (the same way `get()` does), instead of a sync re-lookup that could raise `No attached tab` for a target that was just created
 - A malformed `__repld_tools__` in a gist can no longer take down MCP `initialize`. A non-list declaration, or list entries that aren't dicts, are skipped with a warning instead of raising in `tools/list`
-
-### Removed
 
 ## [0.0.22] - 2026-06-18
 
