@@ -4,8 +4,28 @@ import BaseHead from '../components/BaseHead.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import TerminalHero from '../components/TerminalHero.astro';
+import Progression from '../components/Progression.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const progressionSteps = [
+	{
+		t: 'Interactive',
+		d: 'You and Claude work a task in repld. Poke at the browser, hit an API, inspect the result. No plan yet, just doing.',
+	},
+	{
+		t: 'Scripted',
+		d: 'You repeated it three times. Pull it into a gist, a plain Python file repld reloads on save. Same code, now importable.',
+	},
+	{
+		t: 'Semi-auto',
+		d: 'Wire a trigger: <code class="inline">@every</code>, a webhook, a spreadsheet column waiting for a human decision. The gist is the stage.',
+	},
+	{
+		t: 'Production',
+		d: 'The same gist now runs in FastAPI or Inngest: event-driven and durable. Nothing was thrown away.',
+	},
+];
 
 const title = 'repld — AI that uses the apps you log into, and turns them into automations';
 const description =
@@ -273,50 +293,8 @@ linked (from other projects):
 							>
 						</p>
 					</div>
-					<div class="progression" data-reveal>
-						<div class="phase">
-							<div class="phase-num">1</div>
-							<div class="phase-body">
-								<h3>Interactive</h3>
-								<p>
-									You and Claude work a task in repld. Poke at the browser, hit an API, inspect the
-									result. No plan yet, just doing.
-								</p>
-							</div>
-						</div>
-						<div class="phase-line" aria-hidden="true"></div>
-						<div class="phase">
-							<div class="phase-num">2</div>
-							<div class="phase-body">
-								<h3>Scripted</h3>
-								<p>
-									You repeated it three times. Pull it into a gist, a plain Python file repld
-									reloads on save. Same code, now importable.
-								</p>
-							</div>
-						</div>
-						<div class="phase-line" aria-hidden="true"></div>
-						<div class="phase">
-							<div class="phase-num">3</div>
-							<div class="phase-body">
-								<h3>Semi-auto</h3>
-								<p>
-									Wire a trigger: <code class="inline">@every</code>, a webhook, a spreadsheet
-									column waiting for a human decision. The gist is the stage.
-								</p>
-							</div>
-						</div>
-						<div class="phase-line" aria-hidden="true"></div>
-						<div class="phase">
-							<div class="phase-num">4</div>
-							<div class="phase-body">
-								<h3>Production</h3>
-								<p>
-									The same gist now runs in FastAPI or Inngest: event-driven and durable. Nothing
-									was thrown away.
-								</p>
-							</div>
-						</div>
+					<div data-reveal>
+						<Progression steps={progressionSteps} />
 					</div>
 				</div>
 			</section>
@@ -530,15 +508,6 @@ linked (from other projects):
 						});
 					});
 
-					// progression phases light up on scroll
-					document.querySelectorAll<HTMLElement>('.phase').forEach((phase) => {
-						ScrollTrigger.create({
-							trigger: phase,
-							start: 'top 70%',
-							onEnter: () => phase.classList.add('lit'),
-							onLeaveBack: () => phase.classList.remove('lit'),
-						});
-					});
 				}
 			}
 
@@ -935,56 +904,6 @@ linked (from other projects):
 			}
 
 			/* progression */
-			.progression {
-				display: flex;
-				flex-direction: column;
-				gap: 0;
-			}
-			.phase {
-				display: flex;
-				gap: 18px;
-				align-items: flex-start;
-			}
-			.phase-num {
-				flex-shrink: 0;
-				width: 34px;
-				height: 34px;
-				border-radius: 50%;
-				border: 1px solid var(--color-line);
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				font-size: 13px;
-				font-weight: 700;
-				color: var(--color-muted);
-				margin-top: 2px;
-				transition: all 0.4s;
-			}
-			.phase:hover .phase-num,
-			.phase.lit .phase-num {
-				background: var(--color-accent);
-				border-color: var(--color-accent);
-				color: var(--color-ink);
-				box-shadow: 0 0 14px rgb(60 232 130 / 0.5);
-			}
-			.phase-body h3 {
-				font-family: var(--font-display);
-				font-weight: 700;
-				color: var(--color-bright);
-				font-size: 17px;
-				margin-bottom: 6px;
-			}
-			.phase-body p {
-				color: var(--color-muted);
-				font-size: 13.5px;
-				max-width: 42ch;
-			}
-			.phase-line {
-				width: 1px;
-				height: 28px;
-				margin-left: 17px;
-				background: var(--color-line);
-			}
 			.playbook-link {
 				margin-top: 20px;
 			}

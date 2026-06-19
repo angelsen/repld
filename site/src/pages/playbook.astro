@@ -3,6 +3,7 @@ import { Icon } from '@astrojs/starlight/components';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Section from '../components/Section.astro';
 import CodeCard from '../components/CodeCard.astro';
+import Progression from '../components/Progression.astro';
 
 const gistSnippet = `gists/                  # pure Python, no framework dependency
   inventory.py         # ERP lookup, sheet write
@@ -169,19 +170,9 @@ const steps = [
 			Not every workflow needs every phase. Some jump straight to production. Some stay semi-auto
 			for good. Whichever path it takes, each phase reuses what the last one produced.
 		</p>
-		<ol class="steps" data-reveal>
-			{
-				steps.map((s, i) => (
-					<li class="step">
-						<span class="step-n">{i + 1}</span>
-						<div>
-							<strong>{s.t}</strong>
-							<p>{s.d}</p>
-						</div>
-					</li>
-				))
-			}
-		</ol>
+		<div data-reveal>
+			<Progression steps={steps} />
+		</div>
 	</Section>
 
 	<!-- ==================== outro ==================== -->
@@ -201,23 +192,6 @@ const steps = [
 	</section>
 </BaseLayout>
 
-<script>
-	import gsap from 'gsap';
-	import { ScrollTrigger } from 'gsap/ScrollTrigger';
-
-	gsap.registerPlugin(ScrollTrigger);
-	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-	if (!reduced) {
-		document.querySelectorAll<HTMLElement>('.step').forEach((step) => {
-			ScrollTrigger.create({
-				trigger: step,
-				start: 'top 68%',
-				onEnter: () => step.classList.add('lit'),
-				onLeaveBack: () => step.classList.remove('lit'),
-			});
-		});
-	}
-</script>
 
 <style>
 	/* principle cards */
@@ -256,78 +230,6 @@ const steps = [
 		flex: 1;
 	}
 
-	/* progression steps */
-	.steps {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-		display: flex;
-		flex-direction: column;
-		border-left: 1px solid var(--color-line);
-		margin-left: 18px;
-	}
-	.step {
-		display: flex;
-		gap: 20px;
-		align-items: flex-start;
-		padding: 20px 0 20px 28px;
-		position: relative;
-		transition: background 0.3s;
-	}
-	.step-n {
-		flex-shrink: 0;
-		width: 36px;
-		height: 36px;
-		border-radius: 50%;
-		border: 1px solid var(--color-line);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 14px;
-		font-weight: 700;
-		color: var(--color-muted);
-		position: relative;
-		transition: all 0.4s;
-	}
-	.step::before {
-		content: '';
-		position: absolute;
-		left: -5px;
-		top: 32px;
-		width: 9px;
-		height: 9px;
-		border-radius: 50%;
-		border: 1px solid var(--color-line);
-		background: var(--color-ink);
-		transition: all 0.4s;
-	}
-	.step.lit::before {
-		background: var(--color-accent);
-		border-color: var(--color-accent);
-		box-shadow: 0 0 10px rgb(60 232 130 / 0.6);
-	}
-	.step.lit .step-n {
-		background: var(--color-accent);
-		border-color: var(--color-accent);
-		color: var(--color-ink);
-		box-shadow: 0 0 16px rgb(60 232 130 / 0.5);
-	}
-	.step strong {
-		font-family: var(--font-display);
-		font-weight: 700;
-		color: var(--color-bright);
-		font-size: 16px;
-		display: block;
-		margin-bottom: 4px;
-	}
-	.step p {
-		color: var(--color-muted);
-		font-size: 13.5px;
-		line-height: 1.7;
-		max-width: 48ch;
-		margin: 0;
-	}
-
 	@media (max-width: 900px) {
 		.cards-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -336,12 +238,6 @@ const steps = [
 	@media (max-width: 560px) {
 		.cards-grid {
 			grid-template-columns: minmax(0, 1fr);
-		}
-		.steps {
-			margin-left: 10px;
-		}
-		.step {
-			padding-left: 20px;
 		}
 	}
 </style>

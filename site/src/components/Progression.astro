@@ -1,0 +1,124 @@
+---
+interface Step {
+	t: string;
+	d: string;
+}
+
+interface Props {
+	steps: Step[];
+}
+
+const { steps } = Astro.props;
+---
+
+<ol class="prog-steps">
+	{
+		steps.map((s, i) => (
+			<li class="prog-step">
+				<span class="prog-n">{i + 1}</span>
+				<div class="prog-body">
+					<strong>{s.t}</strong>
+					<p set:html={s.d} />
+				</div>
+			</li>
+		))
+	}
+</ol>
+
+<script>
+	import gsap from 'gsap';
+	import { ScrollTrigger } from 'gsap/ScrollTrigger';
+
+	gsap.registerPlugin(ScrollTrigger);
+	if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+		document.querySelectorAll<HTMLElement>('.prog-step').forEach((step) => {
+			ScrollTrigger.create({
+				trigger: step,
+				start: 'top 68%',
+				onEnter: () => step.classList.add('lit'),
+				onLeaveBack: () => step.classList.remove('lit'),
+			});
+		});
+	}
+</script>
+
+<style>
+	.prog-steps {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		border-left: 1px solid var(--color-line);
+		margin-left: 18px;
+	}
+	.prog-step {
+		display: flex;
+		gap: 20px;
+		align-items: flex-start;
+		padding: 20px 0 20px 28px;
+		position: relative;
+		transition: background 0.3s;
+	}
+	.prog-step::before {
+		content: '';
+		position: absolute;
+		left: -5px;
+		top: 32px;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		border: 1px solid var(--color-line);
+		background: var(--color-ink);
+		transition: all 0.4s;
+	}
+	.prog-step.lit::before {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 10px rgb(60 232 130 / 0.6);
+	}
+	.prog-n {
+		flex-shrink: 0;
+		width: 36px;
+		height: 36px;
+		border-radius: 50%;
+		border: 1px solid var(--color-line);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 14px;
+		font-weight: 700;
+		color: var(--color-muted);
+		position: relative;
+		transition: all 0.4s;
+	}
+	.prog-step.lit .prog-n {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		color: var(--color-ink);
+		box-shadow: 0 0 16px rgb(60 232 130 / 0.5);
+	}
+	.prog-step strong {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 16px;
+		display: block;
+		margin-bottom: 4px;
+	}
+	.prog-step p {
+		color: var(--color-muted);
+		font-size: 13.5px;
+		line-height: 1.7;
+		max-width: 48ch;
+		margin: 0;
+	}
+	@media (max-width: 560px) {
+		.prog-steps {
+			margin-left: 10px;
+		}
+		.prog-step {
+			padding-left: 20px;
+		}
+	}
+</style>
