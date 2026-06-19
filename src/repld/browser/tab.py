@@ -34,6 +34,14 @@ _PX_PER_TOKEN = 28
 _MAX_TOKENS = 1716  # ceil(1440/28) * ceil(900/28) = 52*33
 
 
+def _paeth(a: int, b: int, c: int) -> int:
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
 def _resize_png(data: bytes, tgt_w: int, tgt_h: int) -> bytes:
     """Nearest-neighbor resize of an RGBA PNG. Pure stdlib (struct + zlib)."""
     import struct
@@ -57,7 +65,33 @@ def _resize_png(data: bytes, tgt_w: int, tgt_h: int) -> bytes:
         pos += 12 + length
 
     raw = zlib.decompress(bytes(idat))
-    rows = [raw[i * stride + 1 : (i + 1) * stride] for i in range(src_h)]
+
+    # Unfilter scanlines — PNG filters encode deltas, not raw pixels.
+    row_len = src_w * bpp
+    rows: list[bytearray] = []
+    prev = bytearray(row_len)
+    for y in range(src_h):
+        off = y * stride
+        filt = raw[off]
+        cur = bytearray(raw[off + 1 : off + 1 + row_len])
+        if filt == 1:  # Sub
+            for i in range(bpp, row_len):
+                cur[i] = (cur[i] + cur[i - bpp]) & 0xFF
+        elif filt == 2:  # Up
+            for i in range(row_len):
+                cur[i] = (cur[i] + prev[i]) & 0xFF
+        elif filt == 3:  # Average
+            for i in range(row_len):
+                a = cur[i - bpp] if i >= bpp else 0
+                cur[i] = (cur[i] + (a + prev[i]) // 2) & 0xFF
+        elif filt == 4:  # Paeth
+            for i in range(row_len):
+                a = cur[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                cur[i] = (cur[i] + _paeth(a, b, c)) & 0xFF
+        rows.append(cur)
+        prev = cur
 
     out_rows = bytearray()
     for ty in range(tgt_h):
