@@ -33,7 +33,9 @@ def phase_7_defer(kernel: Kernel) -> None:
         print("  ✓ defer: returned task_id inline")
 
         # Wait for channel notification
-        notif = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
         params = notif["params"]
         assert_eq(params["meta"]["kind"], "task_done", "defer channel kind")
         assert_true(
@@ -66,7 +68,9 @@ def phase_7_defer(kernel: Kernel) -> None:
             },
             timeout=3.0,
         )
-        notif = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
         assert_eq(notif["params"]["meta"]["error"], "1", "defer error case")
         assert_eq(
             notif["params"]["meta"].get("label"),

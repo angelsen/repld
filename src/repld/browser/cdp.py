@@ -21,6 +21,68 @@ MAX_EVENTS = 50_000
 PRUNE_BATCH_SIZE = 5_000
 PRUNE_CHECK_INTERVAL = 1_000
 
+# ---------------------------------------------------------------------------
+# Console error suppress + cross-tab dedup
+# ---------------------------------------------------------------------------
+
+_suppress_patterns: set[str] = set()
+
+_DEDUP_WINDOW = 2.0  # seconds
+
+
+class _DedupEntry:
+    __slots__ = ("count", "text", "meta", "handle")
+
+    def __init__(self, text: str, meta: dict, handle: object):
+        self.count = 0
+        self.text = text
+        self.meta = meta
+        self.handle = handle
+
+
+_dedup_pending: dict[str, _DedupEntry] = {}
+
+
+def _is_suppressed(text: str) -> bool:
+    return any(pat in text for pat in _suppress_patterns)
+
+
+def _flush_dedup(key: str) -> None:
+    entry = _dedup_pending.pop(key, None)
+    if entry is None or entry.count == 0:
+        return
+    try:
+        from ..kernel import push_channel
+
+        total = entry.count + 1
+        push_channel(
+            f"{entry.text} (×{total} tabs)",
+            entry.meta,
+        )
+    except Exception:
+        pass
+
+
+def _dedup_push(
+    text: str,
+    meta: dict,
+    dedup_key: str,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    if dedup_key in _dedup_pending:
+        _dedup_pending[dedup_key].count += 1
+        return
+
+    try:
+        from ..kernel import push_channel
+
+        push_channel(text, meta)
+    except Exception:
+        return
+
+    handle = loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key) if loop else None
+    _dedup_pending[dedup_key] = _DedupEntry(text, meta, handle)
+
 # Regex to strip lone surrogates from JSON strings (DuckDB rejects \uD800-\uDFFF)
 # Keeps valid surrogate pairs intact (high \uD800-\uDBFF followed by low \uDC00-\uDFFF)
 _LONE_HIGH_SURROGATE = re.compile(
@@ -88,7 +150,12 @@ def _check_controls_observation(params: dict, target_id: str) -> None:
         pass
 
 
-def _push_console_error(params: dict, target_id: str, port: int) -> None:
+def _push_console_error(
+    params: dict,
+    target_id: str,
+    port: int,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
     """Push console.error messages as channel notifications."""
     args = params.get("args", [])
     parts = []
@@ -101,38 +168,37 @@ def _push_console_error(params: dict, target_id: str, port: int) -> None:
         if val:
             parts.append(str(val))
     text = " ".join(parts)[:300]
-    if not text:
+    if not text or _is_suppressed(text):
         return
     short_id = f"{port}:{target_id[:6]}"
-    try:
-        from ..kernel import push_channel
-
-        push_channel(
-            f"[console:error] {short_id}: {text}",
-            {"kind": "console_error", "target": short_id},
-        )
-    except Exception:
-        pass
+    _dedup_push(
+        f"[console:error] {short_id}: {text}",
+        {"kind": "console_error", "target": short_id},
+        text[:100],
+        loop,
+    )
 
 
-def _push_exception(params: dict, target_id: str, port: int) -> None:
+def _push_exception(
+    params: dict,
+    target_id: str,
+    port: int,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
     """Push uncaught exceptions as channel notifications."""
     details = params.get("exceptionDetails", {})
     exc = details.get("exception", {})
     text = exc.get("description") or details.get("text", "")
     text = text[:300]
-    if not text:
+    if not text or _is_suppressed(text):
         return
     short_id = f"{port}:{target_id[:6]}"
-    try:
-        from ..kernel import push_channel
-
-        push_channel(
-            f"[console:error] {short_id}: {text}",
-            {"kind": "console_error", "target": short_id},
-        )
-    except Exception:
-        pass
+    _dedup_push(
+        f"[console:error] {short_id}: {text}",
+        {"kind": "console_error", "target": short_id},
+        text[:100],
+        loop,
+    )
 
 
 class CDPSession:
@@ -308,10 +374,10 @@ class CDPSession:
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id)
                 if params.get("type") == "error":
-                    _push_console_error(params, target_id, self.port)
+                    _push_console_error(params, target_id, self.port, self._loop)
 
             if method == "Runtime.exceptionThrown":
-                _push_exception(params, target_id, self.port)
+                _push_exception(params, target_id, self.port, self._loop)
 
             # Periodic pruning — async task to avoid blocking the recv loop
             if self._event_count % PRUNE_CHECK_INTERVAL == 0:

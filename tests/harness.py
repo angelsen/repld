@@ -87,10 +87,19 @@ class Bridge:
             self._notifs = []
         self._notifs.append(msg)
 
-    def wait_notification(self, method: str, *, timeout: float = 5.0) -> dict:
+    def wait_notification(
+        self, method: str, *, kind: str | None = None, timeout: float = 5.0
+    ) -> dict:
+        def _matches(m: dict) -> bool:
+            if m.get("method") != method:
+                return False
+            if kind is not None:
+                return m.get("params", {}).get("meta", {}).get("kind") == kind
+            return True
+
         # Check stash first.
         for m in getattr(self, "_notifs", []):
-            if m.get("method") == method:
+            if _matches(m):
                 self._notifs.remove(m)
                 return m
         deadline = time.monotonic() + timeout
@@ -99,12 +108,11 @@ class Bridge:
                 msg = self.inbox.get(timeout=deadline - time.monotonic())
             except Empty:
                 break
-            if msg.get("method") == method:
+            if _matches(msg):
                 return msg
-            if "id" in msg:
-                # We weren't expecting a response; stash.
-                self._stash_notification(msg)
-        raise TimeoutError(f"no {method} notification within {timeout}s")
+            # Stash non-matching messages for later retrieval.
+            self._stash_notification(msg)
+        raise TimeoutError(f"no {method} notification (kind={kind}) within {timeout}s")
 
     def close(self) -> None:
         try:

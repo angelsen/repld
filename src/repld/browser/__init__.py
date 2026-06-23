@@ -101,6 +101,13 @@ class Browser:
         """Called when a tab is destroyed."""
         emit(BrowserTabDetached(target_id))
 
+    def _iter_tabs(self) -> list[Tab]:
+        """Wrap all attached CDPSessions as Tab objects."""
+        return [
+            Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+            for cdp in self._session._sessions.values()
+        ]
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -331,10 +338,7 @@ class Browser:
     @property
     def tabs(self) -> Rows:
         """List currently attached Tab objects."""
-        return Rows(
-            Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-            for cdp in self._session._sessions.values()
-        )
+        return Rows(self._iter_tabs())
 
     async def pages(self) -> list[dict]:
         """List all Chrome targets (attached or not)."""
@@ -358,6 +362,20 @@ class Browser:
             count += 1
         return f"Cleared events for {count} tab(s)."
 
+    async def fetch(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        body: "dict | str | None" = None,
+        headers: "dict[str, str] | None" = None,
+    ) -> dict:
+        """In-page fetch using any attached tab (inherits cookies/session)."""
+        tabs = self._iter_tabs()
+        if not tabs:
+            raise RuntimeError("No attached tabs — open or get a tab first")
+        return await tabs[0].fetch(url, method=method, body=body, headers=headers)
+
     async def disconnect(self) -> None:
         """Disconnect from Chrome."""
         if self._connected:
@@ -370,11 +388,15 @@ class Browser:
     def format_tabs_nested(self) -> str:
         """Format attached tabs as nested text showing target hierarchy."""
         entries: list[dict] = []
-        for cdp in self._session._sessions.values():
-            info = cdp.target_info
+        id_to_short: dict[str, str] = {}
+        for tab in self._iter_tabs():
+            info = tab._session.target_info
+            full_id = info.get("targetId", "")
+            short = make_target(self.port, full_id)
+            id_to_short[full_id] = short
             entries.append(
                 {
-                    "target": make_target(self.port, info.get("targetId", "")),
+                    "target": short,
                     "type": info.get("type", "unknown"),
                     "url": info.get("url", ""),
                     "title": info.get("title", ""),
@@ -382,13 +404,6 @@ class Browser:
                     "opener_id": info.get("openerId", ""),
                 }
             )
-
-        # Build parent lookup: full chrome ID → short target ID
-        id_to_short: dict[str, str] = {}
-        for cdp in self._session._sessions.values():
-            info = cdp.target_info
-            full_id = info.get("targetId", "")
-            id_to_short[full_id] = make_target(self.port, full_id)
 
         # Separate top-level vs children
         children: dict[str, list[dict]] = {}
@@ -541,6 +556,29 @@ class BrowserPool:
         self._save_hint()
         return "\n".join(results)
 
+    def suppress(self, pattern: str) -> str:
+        """Mute console errors containing this substring."""
+        from .cdp import _suppress_patterns
+
+        _suppress_patterns.add(pattern)
+        self._save_hint()
+        return f"suppressed {pattern!r} ({len(_suppress_patterns)} active)"
+
+    def unsuppress(self, pattern: str) -> str:
+        """Un-mute a previously suppressed pattern."""
+        from .cdp import _suppress_patterns
+
+        _suppress_patterns.discard(pattern)
+        self._save_hint()
+        return f"unsuppressed {pattern!r} ({len(_suppress_patterns)} active)"
+
+    @property
+    def suppressed(self) -> list[str]:
+        """Currently suppressed error patterns."""
+        from .cdp import _suppress_patterns
+
+        return sorted(_suppress_patterns)
+
     async def get(
         self,
         target: str,
@@ -572,6 +610,23 @@ class BrowserPool:
             if b._connected:
                 return await b.open(url)
         raise RuntimeError("No browsers connected")
+
+    async def fetch(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        body: "dict | str | None" = None,
+        headers: "dict[str, str] | None" = None,
+    ) -> dict:
+        """In-page fetch using any attached tab (inherits cookies/session)."""
+        await self._ensure_any()
+        for b in self._browsers.values():
+            if not b._connected:
+                continue
+            if b._iter_tabs():
+                return await b.fetch(url, method=method, body=body, headers=headers)
+        raise RuntimeError("No attached tabs — open or get a tab first")
 
     def clear(self, target: str | None = None) -> str:
         if target is not None:

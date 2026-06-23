@@ -35,7 +35,9 @@ def phase_10_every(kernel: Kernel) -> None:
         print("  ✓ every: decorated without error")
 
         # First tick fires immediately → channel push
-        notif = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )
         params = notif["params"]
         assert_eq(params["meta"]["kind"], "every", "first tick kind=every")
         assert_eq(params["meta"]["label"], "_ticker", "first tick label=_ticker")
@@ -103,7 +105,9 @@ def phase_10_every(kernel: Kernel) -> None:
         )
 
         # First tick fires immediately → error channel push
-        notif4 = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif4 = b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )
         params4 = notif4["params"]
         assert_eq(params4["meta"]["kind"], "every", "error tick kind=every")
         assert_eq(params4["meta"]["label"], "error_ticker", "error tick label")
@@ -115,7 +119,9 @@ def phase_10_every(kernel: Kernel) -> None:
         print("  ✓ every: error in tick pushes kind=every error=1, loop survives")
 
         # Loop still alive — second tick should fire and also push error
-        notif4b = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif4b = b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )
         assert_eq(
             notif4b["params"]["meta"]["kind"], "every", "second error tick kind=every"
         )
@@ -144,7 +150,9 @@ def phase_10_every(kernel: Kernel) -> None:
             not resp5["result"].get("isError", False), "@every async_ticker defined ok"
         )
 
-        notif5 = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif5 = b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )
         params5 = notif5["params"]
         assert_eq(params5["meta"]["kind"], "every", "async tick kind=every")
         assert_eq(params5["meta"]["label"], "async_ticker", "async tick label")

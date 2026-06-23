@@ -59,7 +59,8 @@ _BROWSER_MODEL = (
     "gate mutations in the browser. "
     "Controls: apps exposing window.controls get browser_controls (discover) and "
     "browser_invoke (act) MCP tools. Action observations push as channel messages. "
-    "Console errors from watched tabs push as [console:error] channel messages automatically. "
+    "Console errors from watched tabs push as [console:error] channel messages automatically "
+    "(cross-tab duplicates within 2s are collapsed; browser.suppress(substring) mutes matching errors). "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
@@ -654,6 +655,17 @@ Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
 
     [console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
 
+Cross-tab dedup (always on):
+  When the same error fires from multiple tabs/iframes within 2 seconds,
+  only the first pushes immediately. Duplicates are collapsed into one
+  follow-up message:  [console:error] 9222:af5ae1: ... (×14 tabs)
+
+Suppress filter (opt-in):
+  browser.suppress("[vite] failed to connect")    mute matching errors
+  browser.unsuppress("[vite] failed to connect")   un-mute
+  browser.suppressed                                list active patterns
+  Suppressed patterns persist across kernel restarts.
+
 == Selectors ==
 
 Same syntax across click, tap, type_text, wait_for:
@@ -1090,6 +1102,9 @@ Browser:
   browser.patterns()                             → list[str]  active watch patterns
   browser.clear(target=)                         → str
   browser.disconnect()                           → None
+  browser.suppress(pattern)                      → str  mute console errors matching substring
+  browser.unsuppress(pattern)                    → str  un-mute
+  browser.suppressed                             → list[str]  active suppress patterns
 
   ready= takes a CSS selector. Tab waits for the element to appear before
   returning. On session loss (HMR/navigation), re-attaches and waits again.

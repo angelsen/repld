@@ -756,6 +756,16 @@ def run_kernel(
         if hint.get("chrome_ports") or hint.get("patterns"):
             dashboard.save_hint()
 
+    # Restore suppress patterns for console error filtering.
+    suppress_list = hint.get("suppress", [])
+    if suppress_list:
+        try:
+            from .browser.cdp import _suppress_patterns
+
+            _suppress_patterns.update(suppress_list)
+        except ImportError:
+            pass
+
     _write_lockfile(sock_path, dashboard_port=dashboard_port)
     _active_lock_path = _lock_for(sock_path)
     atexit.register(_cleanup_lockfile)

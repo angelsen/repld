@@ -128,6 +128,13 @@ def save_hint() -> None:
         hint["chrome_ports"] = [p for p, b in pool._browsers.items() if b._connected]
         hint["patterns"] = pool.patterns
     try:
+        from .browser.cdp import _suppress_patterns
+
+        if _suppress_patterns:
+            hint["suppress"] = sorted(_suppress_patterns)
+    except ImportError:
+        pass
+    try:
         _hint_path.write_text(json.dumps(hint))
     except OSError:
         pass

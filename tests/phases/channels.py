@@ -32,7 +32,9 @@ def phase_4(kernel: Kernel) -> None:
         task_id = meta["task_id"]
         print(f"  ✓ nudged: task_id={task_id}")
 
-        notif = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
         params = notif["params"]
         nmeta = params["meta"]
         assert_eq(nmeta["kind"], "task_done", "channel meta.kind")
@@ -55,7 +57,9 @@ def phase_4(kernel: Kernel) -> None:
         )
         assert_eq(resp["result"]["_meta"]["done"], True, "notify exec done sync")
 
-        notif = b.wait_notification("notifications/claude/channel", timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="user", timeout=3.0
+        )
         params = notif["params"]
         assert_eq(params["content"], "ping", "notify content")
         assert_eq(params["meta"]["kind"], "user", "notify meta.kind")
@@ -75,7 +79,9 @@ def phase_4(kernel: Kernel) -> None:
             timeout=3.0,
         )
         err_task_id = resp["result"]["_meta"]["task_id"]
-        notif = b.wait_notification("notifications/claude/channel", timeout=5.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
         nmeta = notif["params"]["meta"]
         assert_eq(nmeta["task_id"], err_task_id, "error channel task_id")
         assert_eq(nmeta["error"], "1", "channel error=1 on exception")
