@@ -27,7 +27,7 @@ PRUNE_CHECK_INTERVAL = 1_000
 
 _suppress_patterns: set[str] = set()
 
-_DEDUP_WINDOW = 2.0  # seconds
+_DEDUP_WINDOW = 5.0  # seconds
 
 
 class _DedupEntry:
