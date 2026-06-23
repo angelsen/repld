@@ -56,7 +56,7 @@ def _flush_dedup(key: str) -> None:
 
         total = entry.count + 1
         push_channel(
-            f"{entry.text} (×{total} tabs)",
+            f"{entry.text} (×{total} tabs — browser.suppress(\"...\") to mute)",
             entry.meta,
         )
     except Exception:
