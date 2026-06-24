@@ -27,7 +27,9 @@ PRUNE_CHECK_INTERVAL = 1_000
 
 _suppress_patterns: set[str] = set()
 
-_DEDUP_WINDOW = 5.0  # seconds
+_DEDUP_WINDOW = 2.0  # seconds — collapse rapid bursts
+_HINT_WINDOW = 30.0  # seconds — track recurring errors for suppress hint
+_HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
 
 class _DedupEntry:
@@ -43,6 +45,35 @@ class _DedupEntry:
 _dedup_pending: dict[str, _DedupEntry] = {}
 
 
+class _HintTracker:
+    __slots__ = ("count", "handle")
+
+    def __init__(self, handle: object):
+        self.count = 0
+        self.handle = handle
+
+
+_hint_counts: dict[str, _HintTracker] = {}
+
+
+def _expire_hint(key: str) -> None:
+    _hint_counts.pop(key, None)
+
+
+def _track_hint(key: str, loop: asyncio.AbstractEventLoop | None) -> bool:
+    """Increment hint counter, return True if hint should be shown."""
+    tracker = _hint_counts.get(key)
+    if tracker is None:
+        handle = loop.call_later(_HINT_WINDOW, _expire_hint, key) if loop else None
+        tracker = _HintTracker(handle)
+        _hint_counts[key] = tracker
+    tracker.count += 1
+    return tracker.count >= _HINT_THRESHOLD
+
+
+_SUPPRESS_HINT = ' — browser.suppress("...") to mute'
+
+
 def _is_suppressed(text: str) -> bool:
     return any(pat in text for pat in _suppress_patterns)
 
@@ -55,10 +86,10 @@ def _flush_dedup(key: str) -> None:
         from ..kernel import push_channel
 
         total = entry.count + 1
-        push_channel(
-            f"{entry.text} (×{total} tabs — browser.suppress(\"...\") to mute)",
-            entry.meta,
-        )
+        msg = f"{entry.text} (×{total} tabs)"
+        if _hint_counts.get(key, _HintTracker(None)).count >= _HINT_THRESHOLD:
+            msg += _SUPPRESS_HINT
+        push_channel(msg, entry.meta)
     except Exception:
         pass
 
@@ -71,12 +102,15 @@ def _dedup_push(
 ) -> None:
     if dedup_key in _dedup_pending:
         _dedup_pending[dedup_key].count += 1
+        _track_hint(dedup_key, loop)
         return
 
     try:
         from ..kernel import push_channel
 
-        push_channel(text, meta)
+        show_hint = _track_hint(dedup_key, loop)
+        msg = text + _SUPPRESS_HINT if show_hint else text
+        push_channel(msg, meta)
     except Exception:
         return
 
