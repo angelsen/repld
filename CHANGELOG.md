@@ -8,7 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Console error dedup: cross-tab duplicate errors within a 2s window are collapsed into one channel push with a count (`×N tabs`). Reduces noise from extension iframes and noisy pages
+- Console error suppress: `browser.suppress(substring)` mutes matching errors entirely. `browser.unsuppress()` removes. `browser.suppressed` lists active patterns. Patterns persist across kernel restarts via `.pyrepl.dashboard` hint file
+- Suppress hint: after 3 pushes of the same error within 30s, the channel message appends `browser.suppress("...") to mute` so the agent learns to suppress recurring noise
+
 ### Changed
+
+- Test harness `wait_notification` accepts `kind=` filter so console error pushes from Chrome don't race expected notifications in smoketests
 
 ### Fixed
 
