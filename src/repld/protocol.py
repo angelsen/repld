@@ -647,13 +647,14 @@ class Dispatcher:
         from . import gists
 
         try:
-            handler = gists.resolve_tool(name)
+            resolved = gists.resolve_tool(name)
         except AttributeError as exc:
             return _error(rid, -32602, str(exc))
-        if handler is None:
+        if resolved is None:
             return _error(rid, -32602, f"unknown tool: {name}")
+        handler, old_style = resolved
         try:
-            result = handler(args)
+            result = handler(args) if old_style else handler(**args)
             if inspect.iscoroutine(result):
                 result = self._run_async(result)
             if not isinstance(result, str):

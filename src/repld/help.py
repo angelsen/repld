@@ -68,8 +68,9 @@ _GISTS_MODEL = (
     "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import.\n"
     "Before using a gist, read repld://gists/{name} for the full API — constructor args, "
     "method signatures, and usage patterns.\n"
-    "Stable gists can register as MCP tools via __repld_tools__ — callable "
-    "directly without exec, discoverable in tools/list.\n"
+    "Stable gists can register as MCP tools via typed _tool_* functions — "
+    "callable directly without exec, discoverable in tools/list. Schema is "
+    "inferred from type hints and the docstring's first line.\n"
     'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
     'use "." to depend on the gist\'s own project. '
     "Kernel prompts to install missing ones at boot.\n"
@@ -252,21 +253,18 @@ replaced by the target framework's decorator.
 
   repld wiring — bottom of file (shed on graduation):
 
-    __repld_tools__ = [
-        {"name": "lookup", "description": "Look up a company",
-         "inputSchema": {"type": "object",
-                         "properties": {"company_id": {"type": "string"}},
-                         "required": ["company_id"]}},
-    ]
-
-    async def _tool_lookup(args: dict) -> str:
-        import json, repld
+    async def _tool_lookup(company_id: str) -> dict:
+        \"""Look up a company.\"""
+        import repld
         try:
             tab = await repld.browser.get("*example.com*")
-            result = await lookup(args["company_id"], fetch=tab.fetch)
+            return await lookup(company_id, fetch=tab.fetch)
         except RuntimeError:
-            result = await lookup(args["company_id"])
-        return json.dumps(result)
+            return await lookup(company_id)
+
+  Schema is inferred from the type hints and the docstring's first line —
+  no separate __repld_tools__ list needed. (That list still works as a
+  legacy override for custom schemas, but prints a deprecation warning.)
 
 == Secrets and .env ==
 
@@ -353,7 +351,7 @@ Same core function, different framework. Data in, data out.
   cp ~/other-project/gists/lookup.py gists/
 
   # 6. Write server.py — import core functions, wrap with decorators
-  #    The __repld_tools__ + _tool_* layer stays behind in the gist file.
+  #    The _tool_* layer stays behind in the gist file.
   #    @mcp.tool / @router.get replaces it.
 
   # 7. Run
@@ -364,11 +362,11 @@ Same core function, different framework. Data in, data out.
 
   Stays (portable):              Goes (repld-specific):
   ────────────────               ──────────────────────
-  Core async functions           __repld_tools__ list
-  __repld_deps__ (as reference)  _tool_* handler functions
-  os.environ["TOKEN"]            import repld (in wiring)
-  Data parsing helpers           tab.fetch / browser.get
-  Type hints, docstrings         __repld_usage__
+  Core async functions           _tool_* handler functions
+  __repld_deps__ (as reference)  import repld (in wiring)
+  os.environ["TOKEN"]            tab.fetch / browser.get
+  Data parsing helpers           __repld_usage__
+  Type hints, docstrings
 """
 
 # ---------------------------------------------------------------------------
@@ -1151,18 +1149,21 @@ Workflow:
   3. Edit → re-import → fresh module
 
 Tool registration:
-  Set __repld_tools__ = [...] in module for MCP tool schemas.
-  Name handlers _tool_{name}(args: dict) → str | dict.
-  Tools appear in tools/list automatically; no exec round-trip needed.
+  Name handlers _tool_{name}(param: type = default, ...) → str | dict.
+  Schema is inferred from type hints + defaults; first docstring line →
+  tool description. Tools appear in tools/list automatically; no exec
+  round-trip needed.
+  Type map: str→string, int→integer, float→number, bool→boolean,
+  list→array, dict→object. No annotation → string. No default → required.
   Scaffold: repld gist new <name>
 
   Example:
-    __repld_tools__ = [
-        {"name": "foo_query", "description": "...",
-         "inputSchema": {"type": "object", "properties": {...}, "required": [...]}},
-    ]
-    async def _tool_foo_query(args: dict) -> str:
-        return json.dumps({"result": ...})
+    async def _tool_foo_query(term: str, limit: int = 10) -> dict:
+        \"""Search foo for term.\"""
+        return {"result": ...}
+
+  Legacy override: __repld_tools__ = [...] + _tool_*(args: dict) still
+  works for custom schemas, but prints a deprecation warning once per gist.
 
 Dependencies:
   __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
@@ -1484,7 +1485,7 @@ state disposable — lazy-init clients, caches that can rebuild.
 
 When a gist might graduate to production (FastMCP, FastAPI), use the two-layer
 pattern: core logic as pure async functions at the top of the file, repld
-wiring (__repld_tools__ + _tool_*) at the bottom. The core functions move
+wiring (typed _tool_* functions) at the bottom. The core functions move
 to production unchanged; the wiring gets replaced by @mcp.tool or @router.get.
 
 For secrets, use os.environ["TOKEN"] — never hardcode. The kernel loads .env

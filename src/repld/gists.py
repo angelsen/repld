@@ -7,9 +7,11 @@ import importlib
 import importlib.abc
 import importlib.machinery
 import importlib.util
+import inspect
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,20 @@ _LINKS_FILENAME = ".links"
 # Dedup warnings for malformed __repld_tools__ / __repld_deps__ so boot warns
 # once but subsequent tools/list scans stay quiet.
 _malformed_warned: set[str] = set()
+
+# Dedup the __repld_tools__ deprecation warning: once per gist file.
+_deprecated_warned: set[str] = set()
+
+# Python type → JSON Schema type, for inferring tool input schemas from
+# _tool_* function signatures.
+_TYPE_MAP: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
 
 _REGISTRY_PATH = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -601,11 +617,8 @@ def signature_for_path(path: Path) -> str:
     return ""
 
 
-def _extract_tools(path: Path) -> list[dict]:
-    """Extract __repld_tools__ list from a gist file via ast.literal_eval."""
-    tree = _parse(path)
-    if tree is None:
-        return []
+def _extract_tools_from_tree(tree: ast.Module, path: Path) -> list[dict]:
+    """Extract __repld_tools__ list from a pre-parsed AST."""
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -650,42 +663,167 @@ def _iter_gist_files():
         yield p
 
 
+def _warn_deprecated(path: Path) -> None:
+    """Warn once per gist file that __repld_tools__ is a legacy override."""
+    key = str(path)
+    if key in _deprecated_warned:
+        return
+    _deprecated_warned.add(key)
+    print(
+        f"repld: {path.name}: __repld_tools__ is deprecated "
+        f"— use _tool_ functions with type hints instead",
+        file=sys.stderr,
+    )
+
+
+def _tool_names_from_tree(tree: ast.Module) -> list[str]:
+    """Return ``_tool_*`` function names from a pre-parsed AST (prefix stripped)."""
+    names = []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("_tool_"):
+                names.append(node.name[len("_tool_") :])
+    return names
+
+
+def _is_old_style(func) -> bool:
+    """True if *func* uses the legacy single ``args: dict`` handler signature."""
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+    if len(params) != 1:
+        return False
+    p = params[0]
+    return p.annotation in (dict, inspect.Parameter.empty)
+
+
+def _schema_from_signature(func, tool_name: str) -> dict:
+    """Build an MCP tool schema dict from a function's signature + docstring."""
+    sig = inspect.signature(func)
+    doc = inspect.getdoc(func) or ""
+    description = doc.split("\n")[0] if doc else tool_name
+
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+    for pname, param in sig.parameters.items():
+        json_type = _TYPE_MAP.get(param.annotation, "string")
+        prop: dict = {"type": json_type}
+        if param.default is not inspect.Parameter.empty:
+            prop["default"] = param.default
+        else:
+            required.append(pname)
+        properties[pname] = prop
+
+    schema: dict = {
+        "name": tool_name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+        },
+    }
+    if required:
+        schema["inputSchema"]["required"] = required
+    return schema
+
+
+def _import_gist(p: Path):
+    """Import (or reload) the gist module at *p*, returning the module object."""
+    mod_name = p.stem
+    _check_reload(mod_name)
+    return importlib.import_module(mod_name)
+
+
 def scan_tools() -> list[dict]:
-    """Scan gist files for __repld_tools__ declarations. Returns tool schemas."""
+    """Scan gist files for MCP tool declarations. Returns tool schemas.
+
+    Two paths, checked per gist file:
+      1. Legacy ``__repld_tools__`` list — used as-is, warns once (deprecated).
+      2. Typed ``_tool_*`` functions — schema inferred from ``inspect.signature``.
+
+    A gist that fails to import or whose signature can't be inspected is
+    skipped with a warning rather than crashing the scan (and with it,
+    ``tools/list`` / ``initialize``).
+    """
     results: list[dict] = []
     seen: set[str] = set()
     for p in _iter_gist_files():
-        for tool in _extract_tools(p):
-            if not isinstance(tool, dict):
-                # A bad gist must not take down tools/list (and with it, initialize).
+        tree = _parse(p)
+        if tree is None:
+            continue
+        legacy = _extract_tools_from_tree(tree, p)
+        if legacy:
+            _warn_deprecated(p)
+            for tool in legacy:
+                if not isinstance(tool, dict):
+                    continue
+                name = tool.get("name")
+                if name and name not in seen:
+                    seen.add(name)
+                    results.append(tool)
+            continue
+
+        tool_names = _tool_names_from_tree(tree)
+        if not tool_names:
+            continue
+        try:
+            mod = _import_gist(p)
+        except Exception as exc:
+            key = f"{p}:import"
+            if key not in _malformed_warned:
+                _malformed_warned.add(key)
+                print(f"repld: {p.name}: failed to import: {exc}", file=sys.stderr)
+            continue
+        for tname in tool_names:
+            if tname in seen:
                 continue
-            name = tool.get("name")
-            if name and name not in seen:
-                seen.add(name)
-                results.append(tool)
+            func = getattr(mod, f"_tool_{tname}", None)
+            if func is None:
+                continue
+            if _is_old_style(func):
+                # Old-style handler with no __repld_tools__ override — no way
+                # to infer a schema, so it can't be exposed as an MCP tool.
+                continue
+            try:
+                schema = _schema_from_signature(func, tname)
+            except Exception as exc:
+                key = f"{p}:_tool_{tname}"
+                if key not in _malformed_warned:
+                    _malformed_warned.add(key)
+                    print(
+                        f"repld: {p.name}: _tool_{tname}: {exc}",
+                        file=sys.stderr,
+                    )
+                continue
+            seen.add(tname)
+            results.append(schema)
     return results
 
 
-def resolve_tool(name: str):
+def resolve_tool(name: str) -> tuple[Callable, bool] | None:
     """Import the gist that declares *name* and return its ``_tool_*`` handler.
 
-    Returns ``None`` if no gist claims the tool.  Raises ``AttributeError``
-    if the gist declares the tool but has no matching handler function.
+    Returns ``(handler, old_style)`` where *old_style* tells the caller to
+    dispatch with ``handler(args)`` (legacy dict) vs ``handler(**args)``
+    (typed kwargs). Returns ``None`` if no gist claims the tool.  Raises
+    ``AttributeError`` if a gist declares the tool but has no matching
+    handler function.
     """
     for p in _iter_gist_files():
-        tool_names = {t.get("name") for t in _extract_tools(p) if isinstance(t, dict)}
-        if name in tool_names:
-            mod_name = p.stem
-            _check_reload(mod_name)
-            mod = importlib.import_module(mod_name)
-            handler_name = f"_tool_{name}"
-            handler = getattr(mod, handler_name, None)
-            if handler is None:
-                raise AttributeError(
-                    f"gist '{mod_name}' declares tool '{name}' "
-                    f"but has no {handler_name}() handler"
-                )
-            return handler
+        tree = _parse(p)
+        if tree is None:
+            continue
+        legacy = _extract_tools_from_tree(tree, p)
+        is_legacy = any(isinstance(t, dict) and t.get("name") == name for t in legacy)
+        if not is_legacy and name not in _tool_names_from_tree(tree):
+            continue
+        mod = _import_gist(p)
+        handler = getattr(mod, f"_tool_{name}", None)
+        if handler is None:
+            raise AttributeError(
+                f"gist '{p.stem}' declares tool '{name}' "
+                f"but has no _tool_{name}() handler"
+            )
+        return handler, True if is_legacy else _is_old_style(handler)
     return None
 
 

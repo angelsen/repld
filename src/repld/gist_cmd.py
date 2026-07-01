@@ -10,7 +10,6 @@ from pathlib import Path
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
-import json
 import os
 
 # __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
@@ -26,25 +25,10 @@ async def example(id: int) -> dict:
 
 # --- repld wiring (shed on graduation — replace with @mcp.tool or @router.get) ---
 
-__repld_tools__ = [
-    {{
-        "name": "{name}_example",
-        "description": "TODO: what this tool does",
-        "inputSchema": {{
-            "type": "object",
-            "properties": {{
-                "id": {{"type": "integer", "description": "TODO: describe"}},
-            }},
-            "required": ["id"],
-        }},
-    }},
-]
 
-
-async def _tool_{name}_example(args: dict) -> str:
-    """TODO: what this returns."""
-    result = await example(args["id"])
-    return json.dumps(result)
+async def _tool_{name}_example(id: int) -> dict:
+    """TODO: what this tool does."""
+    return await example(id)
 '''
 
 

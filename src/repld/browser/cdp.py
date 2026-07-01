@@ -117,6 +117,7 @@ def _dedup_push(
     handle = loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key) if loop else None
     _dedup_pending[dedup_key] = _DedupEntry(text, meta, handle)
 
+
 # Regex to strip lone surrogates from JSON strings (DuckDB rejects \uD800-\uDFFF)
 # Keeps valid surrogate pairs intact (high \uD800-\uDBFF followed by low \uDC00-\uDFFF)
 _LONE_HIGH_SURROGATE = re.compile(

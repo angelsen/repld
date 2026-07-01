@@ -13,38 +13,36 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         b.call("initialize", {"protocolVersion": "2024-11-05"})
         b.send("notifications/initialized", {}, notif=True)
 
-        # Write a gist that declares a tool
+        # Write a gist with a typed _tool_* function — schema auto-inferred,
+        # no __repld_tools__ needed.
         gists_dir = kernel.cwd / "gists"
         gists_dir.mkdir(exist_ok=True)
         gist_file = gists_dir / "smoke_tools.py"
         gist_file.write_text(
             '"""Smoketest gist with tools."""\n\n'
-            "import json\n\n"
-            "__repld_tools__ = [\n"
-            "    {\n"
-            '        "name": "smoke_greet",\n'
-            '        "description": "Return a greeting",\n'
-            '        "inputSchema": {\n'
-            '            "type": "object",\n'
-            '            "properties": {"name": {"type": "string"}},\n'
-            '            "required": ["name"],\n'
-            "        },\n"
-            "    },\n"
-            "]\n\n\n"
-            "async def _tool_smoke_greet(args: dict) -> str:\n"
-            '    return json.dumps({"greeting": f"hello {args[\'name\']}"})\n'
+            "async def _tool_smoke_greet(name: str) -> dict:\n"
+            '    """Return a greeting."""\n'
+            '    return {"greeting": f"hello {name}"}\n'
         )
 
-        # tools/list should include the gist tool
+        # tools/list should include the gist tool with an inferred schema
         resp = b.call("tools/list")
-        tool_names = [t["name"] for t in resp["result"]["tools"]]
+        tools_by_name = {t["name"]: t for t in resp["result"]["tools"]}
         assert_true(
-            "smoke_greet" in tool_names,
-            f"gist tool in tools/list (got {tool_names!r})",
+            "smoke_greet" in tools_by_name,
+            f"gist tool in tools/list (got {list(tools_by_name)!r})",
         )
-        print("  ✓ gist tool 'smoke_greet' in tools/list")
+        schema = tools_by_name["smoke_greet"]
+        assert_eq(schema["description"], "Return a greeting.", "inferred description")
+        assert_eq(
+            schema["inputSchema"]["properties"]["name"]["type"],
+            "string",
+            "inferred param type",
+        )
+        assert_eq(schema["inputSchema"]["required"], ["name"], "inferred required")
+        print("  ✓ gist tool 'smoke_greet' in tools/list with inferred schema")
 
-        # Call the gist tool
+        # Call the gist tool — new-style dispatch (handler(**args))
         resp = b.call(
             "tools/call",
             {"name": "smoke_greet", "arguments": {"name": "world"}},
@@ -63,20 +61,9 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         time.sleep(0.01)  # ensure mtime changes
         gist_file.write_text(
             '"""Smoketest gist with tools — v2."""\n\n'
-            "import json\n\n"
-            "__repld_tools__ = [\n"
-            "    {\n"
-            '        "name": "smoke_greet",\n'
-            '        "description": "Return a greeting v2",\n'
-            '        "inputSchema": {\n'
-            '            "type": "object",\n'
-            '            "properties": {"name": {"type": "string"}},\n'
-            '            "required": ["name"],\n'
-            "        },\n"
-            "    },\n"
-            "]\n\n\n"
-            "async def _tool_smoke_greet(args: dict) -> str:\n"
-            '    return json.dumps({"greeting": f"hey {args[\'name\']}!"})\n'
+            "async def _tool_smoke_greet(name: str) -> dict:\n"
+            '    """Return a greeting v2."""\n'
+            '    return {"greeting": f"hey {name}!"}\n'
         )
 
         resp = b.call(
@@ -88,21 +75,54 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         assert_eq(result["greeting"], "hey world!", "gist tool auto-reload")
         print(f"  ✓ gist tool auto-reload: {content!r}")
 
+        # Legacy path: __repld_tools__ + _tool_*(args: dict) still dispatches
+        # (old-style handler receives the raw args dict).
+        legacy_file = gists_dir / "smoke_legacy_tools.py"
+        legacy_file.write_text(
+            '"""Smoketest gist — legacy tool registration."""\n\n'
+            "__repld_tools__ = [\n"
+            "    {\n"
+            '        "name": "smoke_legacy_greet",\n'
+            '        "description": "Return a greeting (legacy)",\n'
+            '        "inputSchema": {\n'
+            '            "type": "object",\n'
+            '            "properties": {"name": {"type": "string"}},\n'
+            '            "required": ["name"],\n'
+            "        },\n"
+            "    },\n"
+            "]\n\n\n"
+            "async def _tool_smoke_legacy_greet(args: dict) -> str:\n"
+            "    import json\n"
+            '    return json.dumps({"greeting": f"legacy hello {args[\'name\']}"})\n'
+        )
+
+        resp = b.call("tools/list")
+        tool_names = [t["name"] for t in resp["result"]["tools"]]
+        assert_true(
+            "smoke_legacy_greet" in tool_names,
+            f"legacy gist tool in tools/list (got {tool_names!r})",
+        )
+        resp = b.call(
+            "tools/call",
+            {"name": "smoke_legacy_greet", "arguments": {"name": "world"}},
+        )
+        content = resp["result"]["content"][0]["text"]
+        result = json.loads(content)
+        assert_eq(result["greeting"], "legacy hello world", "legacy gist tool response")
+        print(f"  ✓ legacy gist tool call (old-style dispatch): {content!r}")
+
         # Error case: handler that raises
         time.sleep(0.01)
         gist_file.write_text(
             '"""Smoketest gist — error case."""\n\n'
-            "__repld_tools__ = [\n"
-            '    {"name": "smoke_greet", "description": "x",\n'
-            '     "inputSchema": {"type": "object", "properties": {}, "required": []}},\n'
-            "]\n\n\n"
-            "async def _tool_smoke_greet(args: dict) -> str:\n"
+            "async def _tool_smoke_greet(name: str) -> dict:\n"
+            '    """Raise intentionally."""\n'
             '    raise ValueError("intentional boom")\n'
         )
 
         resp = b.call(
             "tools/call",
-            {"name": "smoke_greet", "arguments": {}},
+            {"name": "smoke_greet", "arguments": {"name": "world"}},
         )
         assert_true(
             "error" in resp,

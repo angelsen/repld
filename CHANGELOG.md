@@ -8,7 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Type-hint gist tool registration: `_tool_*` functions with type hints are auto-discovered as MCP tools — schema inferred from parameter annotations/defaults and the first docstring line. Replaces the two-piece `__repld_tools__` + `_tool_*(args: dict)` convention with a single typed function declaration
+
 ### Changed
+
+- `repld gist new` template scaffolds the new typed `_tool_*` pattern (no `__repld_tools__`)
+- `__repld_tools__` still works as a legacy override for custom schemas, but prints a one-time-per-gist deprecation warning at boot
 
 ### Fixed
 

@@ -28,6 +28,13 @@
 - [x] `help.py` — "Multi-tab gists" paragraph duplicated between BROWSER_GUIDE and GUIDE; removed from GUIDE, kept authoritative copy in BROWSER_GUIDE (session 010).
 - [x] Malformed `__repld_tools__` / `__repld_deps__` (non-literal expressions) fail `ast.literal_eval` and the tools/deps silently never appear (`gists.py` `_extract_tools` / `scan_deps`). Warn once on stderr at boot — not per `tools/list` scan, which would spam.
 
+## Browser
+
+- [x] Console error dedup — cross-tab duplicates within 2s collapsed into one push with count.
+  Separate 30s hint window shows `browser.suppress("...")` nudge after 3 occurrences (session 010).
+- [x] Console error suppress — `browser.suppress(substring)` mutes matching errors. Persists
+  across kernel restarts via `.pyrepl.dashboard` hint file (session 010).
+
 ## Features (from session 003 backlog)
 
 - [ ] `__repld_tools__` dict shorthand — allow `{"name": {"function": fn_ref, "description": "...", "parameters": {...}}}` and resolve function refs at import time, so gist authors don't need the `_tool_` naming convention
