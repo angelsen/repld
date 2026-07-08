@@ -523,7 +523,24 @@ def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if item.name.startswith("_"):
                 continue
-            _format_function(item, lines, indent="  ", is_method=True)
+            if _decorator_names(item) & {"setter", "deleter"}:
+                continue  # getter (below) already lists this name once
+            is_property = bool(_decorator_names(item) & {"property", "cached_property"})
+            _format_function(
+                item, lines, indent="  ", is_method=True, is_property=is_property
+            )
+
+
+def _decorator_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Bare decorator names on a function/method (`@x` and `@x.y` → {'x', 'y'})."""
+    names: set[str] = set()
+    for dec in node.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, ast.Attribute):
+            names.add(target.attr)
+    return names
 
 
 def _format_function(
@@ -531,16 +548,24 @@ def _format_function(
     lines: list[str],
     indent: str = "",
     is_method: bool = False,
+    is_property: bool = False,
 ) -> None:
-    """Format one function/method line."""
+    """Format one function/method line.
+
+    Properties render as `.name -> ret` (no call parens, no args) since
+    they're accessed as attributes, not called.
+    """
     async_prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
     prefix = "." if is_method else ""
-    args = _format_args(node.args, skip_self=is_method)
     ret = ""
     if node.returns:
         ret = f" -> {ast.unparse(node.returns)}"
 
-    sig = f"{indent}{async_prefix}{prefix}{node.name}({args}){ret}"
+    if is_property:
+        sig = f"{indent}{prefix}{node.name}{ret}"
+    else:
+        args = _format_args(node.args, skip_self=is_method)
+        sig = f"{indent}{async_prefix}{prefix}{node.name}({args}){ret}"
 
     doc = ast.get_docstring(node)
     if doc:

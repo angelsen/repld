@@ -20,6 +20,28 @@ from typing import Any
 CompiledCell = tuple
 
 
+class _NoDisplay:
+    """Marker wrapper: suppress auto-display of an otherwise-displayable
+    result while still returning the real value for programmatic use and
+    `_`/`_N` history binding. Constructed via `no_display()`, unwrapped in
+    `run_cell()` — never meant to be instantiated or inspected elsewhere.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
+def no_display(value: Any) -> Any:
+    """Wrap `value` so the cell-display hook won't print it when this call
+    is a cell's bare last expression, while still returning it (and binding
+    `_`/`_N`) for programmatic composition. Injected into `__main__` and
+    the `repld` module — call as `no_display(x)` or `repld.no_display(x)`.
+    """
+    return _NoDisplay(value)
+
+
 def compile_cell(src: str, task_id: str) -> CompiledCell:
     flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
     fname = f"<repld:{task_id}>"
@@ -84,7 +106,14 @@ async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
             _, code = compiled
             await _eval(code, ns)
         if tag in ("eval", "exec_eval") and result is not None:
-            print(repr(result))
+            quiet = isinstance(result, _NoDisplay)
+            if quiet:
+                result = result.value
+            if not quiet and result is not None:
+                if isinstance(result, str) and "\n" in result:
+                    print(result)
+                else:
+                    print(repr(result))
             # Shift history: _ → __, __ → ___. Matches IPython convention.
             ns["___"] = ns.get("__")
             ns["__"] = ns.get("_")

@@ -23,7 +23,14 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
             "        self.name = name\n\n"
             "    def ping(self) -> str:\n"
             '        """Return pong."""\n'
-            "        return 'pong'\n"
+            "        return 'pong'\n\n"
+            "    @property\n"
+            "    def label(self) -> str:\n"
+            '        """Display label."""\n'
+            "        return self.name\n\n"
+            "    @label.setter\n"
+            "    def label(self, value: str) -> None:\n"
+            "        self.name = value\n"
         )
 
         # resources/list includes the gist as a concrete entry
@@ -91,6 +98,15 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         )
         assert_true("ping" in text, f"introspect output contains method (got {text!r})")
         assert_true(contents[0]["mimeType"] == "text/plain", "mimeType is text/plain")
+        assert_true(
+            ".label -> str" in text and ".label(" not in text,
+            f"property listed as attribute, no call parens (got {text!r})",
+        )
+        assert_eq(
+            text.count(".label"),
+            1,
+            f"property listed once, setter not duplicated (got {text!r})",
+        )
         print(f"  ✓ resources/read repld://gists/test_api:\n{text}")
 
         # Unknown gist → MCP error

@@ -34,6 +34,8 @@ _EXEC_MODEL = (
     "{task_id, done:false} and pushes channel on completion. "
     "Output: head+tail preview; full at [full output: /path] — use Read/Grep. "
     "_ / _N history. Top-level await. "
+    "no_display(value) returns value without re-printing it (still binds _/_N) — "
+    "for functions that already print their own output. "
     "defer(coro, label) schedules a background task, returns task_id immediately, "
     "pushes channel on completion. "
     "every(seconds)(fn) schedules fn to run periodically; "
@@ -466,8 +468,9 @@ Convention: add data-testid to your root layout component.
       origin.  NOT a separate HTTP call.
       Returns: {"status": int, "ok": bool, "body": Any}
       body is auto-parsed as JSON when content-type includes 'json'.
-      Auto-sets Content-Type: application/json when body is a dict.
-      Caller headers override auto-set headers.
+      Auto-sets Content-Type: application/json for a dict body,
+      application/x-www-form-urlencoded for a string body.
+      Caller headers override auto-set headers (e.g. for raw JSON text).
       Raises RuntimeError (via BrowserJSError) on network errors.
 
   tab.navigate(url)                                           → None
@@ -1011,6 +1014,10 @@ exec(code, timeout=2.0)
   _N                    result of cell N
   Top-level await       supported
 
+no_display(value) → value
+  Return a value from a cell without auto-display re-printing it (still
+  binds _/_N). For functions that already print(...) their own output.
+
 defer(coro, label=None) → task_id
   Fire-and-forget. Channel push on done. Visible to get_task/cancel.
 
@@ -1354,6 +1361,8 @@ Injected into __main__:
   notify(content, **meta)      push a channel notification to the agent
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds)(fn)           periodic ticker; fn.cancel() stops it
+  no_display(value)            return value from a cell without auto-display
+                                re-printing it (still binds _/_N)
   ask(prompt) / confirm(prompt) / choose(prompt, options)
                                block on human input in the kernel terminal;
                                confirm/choose accept tab= to also surface
@@ -1453,7 +1462,7 @@ Template:
 === Conventions ===
 
 Import kernel builtins via `import repld` at module top level. Access as
-repld.browser, repld.notify, repld.defer, repld.every. Module-level import
+repld.browser, repld.notify, repld.defer, repld.every, repld.no_display. Module-level import
 is auto-reload safe (attribute lookup on each call, not a frozen reference).
 
 Async by default. All methods async def, use await tab.fetch(). Async gists

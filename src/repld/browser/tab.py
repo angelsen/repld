@@ -1131,7 +1131,10 @@ class Tab:
         """In-page JS fetch with Python-ergonomic args.
 
         Returns {status: int, ok: bool, body: Any}.
-        Body is auto-parsed as JSON when content-type is json.
+        Body is auto-parsed as JSON when content-type is json. Content-Type
+        defaults to application/json for a dict body, application/x-www-form-
+        urlencoded for a string body — pass `headers={"Content-Type": ...}`
+        to override (e.g. for a raw JSON string or plain text body).
         """
         body_js = "undefined"
         if body is not None:
@@ -1141,10 +1144,19 @@ class Tab:
                 body_js = json.dumps(str(body))
 
         h: dict[str, str] = {}
-        if body is not None and isinstance(body, dict):
-            h["Content-Type"] = "application/json"
+        if body is not None:
+            h["Content-Type"] = (
+                "application/json"
+                if isinstance(body, dict)
+                else "application/x-www-form-urlencoded"
+            )
         if headers:
-            h.update(headers)  # caller's headers win (including Content-Type override)
+            # Caller headers win outright, including overriding the default
+            # Content-Type above (matched case-insensitively per HTTP spec).
+            ct_key = next((k for k in h if k.lower() == "content-type"), None)
+            if ct_key and any(k.lower() == "content-type" for k in headers):
+                del h[ct_key]
+            h.update(headers)
         headers_js = json.dumps(h) if h else "undefined"
 
         code = f"""

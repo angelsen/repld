@@ -102,5 +102,35 @@ def phase_3(kernel: Kernel) -> None:
             head.startswith("x" * 50), f"spill file starts with x's (got {head[:20]!r})"
         )
         print(f"  ✓ spill: {spill_path} ({len(head)} chars head, starts with x's)")
+
+        # Multi-line str results print verbatim (no repr()-escaping of \n).
+        resp = b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "'line one\\nline two'"}},
+        )
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "line one\nline two" in content and "\\n" not in content,
+            f"multi-line str displayed verbatim (got {content!r})",
+        )
+        print(f"  ✓ multi-line str display: {content!r}")
+
+        # no_display() suppresses the print but still returns/binds the value.
+        resp = b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "no_display('quiet result')"}},
+        )
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "quiet result" not in content,
+            f"no_display() suppressed output (got {content!r})",
+        )
+        resp = b.call("tools/call", {"name": "exec", "arguments": {"code": "_"}})
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "quiet result" in content,
+            f"no_display() still bound to _ (got {content!r})",
+        )
+        print("  ✓ no_display(): suppressed on display, bound to _")
     finally:
         b.close()

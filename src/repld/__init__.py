@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         default: str | None = None,
         timeout: float | None = None,
     ) -> str: ...
+    def no_display(value: Any) -> Any: ...
 
 
 __all__ = ["main"]

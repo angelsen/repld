@@ -270,7 +270,10 @@ TOOLS = [
         "name": "browser_fetch",
         "description": (
             "Execute a fetch() in the page's context (inherits cookies/session). "
-            "Returns {status, ok, body}."
+            "Returns {status, ok, body}. Content-Type defaults to "
+            "application/json for a dict body, application/x-www-form-urlencoded "
+            "for a string body — pass headers to override (e.g. for raw JSON "
+            "text or plain text)."
         ),
         "inputSchema": {
             "type": "object",
@@ -282,11 +285,16 @@ TOOLS = [
                 "url": {"type": "string"},
                 "method": {"type": "string", "default": "GET"},
                 "body": {
-                    "description": "Request body (dict for JSON, string for raw)",
+                    "type": ["object", "string"],
+                    "description": (
+                        "Request body: dict is JSON-encoded (Content-Type: "
+                        "application/json), string is sent as-is (Content-Type: "
+                        "application/x-www-form-urlencoded unless overridden)"
+                    ),
                 },
                 "headers": {
                     "type": "object",
-                    "description": "Additional headers",
+                    "description": "Additional headers (overrides the default Content-Type)",
                 },
             },
             "required": ["target", "url"],

@@ -654,7 +654,7 @@ def run_kernel(
         _gists.install_deps(missing)
 
     # 3. Inject helpers into __main__ + repld module.
-    from . import gates
+    from . import gates, runtime
     import pydoc
     import repld as _repld_mod
 
@@ -667,6 +667,7 @@ def run_kernel(
         "ask": gates.ask,
         "confirm": gates.confirm,
         "choose": gates.choose,
+        "no_display": runtime.no_display,
     }
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)
