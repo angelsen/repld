@@ -11,6 +11,11 @@ _SUBCOMMANDS = {
     "exec": ("exec_cmd", "run_exec", "one-shot code or interactive REPL"),
     "help": ("help", "run_help", "agent/human docs"),
     "gist": ("gist_cmd", "run_gist", "new / add / rm / list gists"),
+    "browser": (
+        "relaunch",
+        "run_browser",
+        "re-exec via `uv run` with duckdb/websockets",
+    ),
 }
 
 

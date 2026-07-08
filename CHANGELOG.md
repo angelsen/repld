@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Graceful browser disconnect: `browser.disconnect(port=)` now unpins tabs (removes pill + beforeunload guard + heartbeat) before closing the WebSocket, and returns a summary string. `browser_detach` MCP tool gains `target` (detach one tab) and `port` (disconnect a whole Chrome instance) params alongside the existing `pattern`
 - Dashboard sidebar: left rail listing all live repld sessions (project name, uptime, status dot), with the current session highlighted and siblings linking to their own dashboard. New "Connections" tab shows per-port browser connections, expandable to individual targets, with disconnect/detach buttons
 - `no_display(value)` builtin: return a value from a cell without the auto-display hook re-printing it, while still binding `_`/`_N` and surviving direct assignment (`x = await foo()`) for programmatic use — for functions that already print their own output
+- `repld browser` subcommand: re-execs `repld` under `uv run` with the `browser` extra (`duckdb`+`websockets`), so browser tools work in any project without adding `repld-tool` as a dependency. Detects and preserves a local editable checkout (via `direct_url.json` distribution metadata) instead of silently swapping to the published package
 
 ### Changed
 
@@ -28,6 +29,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `browser_fetch` / `Tab.fetch()` silently sent string bodies with no `Content-Type`, so the browser defaulted to `text/plain` and form-decoding servers saw an empty form — root cause was in `Tab.fetch()`'s header defaulting, not the MCP transport
 - `browser_fetch` tool schema: `body` had no declared `type`, so MCP clients could silently flatten a dict argument to a JSON string instead of sending it as an object. Now typed `["object", "string"]`, matching what the handler actually accepts
 - `no_display(value)` only unwrapped on a cell's bare last expression — direct assignment (`x = await foo()`) left `x` bound to the internal wrapper object instead of the real value, contradicting its own "still returning it... for programmatic use" contract. `compile_cell()` now also collects top-level simple-assignment targets (`x = ...`, chained `x = y = ...`, annotated `x: T = ...`) and `run_cell()` unwraps `_NoDisplay` off them after they're bound. Doesn't cover tuple/list/starred/attribute/subscript targets or walrus expressions nested in larger expressions
+- `browser.watch(pattern)` silently reported "Attached 0 new tab(s)" when a matching target existed but the CDP `Target.attachToTarget` call failed (e.g. another debugger already attached to it) — the exception was swallowed and logged only at `DEBUG` (no logging is configured anywhere in the package, so it was never actually emitted). The returned summary now appends `N attach attempt(s) failed: <target>: <reason>` when any attach errors, instead of looking identical to "nothing matched the pattern"
 
 ### Removed
 

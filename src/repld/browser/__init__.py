@@ -266,6 +266,8 @@ class Browser:
                 if not already:
                     to_attach.append(tid)
 
+        failures: list[tuple[str, str]] = []
+
         async def _attach_one(tid: str) -> str | None:
             try:
                 await self._session.attach(tid)
@@ -273,16 +275,24 @@ class Browser:
                 return tid
             except Exception as exc:
                 logger.debug("Attach %s: %s", tid, exc)
+                failures.append((tid, str(exc)))
                 return None
 
         results = await asyncio.gather(*[_attach_one(tid) for tid in to_attach])
         newly_attached = [tid for tid in results if tid]
 
         total = len(self._session._sessions)
-        return (
+        msg = (
             f"Attached {len(newly_attached)} new tab(s) for pattern '{pattern}'. "
             f"Total attached: {total}."
         )
+        if failures:
+            # Surface the reason directly — logger.debug alone is invisible
+            # by default (no logging configured), so a failed attach used to
+            # look identical to "nothing matched the pattern".
+            detail = "; ".join(f"{tid[:6]}: {reason}" for tid, reason in failures)
+            msg += f" {len(failures)} attach attempt(s) failed: {detail}"
+        return msg
 
     async def open(self, url: str) -> "Tab":
         """Create a new tab and attach to it.

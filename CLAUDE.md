@@ -82,7 +82,7 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 
 ## Architecture (target shape)
 
-Six CLI subcommands, all dispatched from `repld:main`:
+Seven CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
 - `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
@@ -90,6 +90,7 @@ Six CLI subcommands, all dispatched from `repld:main`:
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (`src/repld/help.py:INSTRUCTIONS`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
 - `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (local + linked + linkable-from-registry). Unknown verbs error (no verb-less scaffold alias). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
+- `repld browser [ARGS...]` — re-exec `repld ARGS...` under `uv run` with the `browser` extra (`duckdb`+`websockets`), so browser features work without adding `repld-tool` to the project's dependencies. Preserves a local editable checkout (detected via `direct_url.json` distribution metadata) instead of silently falling back to the published package, so dev changes are picked up (`src/repld/relaunch.py`).
 
 Key invariants to preserve when building this out:
 
