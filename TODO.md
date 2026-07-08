@@ -28,6 +28,55 @@
 - [x] `help.py` — "Multi-tab gists" paragraph duplicated between BROWSER_GUIDE and GUIDE; removed from GUIDE, kept authoritative copy in BROWSER_GUIDE (session 010).
 - [x] Malformed `__repld_tools__` / `__repld_deps__` (non-literal expressions) fail `ast.literal_eval` and the tools/deps silently never appear (`gists.py` `_extract_tools` / `scan_deps`). Warn once on stderr at boot — not per `tools/list` scan, which would spam.
 
+## Kernel / exec display
+
+Found while debugging a `vps.py` gist double-print bug in bulletins-chat: methods that
+`print(out)` for immediate human-readable output *and* `return out` for programmatic use
+get their return value re-displayed by the auto-display hook — as an ugly single-line
+`repr()` with escaped `\n`s — whenever the call is the bare last expression in a cell (the
+exact pattern the gist's own usage docstring recommended). Root cause + fixes traced to
+`src/repld/runtime.py:86-92` (`run_cell()`, single choke point: `print(repr(result))` when
+`result is not None`).
+
+- [ ] Multi-line `str` results: print verbatim instead of `repr()`-escaping. At
+  `runtime.py:87`, special-case `isinstance(result, str) and "\n" in result` → `print(result)`
+  instead of `print(repr(result))`. Trivial, single call site.
+- [ ] Opt-out sentinel for auto-display — let a function suppress display of its own return
+  value while still returning it for programmatic use (the `vps.py` case: print a formatted
+  table, return the same string for composition by `db_size`/`db_tables`/etc., don't
+  double-display on a bare call). E.g. a `repld.no_display(value)` wrapper or marker class,
+  unwrapped before binding `_`/`_N` but skipped in the `print()` branch. No architectural
+  changes needed — same single choke point in `run_cell()`.
+- [ ] `repld://gists/{name}` signature listing renders `@property` methods with call
+  parens — e.g. `devserver.py`'s `DevServer.pid`/`is_running` (real attributes, no parens)
+  show up as `.pid() -> int | None` / `.is_running() -> bool`, so an agent reading only the
+  listing calls `ds.pid()` and gets `TypeError: 'NoneType' object is not callable`. The
+  gist's own hand-written class docstring gets it right (`ds.pid`, no parens) — only the
+  auto-generated listing is wrong. Root cause: `gists.py` `_format_class()` (507-526) never
+  inspects `item.decorator_list` before calling `_format_function()` (529-550), which
+  unconditionally emits `.name(args) -> ret`. Fix: detect `property`/`cached_property` in
+  the decorator list, pass an `is_property` flag through, and render `.name -> ret` (no
+  parens, no args) for properties.
+
+## MCP tool bugs
+
+- [ ] `browser_fetch` MCP tool fails to submit `application/x-www-form-urlencoded`
+  string bodies correctly — reproduced cleanly against a real SvelteKit form action:
+  identical `url`/`method`/`headers`/`body` sent via `browser_fetch` gets a validation
+  failure (server sees an empty/invalid form field), while the exact same request sent
+  via `browser_js` with a raw in-page `fetch()` call succeeds. Ruled out (all clean):
+  the tool's JSON-RPC schema (`protocol.py` ~270-290, `body` has no type coercion),
+  the dispatcher (`_bh_fetch`, `protocol.py:809-817`, plain passthrough of `args.get("body")`),
+  and `Tab.fetch()` itself (`browser/tab.py:1121-1165` — verified the generated JS
+  literally in Node: a string body produces byte-identical `opts.body` either way, no
+  double-JSON-encoding). Since `_bh_fetch` calls the *same* `tab.fetch()` coroutine as
+  the Python-side `tab.fetch()` used inside `exec`, the two paths should be identical —
+  so the discrepancy must be somewhere between the MCP transport (arg deserialization
+  from the JSON-RPC call) and `_bh_fetch` being invoked, which is outside this repo's
+  Python source as far as I could trace. Workaround: use `browser_js` with a manual
+  `fetch()` call for POST bodies until someone with visibility into the MCP transport
+  layer can dig further.
+
 ## Browser
 
 - [x] Console error dedup — cross-tab duplicates within 2s collapsed into one push with count.
