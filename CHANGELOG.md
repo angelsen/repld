@@ -9,11 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Type-hint gist tool registration: `_tool_*` functions with type hints are auto-discovered as MCP tools — schema inferred from parameter annotations/defaults and the first docstring line. Replaces the two-piece `__repld_tools__` + `_tool_*(args: dict)` convention with a single typed function declaration
+- Session registry: every kernel writes `$XDG_RUNTIME_DIR/repld/sessions/<pid>.json` on boot and removes it on shutdown, so any repld instance (or its dashboard) can enumerate live siblings. `repld.sessions.list_sessions()` prunes dead PIDs lazily
+- Graceful browser disconnect: `browser.disconnect(port=)` now unpins tabs (removes pill + beforeunload guard + heartbeat) before closing the WebSocket, and returns a summary string. `browser_detach` MCP tool gains `target` (detach one tab) and `port` (disconnect a whole Chrome instance) params alongside the existing `pattern`
+- Dashboard sidebar: left rail listing all live repld sessions (project name, uptime, status dot), with the current session highlighted and siblings linking to their own dashboard. New "Connections" tab shows per-port browser connections, expandable to individual targets, with disconnect/detach buttons
 
 ### Changed
 
 - `repld gist new` template scaffolds the new typed `_tool_*` pattern (no `__repld_tools__`)
 - `__repld_tools__` still works as a legacy override for custom schemas, but prints a one-time-per-gist deprecation warning at boot
+- Browser tab pin state (`_pinned`, `_pin_reason`, `_pin_origin`, `_heartbeat_task`) now lives on `CDPSession` instead of `Tab` — `Tab` wrappers are recreated on every `get()`/`_iter_tabs()` call, so pin state used to reset whenever a tab was re-fetched. `CDPSession` persists for the life of the attachment, matching the existing pattern for `capture_bodies`
 
 ### Fixed
 

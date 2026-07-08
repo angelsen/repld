@@ -503,13 +503,14 @@ class Tab:
         self._chrome_target_id = target_id
         self._port = port
         self._ready = ready
-        self._pinned: bool = False
-        self._pin_reason: str = ""
-        self._pin_origin: str = ""
-        self._heartbeat_task: asyncio.Task[None] | None = None
         self._label_text: str | None = None
         self._label_color: str | None = None
         self._label_script_id: str | None = None
+
+    @property
+    def _pinned(self) -> bool:
+        """Pin state lives on CDPSession (persists across Tab re-wrapping)."""
+        return self._session._pinned
 
     @property
     def target_id(self) -> str:
@@ -628,33 +629,36 @@ class Tab:
 
     async def pin(self, reason: str = "") -> None:
         """Inject pill + beforeunload guard + heartbeat. Idempotent."""
-        if not self._pinned:
-            self._pin_origin = await self.js("location.origin")
+        session = self._session
+        if not session._pinned:
+            session._pin_origin = await self.js("location.origin")
             await self._setup_binding()
             await self.js(_PIN_JS)
-            self._pinned = True
-            self._pin_reason = reason
-            self._heartbeat_task = asyncio.create_task(
+            session._pinned = True
+            session._pin_reason = reason
+            session._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(), name="repld-pill-heartbeat"
             )
         if reason:
-            self._pin_reason = reason
+            session._pin_reason = reason
             await self.js(f"__repld_update({{reason: {json.dumps(reason)}}})")
 
     async def unpin(self) -> None:
         """Remove pill + beforeunload + heartbeat."""
-        if self._pinned:
-            if self._heartbeat_task is not None:
-                self._heartbeat_task.cancel()
-                self._heartbeat_task = None
+        session = self._session
+        if session._pinned:
+            if session._heartbeat_task is not None:
+                session._heartbeat_task.cancel()
+                session._heartbeat_task = None
             await self.js("window.__repld_remove && window.__repld_remove()")
-            self._pinned = False
-            self._pin_reason = ""
-            self._pin_origin = ""
+            session._pinned = False
+            session._pin_reason = ""
+            session._pin_origin = ""
 
     async def _heartbeat_loop(self) -> None:
         """Beat every 5s. Re-inject on same-origin reload; unpin on cross-origin."""
-        origin = self._pin_origin
+        session = self._session
+        origin = session._pin_origin
         check = (
             "window.__repld_pill"
             " ? (window.__repld_hb = Date.now(), 'ok')"
@@ -677,9 +681,9 @@ class Tab:
                 try:
                     await self._setup_binding()
                     await self.js(_PIN_JS)
-                    if self._pin_reason:
+                    if session._pin_reason:
                         await self.js(
-                            f"__repld_update({{reason: {json.dumps(self._pin_reason)}}})"
+                            f"__repld_update({{reason: {json.dumps(session._pin_reason)}}})"
                         )
                 except Exception:
                     misses += 1
@@ -694,10 +698,10 @@ class Tab:
                 {"kind": "pin_lost", "target": self.target_id},
             )
             break
-        self._pinned = False
-        self._heartbeat_task = None
-        self._pin_reason = ""
-        self._pin_origin = ""
+        session._pinned = False
+        session._heartbeat_task = None
+        session._pin_reason = ""
+        session._pin_origin = ""
 
     async def _setup_binding(self) -> None:
         """Register __repld_resolve CDP binding for gate callbacks."""

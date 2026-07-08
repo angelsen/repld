@@ -25,7 +25,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import events, ipc, tasks
+from . import events, ipc, sessions, tasks
 from .events import CellDone, CellStart
 from .ipc import read_lock
 from .protocol import Dispatcher
@@ -770,6 +770,9 @@ def run_kernel(
     _active_lock_path = _lock_for(sock_path)
     atexit.register(_cleanup_lockfile)
     atexit.register(ipc.stop_server)
+
+    sessions.register(os.getcwd(), str(sock_path), dashboard_port)
+    atexit.register(sessions.unregister)
 
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).

@@ -283,6 +283,14 @@ class CDPSession:
         # Binding handler (set by Tab._setup_binding)
         self._binding_handler: Any | None = None
 
+        # Pin state — lives here (not on Tab) because Tab wrappers are
+        # ephemeral (a fresh Tab is constructed on every _iter_tabs()/get()
+        # call) while CDPSession persists for the life of the attachment.
+        self._pinned: bool = False
+        self._pin_reason: str = ""
+        self._pin_origin: str = ""
+        self._heartbeat_task: asyncio.Task[None] | None = None
+
     def _setup_schema(self) -> None:
         """Create events table, indexes, and HAR views."""
         self.db.execute(

@@ -162,9 +162,9 @@
 
 **Acceptance:**
 - [x] `uv run python tests/smoketest.py --phase 5` passes all checks
-- [ ] Manual: `uv run repld` renders cell blocks nicely; `uv run repld --no-display` is headless
-- [ ] Manual: Claude Code integration verified
-- [ ] Manual: `confirm()` gate verified end-to-end
+- [x] Manual: `uv run repld` renders cell blocks nicely; `uv run repld --no-display` is headless
+- [x] Manual: Claude Code integration verified
+- [x] Manual: `confirm()` gate verified end-to-end
 
 **Dependencies:** Task 8
 **Complexity:** Medium (debugging surface is wide)

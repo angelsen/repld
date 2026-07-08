@@ -377,13 +377,37 @@ class Browser:
         return await tabs[0].fetch(url, method=method, body=body, headers=headers)
 
     async def disconnect(self) -> None:
-        """Disconnect from Chrome."""
+        """Disconnect from Chrome. Unpins all tabs first (removes pill,
+        beforeunload guard, and heartbeat task before dropping the socket)."""
         if self._connected:
+            for tab in self._iter_tabs():
+                if tab._pinned:
+                    try:
+                        await tab.unpin()
+                    except Exception:
+                        pass
             try:
                 await self._session.disconnect()
             except Exception:
                 pass
             self._connected = False
+
+    async def detach_target(self, target_id: str) -> str:
+        """Detach a single target by its short ID (e.g. '9222:abc123').
+        Unpins first if the tab is pinned."""
+        chrome_id_prefix = target_id.split(":")[-1]
+        for sid, cdp in list(self._session._sessions.items()):
+            full_id = cdp.target_info.get("targetId", "")
+            if full_id[:6].lower() == chrome_id_prefix:
+                tab = Tab(cdp, full_id, self.port)
+                if tab._pinned:
+                    try:
+                        await tab.unpin()
+                    except Exception:
+                        pass
+                await self._session.detach(sid)
+                return f"Detached {target_id}."
+        return f"Target {target_id} not found."
 
     def format_tabs_nested(self) -> str:
         """Format attached tabs as nested text showing target hierarchy."""
@@ -480,19 +504,24 @@ class BrowserPool:
         self._save_hint()
         return b
 
-    async def disconnect(self, port: int | None = None) -> None:
-        """Disconnect one or all browsers."""
+    async def disconnect(self, port: int | None = None) -> str:
+        """Disconnect one or all browsers. Returns a summary string."""
         if port is not None:
             b = self._browsers.pop(port, None)
             if b:
                 await b.disconnect()
-        else:
-            for b in self._browsers.values():
-                try:
-                    await b.disconnect()
-                except Exception:
-                    pass
-            self._browsers.clear()
+                self._save_hint()
+                return f"Disconnected from Chrome on port {port}."
+            return f"No browser on port {port}."
+        count = len(self._browsers)
+        for b in self._browsers.values():
+            try:
+                await b.disconnect()
+            except Exception:
+                pass
+        self._browsers.clear()
+        self._save_hint()
+        return f"Disconnected {count} browser(s)."
 
     def browser_for(self, target: str) -> Browser:
         """Resolve a target ID like '42829:abc123' to its Browser instance."""

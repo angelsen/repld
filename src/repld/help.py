@@ -396,7 +396,8 @@ object.  Read this instead of diving into source code.
   browser.clear(target=)                             # clear all captured data
 
   b = Browser.from_profile("/tmp/my-chrome")          # connect by user-data-dir
-  browser.disconnect()                               # close WebSocket
+  browser.disconnect()                               # unpin tabs, close all WebSockets
+  browser.disconnect(port=9222)                      # unpin + close one Chrome instance
 
 Quirks:
   - get(glob) skips workers (service_worker, shared_worker, worker). To reach
@@ -1099,7 +1100,7 @@ Browser:
   browser.detach(pattern=)                       → str
   browser.patterns()                             → list[str]  active watch patterns
   browser.clear(target=)                         → str
-  browser.disconnect()                           → None
+  browser.disconnect(port=)                      → str  (unpins tabs first; port=None disconnects all)
   browser.suppress(pattern)                      → str  mute console errors matching substring
   browser.unsuppress(pattern)                    → str  un-mute
   browser.suppressed                             → list[str]  active suppress patterns

@@ -149,11 +149,29 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "state":
         return _collect_state()
 
+    if method == "sessions":
+        from . import sessions
+
+        return sessions.list_sessions()
+
     from .kernel import push_channel
 
     browser = getattr(__main__, "browser", None)
     if browser is None:
         raise RuntimeError("repld[browser] not installed")
+
+    if method == "browser.disconnect":
+        port = params.get("port")
+        target = params.get("target")
+        if target:
+            b = browser.browser_for(target)
+            result = await b.detach_target(target)
+        elif port is not None:
+            result = await browser.disconnect(port)
+        else:
+            result = await browser.disconnect()
+        push_channel(f"[dashboard] {result}", {"kind": "browser_disconnect"})
+        return {"result": result}
 
     if method == "browser.connect":
         port = params.get("port", 9222)
@@ -454,7 +472,22 @@ _HTML = """\
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; overflow: hidden; }
-body { display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+body { display: flex; flex-direction: row; }
+
+/* --- sidebar --- */
+.sidebar { flex-shrink: 0; width: 220px; height: 100%; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; }
+.sidebar-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); padding: 12px 16px 4px; }
+#session-list { list-style: none; }
+#session-list li { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-family: var(--mono); font-size: 12px; }
+#session-list li.current { background: var(--bg); }
+#session-list a { color: var(--text); text-decoration: none; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#session-list a:hover { color: var(--accent); }
+#session-list .session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#session-list .session-uptime { color: var(--dim); font-size: 10px; }
+#session-list .empty { padding: 6px 16px; }
+
+/* --- main --- */
+.main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; max-width: 960px; margin: 0 auto; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
 
 /* --- header --- */
 .header { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -501,7 +534,7 @@ input[type=number] { width: 72px; }
 button { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 12px; border-radius: 0; cursor: pointer; transition: border-color 0.15s; height: 28px; }
 button:hover { border-color: var(--accent); }
 button:active { background: var(--border); }
-button.sm { padding: 2px 8px; font-size: 10px; }
+button.sm { padding: 2px 8px; font-size: 10px; height: auto; }
 button.danger { color: var(--red); }
 
 .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 16px 0 6px; }
@@ -514,9 +547,14 @@ button.danger { color: var(--red); }
 .pattern-list li .glob { color: var(--accent); }
 .pattern-list li .count { color: var(--dim); font-size: 11px; }
 
+tr.conn-port td { font-weight: 600; cursor: pointer; }
+tr.conn-port:hover td { background: var(--surface); }
+tr.conn-target td { padding-left: 24px; }
+tr.conn-target.collapsed { display: none; }
+
 table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
 th { text-align: left; color: var(--dim); font-weight: 400; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; background: var(--bg); }
-td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 tr:hover td { background: var(--surface); }
 td.url { max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td.type { color: var(--dim); width: 55px; }
@@ -543,6 +581,13 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
 </head>
 <body>
 
+<aside class="sidebar">
+  <div class="sidebar-section-label" style="padding-top:14px">sessions</div>
+  <ul id="session-list"><li class="empty">loading&hellip;</li></ul>
+</aside>
+
+<div class="main">
+
 <div class="header">
   <a href="https://angelsen.github.io/repld/" class="logo">repld<span class="cursor"></span></a>
   <span class="meta" id="hdr-pid"></span>
@@ -560,6 +605,7 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
 
 <div class="tab-bar" id="tab-bar">
   <button class="active" data-tab="browser">Browser</button>
+  <button data-tab="connections">Connections</button>
   <button data-tab="targets">Targets</button>
   <button data-tab="console">Console</button>
   <button data-tab="network">Network</button>
@@ -595,6 +641,18 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
         </table>
         <div class="empty" id="tabs-empty">no attached tabs</div>
       </div>
+    </div>
+  </div>
+
+  <!-- CONNECTIONS TAB -->
+  <div class="tab-pane" id="pane-connections">
+    <div id="connections-unavailable" class="empty" hidden>repld[browser] not installed</div>
+    <div id="connections-panel" hidden>
+      <table id="connections-table" hidden>
+        <thead><tr><th>port</th><th>tabs</th><th class="actions"></th></tr></thead>
+        <tbody id="connections-body"></tbody>
+      </table>
+      <div class="empty" id="connections-empty">no browser connections</div>
     </div>
   </div>
 
@@ -641,6 +699,8 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
   <span id="ft-socket"></span>
   <span id="ft-status"></span>
 </div>
+
+</div><!-- /.main -->
 
 <div class="toast" id="toast"></div>
 
@@ -698,11 +758,15 @@ function render() {
   if (!b) {
     $('#browser-unavailable').hidden = false;
     $('#browser-panel').hidden = true;
+    $('#connections-unavailable').hidden = false;
+    $('#connections-panel').hidden = true;
     $('#ft-status').textContent = 'no browser';
     return;
   }
   $('#browser-unavailable').hidden = true;
   $('#browser-panel').hidden = false;
+  $('#connections-unavailable').hidden = true;
+  $('#connections-panel').hidden = false;
 
   $('#watch-section').hidden = !b.connected;
   const nPorts = (b.ports || []).length;
@@ -754,9 +818,65 @@ function render() {
   // update tab selects for console/network
   updateTabSelects(b.tabs);
 
+  // browser connections panel
+  renderConnections(b);
+
   // auto-fetch targets on first connect
   if (b.connected && !targets) refreshTargets();
   if (targets) renderTargets();
+}
+
+// --- connections panel ---
+function renderConnections(b) {
+  const body = $('#connections-body');
+  const ports = b.ports || [];
+  $('#connections-empty').hidden = ports.length > 0;
+  $('#connections-table').hidden = ports.length === 0;
+  body.innerHTML = '';
+  for (const p of ports) {
+    const tabsOnPort = b.tabs.filter(t => t.port === p);
+    const portRow = document.createElement('tr');
+    portRow.className = 'conn-port';
+    const countText = tabsOnPort.length + ' tab' + (tabsOnPort.length !== 1 ? 's' : '');
+    portRow.innerHTML = '<td>:' + p + '</td><td class="type">' + countText + '</td><td class="actions"></td>';
+    const disconnectBtn = document.createElement('button');
+    disconnectBtn.className = 'sm danger';
+    disconnectBtn.textContent = 'Disconnect';
+    disconnectBtn.onclick = async (e) => {
+      e.stopPropagation();
+      await rpc('browser.disconnect', { port: p });
+      toast('Disconnected port ' + p);
+      await reload();
+    };
+    portRow.querySelector('.actions').appendChild(disconnectBtn);
+    body.appendChild(portRow);
+
+    for (const t of tabsOnPort) {
+      const tr = document.createElement('tr');
+      tr.className = 'conn-target collapsed';
+      tr.innerHTML = '<td class="type">' + esc(t.type) + '</td>'
+        + '<td class="url" title="' + esc(t.url) + '">' + esc(t.title || t.url) + '</td>'
+        + '<td class="actions"></td>';
+      const detachBtn = document.createElement('button');
+      detachBtn.className = 'sm danger';
+      detachBtn.textContent = 'Detach';
+      detachBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await rpc('browser.disconnect', { target: t.id });
+        toast('Detached ' + t.id);
+        await reload();
+      };
+      tr.querySelector('.actions').appendChild(detachBtn);
+      body.appendChild(tr);
+    }
+    portRow.onclick = () => {
+      let next = portRow.nextElementSibling;
+      while (next && next.classList.contains('conn-target')) {
+        next.classList.toggle('collapsed');
+        next = next.nextElementSibling;
+      }
+    };
+  }
 }
 
 function updateTabSelects(tabs) {
@@ -886,6 +1006,44 @@ $('#btn-watch').onclick = async () => {
 
 $('#watch-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-watch').click(); });
 $('#chrome-port').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-connect').click(); });
+
+// --- sidebar: sessions ---
+async function refreshSessions() {
+  try {
+    const list = await rpc('sessions');
+    renderSessions(list);
+  } catch (e) { /* toast shown */ }
+}
+
+function renderSessions(list) {
+  const ul = $('#session-list');
+  const currentPid = state?.kernel?.pid;
+  ul.innerHTML = '';
+  if (!list.length) {
+    ul.innerHTML = '<li class="empty">no sessions found</li>';
+    return;
+  }
+  list.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+  for (const s of list) {
+    const li = document.createElement('li');
+    const isCurrent = s.pid === currentPid;
+    if (isCurrent) li.classList.add('current');
+    const name = (s.cwd || '').split('/').filter(Boolean).pop() || s.cwd || ('pid ' + s.pid);
+    const uptime = formatUptime(Date.now() / 1000 - (s.started_at || 0));
+    const dot = '<span class="status on"></span>';
+    if (isCurrent || !s.dashboard_port) {
+      li.innerHTML = dot + '<span class="session-name" title="' + esc(s.cwd || '') + '">' + esc(name) + '</span>'
+        + '<span class="session-uptime">' + uptime + '</span>';
+    } else {
+      li.innerHTML = dot + '<a href="http://127.0.0.1:' + s.dashboard_port + '/" title="' + esc(s.cwd || '') + '">' + esc(name) + '</a>'
+        + '<span class="session-uptime">' + uptime + '</span>';
+    }
+    ul.appendChild(li);
+  }
+}
+
+refreshSessions();
+setInterval(refreshSessions, 10000);
 
 // --- initial load ---
 refreshState();

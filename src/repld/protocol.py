@@ -74,10 +74,25 @@ TOOLS = [
     },
     {
         "name": "browser_detach",
-        "description": "Detach tabs matching a URL glob pattern, or all tabs if no pattern given.",
+        "description": (
+            "Detach or disconnect browser targets. Pass 'target' to detach one "
+            "tab (unpins it first), 'port' to disconnect an entire Chrome "
+            "instance (unpins all its tabs, closes the WebSocket), 'pattern' "
+            "to detach by URL glob, or no args to detach everything."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"pattern": {"type": "string"}},
+            "properties": {
+                "pattern": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Short target ID (e.g. '9222:a1b2c3') — detach one tab",
+                },
+                "port": {
+                    "type": "integer",
+                    "description": "Chrome debug port — disconnect the entire browser",
+                },
+            },
             "required": [],
         },
     },
@@ -730,6 +745,13 @@ class Dispatcher:
         return {"result": self._run_async(browser.watch(args["pattern"]))}
 
     def _bh_detach(self, browser, args):
+        target = args.get("target")
+        port = args.get("port")
+        if target:
+            b = browser.browser_for(target)
+            return {"result": self._run_async(b.detach_target(target))}
+        if port is not None:
+            return {"result": self._run_async(browser.disconnect(port))}
         return {"result": self._run_async(browser.detach(args.get("pattern")))}
 
     def _bh_tabs(self, browser, args):
