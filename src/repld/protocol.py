@@ -603,12 +603,7 @@ class Dispatcher:
         finished = done_event.wait(timeout=timeout)
         snap = self.ctx.snapshot(task_id)
         if finished:
-            parts = []
-            if snap["text"]:
-                parts.append(snap["text"].rstrip())
-            if snap["truncated"]:
-                parts.append(f"[full output: {snap['spill_path']}]")
-            text = "\n".join(parts) or "(no output)"
+            text = _format_spill(snap, "(no output)")
             return _response(
                 rid,
                 {
@@ -705,13 +700,8 @@ class Dispatcher:
     def _spill_response(self, rid, text: str, label: str = "output") -> dict:
         """Build a tool/resource response using the unified spill pipeline."""
         sp = _spill_text(text, label=label)
-        parts = []
-        if sp["text"]:
-            parts.append(sp["text"].rstrip())
-        if sp["truncated"]:
-            parts.append(f"[full output: {sp['spill_path']}]")
         return _response(
-            rid, {"content": [{"type": "text", "text": "\n".join(parts) or text}]}
+            rid, {"content": [{"type": "text", "text": _format_spill(sp, text)}]}
         )
 
     def _get_browser(self):
@@ -1055,9 +1045,7 @@ class Dispatcher:
             else:
                 return _error(rid, -32602, f"unknown resource: {uri}")
             sp = _spill_text(text, label=uri.split("/")[-1])
-            content = sp["text"].rstrip() if sp["text"] else text
-            if sp["truncated"]:
-                content += f"\n[full output: {sp['spill_path']}]"
+            content = _format_spill(sp, text)
             return _response(
                 rid,
                 {"contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]},
@@ -1108,6 +1096,16 @@ class Dispatcher:
         from . import gists
 
         return gists.introspect(name)
+
+
+def _format_spill(sp: dict, fallback: str) -> str:
+    """Render a spill_text()/snapshot() dict as tool/resource response text."""
+    parts = []
+    if sp["text"]:
+        parts.append(sp["text"].rstrip())
+    if sp["truncated"]:
+        parts.append(f"[full output: {sp['spill_path']}]")
+    return "\n".join(parts) or fallback
 
 
 def _response(rid, result: dict) -> dict:

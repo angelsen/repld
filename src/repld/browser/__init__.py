@@ -22,6 +22,7 @@ import re
 from typing import Any
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
+from .cdp import CDPSession
 from .session import WORKER_TYPES
 from .row import Rows
 from .tab import Tab
@@ -142,13 +143,24 @@ class Browser:
             target, timeout=timeout, fresh=fresh, ready=ready
         )
 
+    def _find_by_prefix(self, prefix: str) -> tuple[str | None, CDPSession | None, str]:
+        """Look up an already-attached session by 6-char lowercase target-ID prefix.
+
+        Returns (session_id, cdp, full_chrome_id); session_id and cdp are
+        None on miss.
+        """
+        for sid, cdp in self._session._sessions.items():
+            chrome_id = cdp.target_info.get("targetId", "")
+            if chrome_id[:6].lower() == prefix:
+                return sid, cdp, chrome_id
+        return None, None, ""
+
     async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
         """Resolve a target ID, attaching on demand if needed."""
         _, prefix = target.split(":", 1)
-        for cdp in self._session._sessions.values():
-            chrome_id = cdp.target_info.get("targetId", "")
-            if chrome_id[:6].lower() == prefix:
-                return Tab(cdp, chrome_id, self.port, ready=ready)
+        _sid, cdp, chrome_id = self._find_by_prefix(prefix)
+        if cdp is not None:
+            return Tab(cdp, chrome_id, self.port, ready=ready)
 
         await self._ensure_connected()
         for t in await self._session.list_targets():
@@ -227,10 +239,9 @@ class Browser:
                 f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
             )
         _, prefix = target.split(":", 1)
-        for cdp in self._session._sessions.values():
-            chrome_id = cdp.target_info.get("targetId", "")
-            if chrome_id[:6].lower() == prefix:
-                return Tab(cdp, chrome_id, self.port)
+        _sid, cdp, chrome_id = self._find_by_prefix(prefix)
+        if cdp is not None:
+            return Tab(cdp, chrome_id, self.port)
 
         attached = [
             make_target(self.port, cdp.target_info.get("targetId", ""))
@@ -405,18 +416,17 @@ class Browser:
     async def detach_target(self, target_id: str) -> str:
         """Detach a single target by its short ID (e.g. '9222:abc123').
         Unpins first if the tab is pinned."""
-        chrome_id_prefix = target_id.split(":")[-1]
-        for sid, cdp in list(self._session._sessions.items()):
-            full_id = cdp.target_info.get("targetId", "")
-            if full_id[:6].lower() == chrome_id_prefix:
-                tab = Tab(cdp, full_id, self.port)
-                if tab._pinned:
-                    try:
-                        await tab.unpin()
-                    except Exception:
-                        pass
-                await self._session.detach(sid)
-                return f"Detached {target_id}."
+        prefix = target_id.split(":")[-1]
+        sid, cdp, full_id = self._find_by_prefix(prefix)
+        if sid is not None and cdp is not None:
+            tab = Tab(cdp, full_id, self.port)
+            if tab._pinned:
+                try:
+                    await tab.unpin()
+                except Exception:
+                    pass
+            await self._session.detach(sid)
+            return f"Detached {target_id}."
         return f"Target {target_id} not found."
 
     def format_tabs_nested(self) -> str:

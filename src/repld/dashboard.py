@@ -9,6 +9,7 @@ import __main__
 import asyncio
 import json
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ _start_time: float = 0.0
 _socket_path: str = ""
 _server: asyncio.Server | None = None
 _hint_path: Path | None = None
+_token: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +125,7 @@ def save_hint() -> None:
         "dashboard_port": _server.sockets[0].getsockname()[1]
         if _server and _server.sockets
         else 0,
+        "token": _token,
     }
     if pool and hasattr(pool, "_browsers"):
         hint["chrome_ports"] = [p for p, b in pool._browsers.items() if b._connected]
@@ -277,15 +280,27 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _cors_header(origin: str | None) -> str:
+    """Echo Access-Control-Allow-Origin only for this dashboard's own origin."""
+    if not origin or not _server or not _server.sockets:
+        return ""
+    port = _server.sockets[0].getsockname()[1]
+    if origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+        return f"Access-Control-Allow-Origin: {origin}\r\n"
+    return ""
+
+
 async def _send_response(
     writer: asyncio.StreamWriter,
     status: int,
     body: bytes,
     content_type: str = "application/json",
     extra_headers: str = "",
+    origin: str | None = None,
 ) -> None:
     reason = {
         200: "OK",
+        401: "Unauthorized",
         400: "Bad Request",
         404: "Not Found",
         500: "Internal Server Error",
@@ -294,7 +309,7 @@ async def _send_response(
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
+        f"{_cors_header(origin)}"
         f"{extra_headers}"
         "\r\n"
     )
@@ -336,6 +351,7 @@ async def _handle_api(body: bytes) -> bytes:
 async def _handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
+    headers: dict[str, str] = {}
     try:
         request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
         if not request_line:
@@ -346,20 +362,24 @@ async def _handle_connection(
             return
         method_http, path = parts[0], parts[1]
 
-        content_length = 0
         while True:
             line = await asyncio.wait_for(reader.readline(), timeout=5.0)
             if line in (b"\r\n", b"\n", b""):
                 break
-            if line.lower().startswith(b"content-length:"):
-                content_length = int(line.split(b":")[1].strip())
+            decoded = line.decode("utf-8", errors="replace").strip()
+            key, sep, value = decoded.partition(":")
+            if sep:
+                headers[key.strip().lower()] = value.strip()
+
+        content_length = int(headers.get("content-length", "0") or "0")
+        origin = headers.get("origin")
 
         if method_http == "OPTIONS":
             cors = (
                 "HTTP/1.1 204 No Content\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
+                f"{_cors_header(origin)}"
                 "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: Content-Type\r\n"
+                "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
                 "\r\n"
             )
             writer.write(cors.encode())
@@ -367,22 +387,33 @@ async def _handle_connection(
             return
 
         if method_http == "GET" and path == "/":
+            html = _HTML.replace("__DASHBOARD_TOKEN__", _token)
             await _send_response(
-                writer, 200, _HTML.encode("utf-8"), "text/html; charset=utf-8"
+                writer,
+                200,
+                html.encode("utf-8"),
+                "text/html; charset=utf-8",
+                origin=origin,
             )
             return
 
         if method_http == "POST" and path == "/api":
+            auth = headers.get("authorization", "")
+            if not secrets.compare_digest(auth, f"Bearer {_token}"):
+                await _send_response(
+                    writer, 401, b'{"error":"unauthorized"}', origin=origin
+                )
+                return
             body = (
                 await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
                 if content_length
                 else b"{}"
             )
             result = await _handle_api(body)
-            await _send_response(writer, 200, result)
+            await _send_response(writer, 200, result, origin=origin)
             return
 
-        await _send_response(writer, 404, b'{"error":"not found"}')
+        await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)
 
     except (
         asyncio.TimeoutError,
@@ -393,7 +424,9 @@ async def _handle_connection(
         pass
     except Exception:
         try:
-            await _send_response(writer, 500, b'{"error":"internal"}')
+            await _send_response(
+                writer, 500, b'{"error":"internal"}', origin=headers.get("origin")
+            )
         except Exception:
             pass
     finally:
@@ -415,9 +448,10 @@ async def _start(
     start_time: float,
     preferred_port: int,
 ) -> int:
-    global _start_time, _socket_path, _server
+    global _start_time, _socket_path, _server, _token
     _start_time = start_time
     _socket_path = socket_path
+    _token = secrets.token_urlsafe(32)
 
     port = preferred_port
     try:
@@ -723,10 +757,11 @@ window.addEventListener('hashchange', () => { if (location.hash) switchTab(locat
 if (location.hash) switchTab(location.hash.slice(1));
 
 // --- RPC ---
+const TOKEN = '__DASHBOARD_TOKEN__';
 async function rpc(method, params = {}) {
   const res = await fetch('/api', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
     body: JSON.stringify({ jsonrpc: '2.0', method, params, id: Date.now() }),
   });
   const data = await res.json();

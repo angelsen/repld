@@ -15,6 +15,8 @@ import os
 import time
 from pathlib import Path
 
+from .ipc import _pid_alive
+
 __all__ = ["register", "unregister", "list_sessions"]
 
 SESSIONS_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld" / "sessions"
@@ -53,8 +55,8 @@ def list_sessions() -> list[dict]:
     for f in SESSIONS_DIR.glob("*.json"):
         try:
             info = json.loads(f.read_text())
-            pid = info["pid"]
-            os.kill(pid, 0)  # raises if the process is gone
+            if not _pid_alive(info["pid"]):
+                continue
             result.append(info)
         except (OSError, KeyError, ValueError):
             pass

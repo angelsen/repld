@@ -15,6 +15,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import inspect
+import itertools
 import json
 import os
 import signal
@@ -284,7 +285,7 @@ def _loop_watchdog(
 # Cell execution (bg loop coroutines)
 # ---------------------------------------------------------------------------
 
-_exec_count = 0
+_exec_count = itertools.count(1)
 
 
 def _maybe_push_done(task_id: str) -> None:
@@ -328,6 +329,13 @@ def _maybe_push_done(task_id: str) -> None:
     push_channel("\n".join(parts), meta_dict)
 
 
+def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:
+    elapsed = (time.monotonic() - t_start) * 1000
+    events.emit(CellDone(task_id, elapsed, task.get("exception")))
+    tasks.finalize(task_id)
+    _maybe_push_done(task_id)
+
+
 async def _run_cell(task_id: str, src: str, n: int) -> None:
     """Coroutine that runs on the bg asyncio loop.
 
@@ -351,10 +359,7 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
         tb = traceback.format_exc()
         sys.stderr.write(tb)
         task["exception"] = "SyntaxError"
-        elapsed = (time.monotonic() - t_start) * 1000
-        events.emit(CellDone(task_id, elapsed, "SyntaxError"))
-        tasks.finalize(task_id)
-        _maybe_push_done(task_id)
+        _finalize_cell(task_id, task, t_start)
         return
 
     try:
@@ -362,10 +367,7 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
     except BaseException as exc:
         task["exception"] = type(exc).__name__
     finally:
-        elapsed = (time.monotonic() - t_start) * 1000
-        events.emit(CellDone(task_id, elapsed, task.get("exception")))
-        tasks.finalize(task_id)
-        _maybe_push_done(task_id)
+        _finalize_cell(task_id, task, t_start)
 
 
 async def _run_deferred(task_id: str, coro) -> None:
@@ -387,10 +389,7 @@ async def _run_deferred(task_id: str, coro) -> None:
         task["exception"] = type(exc).__name__
         sys.stderr.write(traceback.format_exc())
     finally:
-        elapsed = (time.monotonic() - t_start) * 1000
-        events.emit(CellDone(task_id, elapsed, task.get("exception")))
-        tasks.finalize(task_id)
-        _maybe_push_done(task_id)
+        _finalize_cell(task_id, task, t_start)
 
 
 def _make_defer(loop: asyncio.AbstractEventLoop):
@@ -515,9 +514,7 @@ class _Context:
         self.loop = loop
 
     def start_task(self, src: str):
-        global _exec_count
-        _exec_count += 1
-        n = _exec_count
+        n = next(_exec_count)
         task_id, task = tasks.new_task()
         events.emit(CellStart(task_id, src, time.time()))
         asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), self.loop)
@@ -556,9 +553,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
             {"kind": "init_error", "file": str(path), "reason": "not_found"},
         )
         return
-    global _exec_count
-    _exec_count += 1
-    n = _exec_count
+    n = next(_exec_count)
     src = path.read_text()
     # Set __main__.__file__ so the init file's Path(__file__) works the way
     # `python path/to/script.py` would.

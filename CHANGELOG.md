@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Dashboard `POST /api` sent `Access-Control-Allow-Origin: *`, letting any webpage open in any local browser drive `browser.connect`/`watch` or read captured network/console data (auth headers, cookies) via CSRF/DNS-rebinding. Now requires a random per-boot bearer token (embedded in the served dashboard page) and echoes CORS headers only for the dashboard's own origin
+
+### Fixed
+
+- Cell execution counter (`_N`/`_` history) could race and hand out duplicate numbers when two MCP sessions called `exec` concurrently, since the increment wasn't atomic across IPC reader threads
+- `repld gist add <name>` failed for gists that are only ever invoked as MCP tools (never `import`ed by user code) — they were never written to the cross-project gist registry
+
 ### Added
 
 - Type-hint gist tool registration: `_tool_*` functions with type hints are auto-discovered as MCP tools — schema inferred from parameter annotations/defaults and the first docstring line. Replaces the two-piece `__repld_tools__` + `_tool_*(args: dict)` convention with a single typed function declaration

@@ -752,10 +752,17 @@ def _schema_from_signature(func, tool_name: str) -> dict:
 
 
 def _import_gist(p: Path):
-    """Import (or reload) the gist module at *p*, returning the module object."""
+    """Import (or reload) the gist module at *p*, returning the module object.
+
+    Registers the gist even though this bypasses builtins.__import__ (and
+    thus _GistImportHook) — tool-only gists are never `import`ed by user
+    code, so this is the only chokepoint where they'd otherwise be missed.
+    """
     mod_name = p.stem
     _check_reload(mod_name)
-    return importlib.import_module(mod_name)
+    mod = importlib.import_module(mod_name)
+    _register(mod_name)
+    return mod
 
 
 def scan_tools() -> list[dict]:
