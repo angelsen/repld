@@ -26,6 +26,7 @@ pretty = [
 browser = [
     "duckdb>=1.5.2",
     "websockets>=16.0",
+    "pillow>=11.0",
 ]
 
 [dependency-groups]

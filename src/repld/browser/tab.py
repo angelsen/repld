@@ -779,7 +779,8 @@ class Tab:
         """Capture a PNG screenshot, resized to the vision API token grid.
 
         Captures full-res from CDP (no clip.scale — that races the compositor),
-        then resizes client-side with a pure-stdlib nearest-neighbor scaler.
+        then resizes via Pillow off the event loop (in a thread executor, so
+        the resize's CPU cost doesn't stall the kernel's shared asyncio loop).
         """
         import time
 
@@ -801,7 +802,15 @@ class Tab:
             _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)
         )
         if tgt_w < src_w or tgt_h < src_h:
-            img_bytes = _resize_png(img_bytes, tgt_w, tgt_h)
+            try:
+                img_bytes = await asyncio.get_running_loop().run_in_executor(
+                    None, _resize_png, img_bytes, tgt_w, tgt_h
+                )
+            except Exception:
+                # Unparseable/exotic PNG variant — report the untouched image
+                # accurately rather than resizing metadata that doesn't match
+                # the bytes actually written.
+                tgt_w, tgt_h = src_w, src_h
         scale = (
             min(tgt_w / src_w, tgt_h / src_h)
             if src_w > 0 and src_h > 0 and (tgt_w < src_w or tgt_h < src_h)

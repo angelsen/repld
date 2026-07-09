@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import Kernel
 
-from phases.browser import phase_6, phase_6_tools_and_gists
+from phases.browser import phase_6, phase_6_png_resize, phase_6_tools_and_gists
 from phases.channels import phase_4, phase_4b_pregate
 from phases.core import phase_3
 from phases.defer import phase_7_defer
@@ -34,7 +34,7 @@ PHASES = {
     3: phase_3,
     4: lambda k: (phase_4(k), phase_4b_pregate(k)),
     5: lambda k: (phase_5(k), phase_5_init(k)),
-    6: lambda k: (phase_6_tools_and_gists(k), phase_6(k)),
+    6: lambda k: (phase_6_png_resize(k), phase_6_tools_and_gists(k), phase_6(k)),
     7: phase_7_defer,
     8: phase_8_gist_resources,
     9: phase_9_gist_tools,

@@ -1,9 +1,41 @@
 """Phase 6: Tool registration, gist auto-reload, browser integration."""
 
+import io
 import json
 import time
 
 from harness import Bridge, Kernel, assert_eq, assert_true
+
+
+def phase_6_png_resize(_kernel: Kernel) -> None:
+    """Pure-function checks for browser/png.py — no kernel or Chrome needed."""
+    from PIL import Image
+
+    from repld.browser.png import _MAX_PX, _MAX_TOKENS, _model_dims, _resize_png
+
+    for mode, kind in [("RGBA", "rgba"), ("P", "palette"), ("L", "grayscale")]:
+        img = Image.new(mode, (40, 30), 0)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        resized = _resize_png(buf.getvalue(), 10, 8)
+        out = Image.open(io.BytesIO(resized))
+        assert_eq(out.size, (10, 8), f"_resize_png resizes a {kind} PNG")
+    print("  ✓ _resize_png: rgba/palette/grayscale PNGs all resize correctly")
+
+    def _tok(px: int) -> int:
+        return (px - 1) // 28 + 1
+
+    for w, h in [(3000, 3000), (4000, 1000), (1000, 4000), (100, 100)]:
+        tw, th = _model_dims(w, h)
+        assert_true(tw <= _MAX_PX and th <= _MAX_PX, f"_model_dims({w},{h}) <= max px")
+        assert_true(
+            _tok(tw) * _tok(th) <= _MAX_TOKENS,
+            f"_model_dims({w},{h}) within token budget",
+        )
+    assert_eq(
+        _model_dims(100, 100), (100, 100), "_model_dims leaves small images alone"
+    )
+    print("  ✓ _model_dims: token-budget invariants hold across sizes")
 
 
 def phase_6_tools_and_gists(kernel: Kernel) -> None:

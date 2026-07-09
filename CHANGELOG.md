@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Cell execution counter (`_N`/`_` history) could race and hand out duplicate numbers when two MCP sessions called `exec` concurrently, since the increment wasn't atomic across IPC reader threads
 - `repld gist add <name>` failed for gists that are only ever invoked as MCP tools (never `import`ed by user code) — they were never written to the cross-project gist registry
+- `browser_screenshot` silently returned the untouched, full-size PNG (with no error) for any screenshot that wasn't 8-bit RGB/RGBA — while still reporting the *intended* downscaled dimensions in the response metadata, so callers had no way to tell the image didn't actually match what was reported
+
+### Changed
+
+- `browser_screenshot`'s resize step now uses Pillow instead of a hand-rolled PNG decoder (new `pillow` dependency in the `browser` extra) — handles every PNG variant Chrome can emit and runs in a thread executor instead of blocking the kernel's shared asyncio loop for the ~150-200ms a resize takes on realistic screenshot sizes
 
 ### Added
 
