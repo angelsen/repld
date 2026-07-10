@@ -27,7 +27,6 @@ __all__ = [
     "scan_deps",
     "install_deps",
     "read_links",
-    "link_targets",
     "add_link",
     "remove_link",
     "remove_stale_links",
@@ -92,11 +91,18 @@ def _warn_once(key: str, msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+# (name, path) pairs already written to the registry this process — avoids a
+# full read-parse-write of the registry JSON on every re-import.
+_registered: set[tuple[str, str]] = set()
+
+
 def _register(name: str) -> None:
     """Record a gist import in the central registry. Best-effort, never raises."""
     try:
         src = _managed.get(name)
         if src is None:
+            return
+        if (name, str(src)) in _registered:
             return
         _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
         reg: dict = {}
@@ -110,6 +116,7 @@ def _register(name: str) -> None:
             "last_used": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         _REGISTRY_PATH.write_text(json.dumps(reg, indent=2) + "\n", "utf-8")
+        _registered.add((name, str(src)))
     except Exception:
         pass
 
@@ -720,6 +727,20 @@ def _tool_names_from_tree(tree: ast.Module) -> list[str]:
     return names
 
 
+def _tool_decls(p: Path) -> tuple[list[dict], list[str]] | None:
+    """Parse a gist file's tool declarations, or None if it doesn't parse.
+
+    Returns ``(legacy, typed_names)`` — the legacy ``__repld_tools__`` list
+    and the ``_tool_*`` function names. A non-empty *legacy* takes precedence
+    over typed names; keeping that decision here keeps ``scan_tools`` and
+    ``resolve_tool`` classifying gists identically.
+    """
+    tree = _parse(p)
+    if tree is None:
+        return None
+    return _extract_tools_from_tree(tree, p), _tool_names_from_tree(tree)
+
+
 def _is_old_style(func) -> bool:
     """True if *func* uses the legacy single ``args: dict`` handler signature."""
     sig = inspect.signature(func)
@@ -788,10 +809,10 @@ def scan_tools() -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
     for p in _iter_gist_files():
-        tree = _parse(p)
-        if tree is None:
+        decls = _tool_decls(p)
+        if decls is None:
             continue
-        legacy = _extract_tools_from_tree(tree, p)
+        legacy, tool_names = decls
         if legacy:
             _warn_deprecated(p)
             for tool in legacy:
@@ -803,7 +824,6 @@ def scan_tools() -> list[dict]:
                     results.append(tool)
             continue
 
-        tool_names = _tool_names_from_tree(tree)
         if not tool_names:
             continue
         try:
@@ -843,12 +863,12 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
     handler function.
     """
     for p in _iter_gist_files():
-        tree = _parse(p)
-        if tree is None:
+        decls = _tool_decls(p)
+        if decls is None:
             continue
-        legacy = _extract_tools_from_tree(tree, p)
+        legacy, tool_names = decls
         is_legacy = any(isinstance(t, dict) and t.get("name") == name for t in legacy)
-        if not is_legacy and name not in _tool_names_from_tree(tree):
+        if not is_legacy and name not in tool_names:
             continue
         mod = _import_gist(p)
         handler = getattr(mod, f"_tool_{name}", None)
@@ -870,9 +890,12 @@ _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
 
 def _parse_pkg_name(req: str) -> str:
     """Extract the base package name from a PEP 508 requirement string."""
-    for spec in _VERSION_SPECIFIERS:
-        if spec in req:
-            return req[: req.index(spec)].strip()
+    # Split at the earliest-occurring specifier — _VERSION_SPECIFIERS is a
+    # set, so iteration order must not decide the split point (multi-clause
+    # requirements like "foo>=1.0,!=1.2" would truncate wrongly).
+    positions = [req.index(spec) for spec in _VERSION_SPECIFIERS if spec in req]
+    if positions:
+        return req[: min(positions)].strip()
     return req.strip()
 
 

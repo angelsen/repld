@@ -8,14 +8,13 @@ no overlap:
   INSTRUCTIONS (dynamic)  → behavioral model for the agent (terse, always loaded)
   Tool descriptions       → per-tool what + gotchas (lives in protocol.py)
   Topics                  → pure API reference for the human user
-  GUIDE                   → MCP resource (repld://docs/guide) — working guide
-                            with patterns and conventions; read on demand
-  BROWSER_GUIDE           → MCP resource (repld://docs/browser) — comprehensive
-                            browser API reference, internals, and workflows
-  PLAYBOOK                → MCP resource (repld://docs/playbook) — workflow
-                            methodology: interactive → gist → trigger → production
-  PRODUCTION              → MCP resource (repld://docs/production) — graduation
-                            guide: gist → FastMCP/FastAPI with wiring examples
+  MCP resources           → on-demand docs, one constant each:
+      GUIDE          (repld://docs/guide)      working guide — patterns + conventions
+      BROWSER_GUIDE  (repld://docs/browser)    browser API reference + internals
+      PLAYBOOK       (repld://docs/playbook)   workflow methodology:
+                                               interactive → gist → trigger → production
+      PRODUCTION     (repld://docs/production) graduation guide:
+                                               gist → FastMCP/FastAPI with wiring examples
 """
 
 import json
@@ -1040,6 +1039,8 @@ Channel kinds:
   browser_unwatch       dashboard unwatched a pattern
   controls              window.controls action observation (control, action, state in meta)
   console_error         console.error or uncaught exception from watched tab
+  pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
+  browser_disconnect    dashboard disconnected a Chrome connection or tab
 """,
     "browser": """\
 Tab (async unless noted):

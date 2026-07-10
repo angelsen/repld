@@ -23,10 +23,11 @@ from .events import StdoutChunk, StderrChunk, emit
 # what's returned in the `exec` / `get_task` response body.
 PREVIEW_HEAD_LINES = 5
 PREVIEW_TAIL_LINES = 5
-PREVIEW_MAX_BYTES = 4 * 1024
+PREVIEW_MAX_BYTES = 4 * 1024  # wire budget — independent of display.VIEWER_MAX_BYTES
 PREVIEW_MAX_LINE = 400  # per-line clamp for unbroken-text lines
 
-SPILL_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld"
+RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld"
+SPILL_DIR = RUNTIME_DIR
 
 _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None

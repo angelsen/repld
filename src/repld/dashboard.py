@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import time
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -63,11 +64,8 @@ def _collect_state() -> dict:
     return state
 
 
-def _resolve_tab(target_id: str):
+def _resolve_tab(browser, target_id: str):
     """Find an attached Tab by its raw Chrome targetId."""
-    browser = getattr(__main__, "browser", None)
-    if browser is None:
-        raise RuntimeError("no browser")
     pool = browser.peek()
     if pool is None:
         raise RuntimeError("not connected")
@@ -108,6 +106,128 @@ def save_hint() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _rpc_browser_disconnect(browser, params: dict) -> Any:
+    from .kernel import push_channel
+    from .protocol import route_detach
+
+    result = await route_detach(browser, params.get("target"), params.get("port"))
+    if result is None:
+        result = await browser.disconnect()
+    push_channel(f"[dashboard] {result}", {"kind": "browser_disconnect"})
+    return {"result": result}
+
+
+async def _rpc_browser_connect(browser, params: dict) -> Any:
+    from .kernel import push_channel
+
+    port = params.get("port", 9222)
+    b = await browser.connect(port)
+    targets = await b.pages()
+    page_lines = [
+        f"  {port}:{t.get('targetId', '')[:6]}  {t.get('url', '')}"
+        for t in targets
+        if t.get("type") == "page"
+    ]
+    summary = (
+        f"[dashboard] connected to Chrome on port {port} — {len(page_lines)} page(s)"
+    )
+    if page_lines:
+        summary += "\n" + "\n".join(page_lines[:10])
+    push_channel(summary, {"kind": "browser_connect", "port": str(port)})
+    return {"connected": True, "port": port}
+
+
+async def _rpc_browser_targets(browser, params: dict) -> Any:
+    pool = browser.peek()
+    if pool is None or not pool.connected_ports:
+        raise RuntimeError("Not connected to Chrome")
+    targets = await pool.pages()
+    return [
+        {
+            "targetId": t.get("targetId", ""),
+            "type": t.get("type", ""),
+            "url": t.get("url", ""),
+            "title": t.get("title", ""),
+        }
+        for t in targets
+        if t.get("type") not in ("service_worker", "shared_worker", "worker")
+    ]
+
+
+async def _rpc_browser_watch(browser, params: dict) -> Any:
+    from .kernel import push_channel
+
+    pattern = params.get("pattern", "")
+    if not pattern:
+        raise RuntimeError("pattern is required")
+    result = await browser.watch(pattern)
+    tab_lines = [
+        f"  {t.target_id}  {t.url}" for t in browser.tabs if fnmatch(t.url, pattern)
+    ]
+    summary = f"[dashboard] watch '{pattern}': {result}"
+    if tab_lines:
+        summary += "\n" + "\n".join(tab_lines[:10])
+    push_channel(summary, {"kind": "browser_watch", "pattern": pattern})
+    return {"result": result}
+
+
+async def _rpc_browser_unwatch(browser, params: dict) -> Any:
+    from .kernel import push_channel
+
+    pattern = params.get("pattern", "")
+    if not pattern:
+        raise RuntimeError("pattern is required")
+    result = await browser.detach(pattern)
+    push_channel(
+        f"[dashboard] unwatch '{pattern}': {result}",
+        {"kind": "browser_unwatch", "pattern": pattern},
+    )
+    return {"result": result}
+
+
+async def _rpc_browser_console(browser, params: dict) -> Any:
+    tab = _resolve_tab(browser, params.get("target_id", ""))
+    rows = tab.console()
+    return [
+        {
+            "level": r.level,
+            "source": r.source,
+            "text": r.text[:500],
+            "timestamp": r.timestamp,
+        }
+        for r in rows[:50]
+    ]
+
+
+async def _rpc_browser_network(browser, params: dict) -> Any:
+    tab = _resolve_tab(browser, params.get("target_id", ""))
+    rows = tab.network()
+    return [
+        {
+            "method": r.method,
+            "status": r.status,
+            "url": r.url,
+            "type": r.type,
+            "size": r.size,
+            "time_ms": r.time_ms,
+        }
+        for r in rows[:50]
+    ]
+
+
+# Browser RPCs: handler(browser, params) — dispatch injects the validated
+# browser object. "state" and "sessions" are handled inline (no browser).
+_BROWSER_RPCS = {
+    "browser.disconnect": _rpc_browser_disconnect,
+    "browser.connect": _rpc_browser_connect,
+    "browser.targets": _rpc_browser_targets,
+    "browser.watch": _rpc_browser_watch,
+    "browser.unwatch": _rpc_browser_unwatch,
+    "browser.console": _rpc_browser_console,
+    "browser.network": _rpc_browser_network,
+}
+
+
 async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "state":
         return _collect_state()
@@ -117,116 +237,13 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 
         return sessions.list_sessions()
 
-    from .kernel import push_channel
-
+    handler = _BROWSER_RPCS.get(method)
+    if handler is None:
+        raise RuntimeError(f"Unknown method: {method}")
     browser = getattr(__main__, "browser", None)
     if browser is None:
         raise RuntimeError("repld[browser] not installed")
-
-    if method == "browser.disconnect":
-        port = params.get("port")
-        target = params.get("target")
-        if target:
-            b = browser.browser_for(target)
-            result = await b.detach_target(target)
-        elif port is not None:
-            result = await browser.disconnect(port)
-        else:
-            result = await browser.disconnect()
-        push_channel(f"[dashboard] {result}", {"kind": "browser_disconnect"})
-        return {"result": result}
-
-    if method == "browser.connect":
-        port = params.get("port", 9222)
-        b = await browser.connect(port)
-        targets = await b.pages()
-        page_lines = [
-            f"  {port}:{t.get('targetId', '')[:6]}  {t.get('url', '')}"
-            for t in targets
-            if t.get("type") == "page"
-        ]
-        summary = f"[dashboard] connected to Chrome on port {port} — {len(page_lines)} page(s)"
-        if page_lines:
-            summary += "\n" + "\n".join(page_lines[:10])
-        push_channel(summary, {"kind": "browser_connect", "port": str(port)})
-        return {"connected": True, "port": port}
-
-    if method == "browser.targets":
-        pool = browser.peek()
-        if pool is None or not pool.connected_ports:
-            raise RuntimeError("Not connected to Chrome")
-        targets = await pool.pages()
-        return [
-            {
-                "targetId": t.get("targetId", ""),
-                "type": t.get("type", ""),
-                "url": t.get("url", ""),
-                "title": t.get("title", ""),
-            }
-            for t in targets
-            if t.get("type") not in ("service_worker", "shared_worker", "worker")
-        ]
-
-    if method == "browser.watch":
-        pattern = params.get("pattern", "")
-        if not pattern:
-            raise RuntimeError("pattern is required")
-        result = await browser.watch(pattern)
-        import fnmatch
-
-        tab_lines = [
-            f"  {t.target_id}  {t.url}"
-            for t in browser.tabs
-            if fnmatch.fnmatch(t.url, pattern)
-        ]
-        summary = f"[dashboard] watch '{pattern}': {result}"
-        if tab_lines:
-            summary += "\n" + "\n".join(tab_lines[:10])
-        push_channel(summary, {"kind": "browser_watch", "pattern": pattern})
-        return {"result": result}
-
-    if method == "browser.unwatch":
-        pattern = params.get("pattern", "")
-        if not pattern:
-            raise RuntimeError("pattern is required")
-        result = await browser.detach(pattern)
-        push_channel(
-            f"[dashboard] unwatch '{pattern}': {result}",
-            {"kind": "browser_unwatch", "pattern": pattern},
-        )
-        return {"result": result}
-
-    if method == "browser.console":
-        target_id = params.get("target_id", "")
-        tab = _resolve_tab(target_id)
-        rows = tab.console()
-        return [
-            {
-                "level": r.level,
-                "source": r.source,
-                "text": r.text[:500],
-                "timestamp": r.timestamp,
-            }
-            for r in rows[:50]
-        ]
-
-    if method == "browser.network":
-        target_id = params.get("target_id", "")
-        tab = _resolve_tab(target_id)
-        rows = tab.network()
-        return [
-            {
-                "method": r.method,
-                "status": r.status,
-                "url": r.url,
-                "type": r.type,
-                "size": r.size,
-                "time_ms": r.time_ms,
-            }
-            for r in rows[:50]
-        ]
-
-    raise RuntimeError(f"Unknown method: {method}")
+    return await handler(browser, params)
 
 
 # ---------------------------------------------------------------------------

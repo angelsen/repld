@@ -185,24 +185,14 @@ def _check_controls_observation(params: dict, target_id: str) -> None:
         pass
 
 
-def _push_console_error(
-    params: dict,
+def _push_error_text(
+    text: str,
     target_id: str,
     port: int,
-    loop: asyncio.AbstractEventLoop | None = None,
+    loop: asyncio.AbstractEventLoop | None,
 ) -> None:
-    """Push console.error messages as channel notifications."""
-    args = params.get("args", [])
-    parts = []
-    for a in args:
-        val = (
-            a.get("value")
-            or a.get("description")
-            or a.get("preview", {}).get("description", "")
-        )
-        if val:
-            parts.append(str(val))
-    text = " ".join(parts)[:300]
+    """Suppression-check, truncate, and dedup-push a console error line."""
+    text = text[:300]
     if not text or _is_suppressed(text):
         return
     short_id = f"{port}:{target_id[:6]}"
@@ -214,6 +204,25 @@ def _push_console_error(
     )
 
 
+def _push_console_error(
+    params: dict,
+    target_id: str,
+    port: int,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
+    """Push console.error messages as channel notifications."""
+    parts = []
+    for a in params.get("args", []):
+        val = (
+            a.get("value")
+            or a.get("description")
+            or a.get("preview", {}).get("description", "")
+        )
+        if val:
+            parts.append(str(val))
+    _push_error_text(" ".join(parts), target_id, port, loop)
+
+
 def _push_exception(
     params: dict,
     target_id: str,
@@ -223,16 +232,8 @@ def _push_exception(
     """Push uncaught exceptions as channel notifications."""
     details = params.get("exceptionDetails", {})
     exc = details.get("exception", {})
-    text = exc.get("description") or details.get("text", "")
-    text = text[:300]
-    if not text or _is_suppressed(text):
-        return
-    short_id = f"{port}:{target_id[:6]}"
-    _dedup_push(
-        f"[console:error] {short_id}: {text}",
-        {"kind": "console_error", "target": short_id},
-        text[:100],
-        loop,
+    _push_error_text(
+        exc.get("description") or details.get("text", ""), target_id, port, loop
     )
 
 
@@ -282,13 +283,17 @@ class CDPSession:
         # Binding handler (set by Tab._setup_binding)
         self._binding_handler: Any | None = None
 
-        # Pin state — lives here (not on Tab) because Tab wrappers are
-        # ephemeral (a fresh Tab is constructed on every _iter_tabs()/get()
-        # call) while CDPSession persists for the life of the attachment.
+        # Pin + label state — lives here (not on Tab) because Tab wrappers
+        # are ephemeral (a fresh Tab is constructed on every _iter_tabs()/
+        # get() call) while CDPSession persists for the life of the
+        # attachment.
         self._pinned: bool = False
         self._pin_reason: str = ""
         self._pin_origin: str = ""
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._label_text: str | None = None
+        self._label_color: str | None = None
+        self._label_script_id: str | None = None
 
     def _setup_schema(self) -> None:
         """Create events table, indexes, and HAR views."""
@@ -503,6 +508,18 @@ class CDPSession:
             raise RuntimeError(
                 "CDPSession has no event loop — cannot fetch body via CDP"
             )
+        try:
+            on_loop = asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            on_loop = False
+        if on_loop:
+            # Blocking on fut.result() here would stall the loop the
+            # coroutine needs, timing out after 10s. Fail fast instead.
+            return {
+                "error": "body not in capture store; a blocking CDP fetch would "
+                "stall the kernel loop — use await tab.cdp("
+                "'Network.getResponseBody', requestId=...) instead"
+            }
         fut = asyncio.run_coroutine_threadsafe(
             self.execute("Network.getResponseBody", {"requestId": request_id}),
             self._loop,

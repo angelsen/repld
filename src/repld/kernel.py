@@ -33,9 +33,10 @@ from .ipc import read_lock
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
-DEFAULT_SOCKET_PATH = Path(
-    os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock"))
-)
+
+def _default_socket_path() -> Path:
+    """Resolved at call time — cwd may change between import and run_kernel."""
+    return Path(os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock")))
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +601,50 @@ def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
     ipc.stop_server()
 
 
+def _restore_browser_state(hint: dict, loop: asyncio.AbstractEventLoop) -> None:
+    """Recover browser state from the previous kernel's dashboard hint.
+
+    Reconnects saved Chrome ports, re-watches patterns, and restores the
+    console-error suppress list. Best-effort — failures are reported to
+    stderr but never block boot.
+    """
+    browser = getattr(__main__, "browser", None)
+    if browser is not None:
+        for port in hint.get("chrome_ports", []):
+            try:
+                asyncio.run_coroutine_threadsafe(browser.connect(port), loop).result(
+                    timeout=5
+                )
+            except Exception as e:
+                print(
+                    f"repld: failed to reconnect Chrome port {port}: {e}",
+                    file=sys.stderr,
+                )
+        for pattern in hint.get("patterns", []):
+            try:
+                asyncio.run_coroutine_threadsafe(browser.watch(pattern), loop).result(
+                    timeout=5
+                )
+            except Exception as e:
+                print(
+                    f"repld: failed to re-watch pattern {pattern!r}: {e}",
+                    file=sys.stderr,
+                )
+        if hint.get("chrome_ports") or hint.get("patterns"):
+            from . import dashboard
+
+            dashboard.save_hint()
+
+    suppress_list = hint.get("suppress", [])
+    if suppress_list:
+        try:
+            from .browser.cdp import _suppress_patterns
+
+            _suppress_patterns.update(suppress_list)
+        except ImportError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
@@ -611,7 +656,7 @@ def run_kernel(
     display: bool = True,
     init_file: str | None = None,
 ) -> int:
-    sock_path = Path(socket_path) if socket_path else DEFAULT_SOCKET_PATH
+    sock_path = Path(socket_path) if socket_path else _default_socket_path()
     _check_existing_kernel(sock_path)
 
     # 1. Start the asyncio loop on a daemon thread.
@@ -691,11 +736,7 @@ def run_kernel(
     global _active_lock_path
     ctx = _Context(loop)
     dispatcher = Dispatcher(ctx)
-
-    def _handler(req: dict, session: ipc.Session) -> dict | None:
-        return dispatcher.handle(req, session)
-
-    ipc.start_server(sock_path, _handler)
+    ipc.start_server(sock_path, dispatcher.handle)
 
     # 4b. Dashboard HTTP server — reuse previous state from persistent hint file.
     from . import dashboard
@@ -725,45 +766,13 @@ def run_kernel(
     except Exception as e:
         print(f"repld: dashboard failed to start: {e}", file=sys.stderr)
 
-    # Auto-reconnect saved Chrome ports and re-watch patterns.
-    _browser = getattr(__main__, "browser", None)
-    if _browser is not None:
-        for port in hint.get("chrome_ports", []):
-            try:
-                asyncio.run_coroutine_threadsafe(_browser.connect(port), loop).result(
-                    timeout=5
-                )
-            except Exception as e:
-                print(
-                    f"repld: failed to reconnect Chrome port {port}: {e}",
-                    file=sys.stderr,
-                )
-        for pattern in hint.get("patterns", []):
-            try:
-                asyncio.run_coroutine_threadsafe(_browser.watch(pattern), loop).result(
-                    timeout=5
-                )
-            except Exception as e:
-                print(
-                    f"repld: failed to re-watch pattern {pattern!r}: {e}",
-                    file=sys.stderr,
-                )
-        if hint.get("chrome_ports") or hint.get("patterns"):
-            dashboard.save_hint()
-
-    # Restore suppress patterns for console error filtering.
-    suppress_list = hint.get("suppress", [])
-    if suppress_list:
-        try:
-            from .browser.cdp import _suppress_patterns
-
-            _suppress_patterns.update(suppress_list)
-        except ImportError:
-            pass
+    _restore_browser_state(hint, loop)
 
     _write_lockfile(sock_path, dashboard_port=dashboard_port)
     _active_lock_path = _lock_for(sock_path)
     atexit.register(_cleanup_lockfile)
+    # _shutdown() also stops the server; this covers abnormal exits that
+    # never reach it. stop_server is idempotent, so the overlap is safe.
     atexit.register(ipc.stop_server)
 
     sessions.register(os.getcwd(), str(sock_path), dashboard_port)

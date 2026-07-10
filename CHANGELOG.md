@@ -17,9 +17,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `browser_screenshot` silently returned the untouched, full-size PNG (with no error) for any screenshot that wasn't 8-bit RGB/RGBA — while still reporting the *intended* downscaled dimensions in the response metadata, so callers had no way to tell the image didn't actually match what was reported
 - `Tab.sse()` / `Tab.lifecycle()` queried with `LIMIT 500` but no `ORDER BY`, while their backing views (`sse_entries`, `lifecycle_entries`) are defined oldest-first. Once a session passed 500 SSE messages or lifecycle events, these methods silently returned the *oldest* entries instead of the most recent — the opposite of every sibling query method (`network()`, `console()`)
 - Browser doc drift: the `repld help browser` topic documented `tab.type_text(..., enter=)` (the real parameter is `press_enter=`) and neither it nor `docs/browser` listed `tab.key()`; the `confirm()`/`choose()` type stubs were missing the `tab=` parameter that routes gates to a pinned tab's pill UI
+- `BrowserSession.connect()` fetched `/json/version` with a synchronous `urllib.request.urlopen(timeout=5)` on the kernel's shared asyncio loop — every connect *and* auto-reconnect could stall the whole kernel for up to 5s when Chrome was slow or unreachable. Now runs in a thread via `asyncio.to_thread`
+- `tab.body()` / `row.body()` called from `exec` code (which runs *on* the kernel loop) deadlocked for 10s and then errored whenever the body wasn't in the capture store — the sync CDP fallback blocked the very loop it needed to run its coroutine on. Now fails fast with guidance to use `await tab.cdp('Network.getResponseBody', ...)` instead; the thread-side (MCP tool) path is unchanged
+- `browser_screenshot` wrote the PNG to disk synchronously on the kernel loop; the write now runs in a thread executor like the resize step
+- Tab label state (`tab.label`) lived on the ephemeral `Tab` wrapper, so re-labelling a re-fetched tab orphaned the previous label's injected script and DOM bar instead of replacing it. Label state now lives on `CDPSession`, matching pin state
+- Re-attach with a CSS `ready=` selector always timed out: the ready poll held a `DOM.getDocument` nodeId from before the page settled, which goes stale when the document is replaced mid-load and then silently never matches. The poll now evaluates `document.querySelector(...)` via `Runtime.evaluate`
+- `_parse_pkg_name` split multi-clause requirements (`foo>=1.0,!=1.2`) at whichever version specifier set iteration found first, sometimes producing a mangled package name and a spurious install prompt. Now splits at the earliest-occurring specifier
+- Channel-kinds doc in `repld help exec` was missing `pin_lost` and `browser_disconnect`
 
 ### Changed
 
+- `BrowserSession.attach()` accepts the caller's target-info dict and skips a redundant `Target.getTargets` round-trip — `watch()` on N matching tabs no longer issues N full target listings
+- Gist registry writes are skipped after the first import of a given gist per kernel process (previously a full read-parse-write of the registry JSON on every re-import)
+- Importing `repld.display` no longer asserts on `sys.__stdout__`/`sys.__stdin__` at import time, so `--no-display` works in stdio-less environments; display mode checks at startup instead
 - `browser_screenshot`'s resize step now uses Pillow instead of a hand-rolled PNG decoder (new `pillow` dependency in the `browser` extra) — handles every PNG variant Chrome can emit and runs in a thread executor instead of blocking the kernel's shared asyncio loop for the ~150-200ms a resize takes on realistic screenshot sizes
 
 ### Added

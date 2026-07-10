@@ -11,6 +11,8 @@ import queue
 import sys
 import threading
 import time
+from typing import TextIO, cast
+
 from . import tasks
 from .events import (
     BrowserTabAttached,
@@ -50,12 +52,12 @@ _RESET = "\033[0m"
 _BOLD = "\033[1m"
 
 
-# Pinned at import time. typeshed types these as Optional (could be None in
-# GUI/no-console contexts); for a kernel running in a real terminal they're
-# guaranteed non-None.
-assert sys.__stdout__ is not None and sys.__stdin__ is not None
-_STDOUT = sys.__stdout__
-_STDIN = sys.__stdin__
+# Pinned at import time. typeshed types these as Optional (None in GUI /
+# no-console contexts); run_display() checks at entry, and --no-display
+# (make_drainer) never touches them — so importing this module must stay
+# safe without a terminal.
+_STDOUT = cast(TextIO, sys.__stdout__)
+_STDIN = cast(TextIO, sys.__stdin__)
 
 
 def _out(text: str) -> None:
@@ -77,6 +79,8 @@ _awaiting_gate_kind: str | None = None
 # Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
 # edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
 # via the spill file; Read/Grep on that path is the escape hatch.
+# Independent of tasks.PREVIEW_MAX_BYTES (wire budget) — same value by
+# coincidence, not by contract.
 VIEWER_MAX_BYTES = 4 * 1024
 # Per-task (bytes_written, last_char_was_newline).
 _viewer_state: dict[str, tuple[int, bool]] = {}
@@ -348,6 +352,10 @@ def run_display(stop: threading.Event) -> None:
     Pops events from the event queue and renders them. Also drives a
     companion stdin-reader thread for human gates.
     """
+    if sys.__stdout__ is None or sys.__stdin__ is None:
+        raise RuntimeError(
+            "display mode requires a terminal (stdio missing) — use --no-display"
+        )
     q = get_queue()
 
     stdin_thread = threading.Thread(

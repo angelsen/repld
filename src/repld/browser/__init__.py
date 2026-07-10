@@ -15,7 +15,7 @@ Then in user code:
 """
 
 import asyncio
-import fnmatch
+from fnmatch import fnmatch
 import logging
 import os
 import re
@@ -173,7 +173,7 @@ class Browser:
         for t in await self._session.list_targets():
             tid = t.get("targetId", "")
             if tid and tid[:6].lower() == prefix:
-                cdp = await self._session.attach(tid)
+                cdp = await self._session.attach(tid, t)
                 if cdp is not None:
                     await cdp.enable_fetch()
                     return Tab(cdp, tid, self.port, ready=ready)
@@ -197,13 +197,13 @@ class Browser:
         if fresh:
             for cdp in self._session._sessions.values():
                 url = cdp.target_info.get("url", "")
-                if fnmatch.fnmatch(url, pattern):
+                if fnmatch(url, pattern):
                     exclude.add(cdp.target_info.get("targetId", ""))
             await self._ensure_connected()
             for t in await self._session.list_targets():
                 url = t.get("url", "")
                 tid = t.get("targetId", "")
-                if fnmatch.fnmatch(url, pattern) and tid:
+                if fnmatch(url, pattern) and tid:
                     exclude.add(tid)
 
         deadline = (
@@ -215,7 +215,7 @@ class Browser:
                     continue
                 url = cdp.target_info.get("url", "")
                 tid = cdp.target_info.get("targetId", "")
-                if fnmatch.fnmatch(url, pattern) and tid not in exclude:
+                if fnmatch(url, pattern) and tid not in exclude:
                     return Tab(cdp, tid, self.port, ready=ready)
 
             await self._ensure_connected()
@@ -224,8 +224,8 @@ class Browser:
                     continue
                 url = t.get("url", "")
                 tid = t.get("targetId", "")
-                if fnmatch.fnmatch(url, pattern) and tid and tid not in exclude:
-                    cdp = await self._session.attach(tid)
+                if fnmatch(url, pattern) and tid and tid not in exclude:
+                    cdp = await self._session.attach(tid, t)
                     if cdp is not None:
                         await cdp.enable_fetch()
                         return Tab(cdp, tid, self.port, ready=ready)
@@ -250,21 +250,21 @@ class Browser:
         # Attach any targets that match the pattern and aren't already attached
         newly_attached: list[str] = []
         targets = await self._session.list_targets()
-        to_attach: list[str] = []
+        to_attach: list[tuple[str, dict]] = []
         for t in targets:
             if t.get("type", "") in WORKER_TYPES:
                 continue
             tid = t.get("targetId", "")
             url = t.get("url", "")
-            if fnmatch.fnmatch(url, pattern) and tid:
+            if fnmatch(url, pattern) and tid:
                 if self._session.find_by_target_id(tid) is None:
-                    to_attach.append(tid)
+                    to_attach.append((tid, t))
 
         failures: list[tuple[str, str]] = []
 
-        async def _attach_one(tid: str) -> str | None:
+        async def _attach_one(tid: str, info: dict) -> str | None:
             try:
-                await self._session.attach(tid)
+                await self._session.attach(tid, info)
                 self._session._watched_patterns.setdefault(pattern, set()).add(tid)
                 return tid
             except Exception as exc:
@@ -272,7 +272,9 @@ class Browser:
                 failures.append((tid, str(exc)))
                 return None
 
-        results = await asyncio.gather(*[_attach_one(tid) for tid in to_attach])
+        results = await asyncio.gather(
+            *[_attach_one(tid, info) for tid, info in to_attach]
+        )
         newly_attached = [tid for tid in results if tid]
 
         total = len(self._session._sessions)
@@ -326,7 +328,7 @@ class Browser:
         to_detach: list[str] = []
         for sid, cdp in list(self._session._sessions.items()):
             url = cdp.target_info.get("url", "")
-            if fnmatch.fnmatch(url, pattern):
+            if fnmatch(url, pattern):
                 to_detach.append(sid)
 
         for sid in to_detach:

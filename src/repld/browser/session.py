@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 __all__ = ["BrowserSession"]
 
 
+def _fetch_version_info(port: int) -> dict:
+    """Blocking /json/version fetch — call via asyncio.to_thread."""
+    with urllib.request.urlopen(
+        f"http://localhost:{port}/json/version", timeout=5
+    ) as resp:
+        return json.loads(resp.read())
+
+
 class BrowserSession:
     """Browser-level WebSocket connection with CDP session multiplexing.
 
@@ -71,12 +79,10 @@ class BrowserSession:
         """Connect to Chrome DevTools WebSocket endpoint."""
         import websockets  # type: ignore[import-untyped]
 
-        # Fetch browser WS URL from /json/version using stdlib urllib
+        # Fetch browser WS URL from /json/version using stdlib urllib.
+        # Off-loop: urlopen blocks up to 5s and this runs on the kernel loop.
         try:
-            with urllib.request.urlopen(
-                f"http://localhost:{self.port}/json/version", timeout=5
-            ) as resp:
-                version_info = json.loads(resp.read())
+            version_info = await asyncio.to_thread(_fetch_version_info, self.port)
         except Exception as exc:
             raise RuntimeError(
                 f"Cannot reach Chrome on port {self.port}: {exc}"
@@ -328,11 +334,15 @@ class BrowserSession:
                 return cdp
         return None
 
-    async def attach(self, target_id: str) -> CDPSession | None:
+    async def attach(
+        self, target_id: str, target_info: dict | None = None
+    ) -> CDPSession | None:
         """Attach to a target and return a CDPSession.
 
         Returns the existing CDPSession if this target_id is already attached,
         or None if another attach call is already in-flight for this target.
+        Callers that already hold the target's info dict (from list_targets()
+        or a Target.* event) pass it to skip a Target.getTargets round-trip.
         """
         # Guard: return existing session if already attached to this target
         existing = self.find_by_target_id(target_id)
@@ -354,12 +364,13 @@ class BrowserSession:
             if session_id in self._sessions:
                 return self._sessions[session_id]
 
-            # Fetch target info
-            targets_result = await self.execute("Target.getTargets")
-            target_infos = targets_result.get("targetInfos", [])
-            target_info = next(
-                (t for t in target_infos if t.get("targetId") == target_id), {}
-            )
+            # Fetch target info unless the caller already had it
+            if target_info is None:
+                targets_result = await self.execute("Target.getTargets")
+                target_infos = targets_result.get("targetInfos", [])
+                target_info = next(
+                    (t for t in target_infos if t.get("targetId") == target_id), {}
+                )
 
             cdp = CDPSession(
                 self.execute,
@@ -553,7 +564,7 @@ class BrowserSession:
     async def _auto_attach(self, target_info: dict, target_id: str) -> None:
         """Auto-attach to a newly-matched target."""
         try:
-            await self.attach(target_id)
+            await self.attach(target_id, target_info)
             # Update pattern tracking
             url = target_info.get("url", "")
             for pattern, ids in self._watched_patterns.items():

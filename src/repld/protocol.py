@@ -512,6 +512,21 @@ _BROWSER_RESOURCES = [
 ]
 
 
+async def route_detach(browser, target, port) -> str | None:
+    """Shared target/port detach routing (MCP tool + dashboard RPC).
+
+    Returns None when neither target nor port is given — the no-arg
+    fallbacks differ by design (MCP: detach tabs, keep the WebSocket;
+    dashboard: full disconnect) and stay at the call sites.
+    """
+    if target:
+        b = browser.browser_for(target)
+        return await b.detach_target(target)
+    if port is not None:
+        return await browser.disconnect(port)
+    return None
+
+
 class KernelContext(Protocol):
     loop: asyncio.AbstractEventLoop
 
@@ -522,16 +537,10 @@ class KernelContext(Protocol):
 
 
 class Dispatcher:
-    def __init__(
-        self,
-        ctx: KernelContext,
-        *,
-        server_name: str = "repld",
-    ):
+    def __init__(self, ctx: KernelContext):
         from . import __version__
 
         self.ctx = ctx
-        self.server_name = server_name
         self.server_version = __version__
 
     def handle(self, req: dict, session) -> dict | None:
@@ -570,7 +579,7 @@ class Dispatcher:
                     },
                 },
                 "serverInfo": {
-                    "name": self.server_name,
+                    "name": "repld",
                     "version": self.server_version,
                 },
                 "instructions": _build_instructions(),
@@ -744,14 +753,12 @@ class Dispatcher:
         return {"result": self._run_async(browser.watch(args["pattern"]))}
 
     def _bh_detach(self, browser, args):
-        target = args.get("target")
-        port = args.get("port")
-        if target:
-            b = browser.browser_for(target)
-            return {"result": self._run_async(b.detach_target(target))}
-        if port is not None:
-            return {"result": self._run_async(browser.disconnect(port))}
-        return {"result": self._run_async(browser.detach(args.get("pattern")))}
+        result = self._run_async(
+            route_detach(browser, args.get("target"), args.get("port"))
+        )
+        if result is None:
+            result = self._run_async(browser.detach(args.get("pattern")))
+        return {"result": result}
 
     def _bh_tabs(self, browser, args):
         return browser.format_tabs_nested()

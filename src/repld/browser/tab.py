@@ -65,17 +65,14 @@ class Tab:
     def __init__(
         self,
         session: CDPSession,
-        target_id: str,
+        chrome_target_id: str,  # long Chrome-native ID; .target_id is the short form
         port: int = 9222,
         ready: str | None = None,
     ) -> None:
         self._session = session
-        self._chrome_target_id = target_id
+        self._chrome_target_id = chrome_target_id
         self._port = port
         self._ready = ready
-        self._label_text: str | None = None
-        self._label_color: str | None = None
-        self._label_script_id: str | None = None
 
     @property
     def _pinned(self) -> bool:
@@ -139,7 +136,7 @@ class Tab:
     @property
     def label(self) -> str | None:
         """Current label text, or None."""
-        return self._label_text
+        return self._session._label_text
 
     @label.setter
     def label(self, value: str | tuple[str, str] | None) -> None:
@@ -155,12 +152,13 @@ class Tab:
 
     async def _set_label(self, value: str | tuple[str, str] | None) -> None:
         """Apply or remove the label bar."""
+        session = self._session
         # Remove existing label script + DOM
-        if self._label_script_id is not None:
+        if session._label_script_id is not None:
             try:
-                await self._session.execute(
+                await session.execute(
                     "Page.removeScriptToEvaluateOnNewDocument",
-                    {"identifier": self._label_script_id},
+                    {"identifier": session._label_script_id},
                 )
             except Exception:
                 pass
@@ -171,9 +169,9 @@ class Tab:
                 )
             except Exception:
                 pass
-            self._label_script_id = None
-            self._label_text = None
-            self._label_color = None
+            session._label_script_id = None
+            session._label_text = None
+            session._label_color = None
 
         if value is None:
             return
@@ -185,13 +183,13 @@ class Tab:
 
         js = _LABEL_JS.replace("%TEXT%", json.dumps(text)).replace("%COLOR%", color)
 
-        result = await self._session.execute(
+        result = await session.execute(
             "Page.addScriptToEvaluateOnNewDocument",
             {"source": js, "runImmediately": True},
         )
-        self._label_script_id = result.get("identifier")
-        self._label_text = text
-        self._label_color = color
+        session._label_script_id = result.get("identifier")
+        session._label_text = text
+        session._label_color = color
 
     # ------------------------------------------------------------------
     # Pin API
@@ -364,14 +362,16 @@ class Tab:
             await self._wait_ready_js(ready, timeout)
 
     async def _wait_ready_selector(self, selector: str, timeout: float = 10) -> None:
-        doc = await self._session.execute("DOM.getDocument")
-        root_id = doc["root"]["nodeId"]
+        # Poll via Runtime.evaluate — a DOM.getDocument nodeId goes stale
+        # when the document is replaced mid-load, silently never matching.
+        expr = f"!!document.querySelector({json.dumps(selector)})"
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
             result = await self._session.execute(
-                "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+                "Runtime.evaluate",
+                {"expression": expr, "returnByValue": True},
             )
-            if result.get("nodeId", 0) != 0:
+            if result.get("result", {}).get("value"):
                 return
             await asyncio.sleep(0.1)
         raise RuntimeError(f"Ready signal not found after re-attach: {selector}")
@@ -846,7 +846,9 @@ class Tab:
             _ensure_spill_dir()
             tid = self.target_id.replace(":", "-")
             out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
-        out.write_bytes(img_bytes)
+        await asyncio.get_running_loop().run_in_executor(
+            None, out.write_bytes, img_bytes
+        )
         return {
             "path": str(out),
             "source": {"width": src_w, "height": src_h},

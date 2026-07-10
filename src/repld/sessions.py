@@ -16,10 +16,11 @@ import time
 from pathlib import Path
 
 from .ipc import _pid_alive
+from .tasks import RUNTIME_DIR
 
 __all__ = ["register", "unregister", "list_sessions"]
 
-SESSIONS_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld" / "sessions"
+SESSIONS_DIR = RUNTIME_DIR / "sessions"
 
 
 def _session_path(pid: int | None = None) -> Path:
