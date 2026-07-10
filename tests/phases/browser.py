@@ -107,6 +107,96 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
         b.close()
 
 
+def phase_6_label_and_reattach(kernel: Kernel) -> None:
+    """Label state survives Tab re-wrapping; ready-selector poll survives a
+    document replacement mid-wait (regression: stale DOM.getDocument root).
+
+    Requires Chrome with --remote-debugging-port=9222; skips gracefully.
+    """
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        print("  - phase 6 label/reattach: websockets not installed, skipping")
+        return
+
+    import urllib.request as _urlreq
+
+    try:
+        with _urlreq.urlopen("http://localhost:9222/json/version", timeout=2) as r:
+            r.read()
+    except Exception:
+        print("  - phase 6 label/reattach: Chrome not available, skipping")
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        def _exec(code: str) -> str:
+            resp = b.call(
+                "tools/call",
+                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
+                timeout=30.0,
+            )
+            return resp["result"]["content"][0]["text"]
+
+        # Label set on one Tab wrapper must be visible on a fresh wrapper for
+        # the same target (state lives on CDPSession, Tabs are ephemeral).
+        out = _exec(
+            "import asyncio\n"
+            "_t1 = await browser.open('data:text/html,<p>label-test</p>')\n"
+            "_t1.label = 'phase6'\n"
+            "await asyncio.sleep(0.5)\n"
+            "_t2 = await browser.get(_t1.target_id)\n"
+            "print('LABEL=' + repr(_t2.label))"
+        )
+        assert_true("LABEL='phase6'" in out, f"label survives re-get (got {out!r})")
+
+        # Re-labelling via the fresh wrapper must replace the old bar, not
+        # orphan it (the old wrapper lost _label_script_id before the fix).
+        out = _exec(
+            "_t2.label = 'phase6b'\n"
+            "await asyncio.sleep(0.5)\n"
+            "print('BARS=', await _t2.js("
+            "\"document.querySelectorAll('#__repld_label_bar').length\"))"
+        )
+        assert_true("BARS= 1" in out, f"single label bar after re-label (got {out!r})")
+        print("  ✓ label survives Tab re-wrap; re-label replaces, no orphaned bar")
+
+        # Ready-selector poll: navigate (replacing the document) while the
+        # poll is waiting for an element only the *next* document has. The
+        # old DOM.getDocument root went stale here and never matched.
+        out = _exec(
+            "_t3 = await browser.open('data:text/html,<p>one</p>')\n"
+            "async def _nav():\n"
+            "    await asyncio.sleep(0.5)\n"
+            "    await _t3.cdp('Page.navigate',"
+            " url='data:text/html,<div id=\"late-el\">two</div>')\n"
+            "_nt = asyncio.create_task(_nav())\n"
+            "await _t3._wait_ready_selector('#late-el', timeout=8)\n"
+            "await _nt\n"
+            "print('READY-OK')"
+        )
+        assert_true(
+            "READY-OK" in out,
+            f"ready-selector survives document replacement (got {out!r})",
+        )
+        print("  ✓ ready-selector poll survives mid-wait navigation")
+
+        # Close the tabs we opened, then detach everything.
+        _exec(
+            "for _t in (_t1, _t3):\n"
+            "    try:\n"
+            "        await _t.cdp('Page.close')\n"
+            "    except Exception:\n"
+            "        pass"
+        )
+        b.call("tools/call", {"name": "browser_detach", "arguments": {}}, timeout=5.0)
+    finally:
+        b.close()
+
+
 def phase_6(kernel: Kernel) -> None:
     """Browser integration — requires Chrome with --remote-debugging-port=9222.
 
