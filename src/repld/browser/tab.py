@@ -28,6 +28,20 @@ from .selector import resolve as _resolve_selector
 __all__ = ["Tab", "BrowserJSError"]
 
 
+def _format_stack_trace(stack_trace: dict | None) -> str:
+    """Render a CDP Runtime.StackTrace as a JS-style multi-line stack string."""
+    if not stack_trace:
+        return ""
+    lines = []
+    for frame in stack_trace.get("callFrames", []):
+        name = frame.get("functionName") or "<anonymous>"
+        url = frame.get("url", "")
+        line = frame.get("lineNumber", 0) + 1
+        col = frame.get("columnNumber", 0) + 1
+        lines.append(f"    at {name} ({url}:{line}:{col})")
+    return "\n".join(lines)
+
+
 class BrowserJSError(Exception):
     """Raised when JavaScript evaluation throws an exception in the browser."""
 
@@ -188,16 +202,25 @@ class Tab:
         session = self._session
         if not session._pinned:
             session._pin_origin = await self.js("location.origin")
-            await self._setup_binding()
-            await self.js(_PIN_JS)
-            session._pinned = True
             session._pin_reason = reason
+            await self._inject_pin()
+            session._pinned = True
             session._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(), name="repld-pill-heartbeat"
             )
-        if reason:
+        elif reason:
             session._pin_reason = reason
             await self.js(f"__repld_update({{reason: {json.dumps(reason)}}})")
+
+    async def _inject_pin(self) -> None:
+        """Set up the binding + inject the pill JS + re-apply the reason label."""
+        session = self._session
+        await self._setup_binding()
+        await self.js(_PIN_JS)
+        if session._pin_reason:
+            await self.js(
+                f"__repld_update({{reason: {json.dumps(session._pin_reason)}}})"
+            )
 
     async def unpin(self) -> None:
         """Remove pill + beforeunload + heartbeat."""
@@ -235,12 +258,7 @@ class Tab:
                 continue
             if status == "reload":
                 try:
-                    await self._setup_binding()
-                    await self.js(_PIN_JS)
-                    if session._pin_reason:
-                        await self.js(
-                            f"__repld_update({{reason: {json.dumps(session._pin_reason)}}})"
-                        )
+                    await self._inject_pin()
                 except Exception:
                     misses += 1
                     if misses >= 3:
@@ -452,7 +470,7 @@ class Tab:
             details = result["exceptionDetails"]
             exc_obj = details.get("exception", {})
             text = exc_obj.get("description") or details.get("text", "JavaScript error")
-            stack = exc_obj.get("description", "")
+            stack = _format_stack_trace(details.get("stackTrace"))
             url = details.get("url", "")
             line = details.get("lineNumber", 0)
             raise BrowserJSError(text, stack, url, line)

@@ -15,6 +15,8 @@ from .tasks import spill_text as _spill_text
 
 PROTOCOL_VERSION = "2024-11-05"
 
+_TARGET_DESC = "Chrome target_id from browser_tabs"
+
 TOOLS = [
     {
         "name": "exec",
@@ -117,7 +119,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "code": {
                     "type": "string",
@@ -142,7 +144,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "url": {"type": "string", "description": "URL substring filter"},
                 "method": {
@@ -168,7 +170,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "request_id": {"type": "string"},
             },
@@ -183,7 +185,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "request_id": {"type": "string"},
             },
@@ -202,7 +204,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "url": {"type": "string"},
                 "force": {
@@ -239,7 +241,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "key": {
                     "type": "string",
@@ -260,7 +262,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
             },
             "required": ["target"],
@@ -280,7 +282,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "url": {"type": "string"},
                 "method": {"type": "string", "default": "GET"},
@@ -311,7 +313,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "selector": {
                     "type": "string",
@@ -332,7 +334,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "selector": {"type": "string"},
                 "text": {"type": "string"},
@@ -349,7 +351,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "level": {
                     "type": "string",
@@ -368,7 +370,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "full_page": {"type": "boolean", "default": False},
             },
@@ -383,7 +385,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "method": {
                     "type": "string",
@@ -421,7 +423,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
             },
             "required": ["target"],
@@ -438,7 +440,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Chrome target_id from browser_tabs",
+                    "description": _TARGET_DESC,
                 },
                 "control": {
                     "type": "string",

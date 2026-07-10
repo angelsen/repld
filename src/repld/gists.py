@@ -45,12 +45,9 @@ _installed_dirs: list[Path] = []  # set by install()
 _linked: dict[str, Path] = {}
 _LINKS_FILENAME = ".links"
 
-# Dedup warnings for malformed __repld_tools__ / __repld_deps__ so boot warns
-# once but subsequent tools/list scans stay quiet.
+# Dedup warnings (malformed __repld_tools__ / __repld_deps__, deprecation
+# notices, ...) so boot warns once but subsequent tools/list scans stay quiet.
 _malformed_warned: set[str] = set()
-
-# Dedup the __repld_tools__ deprecation warning: once per gist file.
-_deprecated_warned: set[str] = set()
 
 # Python type → JSON Schema type, for inferring tool input schemas from
 # _tool_* function signatures.
@@ -512,15 +509,17 @@ def _find_gist(name: str) -> Path | None:
     return None
 
 
-def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
-    """Format a class: ClassName(init_args) + public methods."""
-    init_args = ""
+def _init_args(node: ast.ClassDef) -> str:
+    """Extract and format __init__'s argument list (excluding self)."""
     for item in node.body:
         if isinstance(item, ast.FunctionDef) and item.name == "__init__":
-            init_args = _format_args(item.args, skip_self=True)
-            break
+            return _format_args(item.args, skip_self=True)
+    return ""
 
-    lines.append(f"{node.name}({init_args})")
+
+def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
+    """Format a class: ClassName(init_args) + public methods."""
+    lines.append(f"{node.name}({_init_args(node)})")
 
     cls_doc = ast.get_docstring(node)
     if cls_doc:
@@ -652,14 +651,10 @@ def signature_for_path(path: Path) -> str:
         return ""
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
-            init_args = ""
-            has_async = False
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
-                    init_args = _format_args(item.args, skip_self=True)
-                if isinstance(item, ast.AsyncFunctionDef):
-                    has_async = True
-            sig = f"{node.name}({init_args})"
+            has_async = any(
+                isinstance(item, ast.AsyncFunctionDef) for item in node.body
+            )
+            sig = f"{node.name}({_init_args(node)})"
             if has_async:
                 sig += " [async]"
             return sig
@@ -709,14 +704,10 @@ def _iter_gist_files():
 
 def _warn_deprecated(path: Path) -> None:
     """Warn once per gist file that __repld_tools__ is a legacy override."""
-    key = str(path)
-    if key in _deprecated_warned:
-        return
-    _deprecated_warned.add(key)
-    print(
+    _warn_once(
+        f"{path}:deprecated",
         f"repld: {path.name}: __repld_tools__ is deprecated "
         f"— use _tool_ functions with type hints instead",
-        file=sys.stderr,
     )
 
 

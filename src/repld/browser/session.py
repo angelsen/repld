@@ -258,6 +258,21 @@ class BrowserSession:
                 session_id = self._session_remap[session_id]
             return await self._execute_once(method, params, session_id, timeout)
 
+    def _build_msg(
+        self, method: str, params: dict | None, session_id: str | None
+    ) -> tuple[int, str]:
+        """Allocate a msg id and serialize a CDP request."""
+        msg_id = self._next_id
+        self._next_id += 1
+
+        msg: dict[str, Any] = {"id": msg_id, "method": method}
+        if params:
+            msg["params"] = params
+        if session_id:
+            msg["sessionId"] = session_id
+
+        return msg_id, json.dumps(msg)
+
     async def _execute_once(
         self,
         method: str,
@@ -269,19 +284,12 @@ class BrowserSession:
         if self._ws is None:
             raise RuntimeError("BrowserSession not connected")
 
-        msg_id = self._next_id
-        self._next_id += 1
+        msg_id, payload = self._build_msg(method, params, session_id)
 
         fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
 
-        msg: dict[str, Any] = {"id": msg_id, "method": method}
-        if params:
-            msg["params"] = params
-        if session_id:
-            msg["sessionId"] = session_id
-
-        await self._ws.send(json.dumps(msg))
+        await self._ws.send(payload)
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
@@ -306,16 +314,8 @@ class BrowserSession:
         if self._ws is None:
             raise RuntimeError("BrowserSession not connected")
 
-        msg_id = self._next_id
-        self._next_id += 1
-
-        msg: dict[str, Any] = {"id": msg_id, "method": method}
-        if params:
-            msg["params"] = params
-        if session_id:
-            msg["sessionId"] = session_id
-
-        await self._ws.send(json.dumps(msg))
+        _msg_id, payload = self._build_msg(method, params, session_id)
+        await self._ws.send(payload)
 
     # ------------------------------------------------------------------
     # Target management

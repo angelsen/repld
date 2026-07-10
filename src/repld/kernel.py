@@ -730,26 +730,32 @@ def run_kernel(
             hint_path=dash_hint,
         )
         atexit.register(dashboard.stop_dashboard)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"repld: dashboard failed to start: {e}", file=sys.stderr)
 
     # Auto-reconnect saved Chrome ports and re-watch patterns.
-    _lazy_browser = getattr(__main__, "browser", None)
-    if _lazy_browser is not None:
+    _browser = getattr(__main__, "browser", None)
+    if _browser is not None:
         for port in hint.get("chrome_ports", []):
             try:
-                asyncio.run_coroutine_threadsafe(
-                    _lazy_browser.connect(port), loop
-                ).result(timeout=5)
-            except Exception:
-                pass
+                asyncio.run_coroutine_threadsafe(_browser.connect(port), loop).result(
+                    timeout=5
+                )
+            except Exception as e:
+                print(
+                    f"repld: failed to reconnect Chrome port {port}: {e}",
+                    file=sys.stderr,
+                )
         for pattern in hint.get("patterns", []):
             try:
-                asyncio.run_coroutine_threadsafe(
-                    _lazy_browser.watch(pattern), loop
-                ).result(timeout=5)
-            except Exception:
-                pass
+                asyncio.run_coroutine_threadsafe(_browser.watch(pattern), loop).result(
+                    timeout=5
+                )
+            except Exception as e:
+                print(
+                    f"repld: failed to re-watch pattern {pattern!r}: {e}",
+                    file=sys.stderr,
+                )
         if hint.get("chrome_ports") or hint.get("patterns"):
             dashboard.save_hint()
 

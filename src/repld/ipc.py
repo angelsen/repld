@@ -52,6 +52,20 @@ def read_lock(lock_path: Path) -> dict | str:
     return lock
 
 
+def resolve_lock_path(argv: list[str]) -> Path:
+    """Resolve the kernel lockfile path from --socket flag, REPLD_SOCKET env,
+    or the cwd default. Shared by bridge and exec subcommands."""
+    for i, arg in enumerate(argv):
+        if arg == "--socket" and i + 1 < len(argv):
+            return Path(argv[i + 1]).with_suffix(".lock")
+        if arg.startswith("--socket="):
+            return Path(arg.split("=", 1)[1]).with_suffix(".lock")
+    env = os.environ.get("REPLD_SOCKET")
+    if env:
+        return Path(env).with_suffix(".lock")
+    return Path.cwd() / ".pyrepl.lock"
+
+
 def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     """Read lockfile, validate kernel pid, connect unix socket.
 

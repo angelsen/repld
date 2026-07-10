@@ -13,7 +13,6 @@ from __future__ import annotations
 import ast
 import code
 import json
-import os
 import signal
 import socket
 import sys
@@ -21,15 +20,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from . import __version__
-from .ipc import connect_to_kernel
-
-
-def _lock_path() -> Path:
-    env = os.environ.get("REPLD_SOCKET")
-    if env:
-        return Path(env).with_suffix(".lock")
-    return Path.cwd() / ".pyrepl.lock"
-
+from .ipc import connect_to_kernel, resolve_lock_path
 
 HISTORY_DIR = Path.home() / ".repld"
 HISTORY_PATH = HISTORY_DIR / "history"
@@ -102,12 +93,12 @@ def _call(
             _handle_notification(data, json_mode)
 
 
-def _connect() -> tuple[socket.socket, IO[str], IO[str], dict] | None:
+def _connect(lock_path: Path) -> tuple[socket.socket, IO[str], IO[str], dict] | None:
     """Read lockfile, connect to kernel, perform MCP handshake.
 
     Returns (sock, rfile, wfile, lock_info) or None on failure.
     """
-    result = connect_to_kernel(_lock_path())
+    result = connect_to_kernel(lock_path)
     if isinstance(result, str):
         _err(result)
         return None
@@ -299,13 +290,20 @@ def run_exec(argv: list[str]) -> int:
     args = list(argv)
 
     if "-h" in args or "--help" in args:
-        print("usage: repld exec [--json] [CODE]")
+        print("usage: repld exec [--json] [--socket PATH] [CODE]")
         print()
         print("  CODE given:  one-shot (run, print, exit)")
         print("  no CODE:     interactive REPL")
         print()
-        print("  --json       emit JSON to stdout (for scripting)")
+        print("  --json         emit JSON to stdout (for scripting)")
+        print("  --socket PATH  connect to a kernel at a non-default socket path")
         return 0
+
+    lock_path = resolve_lock_path(args)
+    if "--socket" in args:
+        i = args.index("--socket")
+        del args[i : i + 2]
+    args = [a for a in args if not a.startswith("--socket=")]
 
     json_mode = False
     if "--json" in args:
@@ -318,7 +316,7 @@ def run_exec(argv: list[str]) -> int:
 
     code_arg = " ".join(args) if args else None
 
-    conn = _connect()
+    conn = _connect(lock_path)
     if conn is None:
         return 1
     sock, rfile, wfile, lock = conn
