@@ -578,8 +578,11 @@ class Dispatcher:
     def _tools_list(self, rid) -> dict:
         from . import gists
 
-        all_tools = list(TOOLS) + gists.scan_tools()
-        return _response(rid, {"tools": all_tools})
+        has_browser = "browser" in __main__.__dict__
+        tools = [
+            t for t in TOOLS if has_browser or not t["name"].startswith("browser_")
+        ]
+        return _response(rid, {"tools": tools + gists.scan_tools()})
 
     def _tools_call(self, rid, params: dict) -> dict:
         name = params.get("name")
@@ -979,7 +982,10 @@ class Dispatcher:
     def _resources_list(self, rid) -> dict:
         from . import gists
 
-        resources = list(_DOC_RESOURCES) + list(_BROWSER_RESOURCES)
+        has_browser = "browser" in __main__.__dict__
+        resources = list(_DOC_RESOURCES) + (
+            list(_BROWSER_RESOURCES) if has_browser else []
+        )
         resources.append(
             {
                 "uri": "repld://gists/_registry",

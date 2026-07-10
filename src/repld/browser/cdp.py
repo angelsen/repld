@@ -269,9 +269,6 @@ class CDPSession:
         # Event count for FIFO pruning
         self._event_count = 0
 
-        # Paused-request counter (Fetch.requestPaused increments, continue decrements)
-        self.paused_count = 0
-
         # Fetch body capture state.  False by default — enabled by get()/open(),
         # or explicitly via tab.capture_bodies = True / tab.enable_capture().
         self.capture_bodies: bool = False
@@ -408,7 +405,6 @@ class CDPSession:
             self._event_count += 1
 
             if method == "Fetch.requestPaused":
-                self.paused_count += 1
                 # Dispatch async handler without blocking the recv loop
                 if self._fetch_handler is not None:
                     asyncio.create_task(

@@ -621,12 +621,28 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
 def signature(name: str) -> str:
     """Return 'ClassName(args)' for a gist's first public class, or ''.
 
-    Always AST-derived — ``__repld_usage__`` is handled separately in
-    ``build_instructions()`` as a display concern.
+    Always AST-derived — ``__repld_usage__`` is handled separately via
+    ``usage_for()`` as a display concern.
     Appends ``[async]`` when the class has async methods.
     """
     path = _find_gist(name)
     return signature_for_path(path) if path else ""
+
+
+def usage_for(name: str) -> str | None:
+    """AST-derived ``__repld_usage__`` override for a gist, or None.
+
+    Works before the gist is imported (unlike a ``sys.modules`` lookup),
+    so first-boot MCP instructions can show it.
+    """
+    path = _find_gist(name)
+    if path is None:
+        return None
+    tree = _parse(path)
+    if tree is None:
+        return None
+    usage_node = _dunder_value(tree, "__repld_usage__")
+    return str(usage_node.value) if isinstance(usage_node, ast.Constant) else None
 
 
 def signature_for_path(path: Path) -> str:

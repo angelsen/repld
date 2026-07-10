@@ -358,11 +358,12 @@ http_entries AS (
             WHEN resp.mime_type LIKE '%video/%' OR resp.mime_type LIKE '%audio/%' THEN 'media'
             ELSE 'other'
         END as mime_family,
-        -- Derived: is_asset (images, fonts, CSS, media)
+        -- Derived: is_asset (images, fonts, CSS, scripts, media)
         CASE
-            WHEN rh.resource_type IN ('Image', 'Font', 'Stylesheet', 'Media') THEN true
+            WHEN rh.resource_type IN ('Image', 'Font', 'Stylesheet', 'Media', 'Script') THEN true
             WHEN resp.mime_type LIKE '%image/%' OR resp.mime_type LIKE '%font/%'
-              OR resp.mime_type LIKE '%css%' OR resp.mime_type LIKE '%woff%' THEN true
+              OR resp.mime_type LIKE '%css%' OR resp.mime_type LIKE '%woff%'
+              OR resp.mime_type LIKE '%video/%' OR resp.mime_type LIKE '%audio/%' THEN true
             ELSE false
         END as is_asset,
         -- Derived: curl_command reconstruction

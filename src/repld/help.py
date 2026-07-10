@@ -19,7 +19,6 @@ no overlap:
 """
 
 import json
-import sys
 from pathlib import Path
 
 from .ipc import read_lock
@@ -917,12 +916,7 @@ def build_instructions() -> str:
         lines = ["Available gists:"]
         for name, doc in available:
             sig = gists.signature(name)
-            mod = sys.modules.get(name)
-            usage = (
-                str(mod.__repld_usage__)
-                if mod and hasattr(mod, "__repld_usage__")
-                else None
-            )
+            usage = gists.usage_for(name)
             if usage and sig:
                 # Usage override — show import of class name + usage hint
                 class_name = sig.split("(")[0]
@@ -989,6 +983,7 @@ Commands:
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
   repld gist list          Show local + linked gists
+  repld browser ARGS...    Re-exec with browser deps (duckdb/websockets)
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:

@@ -61,11 +61,6 @@ LEAF_ROLES: frozenset[str] = frozenset(
     }
 )
 
-# Asset MIME families / type patterns
-ASSET_TYPES: frozenset[str] = frozenset(
-    {"image", "font", "stylesheet", "script", "media", "manifest", "wasm"}
-)
-
 
 # ---------------------------------------------------------------------------
 # Tree builder
@@ -447,7 +442,7 @@ def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEnt
     for tab in tabs:
         min_id = pre_ids.get(tab.target_id, 0)
         rows = tab._session.query(
-            """SELECT method, status, url, time_ms, size, is_asset, mime_family, type
+            """SELECT method, status, url, time_ms, size, is_asset
                FROM har_summary
                WHERE id > ?
                ORDER BY id ASC""",
@@ -461,12 +456,6 @@ def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEnt
             time_ms = row[3]
             size = row[4] or 0
             is_asset = bool(row[5])
-            mime_family = row[6] or ""
-            rtype = row[7] or ""
-
-            # Classify as asset
-            if not is_asset:
-                is_asset = mime_family in ASSET_TYPES or rtype in ASSET_TYPES
 
             path = _truncate_path(url)
 

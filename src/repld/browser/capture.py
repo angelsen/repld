@@ -73,8 +73,6 @@ async def handle_paused(session: CDPSession, params: dict) -> None:
             await _fast_continue(session, request_id, is_response)
         except Exception:
             pass
-    finally:
-        session.paused_count = max(0, session.paused_count - 1)
 
 
 async def _fast_continue(

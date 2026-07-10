@@ -766,12 +766,12 @@ class Tab:
 
     async def reload(self) -> None:
         """Reload the page, then wait for the ready signal."""
-        await self._session.execute("Page.reload")
+        await self._exec("Page.reload")
         await self._wait_ready()
 
     async def navigate(self, url: str) -> None:
         """Navigate to URL, then wait for the ready signal."""
-        await self._session.execute("Page.navigate", {"url": url})
+        await self._exec("Page.navigate", {"url": url})
         await self._wait_ready()
 
     async def screenshot(
@@ -794,12 +794,12 @@ class Tab:
         if full_page:
             params["captureBeyondViewport"] = True
 
-        metrics = await self._session.execute("Page.getLayoutMetrics", {})
+        metrics = await self._exec("Page.getLayoutMetrics", {})
         vp = metrics.get("cssVisualViewport", {})
         src_w = int(vp.get("clientWidth", 0))
         src_h = int(vp.get("clientHeight", 0))
 
-        result = await self._session.execute("Page.captureScreenshot", params)
+        result = await self._exec("Page.captureScreenshot", params)
         img_bytes = base64.b64decode(result.get("data", ""))
 
         tgt_w, tgt_h = (
@@ -1054,7 +1054,7 @@ class Tab:
 
     async def cookies(self) -> list[dict]:
         """Return all cookies for this tab via CDP."""
-        result = await self._session.execute("Network.getCookies")
+        result = await self._exec("Network.getCookies")
         return result.get("cookies", [])
 
     async def cdp(self, method: str, **params: Any) -> dict:
