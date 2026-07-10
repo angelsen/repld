@@ -48,7 +48,7 @@ def _collect_state() -> dict:
     if browser is None:
         return state
 
-    pool = getattr(browser, "_real", browser)
+    pool = browser.peek()
     if pool is None:
         state["browser"] = {
             "available": True,
@@ -59,38 +59,7 @@ def _collect_state() -> dict:
         }
         return state
 
-    connected = getattr(pool, "_connected", False)
-    ports = getattr(pool, "ports", [])
-    patterns = getattr(pool, "patterns", []) if connected else []
-    tab_list = []
-    if connected:
-        try:
-            browsers = getattr(pool, "_browsers", {})
-            for port, b in browsers.items():
-                if not b._connected:
-                    continue
-                for cdp in b._session._sessions.values():
-                    info = cdp.target_info
-                    tab_list.append(
-                        {
-                            "id": f"{port}:{info.get('targetId', '?')[:6]}",
-                            "target_id": info.get("targetId", ""),
-                            "port": port,
-                            "type": info.get("type", ""),
-                            "url": info.get("url", ""),
-                            "title": info.get("title", ""),
-                        }
-                    )
-        except Exception:
-            pass
-
-    state["browser"] = {
-        "available": True,
-        "connected": connected,
-        "ports": ports,
-        "patterns": patterns,
-        "tabs": tab_list,
-    }
+    state["browser"] = {"available": True, **pool.snapshot()}
     return state
 
 
@@ -99,20 +68,10 @@ def _resolve_tab(target_id: str):
     browser = getattr(__main__, "browser", None)
     if browser is None:
         raise RuntimeError("no browser")
-    pool = getattr(browser, "_real", browser)
-    if pool is None or not getattr(pool, "_connected", False):
+    pool = browser.peek()
+    if pool is None:
         raise RuntimeError("not connected")
-
-    browsers = getattr(pool, "_browsers", {})
-    for port, b in browsers.items():
-        if not b._connected:
-            continue
-        from .browser.tab import Tab
-
-        for cdp in b._session._sessions.values():
-            if cdp.target_info.get("targetId") == target_id:
-                return Tab(cdp, target_id, port)
-    raise RuntimeError(f"tab not attached: {target_id}")
+    return pool.resolve_tab(target_id)
 
 
 def save_hint() -> None:
@@ -120,15 +79,15 @@ def save_hint() -> None:
     if _hint_path is None:
         return
     browser = getattr(__main__, "browser", None)
-    pool = getattr(browser, "_real", None) if browser else None
+    pool = browser.peek() if browser else None
     hint: dict[str, Any] = {
         "dashboard_port": _server.sockets[0].getsockname()[1]
         if _server and _server.sockets
         else 0,
         "token": _token,
     }
-    if pool and hasattr(pool, "_browsers"):
-        hint["chrome_ports"] = [p for p, b in pool._browsers.items() if b._connected]
+    if pool is not None:
+        hint["chrome_ports"] = pool.connected_ports
         hint["patterns"] = pool.patterns
     try:
         from .browser.cdp import _suppress_patterns
@@ -179,13 +138,7 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 
     if method == "browser.connect":
         port = params.get("port", 9222)
-        pool = getattr(browser, "_real", None)
-        if pool is None:
-            from .browser import BrowserPool
-
-            pool = BrowserPool()
-            browser._real = pool
-        b = await pool.connect(port)
+        b = await browser.connect(port)
         targets = await b.pages()
         page_lines = [
             f"  {port}:{t.get('targetId', '')[:6]}  {t.get('url', '')}"
@@ -199,10 +152,10 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
         return {"connected": True, "port": port}
 
     if method == "browser.targets":
-        real = getattr(browser, "_real", browser)
-        if real is None or not getattr(real, "_connected", False):
+        pool = browser.peek()
+        if pool is None or not pool.connected_ports:
             raise RuntimeError("Not connected to Chrome")
-        targets = await real.pages()
+        targets = await pool.pages()
         return [
             {
                 "targetId": t.get("targetId", ""),

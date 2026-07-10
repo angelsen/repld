@@ -994,7 +994,9 @@ class Tab:
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
             bind_params.append(since)
 
-        rows = self._filtered_query("sse_entries", conditions, bind_params, "LIMIT 500")
+        rows = self._filtered_query(
+            "sse_entries", conditions, bind_params, "ORDER BY rowid DESC LIMIT 500"
+        )
         return Rows(_row_from_sse(r, self._session) for r in rows)
 
     def lifecycle(
@@ -1021,7 +1023,10 @@ class Tab:
             bind_params.append(since)
 
         rows = self._filtered_query(
-            "lifecycle_entries", conditions, bind_params, "LIMIT 500"
+            "lifecycle_entries",
+            conditions,
+            bind_params,
+            "ORDER BY rowid DESC LIMIT 500",
         )
         return Rows(_row_from_lifecycle(r, self._session) for r in rows)
 

@@ -15,6 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Cell execution counter (`_N`/`_` history) could race and hand out duplicate numbers when two MCP sessions called `exec` concurrently, since the increment wasn't atomic across IPC reader threads
 - `repld gist add <name>` failed for gists that are only ever invoked as MCP tools (never `import`ed by user code) — they were never written to the cross-project gist registry
 - `browser_screenshot` silently returned the untouched, full-size PNG (with no error) for any screenshot that wasn't 8-bit RGB/RGBA — while still reporting the *intended* downscaled dimensions in the response metadata, so callers had no way to tell the image didn't actually match what was reported
+- `Tab.sse()` / `Tab.lifecycle()` queried with `LIMIT 500` but no `ORDER BY`, while their backing views (`sse_entries`, `lifecycle_entries`) are defined oldest-first. Once a session passed 500 SSE messages or lifecycle events, these methods silently returned the *oldest* entries instead of the most recent — the opposite of every sibling query method (`network()`, `console()`)
 
 ### Changed
 

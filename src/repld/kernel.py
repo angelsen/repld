@@ -14,6 +14,7 @@ import __main__
 import asyncio
 import atexit
 import concurrent.futures
+import contextlib
 import inspect
 import itertools
 import json
@@ -336,15 +337,15 @@ def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:
     _maybe_push_done(task_id)
 
 
-async def _run_cell(task_id: str, src: str, n: int) -> None:
-    """Coroutine that runs on the bg asyncio loop.
+@contextlib.asynccontextmanager
+async def _task_scope(task_id: str):
+    """Set up per-task lifecycle bookkeeping shared by _run_cell/_run_deferred.
 
     Sets _current_task ContextVar so that asyncio.create_task() calls inside
     user code inherit it via copy_context() — preserving per-task output
-    attribution for fire-and-forget background tasks.
+    attribution for fire-and-forget background tasks. Finalizes (emits
+    CellDone, pushes channel) on the way out regardless of how the body exits.
     """
-    from . import runtime
-
     _current_task.set(task_id)
     task = tasks._tasks[task_id]
     # Stash the asyncio.Task handle so cancel_task can call .cancel() on it
@@ -352,44 +353,44 @@ async def _run_cell(task_id: str, src: str, n: int) -> None:
     # doesn't propagate reliably).
     task["asyncio_task"] = asyncio.current_task()
     t_start = time.monotonic()
-
     try:
-        compiled = runtime.compile_cell(src, task_id)
-    except SyntaxError:
-        tb = traceback.format_exc()
-        sys.stderr.write(tb)
-        task["exception"] = "SyntaxError"
-        _finalize_cell(task_id, task, t_start)
-        return
-
-    try:
-        await runtime.run_cell(compiled, __main__.__dict__, n)
-    except BaseException as exc:
-        task["exception"] = type(exc).__name__
+        yield task
     finally:
         _finalize_cell(task_id, task, t_start)
+
+
+async def _run_cell(task_id: str, src: str, n: int) -> None:
+    """Coroutine that runs on the bg asyncio loop."""
+    from . import runtime
+
+    async with _task_scope(task_id) as task:
+        try:
+            compiled = runtime.compile_cell(src, task_id)
+        except SyntaxError:
+            tb = traceback.format_exc()
+            sys.stderr.write(tb)
+            task["exception"] = "SyntaxError"
+            return
+
+        try:
+            await runtime.run_cell(compiled, __main__.__dict__, n)
+        except BaseException as exc:
+            task["exception"] = type(exc).__name__
 
 
 async def _run_deferred(task_id: str, coro) -> None:
     """Await a user-supplied coroutine within the task lifecycle.
 
     Like _run_cell but skips compile/eval — just awaits the coroutine directly.
-    Sets _current_task so stdout/stderr attribution works via _Tee.
     """
-    _current_task.set(task_id)
-    task = tasks._tasks[task_id]
-    task["asyncio_task"] = asyncio.current_task()
-    t_start = time.monotonic()
-
-    try:
-        await coro
-    except asyncio.CancelledError:
-        task["exception"] = "CancelledError"
-    except BaseException as exc:
-        task["exception"] = type(exc).__name__
-        sys.stderr.write(traceback.format_exc())
-    finally:
-        _finalize_cell(task_id, task, t_start)
+    async with _task_scope(task_id) as task:
+        try:
+            await coro
+        except asyncio.CancelledError:
+            task["exception"] = "CancelledError"
+        except BaseException as exc:
+            task["exception"] = type(exc).__name__
+            sys.stderr.write(traceback.format_exc())
 
 
 def _make_defer(loop: asyncio.AbstractEventLoop):

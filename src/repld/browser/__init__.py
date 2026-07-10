@@ -562,9 +562,51 @@ class BrowserPool:
             )
         return b
 
+    def resolve_tab(self, target_id: str) -> "Tab":
+        """Find an attached Tab by its raw Chrome targetId, across all ports."""
+        from .tab import Tab
+
+        for port, b in self._browsers.items():
+            if not b._connected:
+                continue
+            for cdp in b._session._sessions.values():
+                if cdp.target_info.get("targetId") == target_id:
+                    return Tab(cdp, target_id, port)
+        raise RuntimeError(f"tab not attached: {target_id}")
+
+    def snapshot(self) -> dict:
+        """Serializable state for the dashboard: connection + tab list."""
+        tab_list = []
+        for port, b in self._browsers.items():
+            if not b._connected:
+                continue
+            for cdp in b._session._sessions.values():
+                info = cdp.target_info
+                tab_list.append(
+                    {
+                        "id": f"{port}:{info.get('targetId', '?')[:6]}",
+                        "target_id": info.get("targetId", ""),
+                        "port": port,
+                        "type": info.get("type", ""),
+                        "url": info.get("url", ""),
+                        "title": info.get("title", ""),
+                    }
+                )
+        return {
+            "connected": self._connected,
+            "ports": self.ports,
+            "patterns": self.patterns if self._connected else [],
+            "tabs": tab_list,
+        }
+
     @property
     def ports(self) -> list[int]:
         return list(self._browsers.keys())
+
+    @property
+    def connected_ports(self) -> list[int]:
+        """Ports whose Browser is currently connected (for hint persistence)."""
+        return [p for p, b in self._browsers.items() if b._connected]
 
     @property
     def tabs(self) -> Rows:
@@ -745,6 +787,10 @@ class LazyBrowser:
     def _bootstrap(self) -> BrowserPool:
         if self._real is None:
             self._real = BrowserPool()
+        return self._real
+
+    def peek(self) -> "BrowserPool | None":
+        """Return the underlying pool without triggering bootstrap/connect."""
         return self._real
 
     def help(self) -> None:
