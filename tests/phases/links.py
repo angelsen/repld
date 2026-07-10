@@ -7,7 +7,8 @@ from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
 
-from repld import gists as g
+from repld import gist_deps, gists
+from repld import gist_links as g
 
 
 def phase_12_gist_links(kernel: Kernel) -> None:
@@ -15,7 +16,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
     other = Path(tempfile.mkdtemp(prefix="repld-link-src-"))
     proj = Path(tempfile.mkdtemp(prefix="repld-link-proj-"))
     gd = proj / "gists"
-    orig_registry = g.registry
+    orig_registry = gists.registry
     try:
         # --- fake "other project" with a gist + sibling import (dep-free) ---
         src = other / "gists"
@@ -28,7 +29,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         (src / "needy.py").write_text(
             '"""Needy gist."""\n__repld_deps__ = ["repld_phantom_pkg_xyz"]\n'
         )
-        g.registry = lambda: {
+        gists.registry = lambda: {
             "widget": {"path": str(src / "widget.py"), "project": str(other)},
             "needy": {"path": str(src / "needy.py"), "project": str(other)},
         }
@@ -52,7 +53,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
 
         # --- scan_deps surfaces a linked gist's declared dependency ---
         g.add_link("needy", gd)
-        missing = g.scan_deps(paths=[src / "needy.py"])
+        missing = gist_deps.scan_deps(paths=[src / "needy.py"])
         assert_true(
             any("repld_phantom_pkg_xyz" in d.requirement for d in missing),
             f"scan_deps surfaces linked dep (got {[d.requirement for d in missing]})",
@@ -61,13 +62,12 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         print("  ✓ scan_deps(paths=) surfaces linked gist deps")
 
         # --- _parse_pkg_name splits at the earliest specifier ---
-        assert_eq(g._parse_pkg_name("foo>=1.0,!=1.2"), "foo", "multi-clause req")
-        assert_eq(g._parse_pkg_name("bar~=2.0"), "bar", "single-specifier req")
-        assert_eq(g._parse_pkg_name("baz"), "baz", "bare package name")
-        assert_eq(
-            g._parse_pkg_name("httpx[http2]>=0.27"), "httpx", "extras + specifier"
-        )
-        assert_eq(g._parse_pkg_name("httpx[http2]"), "httpx", "bare extras")
+        pkg = gist_deps._parse_pkg_name
+        assert_eq(pkg("foo>=1.0,!=1.2"), "foo", "multi-clause req")
+        assert_eq(pkg("bar~=2.0"), "bar", "single-specifier req")
+        assert_eq(pkg("baz"), "baz", "bare package name")
+        assert_eq(pkg("httpx[http2]>=0.27"), "httpx", "extras + specifier")
+        assert_eq(pkg("httpx[http2]"), "httpx", "bare extras")
         print("  ✓ _parse_pkg_name handles multi-clause requirements and extras")
 
         # --- boot a fresh kernel in the project: linked gist imports + sibling resolves ---
@@ -124,7 +124,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         print("  ✓ corrupt manifest → loud error, add refuses, never clobbered")
 
         # --- registry entry whose file is gone: add errors instead of false success ---
-        g.registry = lambda: {
+        gists.registry = lambda: {
             "ghost": {"path": str(src / "ghost.py"), "project": str(other)}
         }
         raised = False
@@ -145,7 +145,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(json.loads((gd / ".links").read_text()), {}, "manifest emptied")
         print("  ✓ stale link skipped at load + pruned by rm --stale")
     finally:
-        g.registry = orig_registry
+        gists.registry = orig_registry
         g._linked.clear()
         shutil.rmtree(other, ignore_errors=True)
         shutil.rmtree(proj, ignore_errors=True)

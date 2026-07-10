@@ -13,12 +13,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Browser.from_profile(path)` replaced by `browser.connect(profile=path)` — the classmethod returned a bare `Browser` outside the pool, so MCP tools and the dashboard never saw its tabs; the pool form resolves the port from `DevToolsActivePort` and connects normally
+- `gists.py` split: dependency management (`scan_deps`/`install_deps`) now lives in `gist_deps.py`, cross-project links (`add_link`/`remove_link`/`link_targets`/manifest handling) in `gist_links.py` — import machinery, AST introspection, tool scanning, and the registry stay in `gists.py`
 - `ask()` now accepts `tab=` like `confirm()`/`choose()` — routed for symmetry, though the pill UI has no text input so the response is still typed in the terminal (previously passing `tab=` raised TypeError)
 - `tab.label` (colored identification bar, survives navigation) is now documented in `repld help browser` and the browser guide
 - Internal cleanups from a codebase health pass: `run_kernel` boot sequence split into phase helpers, deduped ready-signal polling and `__repld_usage__` extraction, removed unused parameters and redundant aliases
 
 ### Fixed
 
+- The per-tab DuckDB event store was read (`tab.network()`/`console()`/`body()` MCP tools) from IPC reader threads while the kernel loop wrote events through the same connection object — DuckDB connections aren't thread-safe. Reads and `clear()` now run on a per-call cursor (duplicated connection, DuckDB's sanctioned cross-thread pattern)
+- `get_task` with an unknown `task_id` returned a *successful* response whose `_meta` carried only `{task_id, error}` — no `done`/`text` fields — instead of a JSON-RPC error like `cancel` does for bad input
+- `repld help browser` listed `tab.controls()` and `tab.invoke()` under the sync DuckDB-query heading; both are async (calling them bare returns a coroutine). The browser guide's `controls()` entry also didn't say it's async
 - `tab.capture_bodies` / `tab.label` setters fell back to the deprecated `asyncio.get_event_loop()` when the session had no loop — now raise a clear `RuntimeError` instead (the fallback was unreachable in practice; the loop is always set at attach)
 - `__repld_deps__` requirements with extras (e.g. `httpx[http2]>=0.27`) were falsely flagged as missing on every boot — the parsed package name kept the `[...]` suffix, which `importlib.util.find_spec` can never resolve
 - Cell execution counter (`_N`/`_` history) could race and hand out duplicate numbers when two MCP sessions called `exec` concurrently, since the increment wasn't atomic across IPC reader threads

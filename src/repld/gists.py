@@ -12,9 +12,14 @@ import json
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Deps + links live in sibling modules. Intentional two-way cycle: they do
+# `from . import gists` back; all cross-module access is module.attr at call
+# time (never `from x import y`), which is cycle-safe and keeps test
+# monkeypatching (e.g. gists.registry) effective.
+from . import gist_deps, gist_links
 
 __all__ = [
     "install",
@@ -28,25 +33,12 @@ __all__ = [
     "usage_for",
     "registry",
     "registry_summary",
-    "scan_deps",
-    "install_deps",
-    "read_links",
-    "add_link",
-    "remove_link",
-    "remove_stale_links",
-    "link_targets",
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
 _managed: dict[str, Path] = {}  # fullname → source .py path
 _mtimes: dict[str, float] = {}  # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
-
-# Cross-project linked gists: name → absolute source path. Populated from
-# ./gists/.links at install() time; consulted by the finder + iterators after
-# local dirs (so local gists always shadow a linked one of the same name).
-_linked: dict[str, Path] = {}
-_LINKS_FILENAME = ".links"
 
 # Dedup warnings (malformed __repld_tools__ / __repld_deps__, deprecation
 # notices, ...) so boot warns once but subsequent tools/list scans stay quiet.
@@ -182,182 +174,6 @@ def registry_summary() -> str:
             lines.append(f"  {name:<22} {date}  {desc}{stale}")
         lines.append("")
     return "\n".join(lines).rstrip()
-
-
-# ---------------------------------------------------------------------------
-# Cross-project links (./gists/.links manifest)
-# ---------------------------------------------------------------------------
-
-
-def read_links(gists_dir: Path) -> dict[str, str]:
-    """Read the link manifest. Returns {name: abspath}; {} if absent.
-
-    Raises ValueError if the manifest exists but won't parse — callers must
-    not guess: treating a corrupt manifest as empty would make `gist add`
-    rewrite it and silently drop every other committed link.
-    """
-    path = gists_dir / _LINKS_FILENAME
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text("utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        raise ValueError(f"corrupt link manifest {path}: {e}") from e
-    if not isinstance(data, dict):
-        raise ValueError(f"corrupt link manifest {path}: expected a JSON object")
-    return {str(k): str(v) for k, v in data.items()}
-
-
-def write_links(gists_dir: Path, links: dict[str, str]) -> None:
-    """Write the link manifest (pretty JSON, name-sorted)."""
-    gists_dir.mkdir(parents=True, exist_ok=True)
-    path = gists_dir / _LINKS_FILENAME
-    ordered = {k: links[k] for k in sorted(links)}
-    path.write_text(json.dumps(ordered, indent=2) + "\n", "utf-8")
-
-
-def _load_links(gists_dir: Path) -> None:
-    """Populate the live _linked overlay from the manifest.
-
-    Skips (with a stderr warning) any entry whose path no longer exists; never
-    rewrites the manifest — it is committed, and silently editing it would dirty
-    the working tree. Use `repld gist rm --stale` to drop dead links.
-    """
-    _linked.clear()
-    try:
-        links = read_links(gists_dir)
-    except ValueError as e:
-        print(
-            f"repld: {e} — linked gists unavailable (fix or delete the file)",
-            file=sys.stderr,
-        )
-        return
-    for name, raw in links.items():
-        p = Path(raw)
-        if p.is_file():
-            _linked[name] = p
-        else:
-            print(
-                f"repld: linked gist '{name}' path gone: {raw} (repld gist rm {name})",
-                file=sys.stderr,
-            )
-
-
-def _sibling_imports(path: Path) -> set[str]:
-    """Top-level names imported by `path` that exist as `<name>.py` beside it.
-
-    Same-directory match = sibling gist; everything else is stdlib/third-party.
-    """
-    siblings: set[str] = set()
-    tree = _parse(path)
-    if tree is None:
-        return siblings
-    src_dir = path.parent
-    for node in ast.walk(tree):
-        names: list[str] = []
-        if isinstance(node, ast.Import):
-            names = [a.name.split(".")[0] for a in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names = [node.module.split(".")[0]]
-        for n in names:
-            if n != path.stem and (src_dir / f"{n}.py").is_file():
-                siblings.add(n)
-    return siblings
-
-
-def link_targets(name: str) -> list[tuple[str, Path]]:
-    """Resolve `name` via the registry + transitive same-dir sibling imports.
-
-    Returns [(name, path), ...] — the full set that must be linked for `name` to
-    import. Raises LookupError (listing known projects) if `name` isn't registered.
-    """
-    reg = registry()
-    if name not in reg:
-        projects = sorted({v.get("project", "?") for v in reg.values()})
-        raise LookupError(
-            f"gist '{name}' is not registered. Known projects:\n  "
-            + "\n  ".join(projects)
-        )
-    resolved: dict[str, Path] = {}
-    queue = [name]
-    while queue:
-        cur = queue.pop()
-        if cur in resolved:
-            continue
-        entry = reg.get(cur)
-        # Siblings may not be registered themselves — fall back to a path beside
-        # an already-resolved gist.
-        if entry is not None:
-            p = Path(entry["path"])
-        else:
-            candidates = (rp.parent / f"{cur}.py" for rp in resolved.values())
-            p = next((c for c in candidates if c.is_file()), Path())
-        if not p.is_file():
-            if cur == name:
-                raise LookupError(
-                    f"gist '{name}' is registered at {p} but the file is gone"
-                    " — import it from its home project to re-register, or"
-                    " remove the entry from ~/.config/repld/gist-registry.json"
-                )
-            print(
-                f"repld: sibling gist '{cur}' could not be resolved — "
-                f"'{name}' may not import without it",
-                file=sys.stderr,
-            )
-            continue
-        resolved[cur] = p
-        queue.extend(_sibling_imports(p) - resolved.keys())
-    return list(resolved.items())
-
-
-def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
-    """Link `name` (and its siblings) into gists_dir's manifest.
-
-    Refuses on local collision — a target already present in ./gists or
-    ~/.repld/gists, or resolving to a path inside this project. Returns the newly
-    linked (name, path) pairs.
-    """
-    targets = link_targets(name)
-    project_root = gists_dir.parent.resolve()
-    for tname, tpath in targets:
-        if (gists_dir / f"{tname}.py").is_file():
-            raise FileExistsError(
-                f"'{tname}' already exists locally: {gists_dir / f'{tname}.py'}"
-            )
-        global_gist = Path.home() / ".repld" / "gists" / f"{tname}.py"
-        if global_gist.is_file():
-            raise FileExistsError(f"'{tname}' already exists globally: {global_gist}")
-        if project_root in tpath.resolve().parents:
-            raise FileExistsError(f"'{tname}' already lives in this project: {tpath}")
-    links = read_links(gists_dir)
-    for tname, tpath in targets:
-        links[tname] = str(tpath.resolve())
-    write_links(gists_dir, links)
-    return targets
-
-
-def remove_link(name: str, gists_dir: Path) -> bool:
-    """Drop `name` from the manifest (works on stale names). Returns True if removed.
-
-    Leaves siblings in place — they may be shared with other linked gists.
-    """
-    links = read_links(gists_dir)
-    if name not in links:
-        return False
-    del links[name]
-    write_links(gists_dir, links)
-    return True
-
-
-def remove_stale_links(gists_dir: Path) -> list[str]:
-    """Drop every manifest entry whose path is gone. Returns the removed names."""
-    links = read_links(gists_dir)
-    stale = [n for n, p in links.items() if not Path(p).is_file()]
-    if stale:
-        for n in stale:
-            del links[n]
-        write_links(gists_dir, links)
-    return stale
 
 
 def _check_reload(fullname: str) -> None:
@@ -506,8 +322,8 @@ def introspect(name: str) -> str:
     path = _find_gist(name)
     if path is None:
         msg = f"No gist '{name}' found in {_installed_dirs}"
-        if _linked:
-            msg += f"; linked: {', '.join(sorted(_linked))}"
+        if gist_links._linked:
+            msg += f"; linked: {', '.join(sorted(gist_links._linked))}"
         raise FileNotFoundError(msg)
 
     try:
@@ -536,7 +352,7 @@ def introspect(name: str) -> str:
 
 def _linked_path(name: str) -> Path | None:
     """Cross-project linked gist path for an exact name, if the file exists."""
-    p = _linked.get(name)
+    p = gist_links._linked.get(name)
     return p if p is not None and p.is_file() else None
 
 
@@ -738,7 +554,7 @@ def _iter_gist_files():
                 continue
             seen.add(p.stem)
             yield p
-    for name, p in sorted(_linked.items()):
+    for name, p in sorted(gist_links._linked.items()):
         if name in seen or not p.is_file():
             continue
         seen.add(name)
@@ -918,228 +734,6 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Dependency management
-# ---------------------------------------------------------------------------
-
-_VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
-
-
-def _parse_pkg_name(req: str) -> str:
-    """Extract the base package name from a PEP 508 requirement string."""
-    # Split at the earliest-occurring specifier — _VERSION_SPECIFIERS is a
-    # set, so iteration order must not decide the split point (multi-clause
-    # requirements like "foo>=1.0,!=1.2" would truncate wrongly).
-    positions = [req.index(spec) for spec in _VERSION_SPECIFIERS if spec in req]
-    name = req[: min(positions)] if positions else req
-    # Drop extras — "httpx[http2]" is not an importable module name.
-    return name.split("[")[0].strip()
-
-
-def _is_importable(name: str) -> bool:
-    """Check if a package is importable. Tries the name as-is (covers most packages).
-
-    find_spec raises ModuleNotFoundError for dotted names whose parent is
-    missing (e.g. "ruamel.yaml") and ValueError for malformed names — treat
-    both as "not importable" so a gist dep can never crash boot.
-    """
-    try:
-        return importlib.util.find_spec(name.replace("-", "_")) is not None
-    except (ImportError, ValueError):
-        return False
-
-
-@dataclass
-class _DepInfo:
-    requirement: str
-    gists: list[str]
-    editable: bool = False
-
-
-_TOOL_DEPS_DIR = Path.home() / ".local" / "share" / "repld" / "deps"
-
-
-def _is_tool_venv() -> bool:
-    return "uv/tools/" in sys.prefix
-
-
-def _read_project_name(pyproject: Path) -> str | None:
-    """Read [project] name from pyproject.toml."""
-    import tomllib
-
-    try:
-        data = tomllib.loads(pyproject.read_text("utf-8"))
-        return data.get("project", {}).get("name")
-    except Exception:
-        return None
-
-
-def _resolve_dot_dep(gist_path: Path) -> _DepInfo | None:
-    """Resolve '.' dep to the source project's editable install path."""
-    project_root = gist_path.parent.parent
-    pyproject = project_root / "pyproject.toml"
-    if not pyproject.is_file():
-        print(
-            f"repld: {gist_path.name}: '.' dep but "
-            f"{project_root} has no pyproject.toml",
-            file=sys.stderr,
-        )
-        return None
-    pkg_name = _read_project_name(pyproject) or project_root.name
-    if _is_importable(pkg_name):
-        return None
-    return _DepInfo(
-        requirement=str(project_root),
-        gists=[gist_path.stem],
-        editable=True,
-    )
-
-
-def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
-    """AST-scan gist files for __repld_deps__. Returns missing deps with their sources.
-
-    Scans `paths` when given (used by `gist add` for just-linked files), else all
-    local + linked gist files.
-    """
-    deps: dict[str, _DepInfo] = {}
-    for p in paths if paths is not None else _iter_gist_files():
-        tree = _parse(p)
-        if tree is None:
-            continue
-        node = _dunder_value(tree, "__repld_deps__")
-        if node is None:
-            continue
-        try:
-            reqs = ast.literal_eval(node)
-        except Exception:
-            _warn_once(
-                f"{p}:__repld_deps__",
-                f"repld: {p.name}: malformed __repld_deps__ "
-                f"(not a valid literal) — skipped",
-            )
-            continue
-        if not isinstance(reqs, list):
-            continue
-        for req in reqs:
-            req_str = str(req).strip()
-            if req_str == ".":
-                info = _resolve_dot_dep(p)
-                if info is not None:
-                    key = info.requirement
-                    if key in deps:
-                        deps[key].gists.append(p.stem)
-                    else:
-                        deps[key] = info
-                continue
-            pkg = _parse_pkg_name(req_str)
-            if _is_importable(pkg):
-                continue
-            if pkg in deps:
-                deps[pkg].gists.append(p.stem)
-            else:
-                deps[pkg] = _DepInfo(req_str, [p.stem])
-    return list(deps.values())
-
-
-def _tty_write(msg: str) -> None:
-    """Write directly to the real stderr, bypassing _Tee."""
-    w = sys.__stderr__
-    if w is not None:
-        w.write(msg)
-        w.flush()
-
-
-def _tty_input(prompt: str) -> str:
-    """Prompt on real stderr, read from real stdin."""
-    _tty_write(prompt)
-    stdin = sys.__stdin__
-    assert stdin is not None
-    return stdin.readline().strip().lower()
-
-
-def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
-    """Prompt which deps to install. Empty list means install nothing."""
-    n = len(missing)
-    if n == 1:
-        choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
-        return missing if choice in ("", "y", "yes") else []
-    choice = _tty_input(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
-    if choice in ("", "y", "yes", "all"):
-        return missing
-    if choice in ("n", "no", "none"):
-        return []
-    indices = []
-    for part in choice.replace(",", " ").split():
-        try:
-            idx = int(part) - 1
-        except ValueError:
-            continue
-        if 0 <= idx < n:
-            indices.append(idx)
-    return [missing[i] for i in indices]
-
-
-def install_deps(missing: list[_DepInfo]) -> bool:
-    """Prompt user and install missing deps. Returns True if anything was installed."""
-    import shutil
-    import subprocess
-
-    if not missing:
-        return False
-
-    if sys.prefix == sys.base_prefix:
-        _tty_write("\033[33m[repld] gists need packages not in system Python:\n")
-        for dep in missing:
-            _tty_write(f"  {dep.requirement:<24} ({', '.join(dep.gists)})\n")
-        _tty_write("  use: uv tool install repld-tool --with <pkg>\033[0m\n")
-        return False
-
-    _tty_write("\033[36m[repld]\033[0m missing gist deps:\n")
-    for i, dep in enumerate(missing, 1):
-        _tty_write(f"  {i}) {dep.requirement:<24} ({', '.join(dep.gists)})\n")
-
-    try:
-        selected = _prompt_dep_selection(missing)
-    except (EOFError, KeyboardInterrupt):
-        _tty_write("\n")
-        return False
-    if not selected:
-        return False
-
-    uv = shutil.which("uv")
-    req_args: list[str] = []
-    for d in selected:
-        if d.editable:
-            req_args.extend(["-e", d.requirement])
-        else:
-            req_args.append(d.requirement)
-
-    if uv:
-        if _is_tool_venv():
-            _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
-            cmd = [uv, "pip", "install", "--target", str(_TOOL_DEPS_DIR), *req_args]
-        else:
-            cmd = [uv, "pip", "install", "--python", sys.executable, *req_args]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", *req_args]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 0:
-        if _is_tool_venv() and str(_TOOL_DEPS_DIR) not in sys.path:
-            sys.path.insert(0, str(_TOOL_DEPS_DIR))
-        importlib.invalidate_caches()
-        count = len(selected)
-        _tty_write(
-            f"  \033[32m✓\033[0m installed {count} package{'s' * (count != 1)}\n"
-        )
-        return True
-
-    _tty_write("  \033[31m✗\033[0m install failed:\n")
-    for line in result.stderr.strip().splitlines()[-5:]:
-        _tty_write(f"    {line}\n")
-    return False
-
-
 def install(dirs: list[Path]) -> None:
     """Add gist directories to sys.path and install the auto-reload finder."""
     import builtins
@@ -1148,8 +742,9 @@ def install(dirs: list[Path]) -> None:
     _installed_dirs = dirs
 
     # Tool-mode deps dir: gist deps installed via --target land here
-    if _TOOL_DEPS_DIR.is_dir() and str(_TOOL_DEPS_DIR) not in sys.path:
-        sys.path.insert(0, str(_TOOL_DEPS_DIR))
+    deps_dir = gist_deps._TOOL_DEPS_DIR
+    if deps_dir.is_dir() and str(deps_dir) not in sys.path:
+        sys.path.insert(0, str(deps_dir))
 
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -1168,4 +763,4 @@ def install(dirs: list[Path]) -> None:
         builtins.__import__ = _GistImportHook(builtins.__import__)
 
     # Load cross-project links from the project gist dir's manifest.
-    _load_links(Path.cwd() / "gists")
+    gist_links._load_links(Path.cwd() / "gists")

@@ -1,8 +1,8 @@
 """The `repld gist` command group — scaffold, link, unlink, list.
 
 `new` scaffolds a local gist file; `add`/`rm`/`list` manage cross-project links
-(registry resolution + the ./gists/.links manifest, see `gists.py`). Dispatched
-from `cli.py`'s _SUBCOMMANDS table.
+(registry resolution + the ./gists/.links manifest, see `gist_links.py`).
+Dispatched from `cli.py`'s _SUBCOMMANDS table.
 """
 
 from pathlib import Path
@@ -82,7 +82,7 @@ def _gist_new(argv: list[str]) -> int:
 
 
 def _gist_add(argv: list[str]) -> int:
-    from . import gists as _gists
+    from . import gist_deps, gist_links
 
     if argv and argv[0] in ("-h", "--help"):
         print("repld gist add <name> — link a gist registered in another project")
@@ -93,7 +93,7 @@ def _gist_add(argv: list[str]) -> int:
     name = argv[0]
     gists_dir = Path.cwd() / "gists"
     try:
-        linked = _gists.add_link(name, gists_dir)
+        linked = gist_links.add_link(name, gists_dir)
     except (LookupError, FileExistsError, ValueError) as e:
         print(f"error: {e}")
         return 1
@@ -105,9 +105,9 @@ def _gist_add(argv: list[str]) -> int:
         print(f"  + siblings: {', '.join(others)}")
 
     # Resolve deps for just the newly linked files (interactive prompt).
-    missing = _gists.scan_deps(paths=[p for _, p in linked])
+    missing = gist_deps.scan_deps(paths=[p for _, p in linked])
     if missing:
-        _gists.install_deps(missing)
+        gist_deps.install_deps(missing)
 
     print()
     print("Restart the kernel to load the linked gist(s).")
@@ -115,7 +115,7 @@ def _gist_add(argv: list[str]) -> int:
 
 
 def _gist_rm(argv: list[str]) -> int:
-    from . import gists as _gists
+    from . import gist_links
 
     if argv and argv[0] in ("-h", "--help"):
         print("repld gist rm <name> | --stale — unlink a gist (or all dead links)")
@@ -123,7 +123,7 @@ def _gist_rm(argv: list[str]) -> int:
     gists_dir = Path.cwd() / "gists"
     try:
         if argv and argv[0] == "--stale":
-            dropped = _gists.remove_stale_links(gists_dir)
+            dropped = gist_links.remove_stale_links(gists_dir)
             if dropped:
                 print(f"dropped stale link(s): {', '.join(dropped)}")
             else:
@@ -133,7 +133,7 @@ def _gist_rm(argv: list[str]) -> int:
             print("repld gist rm <name> | --stale")
             return 2
         name = argv[0]
-        if _gists.remove_link(name, gists_dir):
+        if gist_links.remove_link(name, gists_dir):
             print(f"unlinked: {name}")
             return 0
         print(f"error: '{name}' is not linked")
@@ -144,6 +144,7 @@ def _gist_rm(argv: list[str]) -> int:
 
 
 def _gist_list(argv: list[str]) -> int:
+    from . import gist_links
     from . import gists as _gists
 
     gists_dir = Path.cwd() / "gists"
@@ -158,7 +159,7 @@ def _gist_list(argv: list[str]) -> int:
 
     # Linked gists, flagging stale entries.
     try:
-        links = _gists.read_links(gists_dir)
+        links = gist_links.read_links(gists_dir)
     except ValueError as e:
         print(f"error: {e}")
         links = {}

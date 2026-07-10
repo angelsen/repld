@@ -263,7 +263,12 @@ class CDPSession:
         self.port = port
         self.chrome_target_id = target_info.get("targetId", "")
 
-        # In-memory DuckDB — single writer on the asyncio event loop (no threads)
+        # In-memory DuckDB.  The main connection is written only from the
+        # asyncio loop thread (store_event/_async_prune); query/fetch_body/
+        # clear_events may run on IPC reader threads, so they open a
+        # per-call cursor — a duplicated connection sharing this in-memory
+        # DB, DuckDB's sanctioned cross-thread pattern (MVCC isolates
+        # readers from the loop-thread writer).
         import duckdb
 
         self.db = duckdb.connect(":memory:")
@@ -481,16 +486,24 @@ class CDPSession:
     # ------------------------------------------------------------------
 
     def query(self, sql: str, params: list | None = None) -> list:
-        """Execute arbitrary SQL against the events DB."""
-        if params:
-            return self.db.execute(sql, params).fetchall()
-        return self.db.execute(sql).fetchall()
+        """Execute arbitrary SQL against the events DB.
+
+        Runs on a per-call cursor: callers may be on IPC reader threads
+        while the loop thread writes via the main connection.
+        """
+        cur = self.db.cursor()
+        try:
+            if params:
+                return cur.execute(sql, params).fetchall()
+            return cur.execute(sql).fetchall()
+        finally:
+            cur.close()
 
     def fetch_body(self, request_id: str) -> dict:
         """Return captured body; fall back to Network.getResponseBody CDP call."""
         # Check DuckDB for captured body first
         try:
-            rows = self.db.execute(
+            rows = self.query(
                 """
                 SELECT
                     json_extract_string(event, '$.params.body') as body,
@@ -502,7 +515,7 @@ class CDPSession:
                 LIMIT 1
                 """,
                 [request_id],
-            ).fetchall()
+            )
             if rows:
                 body, b64, capture_json = rows[0]
                 capture = json.loads(capture_json) if capture_json else None
@@ -546,8 +559,12 @@ class CDPSession:
             return {"error": str(exc)}
 
     def clear_events(self) -> None:
-        """Delete all stored events."""
-        self.db.execute("DELETE FROM events")
+        """Delete all stored events.  Cursor per call — may run on IPC threads."""
+        cur = self.db.cursor()
+        try:
+            cur.execute("DELETE FROM events")
+        finally:
+            cur.close()
         self._event_count = 0
         self._inflight.clear()
 

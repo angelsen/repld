@@ -20,6 +20,7 @@ from fnmatch import fnmatch
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
@@ -72,23 +73,6 @@ class Browser:
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         self._session: BrowserSession = BrowserSession(self.port)
         self._connected: bool = False
-
-    @classmethod
-    def from_profile(cls, path: str) -> "Browser":
-        """Connect to a Chrome instance by its user-data-dir.
-
-        Reads the debug port from DevToolsActivePort (written by Chrome
-        when launched with --remote-debugging-port).
-        """
-        port_file = os.path.join(path, "DevToolsActivePort")
-        try:
-            with open(port_file) as f:
-                port = int(f.readline().strip())
-        except (FileNotFoundError, ValueError) as exc:
-            raise RuntimeError(
-                f"No DevToolsActivePort in {path} — is Chrome running with --remote-debugging-port?"
-            ) from exc
-        return cls(port=port)
 
     async def _ensure_connected(self) -> None:
         if not self._connected:
@@ -514,8 +498,26 @@ class BrowserPool:
         except Exception:
             pass
 
-    async def connect(self, port: int = 9222) -> Browser:
-        """Connect to a Chrome instance. Returns the Browser (new or existing)."""
+    async def connect(
+        self, port: int | None = None, *, profile: str | None = None
+    ) -> Browser:
+        """Connect to a Chrome instance. Returns the Browser (new or existing).
+
+        Pass profile=<user-data-dir> to resolve the port from that profile's
+        DevToolsActivePort file — Chrome writes it when launched with
+        --remote-debugging-port (including port 0 for an ephemeral port).
+        """
+        if profile is not None:
+            port_file = Path(profile).expanduser() / "DevToolsActivePort"
+            try:
+                port = int(port_file.read_text().splitlines()[0].strip())
+            except (OSError, ValueError, IndexError) as exc:
+                raise RuntimeError(
+                    f"No DevToolsActivePort in {profile} — is Chrome running "
+                    "with --remote-debugging-port?"
+                ) from exc
+        if port is None:
+            port = 9222
         if port in self._browsers and self._browsers[port]._connected:
             return self._browsers[port]
         b = Browser(port=port)

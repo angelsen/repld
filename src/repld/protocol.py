@@ -657,6 +657,8 @@ class Dispatcher:
         if not tid:
             return _error(rid, -32602, "missing task_id")
         snap = self.ctx.snapshot(tid)
+        if "done" not in snap:  # tasks.snapshot() sentinel for unknown IDs
+            return _error(rid, -32602, f"unknown task_id: {tid}")
         return _response(
             rid,
             {
@@ -1028,37 +1030,24 @@ class Dispatcher:
             )
         return _response(rid, {"resources": resources})
 
+    # Static docs: URI → help.py attribute name (imported lazily at read time)
+    _DOC_RESOURCES = {
+        "repld://docs/guide": "GUIDE",
+        "repld://docs/browser": "BROWSER_GUIDE",
+        "repld://docs/playbook": "PLAYBOOK",
+        "repld://docs/production": "PRODUCTION",
+    }
+
     def _read_resource(self, rid, params: dict) -> dict:
         uri = params.get("uri", "")
         try:
-            if uri == "repld://docs/guide":
-                from .help import GUIDE
+            reader = self._RESOURCE_DISPATCH.get(uri)
+            if uri in self._DOC_RESOURCES:
+                from . import help as _help
 
-                text = GUIDE
-            elif uri == "repld://docs/browser":
-                from .help import BROWSER_GUIDE
-
-                text = BROWSER_GUIDE
-            elif uri == "repld://docs/playbook":
-                from .help import PLAYBOOK
-
-                text = PLAYBOOK
-            elif uri == "repld://docs/production":
-                from .help import PRODUCTION
-
-                text = PRODUCTION
-            elif uri == "repld://browser/tabs":
-                text = self._resource_tabs()
-            elif uri == "repld://browser/network":
-                text = self._resource_network()
-            elif uri == "repld://browser/console":
-                text = self._resource_console()
-            elif uri == "repld://browser/controls":
-                text = self._resource_controls()
-            elif uri == "repld://gists/_registry":
-                from . import gists
-
-                text = gists.registry_summary()
+                text = getattr(_help, self._DOC_RESOURCES[uri])
+            elif reader is not None:
+                text = reader(self)
             elif uri.startswith("repld://gists/"):
                 name = uri.removeprefix("repld://gists/")
                 text = self._resource_gist(name)
@@ -1088,23 +1077,17 @@ class Dispatcher:
             lines.append(f"{t.target_id}  {t.url}  {t.title}")
         return "\n".join(lines)
 
-    def _resource_network(self) -> str:
+    def _collect_rows(self, method: str, empty: str) -> str:
+        """Concatenate repr'd rows of tab.<method>() across all attached tabs."""
         browser = self._get_browser()
-        lines: list[str] = []
-        for tab in browser.tabs:
-            rows = tab.network()
-            for r in rows:
-                lines.append(repr(r))
-        return "\n".join(lines) if lines else "(no network events captured)"
+        lines = [repr(r) for tab in browser.tabs for r in getattr(tab, method)()]
+        return "\n".join(lines) if lines else empty
+
+    def _resource_network(self) -> str:
+        return self._collect_rows("network", "(no network events captured)")
 
     def _resource_console(self) -> str:
-        browser = self._get_browser()
-        lines: list[str] = []
-        for tab in browser.tabs:
-            rows = tab.console()
-            for r in rows:
-                lines.append(repr(r))
-        return "\n".join(lines) if lines else "(no console events captured)"
+        return self._collect_rows("console", "(no console events captured)")
 
     def _resource_controls(self) -> str:
         browser = self._get_browser()
@@ -1121,6 +1104,19 @@ class Dispatcher:
         from . import gists
 
         return gists.introspect(name)
+
+    def _resource_registry(self) -> str:
+        from . import gists
+
+        return gists.registry_summary()
+
+    _RESOURCE_DISPATCH = {
+        "repld://browser/tabs": _resource_tabs,
+        "repld://browser/network": _resource_network,
+        "repld://browser/console": _resource_console,
+        "repld://browser/controls": _resource_controls,
+        "repld://gists/_registry": _resource_registry,
+    }
 
 
 def _format_spill(sp: dict, fallback: str) -> str:

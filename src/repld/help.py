@@ -395,7 +395,8 @@ object.  Read this instead of diving into source code.
   browser.detach()                                   # detach everything
   browser.clear(target=)                             # clear all captured data
 
-  b = Browser.from_profile("/tmp/my-chrome")          # connect by user-data-dir
+  await browser.connect(9223)                        # add another Chrome instance
+  await browser.connect(profile="/tmp/my-chrome")    # connect by user-data-dir
   browser.disconnect()                               # unpin tabs, close all WebSockets
   browser.disconnect(port=9222)                      # unpin + close one Chrome instance
 
@@ -407,7 +408,7 @@ Quirks:
     them — returns only tabs that appear *after* the call.
   - open() creates a tab via Target.createTarget, waits for attach, sleeps 0.3s
     for the page to settle before returning.
-  - Browser.from_profile(path) reads DevToolsActivePort from a Chrome
+  - browser.connect(profile=path) reads DevToolsActivePort from a Chrome
     user-data-dir to discover the debug port.  Works with --remote-debugging-port=0
     (random port) — Chrome writes the actual port to that file on startup.
 
@@ -624,6 +625,7 @@ browser.connect(port) adds a Chrome instance to the pool.  Call it multiple
 
   await browser.connect(42829)
   await browser.connect(43213)
+  await browser.connect(profile="/tmp/my-chrome")  # port from DevToolsActivePort
   await browser.watch("*localhost:5200*")   # watches across both
   browser.tabs                              # tabs from all instances
 
@@ -640,7 +642,7 @@ Apps exposing window.controls (a ControlRegistry) get automatic discovery
   tab.controls()                            → dict | None
       Snapshot window.controls.describeAll().  Returns full schema: actions
       with param types, properties with current values, state per control.
-      Returns None if the tab has no controls.
+      Returns None if the tab has no controls.  Async.
 
   tab.invoke(control, action, args=None)    → dict
       Call window.controls.invoke(control, action, args).  Returns
@@ -1064,6 +1066,8 @@ Tab (async unless noted):
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body}
   tab.navigate(url)                                → None
   tab.reload()                                     → None
+  tab.controls()                                   → dict | None
+  tab.invoke(control, action, args=)               → dict
   tab.screenshot(full_page=)                        → dict {path, source, model, scale, bytes}
   tab.cookies()                                    → list[dict]
   tab.cdp(method, **params)                        → dict
@@ -1090,8 +1094,6 @@ Tab (sync — DuckDB queries):
   tab.sse(url=, event_name=, since=)                                   → Rows
   tab.lifecycle(name=, since=)                                         → Rows
   tab.clear()                                                          → None
-  tab.controls()                                                       → dict | None
-  tab.invoke(control, action, args=)                                   → dict (async)
   tab.control_observations()                                           → list[dict]
 
   row.body()                             → dict (response body for a Row)
@@ -1107,7 +1109,7 @@ Tab properties:
   tab.label                               str | None  colored ID bar; set "text" / ("text", "#hex") / None to clear; survives navigation
 
 Browser:
-  Browser.from_profile(path)                     → Browser  (read port from DevToolsActivePort)
+  browser.connect(port=, profile=)               → Browser  (add Chrome instance; profile= reads DevToolsActivePort)
   browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
   browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
   browser.open(url)                              → Tab

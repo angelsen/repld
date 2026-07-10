@@ -153,12 +153,12 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         # scan_deps survives a dep whose dotted parent is missing —
         # find_spec("no_such_parent.sub") raises, _is_importable must swallow it
         # (this used to crash kernel boot).
-        from repld import gists as _gists
+        from repld import gist_deps
 
         dep_probe = gists_dir / "test_dep_probe.py"
         dep_probe.write_text('__repld_deps__ = ["no_such_parent_xyz.sub"]\n')
         try:
-            missing = _gists.scan_deps(paths=[dep_probe])
+            missing = gist_deps.scan_deps(paths=[dep_probe])
             assert_true(
                 any(d.requirement == "no_such_parent_xyz.sub" for d in missing),
                 f"missing namespace-dotted dep reported, not raised (got {missing!r})",

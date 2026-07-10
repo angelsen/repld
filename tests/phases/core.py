@@ -78,6 +78,16 @@ def phase_3(kernel: Kernel) -> None:
         )
         print(f"  ✓ get_task: done, output {snap['text'].strip()!r}")
 
+        # Unknown task_id → JSON-RPC error, not a hollow success
+        resp = b.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": "bogus-tid"}}
+        )
+        assert_true(
+            "error" in resp and "unknown task_id" in resp["error"]["message"],
+            f"get_task rejects unknown task_id (got {resp!r})",
+        )
+        print("  ✓ get_task: unknown task_id → JSON-RPC error")
+
         # Spill test — every cell with output now spills; large output
         # additionally trips the truncated-preview path.
         resp = b.call(

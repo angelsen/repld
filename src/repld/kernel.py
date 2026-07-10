@@ -703,9 +703,11 @@ def _boot_runtime() -> None:
     )
 
     # 2d. Check gist dependencies before IPC starts (interactive prompt).
-    missing = _gists.scan_deps()
+    from . import gist_deps as _gist_deps
+
+    missing = _gist_deps.scan_deps()
     if missing:
-        _gists.install_deps(missing)
+        _gist_deps.install_deps(missing)
 
 
 def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:

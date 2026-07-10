@@ -301,16 +301,12 @@ async def _send_response(
 
 
 async def _handle_api(body: bytes) -> bytes:
+    from .protocol import _error, _response
+
     try:
         req = json.loads(body)
     except json.JSONDecodeError:
-        return json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
-                "id": None,
-            }
-        ).encode()
+        return json.dumps(_error(None, -32700, "Parse error")).encode()
 
     req_id = req.get("id")
     method = req.get("method", "")
@@ -318,17 +314,9 @@ async def _handle_api(body: bytes) -> bytes:
 
     try:
         result = await _rpc_dispatch(method, params)
-        return json.dumps(
-            {"jsonrpc": "2.0", "result": result, "id": req_id}, separators=(",", ":")
-        ).encode()
+        return json.dumps(_response(req_id, result), separators=(",", ":")).encode()
     except Exception as exc:
-        return json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "error": {"code": -32000, "message": str(exc)},
-                "id": req_id,
-            }
-        ).encode()
+        return json.dumps(_error(req_id, -32000, str(exc))).encode()
 
 
 async def _handle_connection(

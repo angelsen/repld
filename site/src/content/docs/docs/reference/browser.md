@@ -21,7 +21,8 @@ browser.detach("*pattern*")                        # detach by pattern
 browser.detach()                                   # detach everything
 browser.clear(target=)                             # clear captured data
 
-b = Browser.from_profile("/path/to/chrome-profile") # connect by user-data-dir
+await browser.connect(9223)                        # add another Chrome instance
+await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePort
 ```
 
 ### ready= parameter
