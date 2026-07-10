@@ -27,7 +27,6 @@ __all__ = [
     "scan_deps",
     "install_deps",
     "read_links",
-    "write_links",
     "link_targets",
     "add_link",
     "remove_link",

@@ -298,16 +298,8 @@ def _maybe_push_done(task_id: str) -> None:
     delta = ""
     path = task.get("spill_path")
     if path is not None:
-        fp = task.get("spill_file")
-        if fp is not None:
-            try:
-                fp.flush()
-            except Exception:
-                pass
         try:
-            with open(path, "r") as f:
-                f.seek(cutoff)
-                delta = f.read()
+            delta = tasks._read_from(task, cutoff)
         except Exception:
             delta = ""
     delta_preview, _truncated = tasks._make_preview(delta)

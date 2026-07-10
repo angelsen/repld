@@ -321,6 +321,13 @@ class BrowserSession:
     # Target management
     # ------------------------------------------------------------------
 
+    def find_by_target_id(self, target_id: str) -> CDPSession | None:
+        """Return the attached CDPSession for a Chrome targetId, or None."""
+        for cdp in self._sessions.values():
+            if cdp.target_info.get("targetId") == target_id:
+                return cdp
+        return None
+
     async def attach(self, target_id: str) -> CDPSession | None:
         """Attach to a target and return a CDPSession.
 
@@ -328,9 +335,9 @@ class BrowserSession:
         or None if another attach call is already in-flight for this target.
         """
         # Guard: return existing session if already attached to this target
-        for cdp in self._sessions.values():
-            if cdp.target_info.get("targetId") == target_id:
-                return cdp
+        existing = self.find_by_target_id(target_id)
+        if existing is not None:
+            return existing
 
         # Guard: another attach() call is already in flight for this target
         if target_id in self._attaching:
@@ -361,6 +368,7 @@ class BrowserSession:
                 self.port,
                 loop=asyncio.get_running_loop(),
                 send_nowait=self.send_nowait,
+                browser_session=self,
             )
             self._sessions[session_id] = cdp
             asyncio.create_task(
@@ -415,9 +423,8 @@ class BrowserSession:
         # 1. Already have a session or attach in flight for this target_id?
         if target_id in self._attaching:
             return None
-        for cdp in self._sessions.values():
-            if cdp.target_info.get("targetId") == target_id:
-                return None  # already attached
+        if self.find_by_target_id(target_id) is not None:
+            return None  # already attached
 
         # 2. URL glob match
         for pattern in self._watched_patterns:
@@ -426,10 +433,8 @@ class BrowserSession:
 
         # 3. Opener match — OAuth popup or new tab from watched tab
         opener_id = target_info.get("openerId", "")
-        if opener_id:
-            for cdp in self._sessions.values():
-                if cdp.target_info.get("targetId") == opener_id:
-                    return target_id
+        if opener_id and self.find_by_target_id(opener_id) is not None:
+            return target_id
 
         return None
 
@@ -524,10 +529,10 @@ class BrowserSession:
             target_info = params.get("targetInfo", {})
             chrome_tid = target_info.get("targetId", "")
             # Update target_info on existing session
-            for cdp in self._sessions.values():
-                if cdp.target_info.get("targetId") == chrome_tid:
-                    cdp.target_info = target_info
-                    return
+            cdp = self.find_by_target_id(chrome_tid)
+            if cdp is not None:
+                cdp.target_info = target_info
+                return
             # Not attached yet — check if it now matches a pattern
             matched_id = self._resolve_target(target_info)
             if matched_id and self._on_target_created:

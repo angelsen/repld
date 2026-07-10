@@ -447,6 +447,9 @@ Convention: add data-testid to your root layout component.
       delay_ms adds a pause between keystrokes (in milliseconds).
       press_enter sends an Enter key after the text.
 
+  tab.key(key)                                               → None
+      Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape").
+
   tab.tap(selector_or_x, y=None)                             → None
       Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
       Accepts a selector string OR (x, y) coordinates.
@@ -1045,7 +1048,8 @@ Tab (async unless noted):
   tab.click(selector)                              → None (auto-waits 2s, mouse event)
   tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
-  tab.type_text(selector, text, enter=)            → None (clears first, auto-waits)
+  tab.type_text(selector, text, press_enter=)      → None (clears first, auto-waits)
+  tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter")
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body}

@@ -53,11 +53,22 @@ def list_sessions() -> list[dict]:
         return []
     result = []
     for f in SESSIONS_DIR.glob("*.json"):
+        info = None
         try:
             info = json.loads(f.read_text())
-            if not _pid_alive(info["pid"]):
-                continue
-            result.append(info)
-        except (OSError, KeyError, ValueError):
+            pid = int(info["pid"])
+        except (OSError, KeyError, ValueError, TypeError):
+            # Corrupt or mid-write — judge liveness by the filename pid.
+            try:
+                pid = int(f.stem)
+            except ValueError:
+                pid = None
+        if pid is not None and _pid_alive(pid):
+            if info is not None:
+                result.append(info)
+            continue
+        try:
+            f.unlink()
+        except OSError:
             pass
     return result

@@ -119,7 +119,8 @@ def new_task() -> tuple[str, dict]:
     return task_id, task
 
 
-def _read_full(task: dict) -> str:
+def _read_from(task: dict, offset: int = 0) -> str:
+    """Flush the task's spill file (if any) and read it from *offset*."""
     path = task["spill_path"]
     if path is None:
         return ""
@@ -130,6 +131,7 @@ def _read_full(task: dict) -> str:
         except Exception:
             pass
     with open(path, "r") as f:
+        f.seek(offset)
         return f.read()
 
 
@@ -190,7 +192,7 @@ def snapshot(task_id: str) -> dict:
     task = _tasks.get(task_id)
     if task is None:
         return {"task_id": task_id, "error": "unknown task_id"}
-    full = _read_full(task)
+    full = _read_from(task)
     text, truncated = _make_preview(full)
     return {
         "task_id": task_id,

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     async def confirm(
         prompt: str,
         *,
+        tab: Any = None,
         default: bool | None = None,
         timeout: float | None = None,
     ) -> bool: ...
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
         prompt: str,
         options: list[str],
         *,
+        tab: Any = None,
         default: str | None = None,
         timeout: float | None = None,
     ) -> str: ...

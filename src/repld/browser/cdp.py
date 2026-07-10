@@ -251,10 +251,12 @@ class CDPSession:
         port: int,
         loop: asyncio.AbstractEventLoop | None = None,
         send_nowait: Any = None,  # BrowserSession.send_nowait bound method
+        browser_session: Any = None,  # owning BrowserSession, for re-attach
     ) -> None:
         self._send = send
         self._send_nowait = send_nowait or send
         self._loop = loop
+        self.browser_session = browser_session
         self._session_id = session_id
         self.target_info = target_info
         self.port = port

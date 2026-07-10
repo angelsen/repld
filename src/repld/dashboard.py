@@ -249,7 +249,6 @@ async def _send_response(
     status: int,
     body: bytes,
     content_type: str = "application/json",
-    extra_headers: str = "",
     origin: str | None = None,
 ) -> None:
     reason = {
@@ -264,7 +263,6 @@ async def _send_response(
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
         f"{_cors_header(origin)}"
-        f"{extra_headers}"
         "\r\n"
     )
     writer.write(header.encode() + body)

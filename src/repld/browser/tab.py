@@ -339,8 +339,7 @@ class Tab:
         Waits for the ready signal (CSS selector or JS expression) if set,
         otherwise waits for document.readyState === "complete".
         """
-        send_fn = self._session._send
-        browser_session = getattr(send_fn, "__self__", None)
+        browser_session = self._session.browser_session
         if browser_session is None:
             raise RuntimeError("Cannot re-attach: no BrowserSession reference")
 
@@ -352,12 +351,17 @@ class Tab:
             raise RuntimeError(f"Re-attach failed for {self._chrome_target_id}")
         self._session = cdp
 
-        ready = self._ready or "document.readyState === 'complete'"
-        if ready.startswith((".", "#", "[", "data-")):
-            await self._wait_ready_selector(ready)
-        else:
-            await self._wait_ready_js(ready)
+        await self._await_ready_signal(
+            self._ready or "document.readyState === 'complete'"
+        )
         await asyncio.sleep(0.3)
+
+    async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
+        """Wait for a ready signal — CSS selector or JS expression, by shape."""
+        if ready.startswith((".", "#", "[", "data-")):
+            await self._wait_ready_selector(ready, timeout)
+        else:
+            await self._wait_ready_js(ready, timeout)
 
     async def _wait_ready_selector(self, selector: str, timeout: float = 10) -> None:
         doc = await self._session.execute("DOM.getDocument")
@@ -776,10 +780,7 @@ class Tab:
         ready = self._ready
         if ready is None:
             return
-        if ready.startswith((".", "#", "[", "data-")):
-            await self._wait_ready_selector(ready, timeout)
-        else:
-            await self._wait_ready_js(ready, timeout)
+        await self._await_ready_signal(ready, timeout)
         await self.wait_for_idle(timeout=2.0, quiet=0.3)
 
     async def reload(self) -> None:

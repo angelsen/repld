@@ -236,26 +236,6 @@ class Browser:
 
         raise RuntimeError(f"No tab matching '{pattern}'")
 
-    def _resolve_attached(self, target: str) -> Tab:
-        """Sync lookup of an already-attached tab by short target ID.
-
-        Used by clear() and open() where the tab is guaranteed attached.
-        """
-        if ":" not in target:
-            raise RuntimeError(
-                f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
-            )
-        _, prefix = target.split(":", 1)
-        _sid, cdp, chrome_id = self._find_by_prefix(prefix)
-        if cdp is not None:
-            return Tab(cdp, chrome_id, self.port)
-
-        attached = [
-            make_target(self.port, cdp.target_info.get("targetId", ""))
-            for cdp in self._session._sessions.values()
-        ]
-        raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
-
     async def watch(self, pattern: str) -> str:
         """Register a URL glob pattern and attach currently-matching tabs.
 
@@ -277,11 +257,7 @@ class Browser:
             tid = t.get("targetId", "")
             url = t.get("url", "")
             if fnmatch.fnmatch(url, pattern) and tid:
-                already = any(
-                    cdp.target_info.get("targetId") == tid
-                    for cdp in self._session._sessions.values()
-                )
-                if not already:
+                if self._session.find_by_target_id(tid) is None:
                     to_attach.append(tid)
 
         failures: list[tuple[str, str]] = []
@@ -381,8 +357,19 @@ class Browser:
     def clear(self, target: str | None = None) -> str:
         """Clear captured events. Specify target for one tab, or None for all."""
         if target is not None:
-            tab = self._resolve_attached(target)
-            tab.clear()
+            if ":" not in target:
+                raise RuntimeError(
+                    f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
+                )
+            _, prefix = target.split(":", 1)
+            _sid, cdp, _chrome_id = self._find_by_prefix(prefix)
+            if cdp is None:
+                attached = [
+                    make_target(self.port, c.target_info.get("targetId", ""))
+                    for c in self._session._sessions.values()
+                ]
+                raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
+            cdp.clear_events()
             return f"Cleared events for {target}."
         count = 0
         for cdp in self._session._sessions.values():
@@ -569,9 +556,9 @@ class BrowserPool:
         for port, b in self._browsers.items():
             if not b._connected:
                 continue
-            for cdp in b._session._sessions.values():
-                if cdp.target_info.get("targetId") == target_id:
-                    return Tab(cdp, target_id, port)
+            cdp = b._session.find_by_target_id(target_id)
+            if cdp is not None:
+                return Tab(cdp, target_id, port)
         raise RuntimeError(f"tab not attached: {target_id}")
 
     def snapshot(self) -> dict:
