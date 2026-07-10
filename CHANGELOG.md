@@ -45,6 +45,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `repld gist new` template scaffolds the new typed `_tool_*` pattern (no `__repld_tools__`)
 - `__repld_tools__` still works as a legacy override for custom schemas, but prints a one-time-per-gist deprecation warning at boot
+- Kernel boot no longer silently reconnects Chrome ports and re-watches tab patterns from the previous session's dashboard hint — it now prompts on the terminal (`[Y/n]`, default yes) before restoring. Headless boot (`--no-display`) or non-tty stdin skips the restore entirely rather than blocking on a prompt no one can answer
 - Browser tab pin state (`_pinned`, `_pin_reason`, `_pin_origin`, `_heartbeat_task`) now lives on `CDPSession` instead of `Tab` — `Tab` wrappers are recreated on every `get()`/`_iter_tabs()` call, so pin state used to reset whenever a tab was re-fetched. `CDPSession` persists for the life of the attachment, matching the existing pattern for `capture_bodies`
 - `Tab.fetch()` / `browser_fetch`: string request bodies now default to `Content-Type: application/x-www-form-urlencoded` (dict bodies unchanged, still `application/json`); caller `headers` override, matched case-insensitively
 

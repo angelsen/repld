@@ -601,16 +601,48 @@ def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
     ipc.stop_server()
 
 
-def _restore_browser_state(hint: dict, loop: asyncio.AbstractEventLoop) -> None:
+def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
+    """Ask on the real terminal (bypassing the not-yet-wired tee) whether to
+    reconnect Chrome ports / re-watch patterns from the previous kernel run.
+    """
+    out = sys.__stdout__
+    stdin = sys.__stdin__
+    if out is None or stdin is None:
+        return False
+    parts = []
+    if ports:
+        parts.append(f"ports {', '.join(str(p) for p in ports)}")
+    if patterns:
+        parts.append(f"patterns {', '.join(patterns)}")
+    out.write(f"repld: restore previous browser session ({'; '.join(parts)})? [Y/n] ")
+    out.flush()
+    try:
+        answer = stdin.readline().strip().lower()
+    except OSError:
+        return False
+    return answer in ("", "y", "yes")
+
+
+def _restore_browser_state(
+    hint: dict, loop: asyncio.AbstractEventLoop, *, interactive: bool
+) -> None:
     """Recover browser state from the previous kernel's dashboard hint.
 
     Reconnects saved Chrome ports, re-watches patterns, and restores the
     console-error suppress list. Best-effort — failures are reported to
-    stderr but never block boot.
+    stderr but never block boot. Reconnect/re-watch is opt-in: prompted on
+    the real terminal when `interactive`, skipped otherwise (headless boot
+    or non-tty stdin can't be prompted, so it defaults to not reconnecting).
     """
     browser = getattr(__main__, "browser", None)
-    if browser is not None:
-        for port in hint.get("chrome_ports", []):
+    ports = hint.get("chrome_ports", [])
+    patterns = hint.get("patterns", [])
+    if browser is not None and (ports or patterns):
+        restore = interactive and _confirm_browser_restore(ports, patterns)
+    else:
+        restore = False
+    if browser is not None and restore:
+        for port in ports:
             try:
                 asyncio.run_coroutine_threadsafe(browser.connect(port), loop).result(
                     timeout=5
@@ -620,7 +652,7 @@ def _restore_browser_state(hint: dict, loop: asyncio.AbstractEventLoop) -> None:
                     f"repld: failed to reconnect Chrome port {port}: {e}",
                     file=sys.stderr,
                 )
-        for pattern in hint.get("patterns", []):
+        for pattern in patterns:
             try:
                 asyncio.run_coroutine_threadsafe(browser.watch(pattern), loop).result(
                     timeout=5
@@ -630,10 +662,9 @@ def _restore_browser_state(hint: dict, loop: asyncio.AbstractEventLoop) -> None:
                     f"repld: failed to re-watch pattern {pattern!r}: {e}",
                     file=sys.stderr,
                 )
-        if hint.get("chrome_ports") or hint.get("patterns"):
-            from . import dashboard
+        from . import dashboard
 
-            dashboard.save_hint()
+        dashboard.save_hint()
 
     suppress_list = hint.get("suppress", [])
     if suppress_list:
@@ -766,7 +797,7 @@ def run_kernel(
     except Exception as e:
         print(f"repld: dashboard failed to start: {e}", file=sys.stderr)
 
-    _restore_browser_state(hint, loop)
+    _restore_browser_state(hint, loop, interactive=display and sys.stdin.isatty())
 
     _write_lockfile(sock_path, dashboard_port=dashboard_port)
     _active_lock_path = _lock_for(sock_path)

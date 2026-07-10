@@ -622,7 +622,9 @@ browser.connect(port) adds a Chrome instance to the pool.  Call it multiple
   browser.tabs                              # tabs from all instances
 
 Browser state (connected ports + watch patterns) persists in .pyrepl.dashboard
-  across kernel restarts.  On boot, repld auto-reconnects and re-watches.
+  across kernel restarts.  On boot, repld prompts on the terminal before
+  reconnecting/re-watching ([Y/n], default yes); headless boot (--no-display)
+  or non-tty stdin skips the restore.
 
 == Controls protocol ==
 
