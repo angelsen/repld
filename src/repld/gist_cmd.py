@@ -37,26 +37,21 @@ def run_gist(argv: list[str]) -> int:
         _print_gist_usage()
         return 0 if argv else 2
     cmd, rest = argv[0], argv[1:]
-    if cmd == "new":
-        return _gist_new(rest)
-    if cmd == "add":
-        return _gist_add(rest)
-    if cmd == "rm":
-        return _gist_rm(rest)
-    if cmd == "list":
-        return _gist_list(rest)
-    print(f"repld gist: unknown command '{cmd}'\n")
-    _print_gist_usage()
-    return 2
+    entry = _GIST_COMMANDS.get(cmd)
+    if entry is None:
+        print(f"repld gist: unknown command '{cmd}'\n")
+        _print_gist_usage()
+        return 2
+    func, _, _ = entry
+    return func(rest)
 
 
 def _print_gist_usage() -> None:
     print("repld gist — manage tool gists")
     print()
-    print("  repld gist new <name>    scaffold ./gists/<name>.py")
-    print("  repld gist add <name>    link a gist registered in another project")
-    print("  repld gist rm <name>     unlink (use --stale to drop all dead links)")
-    print("  repld gist list          show local + linked + linkable gists")
+    width = max(len(usage) for _, usage, _ in _GIST_COMMANDS.values())
+    for _, usage, desc in _GIST_COMMANDS.values():
+        print(f"  repld gist {usage:<{width}}    {desc}")
 
 
 def _gist_new(argv: list[str]) -> int:
@@ -199,3 +194,13 @@ def _gist_list(argv: list[str]) -> int:
     if not local and not links and not linkable:
         print("no gists in ./gists")
     return 0
+
+
+# name → (handler, usage suffix, one-line help). Single source for both
+# dispatch and the usage listing, so they can't drift.
+_GIST_COMMANDS = {
+    "new": (_gist_new, "new <name>", "scaffold ./gists/<name>.py"),
+    "add": (_gist_add, "add <name>", "link a gist registered in another project"),
+    "rm": (_gist_rm, "rm <name>", "unlink (use --stale to drop all dead links)"),
+    "list": (_gist_list, "list", "show local + linked + linkable gists"),
+}

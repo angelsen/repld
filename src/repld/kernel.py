@@ -208,7 +208,7 @@ def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | Non
     to any non-internal loop task — typically an @every ticker — sorted by
     name for determinism.
     """
-    for task in tasks._tasks.values():
+    for task in list(tasks._tasks.values()):
         if task["done_event"].is_set():
             continue
         atask = task.get("asyncio_task")

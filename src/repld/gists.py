@@ -78,6 +78,24 @@ def _parse(path: Path) -> ast.Module | None:
         return None
 
 
+def _dunder_value(tree: ast.Module, name: str) -> ast.expr | None:
+    """Return the value node of the first top-level `name = <literal>` assignment."""
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return node.value
+    return None
+
+
+def _warn_once(key: str, msg: str) -> None:
+    """Print msg to stderr the first time key is seen; silent on repeats."""
+    if key in _malformed_warned:
+        return
+    _malformed_warned.add(key)
+    print(msg, file=sys.stderr)
+
+
 def _register(name: str) -> None:
     """Record a gist import in the central registry. Best-effort, never raises."""
     try:
@@ -410,38 +428,28 @@ def _extract_doc(path: Path) -> str:
 
 def hint_for_name(name: str) -> str | None:
     """If `name` matches a gist variable or class name, return a usage hint."""
-    for d in _installed_dirs:
-        if not d.is_dir():
+    for p in _iter_gist_files():
+        tree = _parse(p)
+        if tree is None:
             continue
-        for p in d.glob("*.py"):
-            if p.name.startswith("_"):
-                continue
-            tree = _parse(p)
-            if tree is None:
-                continue
-            usage = None
-            classes: list[str] = []
-            for node in ast.iter_child_nodes(tree):
-                if (
-                    isinstance(node, ast.Assign)
-                    and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id == "__repld_usage__"
-                    and isinstance(node.value, ast.Constant)
-                ):
-                    usage = str(node.value.value)
-                elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
-                    classes.append(node.name)
-            # Check usage variable (e.g. "ig" from "ig = await IG.connect()")
+        usage_node = _dunder_value(tree, "__repld_usage__")
+        usage = str(usage_node.value) if isinstance(usage_node, ast.Constant) else None
+        classes = [
+            node.name
+            for node in ast.iter_child_nodes(tree)
+            if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
+        ]
+        # Check usage variable (e.g. "ig" from "ig = await IG.connect()")
+        if usage:
+            lhs = usage.split("=")[0].strip()
+            if lhs == name:
+                return f"from gist {p.stem}: {usage}"
+        # Check class names (e.g. "IG" from instagram.py)
+        if name in classes:
+            hint = f"from {p.stem} import {name}"
             if usage:
-                lhs = usage.split("=")[0].strip()
-                if lhs == name:
-                    return f"from gist {p.stem}: {usage}"
-            # Check class names (e.g. "IG" from instagram.py)
-            if name in classes:
-                hint = f"from {p.stem} import {name}"
-                if usage:
-                    hint += f"; then: {usage}"
-                return hint
+                hint += f"; then: {usage}"
+            return hint
     return None
 
 
@@ -644,25 +652,20 @@ def signature_for_path(path: Path) -> str:
 
 def _extract_tools_from_tree(tree: ast.Module, path: Path) -> list[dict]:
     """Extract __repld_tools__ list from a pre-parsed AST."""
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "__repld_tools__":
-                    try:
-                        value = ast.literal_eval(ast.unparse(node.value))
-                    except Exception:
-                        value = None
-                    if isinstance(value, list):
-                        return value
-                    key = f"{path}:__repld_tools__"
-                    if key not in _malformed_warned:
-                        _malformed_warned.add(key)
-                        print(
-                            f"repld: {path.name}: malformed __repld_tools__ "
-                            f"(expected a list of tool dicts) — skipped",
-                            file=sys.stderr,
-                        )
-                    return []
+    node = _dunder_value(tree, "__repld_tools__")
+    if node is None:
+        return []
+    try:
+        value = ast.literal_eval(node)
+    except Exception:
+        value = None
+    if isinstance(value, list):
+        return value
+    _warn_once(
+        f"{path}:__repld_tools__",
+        f"repld: {path.name}: malformed __repld_tools__ "
+        f"(expected a list of tool dicts) — skipped",
+    )
     return []
 
 
@@ -800,10 +803,7 @@ def scan_tools() -> list[dict]:
         try:
             mod = _import_gist(p)
         except Exception as exc:
-            key = f"{p}:import"
-            if key not in _malformed_warned:
-                _malformed_warned.add(key)
-                print(f"repld: {p.name}: failed to import: {exc}", file=sys.stderr)
+            _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
             continue
         for tname in tool_names:
             if tname in seen:
@@ -818,13 +818,9 @@ def scan_tools() -> list[dict]:
             try:
                 schema = _schema_from_signature(func, tname)
             except Exception as exc:
-                key = f"{p}:_tool_{tname}"
-                if key not in _malformed_warned:
-                    _malformed_warned.add(key)
-                    print(
-                        f"repld: {p.name}: _tool_{tname}: {exc}",
-                        file=sys.stderr,
-                    )
+                _warn_once(
+                    f"{p}:_tool_{tname}", f"repld: {p.name}: _tool_{tname}: {exc}"
+                )
                 continue
             seen.add(tname)
             results.append(schema)
@@ -936,45 +932,38 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
         tree = _parse(p)
         if tree is None:
             continue
-        for node in ast.iter_child_nodes(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "__repld_deps__"
-            ):
-                try:
-                    reqs = ast.literal_eval(ast.unparse(node.value))
-                except Exception:
-                    key = f"{p}:__repld_deps__"
-                    if key not in _malformed_warned:
-                        _malformed_warned.add(key)
-                        print(
-                            f"repld: {p.name}: malformed __repld_deps__ "
-                            f"(not a valid literal) — skipped",
-                            file=sys.stderr,
-                        )
-                    continue
-                if not isinstance(reqs, list):
-                    continue
-                for req in reqs:
-                    req_str = str(req).strip()
-                    if req_str == ".":
-                        info = _resolve_dot_dep(p)
-                        if info is not None:
-                            key = info.requirement
-                            if key in deps:
-                                deps[key].gists.append(p.stem)
-                            else:
-                                deps[key] = info
-                        continue
-                    pkg = _parse_pkg_name(req_str)
-                    if _is_importable(pkg):
-                        continue
-                    if pkg in deps:
-                        deps[pkg].gists.append(p.stem)
+        node = _dunder_value(tree, "__repld_deps__")
+        if node is None:
+            continue
+        try:
+            reqs = ast.literal_eval(node)
+        except Exception:
+            _warn_once(
+                f"{p}:__repld_deps__",
+                f"repld: {p.name}: malformed __repld_deps__ "
+                f"(not a valid literal) — skipped",
+            )
+            continue
+        if not isinstance(reqs, list):
+            continue
+        for req in reqs:
+            req_str = str(req).strip()
+            if req_str == ".":
+                info = _resolve_dot_dep(p)
+                if info is not None:
+                    key = info.requirement
+                    if key in deps:
+                        deps[key].gists.append(p.stem)
                     else:
-                        deps[pkg] = _DepInfo(req_str, [p.stem])
+                        deps[key] = info
+                continue
+            pkg = _parse_pkg_name(req_str)
+            if _is_importable(pkg):
+                continue
+            if pkg in deps:
+                deps[pkg].gists.append(p.stem)
+            else:
+                deps[pkg] = _DepInfo(req_str, [p.stem])
     return list(deps.values())
 
 

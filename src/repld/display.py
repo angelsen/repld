@@ -76,7 +76,7 @@ _awaiting_gate_kind: str | None = None
 
 # Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
 # edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
-# via the spill file; `read_spill` is the escape hatch.
+# via the spill file; Read/Grep on that path is the escape hatch.
 VIEWER_MAX_BYTES = 4 * 1024
 # Per-task (bytes_written, last_char_was_newline).
 _viewer_state: dict[str, tuple[int, bool]] = {}

@@ -49,6 +49,13 @@ def make_target(port: int, chrome_id: str) -> str:
     return f"{port}:{chrome_id[:6].lower()}"
 
 
+def _print_browser_help() -> None:
+    """Print the Python API reference for the browser object."""
+    from ..help import _TOPICS
+
+    print(_TOPICS["browser"])
+
+
 class Browser:
     """Manages the BrowserSession + watch patterns + Tab resolution.
 
@@ -481,9 +488,7 @@ class Browser:
 
     def help(self) -> None:
         """Print the Python API reference for the browser object."""
-        from ..help import _TOPICS
-
-        print(_TOPICS["browser"])
+        _print_browser_help()
 
     def __repr__(self) -> str:
         n = len(self._session._sessions) if self._connected else 0
@@ -715,9 +720,7 @@ class BrowserPool:
         raise RuntimeError("No browsers connected")
 
     def help(self) -> None:
-        from ..help import _TOPICS
-
-        print(_TOPICS["browser"])
+        _print_browser_help()
 
     def __repr__(self) -> str:
         if not self._browsers:
@@ -746,9 +749,7 @@ class LazyBrowser:
 
     def help(self) -> None:
         """Print the Python API reference (no Chrome connection needed)."""
-        from ..help import _TOPICS
-
-        print(_TOPICS["browser"])
+        _print_browser_help()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._bootstrap(), name)

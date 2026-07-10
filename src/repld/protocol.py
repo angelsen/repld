@@ -715,11 +715,7 @@ class Dispatcher:
 
     def _run_async(self, coro, timeout: float = 30):
         """Run a coroutine on the repld asyncio loop from the IPC thread."""
-        try:
-            loop = self.ctx.loop  # type: ignore[attr-defined]
-        except AttributeError:
-            raise RuntimeError("KernelContext does not expose .loop")
-        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        fut = asyncio.run_coroutine_threadsafe(coro, self.ctx.loop)
         return fut.result(timeout=timeout)
 
     def _get_tab(self, browser, args):
@@ -921,17 +917,12 @@ class Dispatcher:
 
     def _bh_key(self, browser, args):
         tab = self._get_tab(browser, args)
-        key = args["key"]
-
-        def mutate():
-            self._run_async(
-                tab.cdp("Input.dispatchKeyEvent", type="keyDown", key=key, code=key)
-            )
-            self._run_async(
-                tab.cdp("Input.dispatchKeyEvent", type="keyUp", key=key, code=key)
-            )
-
-        return self._observed_mutation(browser, tab, mutate, timeout=5.0)
+        return self._observed_mutation(
+            browser,
+            tab,
+            lambda: self._run_async(tab.key(args["key"])),
+            timeout=5.0,
+        )
 
     def _bh_click(self, browser, args):
         tab = self._get_tab(browser, args)

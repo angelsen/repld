@@ -13,7 +13,7 @@ import base64
 import logging
 import time
 
-from .cdp import CDPSession, _json_dumps_safe
+from .cdp import CDPSession
 
 __all__ = ["enable", "disable", "handle_paused"]
 
@@ -221,15 +221,7 @@ def _store_request_body(session: CDPSession, network_id: str, body: str) -> None
         "params": {"requestId": network_id, "body": body},
     }
     try:
-        session.db.execute(
-            "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
-            [
-                _json_dumps_safe(event),
-                "Network.requestBodyCaptured",
-                network_id,
-                session.target_info.get("targetId", ""),
-            ],
-        )
+        session.store_event(event, "Network.requestBodyCaptured", network_id)
     except Exception as exc:
         logger.debug("store_request_body %s: %s", network_id, exc)
 
@@ -252,14 +244,6 @@ def _store_response_body(
         },
     }
     try:
-        session.db.execute(
-            "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
-            [
-                _json_dumps_safe(event),
-                "Network.responseBodyCaptured",
-                network_id,
-                session.target_info.get("targetId", ""),
-            ],
-        )
+        session.store_event(event, "Network.responseBodyCaptured", network_id)
     except Exception as exc:
         logger.debug("store_response_body %s: %s", network_id, exc)

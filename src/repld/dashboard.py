@@ -139,6 +139,7 @@ def save_hint() -> None:
         pass
     try:
         _hint_path.write_text(json.dumps(hint))
+        _hint_path.chmod(0o600)
     except OSError:
         pass
 

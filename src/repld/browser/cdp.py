@@ -382,6 +382,18 @@ class CDPSession:
     # Event handling (sync — called from recv loop on asyncio thread)
     # ------------------------------------------------------------------
 
+    def store_event(self, event: dict, method: str, request_id: str | None) -> None:
+        """Insert an event row into this session's DuckDB event store."""
+        self.db.execute(
+            "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
+            [
+                _json_dumps_safe(event),
+                method,
+                request_id,
+                self.target_info.get("targetId", ""),
+            ],
+        )
+
     def _handle_event(self, data: dict) -> None:
         """Store event in DuckDB and dispatch Fetch handler if needed."""
         try:
@@ -392,10 +404,7 @@ class CDPSession:
             target_id = self.target_info.get("targetId", "")
 
             # Synchronous insert — microseconds, no contention
-            self.db.execute(
-                "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
-                [_json_dumps_safe(data), method, request_id, target_id],
-            )
+            self.store_event(data, method, request_id)
             self._event_count += 1
 
             if method == "Fetch.requestPaused":

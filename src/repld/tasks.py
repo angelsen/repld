@@ -3,7 +3,8 @@
 Every task that produces any output gets a spill file at
 $XDG_RUNTIME_DIR/repld/{pid}-{task_id}.out, opened lazily on first write.
 The MCP `exec` / `get_task` responses return a small head+tail preview
-sliced from that file; `read_spill` exposes arbitrary byte ranges.
+sliced from that file; agents use the standard Read/Grep tools on the
+spill path for anything beyond the preview.
 """
 
 import contextvars
@@ -244,7 +245,7 @@ def finalize(task_id: str) -> None:
 def _prune_spill_files() -> None:
     """Close spill file handles on tasks completed more than _PRUNE_AGE ago."""
     now = time.monotonic()
-    for task in _tasks.values():
+    for task in list(_tasks.values()):
         done_at = task.get("done_at")
         if done_at is None or now - done_at < _PRUNE_AGE:
             continue

@@ -610,11 +610,15 @@ class Tab:
                 await asyncio.sleep(delay_ms / 1000)
 
         if press_enter:
-            for event_type in ("keyDown", "keyUp"):
-                await self._exec(
-                    "Input.dispatchKeyEvent",
-                    {"type": event_type, "key": "Enter", "code": "Enter"},
-                )
+            await self.key("Enter")
+
+    async def key(self, key: str) -> None:
+        """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape")."""
+        for event_type in ("keyDown", "keyUp"):
+            await self._exec(
+                "Input.dispatchKeyEvent",
+                {"type": event_type, "key": key, "code": key},
+            )
 
     async def _touch(
         self, type: str, touch_points: list[dict], timeout: float = 3
