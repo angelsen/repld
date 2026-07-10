@@ -116,7 +116,7 @@ def _should_capture_body(params: dict) -> bool:
     if "text/event-stream" in content_type:
         return False
 
-    if 0 < content_length > _MAX_BODY_SIZE:
+    if content_length > _MAX_BODY_SIZE:
         return False
 
     return True

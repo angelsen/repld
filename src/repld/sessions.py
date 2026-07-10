@@ -15,7 +15,7 @@ import os
 import time
 from pathlib import Path
 
-from .ipc import _pid_alive
+from .ipc import pid_alive
 from .tasks import RUNTIME_DIR
 
 __all__ = ["register", "unregister", "list_sessions"]
@@ -64,7 +64,7 @@ def list_sessions() -> list[dict]:
                 pid = int(f.stem)
             except ValueError:
                 pid = None
-        if pid is not None and _pid_alive(pid):
+        if pid is not None and pid_alive(pid):
             if info is not None:
                 result.append(info)
             continue

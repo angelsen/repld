@@ -261,6 +261,19 @@ def _cors_header(origin: str | None) -> str:
     return ""
 
 
+def _host_allowed(host: str | None) -> bool:
+    """Reject DNS rebinding: the Host header must name this loopback server.
+
+    A rebound page (evil.com resolving to 127.0.0.1) is same-origin in the
+    browser's eyes — no Origin header, so CORS can't stop it from reading
+    GET / (and the embedded token). Its requests carry Host: evil.com:<port>.
+    """
+    if not host or not _server or not _server.sockets:
+        return False
+    port = _server.sockets[0].getsockname()[1]
+    return host in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}")
+
+
 async def _send_response(
     writer: asyncio.StreamWriter,
     status: int,
@@ -272,6 +285,7 @@ async def _send_response(
         200: "OK",
         401: "Unauthorized",
         400: "Bad Request",
+        403: "Forbidden",
         404: "Not Found",
         500: "Internal Server Error",
     }.get(status, "OK")
@@ -343,6 +357,10 @@ async def _handle_connection(
         content_length = int(headers.get("content-length", "0") or "0")
         origin = headers.get("origin")
 
+        if not _host_allowed(headers.get("host")):
+            await _send_response(writer, 403, b'{"error":"forbidden host"}')
+            return
+
         if method_http == "OPTIONS":
             cors = (
                 "HTTP/1.1 204 No Content\r\n"
@@ -412,7 +430,6 @@ async def _handle_connection(
 
 
 async def _start(
-    loop: asyncio.AbstractEventLoop,
     socket_path: str,
     start_time: float,
     preferred_port: int,
@@ -442,7 +459,7 @@ def start_dashboard(
     global _hint_path
     _hint_path = hint_path
     future = asyncio.run_coroutine_threadsafe(
-        _start(loop, socket_path, start_time, preferred_port), loop
+        _start(socket_path, start_time, preferred_port), loop
     )
     return future.result(timeout=5.0)
 
@@ -902,16 +919,15 @@ async function refreshTargets() {
 
 function renderTargets() {
   if (!targets || !state?.browser) return;
-  const filtered = targets;
   const tbody = $('#targets-body');
   tbody.innerHTML = '';
-  $('#targets-table').hidden = filtered.length === 0;
-  $('#targets-empty').hidden = filtered.length > 0;
-  if (!filtered.length) { $('#targets-empty').textContent = 'no targets'; }
+  $('#targets-table').hidden = targets.length === 0;
+  $('#targets-empty').hidden = targets.length > 0;
+  if (!targets.length) { $('#targets-empty').textContent = 'no targets'; }
 
   const attachedIds = new Set((state.browser.tabs || []).map(t => t.target_id));
 
-  for (const t of filtered) {
+  for (const t of targets) {
     const attached = attachedIds.has(t.targetId);
     const tr = document.createElement('tr');
     const origin = urlOrigin(t.url);

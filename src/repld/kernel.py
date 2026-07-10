@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import events, ipc, sessions, tasks
-from .events import CellDone, CellStart
+from .events import CellDone, CellStart, ChannelPush
 from .ipc import read_lock
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
@@ -80,13 +80,13 @@ _active_lock_path: Path | None = None
 # ---------------------------------------------------------------------------
 
 
-def _load_dotenv(path: Path | None = None) -> None:
-    """Load KEY=VALUE pairs from a .env file into os.environ (stdlib only).
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from ./.env into os.environ (stdlib only).
 
     Skips comments, blank lines, and export prefixes. Strips surrounding
     quotes. Does NOT override existing env vars.
     """
-    p = path or Path.cwd() / ".env"
+    p = Path.cwd() / ".env"
     if not p.is_file():
         return
     for raw in p.read_text().splitlines():
@@ -162,8 +162,6 @@ def push_channel(content: str, meta: dict | None = None) -> None:
             "params": {"content": content, "meta": meta},
         }
     )
-    from .events import ChannelPush
-
     events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
 
 
@@ -277,8 +275,6 @@ def _loop_watchdog(
                         f"[repld] killed blocked task: {victim_name}",
                         {"kind": "loop_kill", "task": victim_name},
                     )
-            except Exception:
-                pass
         if stop.wait(interval):
             return
 
@@ -296,13 +292,11 @@ def _maybe_push_done(task_id: str) -> None:
     if task is None or not task.get("nudged"):
         return
     cutoff = task.get("nudge_cutoff", 0)
-    delta = ""
     path = task.get("spill_path")
-    if path is not None:
-        try:
-            delta = tasks._read_from(task, cutoff)
-        except Exception:
-            delta = ""
+    try:
+        delta = tasks._read_from(task, cutoff)
+    except Exception:
+        delta = ""
     delta_preview, _truncated = tasks._make_preview(delta)
     label = task.get("label")
     label_str = f' "{label}"' if label else ""
@@ -310,7 +304,7 @@ def _maybe_push_done(task_id: str) -> None:
     if delta_preview.strip():
         parts.append(delta_preview.rstrip())
     if path is not None:
-        parts.append(f"[full output: {path}]")
+        parts.append(tasks.spill_marker(path))
     if task["exception"]:
         parts.append(str(task["exception"]).rstrip())
     meta_dict: dict[str, str] = {
@@ -552,7 +546,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     # Set __main__.__file__ so the init file's Path(__file__) works the way
     # `python path/to/script.py` would.
     __main__.__file__ = str(path.resolve())
-    task_id, task = tasks.new_task()
+    task_id, _ = tasks.new_task()
     events.emit(CellStart(task_id, src, time.time()))
     future = asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), loop)
     # Block until the init file completes (including any run_until_complete
@@ -637,11 +631,12 @@ def _restore_browser_state(
     browser = getattr(__main__, "browser", None)
     ports = hint.get("chrome_ports", [])
     patterns = hint.get("patterns", [])
-    if browser is not None and (ports or patterns):
-        restore = interactive and _confirm_browser_restore(ports, patterns)
-    else:
-        restore = False
-    if browser is not None and restore:
+    if (
+        browser is not None
+        and (ports or patterns)
+        and interactive
+        and _confirm_browser_restore(ports, patterns)
+    ):
         for port in ports:
             try:
                 asyncio.run_coroutine_threadsafe(browser.connect(port), loop).result(
@@ -681,21 +676,16 @@ def _restore_browser_state(
 # ---------------------------------------------------------------------------
 
 
-def run_kernel(
-    socket_path: str | None = None,
-    *,
-    display: bool = True,
-    init_file: str | None = None,
-) -> int:
-    sock_path = Path(socket_path) if socket_path else _default_socket_path()
-    _check_existing_kernel(sock_path)
-
-    # 1. Start the asyncio loop on a daemon thread.
+def _start_loop() -> asyncio.AbstractEventLoop:
+    """1. Start the asyncio loop on a daemon thread."""
     loop = asyncio.new_event_loop()
     loop.set_exception_handler(_asyncio_exception_handler)
     threading.Thread(target=loop.run_forever, daemon=True, name="repld-asyncio").start()
+    return loop
 
-    # 2. Init event queue and tee (must happen before any user code runs).
+
+def _boot_runtime() -> None:
+    """2. Event queue, tee, .env, gists — before any user code runs."""
     events.init_event_queue()
     install_tee()
 
@@ -717,7 +707,9 @@ def run_kernel(
     if missing:
         _gists.install_deps(missing)
 
-    # 3. Inject helpers into __main__ + repld module.
+
+def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
+    """3. Inject helpers into __main__ + repld module."""
     from . import gates, runtime
     import pydoc
     import repld as _repld_mod
@@ -763,7 +755,14 @@ def run_kernel(
     except ImportError:
         pass  # repld[browser] not installed — no browser builtin
 
-    # 4. Wire IPC.
+
+def _start_services(
+    loop: asyncio.AbstractEventLoop, sock_path: Path, display: bool
+) -> int | None:
+    """4. IPC, dashboard, browser restore, lockfile, session registry.
+
+    Returns the dashboard port (None if the dashboard failed to start).
+    """
     global _active_lock_path
     ctx = _Context(loop)
     dispatcher = Dispatcher(ctx)
@@ -808,7 +807,13 @@ def run_kernel(
 
     sessions.register(os.getcwd(), str(sock_path), dashboard_port)
     atexit.register(sessions.unregister)
+    return dashboard_port
 
+
+def _start_watchdog(
+    loop: asyncio.AbstractEventLoop, sock_path: Path, dashboard_port: int | None
+) -> threading.Event:
+    """5+6. Loop watchdog + banner. Returns the kernel's stop event."""
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
@@ -832,6 +837,23 @@ def run_kernel(
         daemon=True,
         name="repld-watchdog",
     ).start()
+    return stop
+
+
+def run_kernel(
+    socket_path: str | None = None,
+    *,
+    display: bool = True,
+    init_file: str | None = None,
+) -> int:
+    sock_path = Path(socket_path) if socket_path else _default_socket_path()
+    _check_existing_kernel(sock_path)
+
+    loop = _start_loop()
+    _boot_runtime()
+    _inject_builtins(loop)
+    dashboard_port = _start_services(loop, sock_path, display)
+    stop = _start_watchdog(loop, sock_path, dashboard_port)
 
     # 7. Optionally run init file.
     if init_file:

@@ -21,6 +21,7 @@ from typing import IO, Any
 
 from . import __version__
 from .ipc import connect_to_kernel, resolve_lock_path
+from .tasks import spill_marker
 
 HISTORY_DIR = Path.home() / ".repld"
 HISTORY_PATH = HISTORY_DIR / "history"
@@ -226,7 +227,7 @@ def _wait_task(rfile: IO[str], wfile: IO[str], task_id: str, json_mode: bool) ->
                         if text:
                             print(text)
                         if snap.get("truncated"):
-                            _err(f"[full output: {snap.get('spill_path')}]")
+                            _err(spill_marker(snap.get("spill_path")))
                     return 1 if snap.get("exception") else 0
                 else:
                     _handle_notification(data, json_mode)
@@ -299,11 +300,7 @@ def run_exec(argv: list[str]) -> int:
         print("  --socket PATH  connect to a kernel at a non-default socket path")
         return 0
 
-    lock_path = resolve_lock_path(args)
-    if "--socket" in args:
-        i = args.index("--socket")
-        del args[i : i + 2]
-    args = [a for a in args if not a.startswith("--socket=")]
+    lock_path, args = resolve_lock_path(args)
 
     json_mode = False
     if "--json" in args:

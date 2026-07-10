@@ -27,7 +27,6 @@ PREVIEW_MAX_BYTES = 4 * 1024  # wire budget — independent of display.VIEWER_MA
 PREVIEW_MAX_LINE = 400  # per-line clamp for unbroken-text lines
 
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld"
-SPILL_DIR = RUNTIME_DIR
 
 _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None
@@ -40,12 +39,12 @@ _finalize_count = 0
 
 
 def _ensure_spill_dir() -> None:
-    SPILL_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _open_spill(task: dict, task_id: str) -> None:
     _ensure_spill_dir()
-    path = SPILL_DIR / f"{os.getpid()}-{task_id}.out"
+    path = RUNTIME_DIR / f"{os.getpid()}-{task_id}.out"
     fp = open(path, "w")
     task["spill_file"] = fp
     task["spill_path"] = str(path)
@@ -180,7 +179,7 @@ def spill_text(text: str, label: str = "output") -> dict:
     if len(text) > PREVIEW_MAX_BYTES:
         _ensure_spill_dir()
         tid = uuid.uuid4().hex[:12]
-        path = SPILL_DIR / f"{os.getpid()}-{label}-{tid}.out"
+        path = RUNTIME_DIR / f"{os.getpid()}-{label}-{tid}.out"
         tmp = path.with_suffix(".tmp")
         with open(tmp, "w") as f:
             f.write(text)
@@ -189,10 +188,22 @@ def spill_text(text: str, label: str = "output") -> dict:
     return {"text": preview, "spill_path": spill_path, "truncated": truncated}
 
 
+def spill_marker(path: str) -> str:
+    """Canonical '[full output: {path}]' marker.
+
+    Agents and tests grep for this exact shape — every wire-facing producer
+    must build it here.  (display.py's 'full: {path}' viewer-cap notice is a
+    deliberately distinct, terminal-only variant.)
+    """
+    return f"[full output: {path}]"
+
+
 def snapshot(task_id: str) -> dict:
     task = _tasks.get(task_id)
     if task is None:
         return {"task_id": task_id, "error": "unknown task_id"}
+    # Full re-read per poll is fine at current poll rates; revisit with a
+    # head-cache + tail-seek if multi-MB spills under polling become common.
     full = _read_from(task)
     text, truncated = _make_preview(full)
     return {

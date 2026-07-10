@@ -3,9 +3,10 @@
 PUBLIC API:
   - LazyBrowser: Descriptor injected into __main__; lazy-bootstraps on first access.
   - Browser: Manages BrowserSession, watch patterns, and Tab resolution.
+  - BrowserPool: Multi-port façade over one Browser per Chrome instance.
 
 Usage in kernel:
-    setattr(__main__, "browser", LazyBrowser(loop))
+    setattr(__main__, "browser", LazyBrowser())
 
 Then in user code:
     tab = await browser.get("*github.com*")   # find one tab by glob
@@ -156,6 +157,7 @@ class Browser:
         Returns (session_id, cdp, full_chrome_id); session_id and cdp are
         None on miss.
         """
+        prefix = prefix.lower()
         for sid, cdp in self._session._sessions.items():
             chrome_id = cdp.target_info.get("targetId", "")
             if chrome_id[:6].lower() == prefix:
@@ -178,11 +180,14 @@ class Browser:
                     await cdp.enable_fetch()
                     return Tab(cdp, tid, self.port, ready=ready)
 
-        attached = [
+        raise RuntimeError(f"No tab '{target}'. Attached: {self._attached_short_ids()}")
+
+    def _attached_short_ids(self) -> list[str]:
+        """Short target IDs of all attached sessions, for error messages."""
+        return [
             make_target(self.port, cdp.target_info.get("targetId", ""))
             for cdp in self._session._sessions.values()
         ]
-        raise RuntimeError(f"No tab '{target}'. Attached: {attached}")
 
     async def _get_by_glob(
         self,
@@ -196,14 +201,13 @@ class Browser:
         exclude: set[str] = set()
         if fresh:
             for cdp in self._session._sessions.values():
-                url = cdp.target_info.get("url", "")
-                if fnmatch(url, pattern):
-                    exclude.add(cdp.target_info.get("targetId", ""))
+                tid = self._glob_target_id(cdp.target_info, pattern, exclude)
+                if tid:
+                    exclude.add(tid)
             await self._ensure_connected()
             for t in await self._session.list_targets():
-                url = t.get("url", "")
-                tid = t.get("targetId", "")
-                if fnmatch(url, pattern) and tid:
+                tid = self._glob_target_id(t, pattern, exclude)
+                if tid:
                     exclude.add(tid)
 
         deadline = (
@@ -211,20 +215,14 @@ class Browser:
         )
         while True:
             for cdp in self._session._sessions.values():
-                if cdp.target_info.get("type", "") in WORKER_TYPES:
-                    continue
-                url = cdp.target_info.get("url", "")
-                tid = cdp.target_info.get("targetId", "")
-                if fnmatch(url, pattern) and tid not in exclude:
+                tid = self._glob_target_id(cdp.target_info, pattern, exclude)
+                if tid:
                     return Tab(cdp, tid, self.port, ready=ready)
 
             await self._ensure_connected()
             for t in await self._session.list_targets():
-                if t.get("type", "") in WORKER_TYPES:
-                    continue
-                url = t.get("url", "")
-                tid = t.get("targetId", "")
-                if fnmatch(url, pattern) and tid and tid not in exclude:
+                tid = self._glob_target_id(t, pattern, exclude)
+                if tid:
                     cdp = await self._session.attach(tid, t)
                     if cdp is not None:
                         await cdp.enable_fetch()
@@ -235,6 +233,16 @@ class Browser:
             await asyncio.sleep(0.3)
 
         raise RuntimeError(f"No tab matching '{pattern}'")
+
+    @staticmethod
+    def _glob_target_id(info: dict, pattern: str, exclude: set[str]) -> str | None:
+        """targetId if info matches: non-worker, url glob, not excluded; else None."""
+        if info.get("type", "") in WORKER_TYPES:
+            return None
+        tid = info.get("targetId", "")
+        if not tid or tid in exclude:
+            return None
+        return tid if fnmatch(info.get("url", ""), pattern) else None
 
     async def watch(self, pattern: str) -> str:
         """Register a URL glob pattern and attach currently-matching tabs.
@@ -359,18 +367,16 @@ class Browser:
     def clear(self, target: str | None = None) -> str:
         """Clear captured events. Specify target for one tab, or None for all."""
         if target is not None:
-            if ":" not in target:
+            if not _is_target_id(target):
                 raise RuntimeError(
                     f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
                 )
             _, prefix = target.split(":", 1)
             _sid, cdp, _chrome_id = self._find_by_prefix(prefix)
             if cdp is None:
-                attached = [
-                    make_target(self.port, c.target_info.get("targetId", ""))
-                    for c in self._session._sessions.values()
-                ]
-                raise RuntimeError(f"No attached tab '{target}'. Attached: {attached}")
+                raise RuntimeError(
+                    f"No attached tab '{target}'. Attached: {self._attached_short_ids()}"
+                )
             cdp.clear_events()
             return f"Cleared events for {target}."
         count = 0
@@ -393,16 +399,21 @@ class Browser:
             raise RuntimeError("No attached tabs — open or get a tab first")
         return await tabs[0].fetch(url, method=method, body=body, headers=headers)
 
+    @staticmethod
+    async def _safe_unpin(tab: Tab) -> None:
+        """Unpin before detach/disconnect; a failed unpin must not block either."""
+        if tab._pinned:
+            try:
+                await tab.unpin()
+            except Exception:
+                pass
+
     async def disconnect(self) -> None:
         """Disconnect from Chrome. Unpins all tabs first (removes pill,
         beforeunload guard, and heartbeat task before dropping the socket)."""
         if self._connected:
             for tab in self._iter_tabs():
-                if tab._pinned:
-                    try:
-                        await tab.unpin()
-                    except Exception:
-                        pass
+                await self._safe_unpin(tab)
             try:
                 await self._session.disconnect()
             except Exception:
@@ -415,12 +426,7 @@ class Browser:
         prefix = target_id.split(":")[-1]
         sid, cdp, full_id = self._find_by_prefix(prefix)
         if sid is not None and cdp is not None:
-            tab = Tab(cdp, full_id, self.port)
-            if tab._pinned:
-                try:
-                    await tab.unpin()
-                except Exception:
-                    pass
+            await self._safe_unpin(Tab(cdp, full_id, self.port))
             await self._session.detach(sid)
             return f"Detached {target_id}."
         return f"Target {target_id} not found."
@@ -573,7 +579,7 @@ class BrowserPool:
                 info = cdp.target_info
                 tab_list.append(
                     {
-                        "id": f"{port}:{info.get('targetId', '?')[:6]}",
+                        "id": make_target(port, info.get("targetId", "")),
                         "target_id": info.get("targetId", ""),
                         "port": port,
                         "type": info.get("type", ""),
@@ -732,23 +738,8 @@ class BrowserPool:
         return "\n".join(parts) if parts else "(no attached tabs)"
 
     @property
-    def port(self) -> int:
-        """Port of the first connected browser (backwards compat)."""
-        for b in self._browsers.values():
-            return b.port
-        return int(os.environ.get("REPLD_CHROME_PORT", "9222"))
-
-    @property
     def _connected(self) -> bool:
         return any(b._connected for b in self._browsers.values())
-
-    @property
-    def _session(self):
-        """Session of the first browser (backwards compat for protocol.py)."""
-        for b in self._browsers.values():
-            if b._connected:
-                return b._session
-        raise RuntimeError("No browsers connected")
 
     def help(self) -> None:
         _print_browser_help()

@@ -21,7 +21,6 @@ from typing import Any
 # `x: T = ...`, chained `x = y = ...`) — used to unwrap any `_NoDisplay`
 # a callee assigned directly, since assignment doesn't go through the
 # display path where unwrapping normally happens.
-CompiledCell = tuple
 
 
 class _NoDisplay:
@@ -69,7 +68,7 @@ def _assign_target_names(stmts: list) -> set:
     return names
 
 
-def compile_cell(src: str, task_id: str) -> CompiledCell:
+def compile_cell(src: str, task_id: str) -> tuple:
     flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
     fname = f"<repld:{task_id}>"
     # Try eval-mode first — handles single-expression cells like `1 + 1`.
@@ -133,7 +132,7 @@ def _unwrap_assigned(ns: dict, names: set) -> None:
             ns[name] = val.value
 
 
-async def run_cell(compiled: CompiledCell, ns: dict, n: int) -> Any:
+async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
     """Execute a compiled cell. Returns the last-expression value (or None).
 
     On success, binds `_` and `_{n}` in `ns` to the returned result (when

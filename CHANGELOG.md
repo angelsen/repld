@@ -9,9 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Security
 
 - Dashboard `POST /api` sent `Access-Control-Allow-Origin: *`, letting any webpage open in any local browser drive `browser.connect`/`watch` or read captured network/console data (auth headers, cookies) via CSRF/DNS-rebinding. Now requires a random per-boot bearer token (embedded in the served dashboard page) and echoes CORS headers only for the dashboard's own origin
+- The dashboard bearer token was still readable via DNS rebinding: a page on an attacker domain resolving to 127.0.0.1 is same-origin in the browser's eyes, so it could fetch `GET /` (which embeds the token) and then drive `POST /api`. All dashboard requests now require a loopback `Host` header (`127.0.0.1:<port>` / `localhost:<port>`) and 403 otherwise
+
+### Changed
+
+- `ask()` now accepts `tab=` like `confirm()`/`choose()` — routed for symmetry, though the pill UI has no text input so the response is still typed in the terminal (previously passing `tab=` raised TypeError)
+- `tab.label` (colored identification bar, survives navigation) is now documented in `repld help browser` and the browser guide
+- Internal cleanups from a codebase health pass: `run_kernel` boot sequence split into phase helpers, deduped ready-signal polling and `__repld_usage__` extraction, removed unused parameters and redundant aliases
 
 ### Fixed
 
+- `tab.capture_bodies` / `tab.label` setters fell back to the deprecated `asyncio.get_event_loop()` when the session had no loop — now raise a clear `RuntimeError` instead (the fallback was unreachable in practice; the loop is always set at attach)
+- `__repld_deps__` requirements with extras (e.g. `httpx[http2]>=0.27`) were falsely flagged as missing on every boot — the parsed package name kept the `[...]` suffix, which `importlib.util.find_spec` can never resolve
 - Cell execution counter (`_N`/`_` history) could race and hand out duplicate numbers when two MCP sessions called `exec` concurrently, since the increment wasn't atomic across IPC reader threads
 - `repld gist add <name>` failed for gists that are only ever invoked as MCP tools (never `import`ed by user code) — they were never written to the cross-project gist registry
 - `browser_screenshot` silently returned the untouched, full-size PNG (with no error) for any screenshot that wasn't 8-bit RGB/RGBA — while still reporting the *intended* downscaled dimensions in the response metadata, so callers had no way to tell the image didn't actually match what was reported
@@ -24,10 +33,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Re-attach with a CSS `ready=` selector always timed out: the ready poll held a `DOM.getDocument` nodeId from before the page settled, which goes stale when the document is replaced mid-load and then silently never matches. The poll now evaluates `document.querySelector(...)` via `Runtime.evaluate`
 - `_parse_pkg_name` split multi-clause requirements (`foo>=1.0,!=1.2`) at whichever version specifier set iteration found first, sometimes producing a mangled package name and a spurious install prompt. Now splits at the earliest-occurring specifier
 - Channel-kinds doc in `repld help exec` was missing `pin_lost` and `browser_disconnect`
+- A gist declaring a dep whose dotted parent package is missing (e.g. `__repld_deps__ = ["ruamel.yaml"]`) crashed kernel boot — `importlib.util.find_spec` raises `ModuleNotFoundError` for such names instead of returning `None`; now treated as "not importable"
+- `resources/read` truncated every resource to the 4KB exec-output preview, so `repld://docs/*` never returned the actual docs to MCP clients (only a head/tail preview plus a local spill path). Resources now return full text up to 64KB — only the unbounded browser network/console dumps can still spill — and honor each resource's declared mimeType (`repld://browser/controls` was declared `application/json` but always served `text/plain`)
+- The dashboard's per-tab Detach button never worked: `BrowserPool.snapshot()` built target IDs without lowercasing while the detach lookup compares lowercased, so every click returned "Target not found"
+- HMR/navigation re-attach built a brand-new CDP session, silently discarding the tab's event history, body-capture state, and pin/label state, and leaking the old session's DuckDB connection. Re-attach now preserves the session in place (same mechanism as Chrome-restart reconnect) and re-registers the label script
+- `tap`/`swipe` and `browser_tree` bypassed the session-gone recovery wrapper, so touch input and tree reads failed permanently after an HMR reload while clicks recovered
+- Every browser mutation tool polled a heavyweight DuckDB HAR view at 20Hz *synchronously on the kernel loop* while waiting for network idle; settle now reads an in-memory in-flight counter maintained on the event path
+- `repld gist new -h` / `add -h` / `rm -h` treated `-h` as a gist name (or exited non-zero); they now print usage and exit 0
+- Scaffolded gists (`repld gist new`) shipped an unused `import os` that lint flags in the user's project
+- Doc drift: `repld help browser` claimed CSS selectors use `DOM.getBoxModel` (the code uses `DOM.getContentQuads`) and understated `ready=` as CSS-only (it also accepts JS expressions)
+- Missing `task_id` on `get_task`/`cancel` returned a generic internal error (`-32603 KeyError`) instead of the proper invalid-params error (`-32602`)
 
 ### Changed
 
 - `BrowserSession.attach()` accepts the caller's target-info dict and skips a redundant `Target.getTargets` round-trip — `watch()` on N matching tabs no longer issues N full target listings
+- Gist AST parsing is memoized on file mtime — a single MCP `initialize` previously re-parsed every gist file four times (docstring scan, signature, usage, tools)
+- `repld exec` consumes every `--socket` flag occurrence (first value wins) instead of only stripping the first `--socket PATH` pair
 - Gist registry writes are skipped after the first import of a given gist per kernel process (previously a full read-parse-write of the registry JSON on every re-import)
 - Importing `repld.display` no longer asserts on `sys.__stdout__`/`sys.__stdin__` at import time, so `--no-display` works in stdio-less environments; display mode checks at startup instead
 - `browser_screenshot`'s resize step now uses Pillow instead of a hand-rolled PNG decoder (new `pillow` dependency in the `browser` extra) — handles every PNG variant Chrome can emit and runs in a thread executor instead of blocking the kernel's shared asyncio loop for the ~150-200ms a resize takes on realistic screenshot sizes

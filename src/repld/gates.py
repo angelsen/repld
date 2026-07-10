@@ -21,11 +21,15 @@ _gates_lock = threading.Lock()
 async def ask(
     prompt: str,
     *,
+    tab=None,
     default: str | None = None,
     timeout: float | None = None,
 ) -> str:
-    """Prompt the human for a free-form string response."""
-    return await _gate("ask", prompt, None, default, timeout)  # type: ignore[return-value]
+    """Prompt the human for a free-form string response.
+
+    `tab` is accepted for symmetry with confirm/choose — the pill UI has
+    no text input, so the response is always typed in the terminal."""
+    return await _gate("ask", prompt, None, default, timeout, tab=tab)  # type: ignore[return-value]
 
 
 async def confirm(

@@ -22,6 +22,10 @@ __all__ = [
     "scan_tools",
     "resolve_tool",
     "signature",
+    "signature_for_path",
+    "introspect",
+    "hint_for_name",
+    "usage_for",
     "registry",
     "registry_summary",
     "scan_deps",
@@ -30,6 +34,7 @@ __all__ = [
     "add_link",
     "remove_link",
     "remove_stale_links",
+    "link_targets",
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
@@ -65,12 +70,29 @@ _REGISTRY_PATH = (
 )
 
 
+_parse_cache: dict[str, tuple[float, ast.Module | None]] = {}
+
+
 def _parse(path: Path) -> ast.Module | None:
-    """ast.parse a gist file; None if unreadable or unparseable."""
+    """ast.parse a gist file; None if unreadable or unparseable.
+
+    Memoized on (path, mtime) — a single MCP initialize touches each gist
+    file several times (scan / signature / usage / tools), and mtime-keyed
+    staleness matches the reload semantics of _check_reload.
+    """
     try:
-        return ast.parse(path.read_text("utf-8"))
-    except Exception:
+        key, mtime = str(path), path.stat().st_mtime
+    except OSError:
         return None
+    hit = _parse_cache.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    try:
+        tree = ast.parse(path.read_text("utf-8"))
+    except Exception:
+        tree = None
+    _parse_cache[key] = (mtime, tree)
+    return tree
 
 
 def _dunder_value(tree: ast.Module, name: str) -> ast.expr | None:
@@ -81,6 +103,12 @@ def _dunder_value(tree: ast.Module, name: str) -> ast.expr | None:
         ):
             return node.value
     return None
+
+
+def _usage_value(tree: ast.Module) -> str | None:
+    """String value of a top-level `__repld_usage__ = "..."`, or None."""
+    node = _dunder_value(tree, "__repld_usage__")
+    return str(node.value) if isinstance(node, ast.Constant) else None
 
 
 def _warn_once(key: str, msg: str) -> None:
@@ -376,9 +404,10 @@ class _GistFinder(importlib.abc.MetaPathFinder):
                             [str(candidate)] if p.name == "__init__.py" else None
                         ),
                     )
-        # Cross-project linked gist (exact name only — local dirs win above).
-        linked = _linked.get(fullname)
-        if linked is not None and linked.is_file():
+        # Cross-project linked gist (exact name only — local dirs win above;
+        # same precedence rule as _find_gist and _iter_gist_files).
+        linked = _linked_path(fullname)
+        if linked is not None:
             _managed[fullname] = linked
             _mtimes[fullname] = linked.stat().st_mtime
             return importlib.util.spec_from_file_location(fullname, linked)
@@ -435,8 +464,7 @@ def hint_for_name(name: str) -> str | None:
         tree = _parse(p)
         if tree is None:
             continue
-        usage_node = _dunder_value(tree, "__repld_usage__")
-        usage = str(usage_node.value) if isinstance(usage_node, ast.Constant) else None
+        usage = _usage_value(tree)
         classes = [
             node.name
             for node in ast.iter_child_nodes(tree)
@@ -477,7 +505,10 @@ def introspect(name: str) -> str:
     """AST-introspect a gist module. Returns formatted API summary."""
     path = _find_gist(name)
     if path is None:
-        raise FileNotFoundError(f"No gist '{name}' found in {_installed_dirs}")
+        msg = f"No gist '{name}' found in {_installed_dirs}"
+        if _linked:
+            msg += f"; linked: {', '.join(sorted(_linked))}"
+        raise FileNotFoundError(msg)
 
     try:
         tree = ast.parse(path.read_text("utf-8"))
@@ -503,16 +534,23 @@ def introspect(name: str) -> str:
     return "\n".join(lines)
 
 
+def _linked_path(name: str) -> Path | None:
+    """Cross-project linked gist path for an exact name, if the file exists."""
+    p = _linked.get(name)
+    return p if p is not None and p.is_file() else None
+
+
 def _find_gist(name: str) -> Path | None:
-    """Resolve gist name to file path (local dirs first, then linked)."""
+    """Resolve gist name to a single .py file for AST introspection.
+
+    Precedence rule (shared with _GistFinder.find_spec and _iter_gist_files):
+    installed dirs in order, then _linked — local always shadows linked.
+    """
     for d in _installed_dirs:
         p = d / f"{name}.py"
         if p.is_file():
             return p
-    linked = _linked.get(name)
-    if linked is not None and linked.is_file():
-        return linked
-    return None
+    return _linked_path(name)
 
 
 def _init_args(node: ast.ClassDef) -> str:
@@ -646,8 +684,7 @@ def usage_for(name: str) -> str | None:
     tree = _parse(path)
     if tree is None:
         return None
-    usage_node = _dunder_value(tree, "__repld_usage__")
-    return str(usage_node.value) if isinstance(usage_node, ast.Constant) else None
+    return _usage_value(tree)
 
 
 def signature_for_path(path: Path) -> str:
@@ -894,14 +931,22 @@ def _parse_pkg_name(req: str) -> str:
     # set, so iteration order must not decide the split point (multi-clause
     # requirements like "foo>=1.0,!=1.2" would truncate wrongly).
     positions = [req.index(spec) for spec in _VERSION_SPECIFIERS if spec in req]
-    if positions:
-        return req[: min(positions)].strip()
-    return req.strip()
+    name = req[: min(positions)] if positions else req
+    # Drop extras — "httpx[http2]" is not an importable module name.
+    return name.split("[")[0].strip()
 
 
 def _is_importable(name: str) -> bool:
-    """Check if a package is importable. Tries the name as-is (covers most packages)."""
-    return importlib.util.find_spec(name.replace("-", "_")) is not None
+    """Check if a package is importable. Tries the name as-is (covers most packages).
+
+    find_spec raises ModuleNotFoundError for dotted names whose parent is
+    missing (e.g. "ruamel.yaml") and ValueError for malformed names — treat
+    both as "not importable" so a gist dep can never crash boot.
+    """
+    try:
+        return importlib.util.find_spec(name.replace("-", "_")) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 @dataclass

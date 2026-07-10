@@ -19,7 +19,7 @@ from typing import Callable
 Handler = Callable[[dict, "Session"], dict | None]
 
 
-def _pid_alive(pid) -> bool:
+def pid_alive(pid) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
     try:
@@ -47,23 +47,37 @@ def read_lock(lock_path: Path) -> dict | str:
         lock = json.loads(lock_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         return f"cannot read {lock_path.name}: {e}"
-    if not _pid_alive(lock.get("pid", -1)):
+    if not pid_alive(lock.get("pid", -1)):
         return f"kernel pid {lock.get('pid')} is not running (stale {lock_path.name})"
     return lock
 
 
-def resolve_lock_path(argv: list[str]) -> Path:
-    """Resolve the kernel lockfile path from --socket flag, REPLD_SOCKET env,
-    or the cwd default. Shared by bridge and exec subcommands."""
-    for i, arg in enumerate(argv):
+def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
+    """Resolve the kernel lockfile path from --socket flags, REPLD_SOCKET env,
+    or the cwd default. Shared by bridge and exec subcommands.
+
+    Parses AND consumes every ``--socket PATH`` / ``--socket=PATH`` occurrence
+    (first value wins), returning (lock_path, argv_without_socket_flags) so
+    callers never re-implement the flag syntax.
+    """
+    sock: str | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
         if arg == "--socket" and i + 1 < len(argv):
-            return Path(argv[i + 1]).with_suffix(".lock")
+            sock = sock or argv[i + 1]
+            i += 2
+            continue
         if arg.startswith("--socket="):
-            return Path(arg.split("=", 1)[1]).with_suffix(".lock")
-    env = os.environ.get("REPLD_SOCKET")
-    if env:
-        return Path(env).with_suffix(".lock")
-    return Path.cwd() / ".pyrepl.lock"
+            sock = sock or arg.split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    target = sock or os.environ.get("REPLD_SOCKET")
+    lock = Path(target).with_suffix(".lock") if target else Path.cwd() / ".pyrepl.lock"
+    return lock, rest
 
 
 def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:

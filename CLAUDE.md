@@ -43,7 +43,7 @@ prior release). Verify with the simple index (fast) — the JSON API lags:
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 13). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`).
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 14). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`).
 
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
@@ -57,6 +57,7 @@ Phases:
 - **11:** Graceful shutdown — `_shutdown` drains `@every` + `defer()` `try/finally` blocks before stopping the loop, with a 2 s budget.
 - **12:** Cross-project gist links — `add_link` resolves via the registry + AST sibling co-link, writes `./gists/.links`; a fresh kernel boots with the manifest and the linked gist imports (sibling resolving); stale entries skipped at load + pruned by `rm --stale`.
 - **13:** Session registry — kernel boot writes `$XDG_RUNTIME_DIR/repld/sessions/<pid>.json`; `list_sessions()` returns it; file is removed after SIGTERM shutdown.
+- **14:** Dashboard HTTP — Host-header allowlist serves loopback Hosts and 403s rebound hostnames (DNS-rebinding guard).
 
 ## Key subsystems
 

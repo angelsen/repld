@@ -509,6 +509,12 @@ Convention: add data-testid to your root layout component.
   tab.unpin()                       → None
       Remove pill + guard + heartbeat.
 
+  tab.label = "text"                → None
+      Colored identification bar at the top of the page.  Auto-color;
+      ("text", "#hex") picks the color, None removes.  Injected via
+      Page.addScriptToEvaluateOnNewDocument, so it survives navigation.
+      Read tab.label for the current text (or None).
+
   tab.confirm(prompt, **kw)         → bool
       Gate routed to pill UI.  Also appears in terminal — first wins.
 
@@ -1098,6 +1104,7 @@ Tab properties:
   tab.url / tab.title / tab.type         str   target info (type: page/iframe/worker)
   tab.target_id / tab.parent_frame_id    str   short ID; parent frame for iframes
   tab.capture_bodies                      bool  Fetch body capture (True on get/open, False on watch)
+  tab.label                               str | None  colored ID bar; set "text" / ("text", "#hex") / None to clear; survives navigation
 
 Browser:
   Browser.from_profile(path)                     → Browser  (read port from DevToolsActivePort)
@@ -1114,9 +1121,11 @@ Browser:
   browser.unsuppress(pattern)                    → str  un-mute
   browser.suppressed                             → list[str]  active suppress patterns
 
-  ready= takes a CSS selector. Tab waits for the element to appear before
-  returning. On session loss (HMR/navigation), re-attaches and waits again.
-  navigate() and reload() also wait for the ready selector before returning.
+  ready= takes a CSS selector or a JS expression, dispatched by prefix:
+  '.', '#', '[', 'data-' → polled via document.querySelector; anything else
+  is evaluated as a JS expression and must return truthy. Tab waits for the
+  signal before returning; on session loss (HMR/navigation) it re-attaches
+  and waits again. navigate() and reload() also wait for the ready signal.
   Convention: add data-testid to your root layout component.
 
 Selectors (click/tap/type_text):
@@ -1127,7 +1136,7 @@ Selectors (click/tap/type_text):
   label=Username                        input by label (JS eval)
   button:has-text('OK')                 CSS + text filter (JS eval)
 
-  CSS selectors use DOM.querySelector + DOM.getBoxModel (no JS eval, no focus steal).
+  CSS selectors use DOM.querySelector + DOM.getContentQuads (no JS eval, no focus steal).
   Custom selectors (text=, role=, label=, :has-text) use Runtime.evaluate.
 
 Touch vs mouse:
@@ -1197,13 +1206,15 @@ Writing gists:
   Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
 """,
     "gates": """\
-await ask(prompt, *, default=None, timeout=None)                       → str
+await ask(prompt, *, tab=None, default=None, timeout=None)             → str
 await confirm(prompt, *, tab=None, default=None, timeout=None)         → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 
 Blocks cell on human input in kernel pane.
 Pass tab= to also surface the gate in that tab's pin pill (requires
 tab.pin()); terminal and browser resolve the same gate — first wins.
+ask() accepts tab= for symmetry, but the pill has no text input — the
+response is always typed in the terminal.
 TimeoutError if no default and timeout expires.
 Emits awaiting_human channel while blocked.
 

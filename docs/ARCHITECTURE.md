@@ -79,7 +79,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard
 - [x] Ready signal — `browser.get(ready=selector)`, session recovery on HMR, navigate/reload wait
 - [x] Touch input — `tab.tap()`, `tab.swipe()`, 3s timeout for blocking handlers
-- [x] No-focus-steal selectors — CSS selectors use `DOM.querySelector` + `DOM.getBoxModel` (no JS eval)
+- [x] No-focus-steal selectors — CSS selectors use `DOM.querySelector` + `DOM.getContentQuads` (no JS eval)
 - [x] Gist dependency management — `__repld_deps__` declaration, boot-time scan + interactive install prompt
 - [x] Dynamic `__version__` — `importlib.metadata.version("repld-tool")`, `repld --version` CLI flag
 - [x] `tab.wait_for_idle()` — network idle detection exposed on Tab API; replaces hardcoded 300ms in ready signal

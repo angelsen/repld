@@ -174,7 +174,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             "    await _t3.cdp('Page.navigate',"
             " url='data:text/html,<div id=\"late-el\">two</div>')\n"
             "_nt = asyncio.create_task(_nav())\n"
-            "await _t3._wait_ready_selector('#late-el', timeout=8)\n"
+            "await _t3._await_ready_signal('#late-el', timeout=8)\n"
             "await _nt\n"
             "print('READY-OK')"
         )

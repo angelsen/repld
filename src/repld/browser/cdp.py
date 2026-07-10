@@ -33,24 +33,22 @@ _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
 
 class _DedupEntry:
-    __slots__ = ("count", "text", "meta", "handle")
+    __slots__ = ("count", "text", "meta")
 
-    def __init__(self, text: str, meta: dict, handle: object):
+    def __init__(self, text: str, meta: dict):
         self.count = 0
         self.text = text
         self.meta = meta
-        self.handle = handle
 
 
 _dedup_pending: dict[str, _DedupEntry] = {}
 
 
 class _HintTracker:
-    __slots__ = ("count", "handle")
+    __slots__ = ("count",)
 
-    def __init__(self, handle: object):
+    def __init__(self) -> None:
         self.count = 0
-        self.handle = handle
 
 
 _hint_counts: dict[str, _HintTracker] = {}
@@ -64,8 +62,9 @@ def _track_hint(key: str, loop: asyncio.AbstractEventLoop | None) -> bool:
     """Increment hint counter, return True if hint should be shown."""
     tracker = _hint_counts.get(key)
     if tracker is None:
-        handle = loop.call_later(_HINT_WINDOW, _expire_hint, key) if loop else None
-        tracker = _HintTracker(handle)
+        if loop:
+            loop.call_later(_HINT_WINDOW, _expire_hint, key)
+        tracker = _HintTracker()
         _hint_counts[key] = tracker
     tracker.count += 1
     return tracker.count >= _HINT_THRESHOLD
@@ -87,7 +86,7 @@ def _flush_dedup(key: str) -> None:
 
         total = entry.count + 1
         msg = f"{entry.text} (×{total} tabs)"
-        if _hint_counts.get(key, _HintTracker(None)).count >= _HINT_THRESHOLD:
+        if _hint_counts.get(key, _HintTracker()).count >= _HINT_THRESHOLD:
             msg += _SUPPRESS_HINT
         push_channel(msg, entry.meta)
     except Exception:
@@ -114,8 +113,9 @@ def _dedup_push(
     except Exception:
         return
 
-    handle = loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key) if loop else None
-    _dedup_pending[dedup_key] = _DedupEntry(text, meta, handle)
+    if loop:
+        loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key)
+    _dedup_pending[dedup_key] = _DedupEntry(text, meta)
 
 
 # Regex to strip lone surrogates from JSON strings (DuckDB rejects \uD800-\uDFFF)
@@ -272,6 +272,16 @@ class CDPSession:
         # Event count for FIFO pruning
         self._event_count = 0
 
+        # In-flight requestIds — maintained by _handle_event, read by
+        # observe.settle().  A set (not a counter) is self-correcting:
+        # redirect re-emits are idempotent adds, terminal events for
+        # pre-attach requests are no-op discards.  WS never enters (no
+        # Network.requestWillBeSent for WebSockets).
+        self._inflight: set[str] = set()
+
+        # Serializes state-preserving reattach (BrowserSession.reattach_session)
+        self._reattach_lock = asyncio.Lock()
+
         # Fetch body capture state.  False by default — enabled by get()/open(),
         # or explicitly via tab.capture_bodies = True / tab.enable_capture().
         self.capture_bodies: bool = False
@@ -411,6 +421,12 @@ class CDPSession:
             self.store_event(data, method, request_id)
             self._event_count += 1
 
+            if request_id:
+                if method == "Network.requestWillBeSent":
+                    self._inflight.add(request_id)
+                elif method in ("Network.loadingFinished", "Network.loadingFailed"):
+                    self._inflight.discard(request_id)
+
             if method == "Fetch.requestPaused":
                 # Dispatch async handler without blocking the recv loop
                 if self._fetch_handler is not None:
@@ -533,6 +549,7 @@ class CDPSession:
         """Delete all stored events."""
         self.db.execute("DELETE FROM events")
         self._event_count = 0
+        self._inflight.clear()
 
     def cleanup(self) -> None:
         """Close the DuckDB connection."""

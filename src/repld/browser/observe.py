@@ -139,7 +139,7 @@ async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
 
     Returns list of indented text lines.
     """
-    result = await tab._session.execute("Accessibility.getFullAXTree", {})
+    result = await tab._exec("Accessibility.getFullAXTree", {})
 
     nodes = result.get("nodes", [])
     if not nodes:
@@ -317,8 +317,9 @@ async def settle(
 ) -> int:
     """Wait for network idle across all tabs.
 
-    Polls DuckDB: state != 'complete' AND method != 'WS'.
-    Returns settle time in ms.
+    Polls each session's in-memory _inflight set (maintained by
+    CDPSession._handle_event) — O(1) per iteration, no DuckDB round-trip
+    on the kernel loop.  Returns settle time in ms.
     """
     start = time.monotonic()
     deadline = start + timeout
@@ -330,12 +331,7 @@ async def settle(
             break
 
         # Count inflight requests across all tabs
-        inflight = 0
-        for tab in tabs:
-            rows = tab._session.query(
-                "SELECT COUNT(*) FROM har_entries WHERE state NOT IN ('complete', 'failed', 'redirect', 'closed') AND method != 'WS'"
-            )
-            inflight += rows[0][0]
+        inflight = sum(len(tab._session._inflight) for tab in tabs)
 
         if inflight > 0:
             last_activity = now

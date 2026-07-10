@@ -64,7 +64,11 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(g._parse_pkg_name("foo>=1.0,!=1.2"), "foo", "multi-clause req")
         assert_eq(g._parse_pkg_name("bar~=2.0"), "bar", "single-specifier req")
         assert_eq(g._parse_pkg_name("baz"), "baz", "bare package name")
-        print("  ✓ _parse_pkg_name handles multi-clause requirements")
+        assert_eq(
+            g._parse_pkg_name("httpx[http2]>=0.27"), "httpx", "extras + specifier"
+        )
+        assert_eq(g._parse_pkg_name("httpx[http2]"), "httpx", "bare extras")
+        print("  ✓ _parse_pkg_name handles multi-clause requirements and extras")
 
         # --- boot a fresh kernel in the project: linked gist imports + sibling resolves ---
         sub = Kernel(proj)

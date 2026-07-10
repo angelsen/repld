@@ -10,8 +10,6 @@ from pathlib import Path
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
-import os
-
 # __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
 
 # --- core logic (portable — keeps on graduation) ---
@@ -55,6 +53,9 @@ def _print_gist_usage() -> None:
 
 
 def _gist_new(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help"):
+        print("repld gist new <name> — scaffold ./gists/<name>.py")
+        return 0
     if not argv:
         _print_gist_usage()
         return 2
@@ -83,7 +84,10 @@ def _gist_new(argv: list[str]) -> int:
 def _gist_add(argv: list[str]) -> int:
     from . import gists as _gists
 
-    if not argv or argv[0] in ("-h", "--help"):
+    if argv and argv[0] in ("-h", "--help"):
+        print("repld gist add <name> — link a gist registered in another project")
+        return 0
+    if not argv:
         print("repld gist add <name> — link a gist registered in another project")
         return 2
     name = argv[0]
@@ -113,6 +117,9 @@ def _gist_add(argv: list[str]) -> int:
 def _gist_rm(argv: list[str]) -> int:
     from . import gists as _gists
 
+    if argv and argv[0] in ("-h", "--help"):
+        print("repld gist rm <name> | --stale — unlink a gist (or all dead links)")
+        return 0
     gists_dir = Path.cwd() / "gists"
     try:
         if argv and argv[0] == "--stale":

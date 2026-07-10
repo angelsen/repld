@@ -26,6 +26,7 @@ from phases.browser import (
 )
 from phases.channels import phase_4, phase_4b_pregate
 from phases.core import phase_3
+from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
 from phases.gist_tools import phase_9_gist_tools
@@ -52,6 +53,7 @@ PHASES = {
     11: phase_11_shutdown,
     12: phase_12_gist_links,
     13: phase_13_sessions,
+    14: phase_14_dashboard,
 }
 
 

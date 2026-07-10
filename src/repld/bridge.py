@@ -21,7 +21,7 @@ def _err(msg: str) -> None:
 
 
 def run_bridge(argv: list[str]) -> int:
-    lock_path = resolve_lock_path(argv)
+    lock_path, _ = resolve_lock_path(argv)
     result = connect_to_kernel(lock_path)
     if isinstance(result, str):
         _err(result)

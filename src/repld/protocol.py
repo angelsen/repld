@@ -11,7 +11,7 @@ import threading
 from typing import Protocol
 
 from .help import build_instructions as _build_instructions
-from .tasks import spill_text as _spill_text
+from .tasks import spill_marker, spill_text as _spill_text
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -511,6 +511,14 @@ _BROWSER_RESOURCES = [
     },
 ]
 
+# resources/read returns full text — resources are on-demand pulls, unlike
+# exec output. The cap only guards the unbounded producers (browser network/
+# console dumps); everything above it falls back to the spill preview.
+_RESOURCE_MAX_BYTES = 64 * 1024
+_RESOURCE_MIMETYPES = {
+    r["uri"]: r["mimeType"] for r in _DOC_RESOURCES + _BROWSER_RESOURCES
+}
+
 
 async def route_detach(browser, target, port) -> str | None:
     """Shared target/port detach routing (MCP tool + dashboard RPC).
@@ -645,7 +653,10 @@ class Dispatcher:
         )
 
     def _get_task(self, rid, args: dict) -> dict:
-        snap = self.ctx.snapshot(args["task_id"])
+        tid = args.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
+        snap = self.ctx.snapshot(tid)
         return _response(
             rid,
             {
@@ -655,7 +666,9 @@ class Dispatcher:
         )
 
     def _cancel(self, rid, args: dict) -> dict:
-        tid = args["task_id"]
+        tid = args.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
         accepted = self.ctx.cancel_task(tid)
         status = "accepted" if accepted else "no-op"
         return _response(
@@ -727,10 +740,10 @@ class Dispatcher:
             )
         return browser
 
-    def _run_async(self, coro, timeout: float = 30):
+    def _run_async(self, coro):
         """Run a coroutine on the repld asyncio loop from the IPC thread."""
         fut = asyncio.run_coroutine_threadsafe(coro, self.ctx.loop)
-        return fut.result(timeout=timeout)
+        return fut.result(timeout=30)
 
     def _get_tab(self, browser, args):
         return self._run_async(browser.get(args["target"]))
@@ -791,7 +804,7 @@ class Dispatcher:
 
     def _bh_js(self, browser, args):
         tab = self._get_tab(browser, args)
-        ap = args.get("await_promise", "auto")
+        ap = args.get("await_promise", True)
         return {"result": self._run_async(tab.js(args["code"], await_promise=ap))}
 
     def _bh_network(self, browser, args):
@@ -859,6 +872,7 @@ class Dispatcher:
         """Get the BrowserSession that owns this tab (multi-browser aware)."""
         if hasattr(browser, "browser_for"):
             return browser.browser_for(tab.target_id)._session
+        # Fallback for a plain Browser bound to __main__.browser (no pool).
         return browser._session
 
     def _bh_tree(self, browser, args):
@@ -1050,11 +1064,16 @@ class Dispatcher:
                 text = self._resource_gist(name)
             else:
                 return _error(rid, -32602, f"unknown resource: {uri}")
-            sp = _spill_text(text, label=uri.split("/")[-1])
-            content = _format_spill(sp, text)
+            if len(text) <= _RESOURCE_MAX_BYTES:
+                content = text
+                mime = _RESOURCE_MIMETYPES.get(uri, "text/plain")
+            else:
+                sp = _spill_text(text, label=uri.split("/")[-1])
+                # Preview + [full output: …] marker isn't valid JSON anymore.
+                content, mime = _format_spill(sp, text), "text/plain"
             return _response(
                 rid,
-                {"contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]},
+                {"contents": [{"uri": uri, "mimeType": mime, "text": content}]},
             )
         except Exception as exc:
             return _error(rid, -32000, f"resource read: {exc}")
@@ -1110,7 +1129,7 @@ def _format_spill(sp: dict, fallback: str) -> str:
     if sp["text"]:
         parts.append(sp["text"].rstrip())
     if sp["truncated"]:
-        parts.append(f"[full output: {sp['spill_path']}]")
+        parts.append(spill_marker(sp["spill_path"]))
     return "\n".join(parts) or fallback
 
 

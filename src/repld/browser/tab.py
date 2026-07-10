@@ -109,7 +109,9 @@ class Tab:
     @capture_bodies.setter
     def capture_bodies(self, value: bool) -> None:
         self._session.capture_bodies = value
-        loop = self._session._loop or asyncio.get_event_loop()
+        loop = self._session._loop
+        if loop is None:
+            raise RuntimeError("tab session has no event loop (not attached)")
         if value:
             loop.create_task(
                 self._session.enable_fetch(),
@@ -147,7 +149,9 @@ class Tab:
             tab.label = ("Skantz Tools", "#3b82f6")  # explicit color
             tab.label = None                         # remove
         """
-        loop = self._session._loop or asyncio.get_event_loop()
+        loop = self._session._loop
+        if loop is None:
+            raise RuntimeError("tab session has no event loop (not attached)")
         loop.create_task(self._set_label(value), name="repld-label-set")
 
     async def _set_label(self, value: str | tuple[str, str] | None) -> None:
@@ -314,10 +318,11 @@ class Tab:
         return await _choose(prompt, options, tab=self, **kw)
 
     async def ask(self, prompt: str, **kw: Any) -> str:
-        """Gate routed to terminal (no pill UI for text input)."""
+        """Gate routed like confirm/choose — but the pill UI has no text
+        input, so the response is always typed in the terminal."""
         from ..gates import ask as _ask
 
-        return await _ask(prompt, **kw)
+        return await _ask(prompt, tab=self, **kw)
 
     # ------------------------------------------------------------------
     # JS interaction
@@ -334,20 +339,23 @@ class Tab:
         """Re-attach to the same target after session invalidation (HMR, navigation).
 
         The target ID usually survives — only the CDP session ID changes.
-        Waits for the ready signal (CSS selector or JS expression) if set,
-        otherwise waits for document.readyState === "complete".
+        The CDPSession object is preserved (event history, capture, pin and
+        label state); the pin pill re-injects via the heartbeat loop, but the
+        label's addScriptToEvaluateOnNewDocument registration died with the
+        old session and must be re-applied here.  Waits for the ready signal
+        (CSS selector or JS expression) if set, otherwise waits for
+        document.readyState === "complete".
         """
         browser_session = self._session.browser_session
         if browser_session is None:
             raise RuntimeError("Cannot re-attach: no BrowserSession reference")
 
-        old_sid = self._session._session_id
-        browser_session._sessions.pop(old_sid, None)
+        await browser_session.reattach_session(self._session)
 
-        cdp = await browser_session.attach(self._chrome_target_id)
-        if cdp is None:
-            raise RuntimeError(f"Re-attach failed for {self._chrome_target_id}")
-        self._session = cdp
+        if self._session._label_text is not None:
+            await self._set_label(
+                (self._session._label_text, self._session._label_color or "")
+            )
 
         await self._await_ready_signal(
             self._ready or "document.readyState === 'complete'"
@@ -357,14 +365,13 @@ class Tab:
     async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
         """Wait for a ready signal — CSS selector or JS expression, by shape."""
         if ready.startswith((".", "#", "[", "data-")):
-            await self._wait_ready_selector(ready, timeout)
+            # Poll via Runtime.evaluate — a DOM.getDocument nodeId goes stale
+            # when the document is replaced mid-load, silently never matching.
+            expr = f"!!document.querySelector({json.dumps(ready)})"
+            failure = f"Ready signal not found after re-attach: {ready}"
         else:
-            await self._wait_ready_js(ready, timeout)
-
-    async def _wait_ready_selector(self, selector: str, timeout: float = 10) -> None:
-        # Poll via Runtime.evaluate — a DOM.getDocument nodeId goes stale
-        # when the document is replaced mid-load, silently never matching.
-        expr = f"!!document.querySelector({json.dumps(selector)})"
+            expr = ready
+            failure = f"Ready signal not satisfied after re-attach: {ready}"
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
             result = await self._session.execute(
@@ -374,19 +381,7 @@ class Tab:
             if result.get("result", {}).get("value"):
                 return
             await asyncio.sleep(0.1)
-        raise RuntimeError(f"Ready signal not found after re-attach: {selector}")
-
-    async def _wait_ready_js(self, expr: str, timeout: float = 10) -> None:
-        deadline = asyncio.get_running_loop().time() + timeout
-        while asyncio.get_running_loop().time() < deadline:
-            result = await self._session.execute(
-                "Runtime.evaluate",
-                {"expression": expr, "returnByValue": True},
-            )
-            if result.get("result", {}).get("value"):
-                return
-            await asyncio.sleep(0.1)
-        raise RuntimeError(f"Ready signal not satisfied after re-attach: {expr}")
+        raise RuntimeError(failure)
 
     async def _exec(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -647,7 +642,7 @@ class Tab:
     ) -> None:
         """Dispatch a touch event with a timeout. Raises TimeoutError if the page's
         touch handler blocks (e.g. preventDefault on complex apps like Messenger)."""
-        await self._session.execute(
+        await self._exec(
             "Input.dispatchTouchEvent",
             {"type": type, "touchPoints": touch_points},
             timeout=timeout,
@@ -807,7 +802,7 @@ class Tab:
         """
         import time
 
-        from ..tasks import SPILL_DIR, _ensure_spill_dir
+        from ..tasks import RUNTIME_DIR, _ensure_spill_dir
 
         params: dict = {"format": "png"}
         if full_page:
@@ -845,7 +840,7 @@ class Tab:
         else:
             _ensure_spill_dir()
             tid = self.target_id.replace(":", "-")
-            out = SPILL_DIR / f"screenshot-{tid}-{int(time.time())}.png"
+            out = RUNTIME_DIR / f"screenshot-{tid}-{int(time.time())}.png"
         await asyncio.get_running_loop().run_in_executor(
             None, out.write_bytes, img_bytes
         )

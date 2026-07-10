@@ -135,5 +135,37 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         finally:
             broken_file.unlink()
 
+        # Doc resources return FULL text — not the 4KB spill preview
+        # (resources are on-demand pulls; only >64KB falls back to spill).
+        resp = b.call("resources/read", {"uri": "repld://docs/guide"})
+        doc = resp["result"]["contents"][0]
+        assert_true(
+            len(doc["text"]) > 4096,
+            f"docs/guide returned full text, not preview ({len(doc['text'])} bytes)",
+        )
+        assert_true(
+            "[full output:" not in doc["text"],
+            "docs/guide has no spill marker",
+        )
+        assert_eq(doc["mimeType"], "text/plain", "docs/guide mimeType")
+        print(f"  ✓ repld://docs/guide read in full ({len(doc['text'])} bytes)")
+
+        # scan_deps survives a dep whose dotted parent is missing —
+        # find_spec("no_such_parent.sub") raises, _is_importable must swallow it
+        # (this used to crash kernel boot).
+        from repld import gists as _gists
+
+        dep_probe = gists_dir / "test_dep_probe.py"
+        dep_probe.write_text('__repld_deps__ = ["no_such_parent_xyz.sub"]\n')
+        try:
+            missing = _gists.scan_deps(paths=[dep_probe])
+            assert_true(
+                any(d.requirement == "no_such_parent_xyz.sub" for d in missing),
+                f"missing namespace-dotted dep reported, not raised (got {missing!r})",
+            )
+            print("  ✓ scan_deps handles missing namespace-dotted dep without raising")
+        finally:
+            dep_probe.unlink()
+
     finally:
         b.close()

@@ -203,21 +203,8 @@ class BrowserSession:
 
                 # Re-attach old targets, preserving CDPSession state
                 for target_id, cdp in old_cdps.items():
-                    old_sid = cdp._session_id
                     try:
-                        result = await self.execute(
-                            "Target.attachToTarget",
-                            {"targetId": target_id, "flatten": True},
-                        )
-                        new_sid = result["sessionId"]
-                        cdp._session_id = new_sid
-                        self._sessions[new_sid] = cdp
-                        self._session_remap[old_sid] = new_sid
-                        had_fetch = cdp._fetch_enabled
-                        cdp._fetch_enabled = False
-                        await cdp._enable_domains()
-                        if had_fetch:
-                            await cdp.enable_fetch()
+                        await self._reattach_core(cdp)
                     except Exception as exc:
                         logger.debug(
                             "reconnect: re-attach %s failed: %s", target_id, exc
@@ -333,6 +320,45 @@ class BrowserSession:
             if cdp.target_info.get("targetId") == target_id:
                 return cdp
         return None
+
+    async def _reattach_core(self, cdp: CDPSession) -> None:
+        """Attach cdp to its target under a new sessionId, preserving all state.
+
+        Unlocked core shared by _reconnect and reattach_session — the same
+        CDPSession object (DuckDB history, capture/pin/label state) survives,
+        only the session id changes.
+        """
+        old_sid = cdp._session_id
+        result = await self.execute(
+            "Target.attachToTarget",
+            {"targetId": cdp.chrome_target_id, "flatten": True},
+        )
+        new_sid = result["sessionId"]
+        self._sessions.pop(old_sid, None)
+        cdp._session_id = new_sid
+        self._sessions[new_sid] = cdp
+        self._session_remap[old_sid] = new_sid
+        # Terminal events missed while the session was dead would strand ids
+        # and force every future settle() to full timeout.
+        cdp._inflight.clear()
+        had_fetch = cdp._fetch_enabled
+        cdp._fetch_enabled = False
+        await cdp._enable_domains()
+        if had_fetch:
+            await cdp.enable_fetch()
+
+    async def reattach_session(self, cdp: CDPSession) -> None:
+        """Re-attach an invalidated session in place (HMR, navigation).
+
+        Locked wrapper for Tab._reattach; _reconnect calls the unlocked core
+        directly — execute() under a held lock can itself trigger _reconnect,
+        and asyncio.Lock is not reentrant.
+        """
+        old_sid = cdp._session_id
+        async with cdp._reattach_lock:
+            if cdp._session_id != old_sid:
+                return  # concurrent caller already reattached
+            await self._reattach_core(cdp)
 
     async def attach(
         self, target_id: str, target_info: dict | None = None
@@ -551,15 +577,6 @@ class BrowserSession:
                     self._auto_attach(target_info, matched_id),
                     name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
                 )
-
-        elif method == "Inspector.detached":
-            reason = params.get("reason", "")
-            if "Render process gone" in reason:
-                # Tab crashed — clean up sessions on that target
-                session_id = data.get("sessionId", "")
-                cdp = self._sessions.pop(session_id, None)
-                if cdp:
-                    cdp.cleanup()
 
     async def _auto_attach(self, target_info: dict, target_id: str) -> None:
         """Auto-attach to a newly-matched target."""
