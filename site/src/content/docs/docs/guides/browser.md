@@ -13,7 +13,13 @@ Start Chrome with remote debugging:
 google-chrome --remote-debugging-port=9222
 ```
 
-Install the browser extra:
+Run the kernel via the `browser` subcommand — it re-execs under `uv run` with `duckdb`/`websockets` for this invocation, so browser tools work without adding anything to your project's dependencies:
+
+```bash
+repld browser
+```
+
+For a permanent global install instead:
 
 ```bash
 uv tool install repld-tool[browser]
@@ -106,6 +112,10 @@ This injects a floating pill UI with a `beforeunload` guard. Gates route human d
 ok = await tab.confirm("Delete all draft orders?")
 choice = await tab.choose("Which environment?", ["staging", "production"])
 ```
+
+## Console errors
+
+Watched tabs push console errors and uncaught exceptions to the channel the instant they happen — no polling. Duplicate errors firing across tabs within 2 seconds collapse into one follow-up message. Mute a noisy pattern (a dev-server HMR warning, a third-party script) with `browser.suppress("substring")`; `browser.unsuppress(...)` un-mutes, `browser.suppressed` lists active patterns.
 
 ## What's next
 

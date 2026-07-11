@@ -26,6 +26,8 @@ repld                              # starts the kernel
 
 Project-local alternative: `uv add --dev repld-tool`, then point `.mcp.json` at `uv run repld bridge`.
 
+For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `duckdb`/`websockets` extra for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
+
 `repld init` produces:
 
 ```json
@@ -93,7 +95,7 @@ The agent now has a live handle on your running app: inspect routes, query the O
 | `get_task` | Status + head/tail preview of a running task's output. |
 | `cancel` | Cancel a running task by id. |
 
-**Browser** (requires `uv tool install repld-tool[browser]`):
+**Browser** (run `repld browser` instead of `repld`, or `uv tool install repld-tool[browser]`):
 
 | Tool | What it does |
 |------|-------------|

@@ -9,7 +9,13 @@ description: Install repld, start the kernel, and connect Claude Code.
 uv tool install repld-tool
 ```
 
-For browser integration (CDP + DuckDB):
+For browser integration (CDP + DuckDB), run the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the extra dependencies for that invocation, no project changes needed:
+
+```bash
+repld browser
+```
+
+Or install the extra permanently:
 
 ```bash
 uv tool install repld-tool[browser]
@@ -38,7 +44,7 @@ This creates `.mcp.json` (so Claude Code discovers the MCP server) and adds runt
 repld
 ```
 
-The kernel writes `.pyrepl.lock` with its PID and socket path, then listens for connections. It stays up until you stop it.
+The kernel writes `.pyrepl.lock` with its PID and socket path, then listens for connections. It stays up until you stop it. It also prints a dashboard URL — a built-in web control panel, no setup required. See the [dashboard guide](/repld/docs/guides/dashboard/).
 
 ## Connect Claude Code
 
@@ -93,3 +99,4 @@ The agent now has a live handle on your running app: inspect routes, query the O
 
 - [Browser guide](/repld/docs/guides/browser/) — attach to Chrome, discover APIs, capture traffic
 - [Gists guide](/repld/docs/guides/gists/) — reusable modules that wrap any web app
+- [Dashboard guide](/repld/docs/guides/dashboard/) — the kernel's built-in web control panel

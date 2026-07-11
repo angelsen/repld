@@ -70,28 +70,19 @@ __repld_deps__ = ["."]  # installs the project containing this gist
 
 ## MCP tool registration
 
-A gist can register MCP tools that appear alongside built-in tools:
+A gist can register MCP tools that appear alongside built-in tools. Name a handler `_tool_{name}` with typed parameters and the schema is inferred automatically — no separate declaration needed:
 
 ```python
-__repld_tools__ = [
-    {
-        "name": "lookup_company",
-        "description": "Look up a Norwegian company by org number",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"org_number": {"type": "string"}},
-            "required": ["org_number"],
-        },
-    }
-]
-
-async def _tool_lookup_company(args):
+async def _tool_lookup_company(org_number: str) -> dict:
+    """Look up a Norwegian company by org number."""
     from brreg import Brreg
     b = Brreg()
-    return await b.company(args["org_number"])
+    return await b.company(org_number)
 ```
 
-Tools appear in `tools/list` automatically. The handler is `_tool_{name}` — the kernel discovers it by convention.
+Type hints and defaults become the JSON schema (`str`→string, `int`→integer, `float`→number, `bool`→boolean, `list`→array, `dict`→object; no annotation defaults to string; no default marks the param required). The first docstring line becomes the tool description. Tools appear in `tools/list` automatically — no exec round-trip needed. `repld gist new <name>` scaffolds this pattern.
+
+Legacy override: the older `__repld_tools__ = [...]` list + `_tool_*(args: dict)` convention still works for custom schemas, but prints a one-time deprecation warning per gist.
 
 ## Cross-project linking
 

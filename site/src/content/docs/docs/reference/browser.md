@@ -23,6 +23,8 @@ browser.clear(target=)                             # clear captured data
 
 await browser.connect(9223)                        # add another Chrome instance
 await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePort
+browser.disconnect()                               # unpin tabs, close all WebSockets
+browser.disconnect(port=9222)                      # unpin + close one Chrome instance
 ```
 
 ### ready= parameter
@@ -67,6 +69,14 @@ await tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300) → None
 ```
 
 Touch events for mobile Chrome via ADB.
+
+### key
+
+```python
+await tab.key(key) → None
+```
+
+Dispatch a keyDown+keyUp pair for a named key (e.g. `"Enter"`, `"Escape"`).
 
 ### fetch
 
@@ -124,6 +134,14 @@ await tab.cdp(method, **params) → dict
 
 Raw CDP passthrough.
 
+### cookies
+
+```python
+await tab.cookies() → list[dict]
+```
+
+All cookies for this tab via `Network.getCookies`.
+
 ## Sync query methods (DuckDB-backed)
 
 ### network
@@ -171,6 +189,39 @@ row.body() → dict                 # shortcut on any network Row
 ```python
 tab.clear() → None
 ```
+
+## Multi-browser
+
+`browser.connect(port)` adds a Chrome instance to the pool — call it multiple times for multi-browser setups. Target IDs include the port prefix (`42829:abc123` vs `43213:def456`), so tab-scoped tools route to the right Chrome automatically.
+
+```python
+await browser.connect(42829)
+await browser.connect(43213)
+await browser.watch("*localhost:5200*")   # watches across both
+browser.tabs                              # tabs from all instances
+```
+
+Connected ports and watch patterns persist across kernel restarts. On boot, repld prompts on the terminal (`[Y/n]`, default yes) before reconnecting and re-watching — headless boot (`--no-display`) or non-tty stdin skips the restore entirely.
+
+The [dashboard](/repld/docs/guides/dashboard/)'s Connections tab gives you the same connect/watch/disconnect controls from a browser instead of `exec`.
+
+## Console error push
+
+Console errors and uncaught exceptions from watched tabs push as `[console:error]` channel messages the moment they happen — no polling:
+
+```
+[console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
+```
+
+Cross-tab duplicates within 2 seconds are collapsed into one follow-up message (`... (×14 tabs)`). Mute noisy patterns:
+
+```python
+browser.suppress("[vite] failed to connect")   # mute matching errors
+browser.unsuppress("[vite] failed to connect") # un-mute
+browser.suppressed                             # list active patterns
+```
+
+Suppress patterns persist across kernel restarts.
 
 ## Properties
 

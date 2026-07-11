@@ -24,6 +24,14 @@ Output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1. The inlin
 
 Top-level `await` is supported.
 
+## no_display
+
+```python
+no_display(value) → value
+```
+
+Return a value from a cell without the auto-display hook re-printing it — still binds `_`/`_N`, and still unwraps on direct assignment (`x = no_display(await foo())`). For functions that already print their own output.
+
 ## defer
 
 ```python
