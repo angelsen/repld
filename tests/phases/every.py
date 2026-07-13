@@ -77,7 +77,7 @@ def phase_10_every(kernel: Kernel) -> None:
         )
         content3 = resp3["result"]["content"][0]["text"]
         assert_true(
-            "0" in content3 or content3.strip() == "0",
+            content3.strip() == "0",
             f"every.list() empty after cancel (got {content3!r})",
         )
         print("  ✓ every: cancel() removes handle, registry empty")
@@ -177,7 +177,7 @@ def phase_10_every(kernel: Kernel) -> None:
         )
         content6 = resp6["result"]["content"][0]["text"]
         assert_true(
-            "0" in content6 or content6.strip() == "0",
+            content6.strip() == "0",
             f"every.list() empty after cancel_all (got {content6!r})",
         )
         print("  ✓ every: cancel_all() clears registry")
