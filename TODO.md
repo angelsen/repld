@@ -71,6 +71,32 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Browser
 
+- [ ] `Tab.fetch()` corrupts binary responses — `browser/tab.py` `fetch()` always does
+  `await r.text()`, so any non-text payload (ZIP, PDF, image, protobuf) comes back as
+  mangled mojibake instead of the actual bytes. Found while pulling a raw diagnostic
+  archive (a ZIP) through `tab.fetch()` in a client project; had to work around it with a
+  one-off `tab.js()` call doing `fetch().arrayBuffer()` + manual base64 in-page. Fix:
+  fetch as `arrayBuffer()`, try `TextDecoder('utf-8', {fatal: true}).decode(bytes)` —
+  on failure (invalid UTF-8 ⇒ binary), base64-encode instead (prefer native
+  `Uint8Array.prototype.toBase64()` when present — shipped Chrome 123+, confirmed
+  available in-session — else a manual byte loop for older targets) and return
+  `base64Encoded: true`, matching the `{body, base64Encoded}` shape `tab.body()`/
+  `Fetch.getResponseBody` already use. Purely additive — existing callers unaffected,
+  new key defaults `false`. Not content-type-based (many APIs mislabel binary), so it's a
+  general `fetch()`-level fix, not case-specific.
+- [ ] `tab.fetch(url, auth="replay")` — auto-attach auth headers a page's *own* API calls
+  use (bearer token, custom header, CSRF token) without the caller manually extracting
+  them from a captured request first. Came up because an SPA's own axios instance
+  attached a custom `autel-token` header via an interceptor, invisible to a raw in-page
+  `fetch()` — token lived in `localStorage`, requiring a manual extract-and-pass-header
+  step every call. Rejected "just support axios" as too narrow (axios instances are
+  usually closed over inside a bundled module, not exposed on `window` — wouldn't
+  generalize to ky/custom-fetch-wrapper/GraphQL-client apps). Better shape: grab the
+  most recent captured request to the same origin from `tab.network()`, diff out
+  standard browser-set headers, merge the rest into the outgoing `fetch()` — works
+  regardless of *how* the page attached the header. Bigger design surface (deciding
+  which headers are "browser-set" vs app-set, per-origin caching) — needs a real design
+  pass before implementing.
 - [x] Console error dedup — cross-tab duplicates within 2s collapsed into one push with count.
   Separate 30s hint window shows `browser.suppress("...")` nudge after 3 occurrences (session 010).
 - [x] Console error suppress — `browser.suppress(substring)` mutes matching errors. Persists
