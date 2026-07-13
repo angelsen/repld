@@ -214,13 +214,17 @@ class Tab:
         """Inject pill + beforeunload guard + heartbeat. Idempotent."""
         session = self._session
         if not session._pinned:
-            session._pin_origin = await self.js("location.origin")
-            session._pin_reason = reason
-            await self._inject_pin()
-            session._pinned = True
-            session._heartbeat_task = asyncio.create_task(
-                self._heartbeat_loop(), name="repld-pill-heartbeat"
-            )
+            session._pinned = True  # claim before the awaits below yield
+            try:
+                session._pin_origin = await self.js("location.origin")
+                session._pin_reason = reason
+                await self._inject_pin()
+                session._heartbeat_task = asyncio.create_task(
+                    self._heartbeat_loop(), name="repld-pill-heartbeat"
+                )
+            except Exception:
+                session._pinned = False
+                raise
         elif reason:
             session._pin_reason = reason
             await self.js(f"__repld_update({{reason: {json.dumps(reason)}}})")

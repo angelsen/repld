@@ -360,21 +360,30 @@ class CDPSession:
         """Enable Fetch body capture on this session. Idempotent."""
         if self._fetch_enabled:
             return
+        self._fetch_enabled = True  # claim before the await below yields
         from .capture import enable as fetch_enable
 
-        await fetch_enable(self)
-        self.capture_bodies = True
-        self._fetch_enabled = True
+        try:
+            await fetch_enable(self)
+            self.capture_bodies = True
+        except Exception:
+            self._fetch_enabled = False
+            raise
 
     async def disable_fetch(self) -> None:
         """Disable Fetch body capture on this session. Idempotent."""
         if not self._fetch_enabled:
             return
+        self._fetch_enabled = False  # claim before the await below yields
+        self.capture_bodies = False
         from .capture import disable as fetch_disable
 
-        self.capture_bodies = False
-        await fetch_disable(self)
-        self._fetch_enabled = False
+        try:
+            await fetch_disable(self)
+        except Exception:
+            self._fetch_enabled = True
+            self.capture_bodies = True
+            raise
 
     # ------------------------------------------------------------------
     # Command execution

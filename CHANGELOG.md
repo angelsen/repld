@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Internal cleanups from a codebase health pass: `run_kernel` boot sequence split into phase helpers, deduped ready-signal polling and `__repld_usage__` extraction, removed unused parameters and redundant aliases
 - More health-pass cleanups: renamed `Dispatcher`'s doc-resource map to stop shadowing the module-level `_DOC_RESOURCES` list, `introspect()` reuses the memoized gist AST parse, first-docstring-line extraction unified in one helper (gist tool descriptions now strip whitespace), `tasks.snapshot()` returns `None` for unknown ids instead of a keyless sentinel dict, `browser.watch()` reuses `_glob_target_id`, `__controls__` prefix shared from one constant, `ask()` typing stub gained the `tab=` parameter it already accepted at runtime
 - Third health-pass round: `browser_key`'s tool description now matches its click/type siblings (it runs the same observation pipeline), the browser-availability probe and request-size formatting each live in one helper, and GUIDE's builtins recap is documented as the sanctioned exception to the no-overlap doc-surface rule
+- Fourth health-pass round: `kernel.py` reached into `tasks._read_from`/`tasks._make_preview` (both underscore-private) to build the task-done channel push — `tasks.py` now exposes `preview_since(task, offset)` for this; `gists.py`'s `_register()`/`registry()` had duplicated JSON-read-with-fallback logic, extracted into `_read_registry()`
 
 ### Fixed
 
@@ -91,6 +92,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `BrowserJSError.stack` was always a copy of `.text` (never an actual stack trace), contradicting the docs' claim of a "preserved stack trace". Now parses CDP `exceptionDetails.stackTrace.callFrames` into a real multi-frame string
 - Kernel boot swallowed dashboard-start, Chrome-port-reconnect, and pattern-re-watch failures with a bare `except: pass` — a broken dashboard import or failed session restore was invisible. Now logged to stderr
 - `repld exec` had no `--socket` flag despite `repld bridge` supporting one, so pointing `exec` at a kernel on a non-default socket path required setting `REPLD_SOCKET` instead
+- Codebase health pass found several unlocked check-then-act races matching bug classes already fixed elsewhere: `_Tee.write`'s lazy spill-file open had no lock, so two threads sharing a `task_id` (a sync cell's `asyncio.to_thread` worker racing the loop thread) could both open the spill file, leaking the first handle and losing its output; `Tab.pin()` checked-then-set `_pinned` across two `await`s, so a concurrent `pin()` call could pass the guard twice and leak a heartbeat task that later reset `_pinned=False` out from under the real one; `CDPSession.enable_fetch()`/`disable_fetch()` had the same check-await-set gap
+- `browser.get(<target-id>)` raised `TabNotFoundError` when another `attach()` was already in flight for that exact target, instead of retrying like the glob-based lookup does — extracted the shared poll interval into `_ATTACH_POLL_INTERVAL_S`
+- `Browser.detach_target()` let unpin/detach exceptions propagate while `detach()` swallowed them — same operation, inconsistent error handling; both now go through one `_unpin_and_detach()` helper
+- `gists.py`'s tool-schema builder silently mapped any unrecognized parameter type (e.g. `bytes`, `Path`, `Optional[str]`) to JSON Schema `"string"` with no warning, unlike every other malformed-input path in the file; `gist_deps.py`'s `__repld_deps__` scanner had the same silent-fallback gap for non-list values
 
 ### Removed
 

@@ -41,6 +41,7 @@ class TabNotFoundError(RuntimeError):
 
 
 _TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$")
+_ATTACH_POLL_INTERVAL_S = 0.3  # retry cadence while waiting for a tab to appear/attach
 
 
 def _is_target_id(s: str) -> bool:
@@ -188,6 +189,15 @@ class Browser:
                 tab = await self._attach_and_wrap(tid, t, ready=ready)
                 if tab is not None:
                     return tab
+                # Another attach was already in flight for this target —
+                # wait for it and pick up its result instead of failing.
+                await asyncio.sleep(_ATTACH_POLL_INTERVAL_S)
+                _sid2, cdp2, chrome_id2 = self._find_by_prefix(prefix)
+                if cdp2 is not None:
+                    return Tab(cdp2, chrome_id2, self.port, ready=ready)
+                tab = await self._attach_and_wrap(tid, t, ready=ready)
+                if tab is not None:
+                    return tab
 
         raise TabNotFoundError(
             f"No tab '{target}'. Attached: {self._attached_short_ids()}"
@@ -240,7 +250,7 @@ class Browser:
 
             if deadline is None or asyncio.get_running_loop().time() >= deadline:
                 break
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(_ATTACH_POLL_INTERVAL_S)
 
         raise TabNotFoundError(f"No tab matching '{pattern}'")
 
@@ -330,13 +340,7 @@ class Browser:
             # Detach everything
             sessions = list(self._session._sessions.items())
             for sid, cdp in sessions:
-                try:
-                    await self._safe_unpin(
-                        Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-                    )
-                    await self._session.detach(sid)
-                except Exception as exc:
-                    logger.debug("Detach %s: %s", sid, exc)
+                await self._unpin_and_detach(sid, cdp)
             self._session._watched_patterns.clear()
             return f"Detached {len(sessions)} tab(s). All patterns cleared."
 
@@ -348,13 +352,7 @@ class Browser:
                 to_detach.append((sid, cdp))
 
         for sid, cdp in to_detach:
-            try:
-                await self._safe_unpin(
-                    Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-                )
-                await self._session.detach(sid)
-            except Exception as exc:
-                logger.debug("Detach %s: %s", sid, exc)
+            await self._unpin_and_detach(sid, cdp)
 
         # Remove pattern
         self._session._watched_patterns.pop(pattern, None)
@@ -419,6 +417,16 @@ class Browser:
             except Exception:
                 pass
 
+    async def _unpin_and_detach(self, sid: str, cdp: CDPSession) -> None:
+        """Unpin a tab (if pinned) and detach its session. Never raises."""
+        try:
+            await self._safe_unpin(
+                Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+            )
+            await self._session.detach(sid)
+        except Exception as exc:
+            logger.debug("Detach %s: %s", sid, exc)
+
     async def disconnect(self) -> None:
         """Disconnect from Chrome. Unpins all tabs first (removes pill,
         beforeunload guard, and heartbeat task before dropping the socket)."""
@@ -437,8 +445,7 @@ class Browser:
         _, prefix = _split_target(target_id)
         sid, cdp, full_id = self._find_by_prefix(prefix)
         if sid is not None and cdp is not None:
-            await self._safe_unpin(Tab(cdp, full_id, self.port))
-            await self._session.detach(sid)
+            await self._unpin_and_detach(sid, cdp)
             return f"Detached {target_id}."
         return f"Target {target_id} not found."
 

@@ -282,11 +282,7 @@ def _maybe_push_done(task_id: str) -> None:
         return
     cutoff = task.get("nudge_cutoff", 0)
     path = task.get("spill_path")
-    try:
-        delta = tasks._read_from(task, cutoff)
-    except Exception:
-        delta = ""
-    delta_preview, _truncated = tasks._make_preview(delta)
+    delta_preview, _truncated = tasks.preview_since(task, cutoff)
     label = task.get("label")
     label_str = f' "{label}"' if label else ""
     parts = [f"[repld] task {task_id}{label_str} done"]

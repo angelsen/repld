@@ -44,12 +44,13 @@ def _ensure_spill_dir() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _open_spill(task: dict, task_id: str) -> None:
+def _open_spill(task: dict, task_id: str) -> io.TextIOWrapper:
     _ensure_spill_dir()
     path = RUNTIME_DIR / f"{os.getpid()}-{task_id}.out"
     fp = open(path, "w")
     task["spill_file"] = fp
     task["spill_path"] = str(path)
+    return fp
 
 
 class _Tee(io.TextIOBase):
@@ -76,8 +77,10 @@ class _Tee(io.TextIOBase):
         if task_id is not None and task is not None:
             fp = task["spill_file"]
             if fp is None:
-                _open_spill(task, task_id)
-                fp = task["spill_file"]
+                with _tasks_lock:
+                    fp = task["spill_file"]
+                    if fp is None:
+                        fp = _open_spill(task, task_id)
             if fp is not _CLOSED:
                 try:
                     fp.write(s)
@@ -180,6 +183,19 @@ def _make_preview(full: str) -> tuple[str, bool]:
         sep = f"… {elided} lines elided …\n"
         return head + sep + tail, True
     return "".join(_clip_line(ln) for ln in lines), True
+
+
+def preview_since(task: dict, offset: int) -> tuple[str, bool]:
+    """Head+tail preview of spill output written since *offset*.
+
+    Callers outside this module should use this instead of reaching into
+    `_read_from`/`_make_preview` directly.
+    """
+    try:
+        delta = _read_from(task, offset)
+    except Exception:
+        return "", False
+    return _make_preview(delta)
 
 
 def spill_text(text: str, label: str = "output") -> dict:

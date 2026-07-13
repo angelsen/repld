@@ -135,6 +135,11 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
             )
             continue
         if not isinstance(reqs, list):
+            gists._warn_once(
+                f"{p}:__repld_deps__:type",
+                f"repld: {p.name}: __repld_deps__ is {type(reqs).__name__}, "
+                f"expected a list — skipped",
+            )
             continue
         for req in reqs:
             req_str = str(req).strip()

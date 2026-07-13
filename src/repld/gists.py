@@ -11,6 +11,8 @@ import inspect
 import json
 import os
 import sys
+import types
+import typing
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,6 +119,21 @@ def _warn_once(key: str, msg: str) -> None:
 _registered: set[tuple[str, str]] = set()
 
 
+def _read_registry() -> dict:
+    """Read the gist registry JSON, or {} on missing/corrupt file."""
+    if not _REGISTRY_PATH.is_file():
+        return {}
+    try:
+        return json.loads(_REGISTRY_PATH.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        _warn_once(
+            "registry:corrupt",
+            f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
+            "treating as empty",
+        )
+        return {}
+
+
 def _register(name: str) -> None:
     """Record a gist import in the central registry. Best-effort, never raises."""
     try:
@@ -126,17 +143,7 @@ def _register(name: str) -> None:
         if (name, str(src)) in _registered:
             return
         _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        reg: dict = {}
-        if _REGISTRY_PATH.is_file():
-            try:
-                reg = json.loads(_REGISTRY_PATH.read_text("utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                _warn_once(
-                    "registry:corrupt",
-                    f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
-                    "rewriting it fresh",
-                )
-                reg = {}
+        reg = _read_registry()
         doc = _extract_doc(src)
         reg[name] = {
             "path": str(src),
@@ -152,17 +159,7 @@ def _register(name: str) -> None:
 
 def registry() -> dict:
     """Read the gist registry. Returns {name: {path, description, project, last_used}}."""
-    if _REGISTRY_PATH.is_file():
-        try:
-            return json.loads(_REGISTRY_PATH.read_text("utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            _warn_once(
-                "registry:corrupt",
-                f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
-                "treating as empty",
-            )
-            return {}
-    return {}
+    return _read_registry()
 
 
 def registry_summary() -> str:
@@ -628,6 +625,20 @@ def _is_old_style(func) -> bool:
     return p.annotation in (dict, inspect.Parameter.empty)
 
 
+def _resolve_json_type(annotation) -> str | None:
+    """Map a parameter annotation to a JSON Schema type, unwrapping
+    ``X | None`` / ``Optional[X]`` to the non-None arm. None if unmapped."""
+    mapped = _TYPE_MAP.get(annotation)
+    if mapped is not None:
+        return mapped
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return _TYPE_MAP.get(args[0])
+    return None
+
+
 def _schema_from_signature(func, tool_name: str) -> dict:
     """Build an MCP tool schema dict from a function's signature + docstring."""
     sig = inspect.signature(func)
@@ -637,7 +648,15 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     properties: dict[str, dict] = {}
     required: list[str] = []
     for pname, param in sig.parameters.items():
-        json_type = _TYPE_MAP.get(param.annotation, "string")
+        json_type = _resolve_json_type(param.annotation)
+        if json_type is None:
+            if param.annotation is not inspect.Parameter.empty:
+                _warn_once(
+                    f"{tool_name}:{pname}:type",
+                    f"repld: tool '{tool_name}' param '{pname}' has unmapped "
+                    f"type {param.annotation!r} — treating as string",
+                )
+            json_type = "string"
         prop: dict = {"type": json_type}
         if param.default is not inspect.Parameter.empty:
             prop["default"] = param.default
