@@ -22,18 +22,12 @@ async def lookup(company_id: str) -> dict:
         return resp.json()`;
 
 const twoLayerWiring = `# --- repld wiring (shed on graduation) ---
+# _tool_ prefix + type hints is all repld needs — schema is inferred,
+# no separate declaration or manual (de)serialization required.
 
-__repld_tools__ = [
-    {"name": "lookup", "description": "Look up a company",
-     "inputSchema": {"type": "object",
-                     "properties": {"company_id": {"type": "string"}},
-                     "required": ["company_id"]}},
-]
-
-async def _tool_lookup(args: dict) -> str:
-    import json
-    result = await lookup(args["company_id"])
-    return json.dumps(result)`;
+async def _tool_lookup(company_id: str) -> dict:
+    """Look up a company."""
+    return await lookup(company_id)`;
 
 const fetchPattern = `# Browser-auth variant — accept a fetch callable
 # Works with browser session (no token) AND standalone (token from env)
@@ -122,9 +116,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<h2 class="display sm">Core logic stays.<br />Wiring gets replaced.</h2>
 		<p class="body-text">
 			Write gists in two layers. The core logic sits at the top and moves to production untouched.
-			The repld wiring sits at the bottom: <code class="c">__repld_tools__</code> and
-			<code class="c">_tool_*</code>. That bottom layer drops away when the gist graduates, and a
-			<code class="c">@mcp.tool</code> or <code class="c">@router.get</code> takes its place.
+			The repld wiring sits at the bottom: a thin <code class="c">_tool_*</code> function with type
+			hints — repld infers the schema, no separate declaration needed. That bottom layer drops away
+			when the gist graduates, and a <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
+			takes its place.
 		</p>
 		<div class="code-stack" data-reveal>
 			<CodeCard code={twoLayerCore} label="keeps" labelTone="accent" class="keeps" />
@@ -244,7 +239,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<h2 class="display sm">Seven commands to a running service.</h2>
 		<p class="body-text">
 			Create a project, add the dependencies, copy the gist in, run it. The
-			<code class="c">__repld_tools__</code> layer stays behind. A <code class="c">@mcp.tool</code> or
+			<code class="c">_tool_*</code> layer stays behind. A <code class="c">@mcp.tool</code> or
 			<code class="c">@router.get</code> replaces it.
 		</p>
 		<CodeCard code={scaffoldSnippet} lang="bash" class="wide" />
@@ -267,7 +262,6 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 			<div class="compare-col goes">
 				<h3 class="compare-head">Goes <span class="dim">(repld-specific)</span></h3>
 				<ul>
-					<li><code class="c">__repld_tools__</code> list</li>
 					<li><code class="c">_tool_*</code> handler functions</li>
 					<li><code class="c">import repld</code> <span class="dim">(in wiring)</span></li>
 					<li><code class="c">tab.fetch</code> / <code class="c">browser.get</code></li>

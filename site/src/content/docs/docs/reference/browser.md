@@ -61,14 +61,17 @@ await tab.type_text(selector, text, *, delay_ms=0, press_enter=False) → None
 
 Focus element, select-all, type character-by-character. Auto-waits up to 2s.
 
-### tap / swipe
+### tap / swipe / scroll
 
 ```python
 await tab.tap(selector_or_x, y=None) → None
 await tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300) → None
+await tab.scroll(selector, dy=0, dx=0, *, steps=10, duration_ms=300) → None
 ```
 
-Touch events for mobile Chrome via ADB.
+Touch events for mobile Chrome via ADB. `scroll()` is sugar over `swipe()` —
+resolves `selector` to its center and swipes the opposite direction
+(scrollBy semantics: positive `dy` scrolls down, positive `dx` scrolls right).
 
 ### key
 
