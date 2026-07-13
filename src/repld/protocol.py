@@ -234,7 +234,7 @@ TOOLS = [
         "name": "browser_key",
         "description": (
             "Send a key press (Enter, Escape, Tab, ArrowDown, etc). "
-            "Returns accessibility tree + network/console delta."
+            "Returns observation (tree + network + console delta after settle)."
         ),
         "inputSchema": {
             "type": "object",
@@ -597,7 +597,7 @@ class Dispatcher:
     def _tools_list(self, rid) -> dict:
         from . import gists
 
-        has_browser = "browser" in __main__.__dict__
+        has_browser = _has_browser()
         tools = [
             t for t in TOOLS if has_browser or not t["name"].startswith("browser_")
         ]
@@ -1008,9 +1008,8 @@ class Dispatcher:
     def _resources_list(self, rid) -> dict:
         from . import gists
 
-        has_browser = "browser" in __main__.__dict__
         resources = list(_DOC_RESOURCES) + (
-            list(_BROWSER_RESOURCES) if has_browser else []
+            list(_BROWSER_RESOURCES) if _has_browser() else []
         )
         resources.append(
             {
@@ -1128,6 +1127,10 @@ def _format_spill(sp: dict, fallback: str) -> str:
     if sp["truncated"]:
         parts.append(spill_marker(sp["spill_path"]))
     return "\n".join(parts) or fallback
+
+
+def _has_browser() -> bool:
+    return "browser" in __main__.__dict__
 
 
 def _response(rid, result: dict) -> dict:

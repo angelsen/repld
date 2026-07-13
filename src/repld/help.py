@@ -3,7 +3,9 @@
 `build_instructions()` composes the MCP `initialize.instructions` dynamically
 based on kernel state (browser connected? which gists available?). `OVERVIEW`
 and `_TOPICS` back the `repld help` command / `browser.help()`. Four surfaces,
-no overlap:
+no overlap — one sanctioned exception: GUIDE's `== Builtins ==` section recaps
+the injected builtins so the guide reads standalone; keep it in sync with
+`_EXEC_MODEL`. The surfaces:
 
   INSTRUCTIONS (dynamic)  → behavioral model for the agent (terse, always loaded)
   Tool descriptions       → per-tool what + gotchas (lives in protocol.py)
@@ -26,6 +28,7 @@ from .ipc import read_lock
 # Composable instruction blocks (agent-facing, behavioral model only)
 # ---------------------------------------------------------------------------
 
+# Builtins recap also in GUIDE's `== Builtins ==` section — keep in sync.
 _EXEC_MODEL = (
     "Execution model: "
     "exec runs code in shared __main__. If it exceeds timeout, returns "
@@ -1226,6 +1229,7 @@ notify(content, **meta)
 }
 
 
+# `== Builtins ==` below recaps _EXEC_MODEL's builtins — keep in sync.
 GUIDE = """\
 repld — working guide
 

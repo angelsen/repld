@@ -9,6 +9,12 @@ from .cdp import CDPSession
 __all__ = ["Row", "Rows"]
 
 
+def size_str(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    return f"{size_bytes / 1024:.1f}KB"
+
+
 @dataclass
 class Row:
     """A row from a HAR or console query."""
@@ -68,10 +74,10 @@ class Row:
 
     def __repr__(self) -> str:
         if self.method and self.url:
-            size_str = f"{self.size / 1024:.1f}KB" if self.size else "0B"
+            size_fmt = size_str(self.size) if self.size else "0B"
             time_str = f"{self.time_ms}ms" if self.time_ms is not None else "?"
             rid = f" rid={self.request_id}" if self.request_id else ""
-            return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_str}){rid}>"
+            return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_fmt}){rid}>"
         if self.level:
             text = self.text if len(self.text) <= 200 else self.text[:200] + "…"
             loc = ""

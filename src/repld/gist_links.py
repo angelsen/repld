@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from . import gists
+from .ipc import atomic_write_json
 
 # Cross-project linked gists: name → absolute source path. Populated from
 # ./gists/.links at install() time; consulted by the finder + iterators after
@@ -53,7 +54,7 @@ def write_links(gists_dir: Path, links: dict[str, str]) -> None:
     gists_dir.mkdir(parents=True, exist_ok=True)
     path = gists_dir / _LINKS_FILENAME
     ordered = {k: links[k] for k in sorted(links)}
-    path.write_text(json.dumps(ordered, indent=2) + "\n", "utf-8")
+    atomic_write_json(path, ordered, indent=2)
 
 
 def _load_links(gists_dir: Path) -> None:

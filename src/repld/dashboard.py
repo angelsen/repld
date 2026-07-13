@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import tasks
+from .ipc import atomic_write_json
 
 _start_time: float = 0.0
 _socket_path: str = ""
@@ -95,8 +96,7 @@ def save_hint() -> None:
     except ImportError:
         pass
     try:
-        _hint_path.write_text(json.dumps(hint))
-        _hint_path.chmod(0o600)
+        atomic_write_json(_hint_path, hint, chmod=0o600)
     except OSError:
         pass
 

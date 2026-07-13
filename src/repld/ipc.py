@@ -52,6 +52,31 @@ def read_lock(lock_path: Path) -> dict | str:
     return lock
 
 
+def atomic_write_json(
+    path: Path,
+    obj: object,
+    *,
+    indent: int | None = None,
+    chmod: int | None = None,
+) -> None:
+    """Write JSON via tmp + os.replace so concurrent readers never see a torn file.
+
+    indent=N also appends a trailing newline (pretty files are committed or
+    hand-read). chmod is applied to the tmp file before the rename, so the
+    final file never exists with wrong permissions. The tmp name carries the
+    pid so concurrent writers (e.g. two kernels booting) can't clobber each
+    other's tmp — last rename wins cleanly.
+    """
+    text = json.dumps(obj, indent=indent)
+    if indent is not None:
+        text += "\n"
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, "utf-8")
+    if chmod is not None:
+        tmp.chmod(chmod)
+    os.replace(tmp, path)
+
+
 def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
     """Resolve the kernel lockfile path from --socket flags, REPLD_SOCKET env,
     or the cwd default. Shared by bridge and exec subcommands.

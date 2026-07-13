@@ -20,6 +20,7 @@ from pathlib import Path
 # time (never `from x import y`), which is cycle-safe and keeps test
 # monkeypatching (e.g. gists.registry) effective.
 from . import gist_deps, gist_links
+from .ipc import atomic_write_json
 
 __all__ = [
     "install",
@@ -135,7 +136,7 @@ def _register(name: str) -> None:
             "project": str(Path.cwd()),
             "last_used": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        _REGISTRY_PATH.write_text(json.dumps(reg, indent=2) + "\n", "utf-8")
+        atomic_write_json(_REGISTRY_PATH, reg, indent=2)
         _registered.add((name, str(src)))
     except Exception:
         pass

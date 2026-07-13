@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from .row import size_str
+
 if TYPE_CHECKING:
     from .session import BrowserSession
     from .tab import Tab
@@ -426,12 +428,6 @@ def _truncate_path(url: str) -> str:
     return path[:_PATH_TRUNCATE]
 
 
-def _size_str(size_bytes: int) -> str:
-    if size_bytes < 1024:
-        return f"{size_bytes}B"
-    return f"{size_bytes / 1024:.1f}KB"
-
-
 def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEntry]:
     """Query each tab's DuckDB for entries with id > snapshot."""
     entries: list[NetworkEntry] = []
@@ -521,12 +517,12 @@ def format_observation(obs: Observation) -> str:
         for e in api_entries:
             time_str = f"{e.time_ms}ms" if e.time_ms is not None else "?"
             parts.append(
-                f"  {e.target}  {e.method}  {e.status} {e.path}  {time_str} {_size_str(e.size)}"
+                f"  {e.target}  {e.method}  {e.status} {e.path}  {time_str} {size_str(e.size)}"
             )
         if asset_entries:
             total_asset_bytes = sum(e.size for e in asset_entries)
             parts.append(
-                f"  + {len(asset_entries)} assets ({_size_str(total_asset_bytes)})"
+                f"  + {len(asset_entries)} assets ({size_str(total_asset_bytes)})"
             )
     else:
         parts.append("network (0 requests)")

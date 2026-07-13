@@ -15,7 +15,7 @@ import os
 import time
 from pathlib import Path
 
-from .ipc import pid_alive
+from .ipc import atomic_write_json, pid_alive
 from .tasks import RUNTIME_DIR
 
 __all__ = ["register", "unregister", "list_sessions"]
@@ -37,7 +37,7 @@ def register(cwd: str, socket_path: str, dashboard_port: int | None) -> None:
         "dashboard_port": dashboard_port,
         "started_at": time.time(),
     }
-    _session_path().write_text(json.dumps(info))
+    atomic_write_json(_session_path(), info)
 
 
 def unregister() -> None:

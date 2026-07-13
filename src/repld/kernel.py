@@ -29,7 +29,7 @@ from pathlib import Path
 
 from . import events, ipc, sessions, tasks
 from .events import CellDone, CellStart, ChannelPush
-from .ipc import read_lock
+from .ipc import atomic_write_json, read_lock
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
 
@@ -69,7 +69,7 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
     }
     if dashboard_port is not None:
         info["dashboard_port"] = dashboard_port
-    _lock_for(socket_path).write_text(json.dumps(info))
+    atomic_write_json(_lock_for(socket_path), info)
 
 
 _active_lock_path: Path | None = None
