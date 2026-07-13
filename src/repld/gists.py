@@ -267,11 +267,16 @@ class _GistImportHook:
         return result
 
 
+def _first_line(doc: str | None, limit: int | None = None) -> str:
+    """First line of a docstring, stripped; '' if no doc."""
+    return doc.split("\n")[0].strip()[:limit] if doc else ""
+
+
 def _extract_doc(path: Path) -> str:
     """Extract first line of module docstring without importing."""
     tree = _parse(path)
     doc = ast.get_docstring(tree) if tree else None
-    return doc.split("\n")[0].strip()[:80] if doc else ""
+    return _first_line(doc, limit=80)
 
 
 def hint_for_name(name: str) -> str | None:
@@ -326,17 +331,20 @@ def introspect(name: str) -> str:
             msg += f"; linked: {', '.join(sorted(gist_links._linked))}"
         raise FileNotFoundError(msg)
 
-    try:
-        tree = ast.parse(path.read_text("utf-8"))
-    except SyntaxError as e:
-        raise ValueError(
-            f"gist '{name}': syntax error at line {e.lineno}: {e.msg}"
-        ) from e
+    tree = _parse(path)
+    if tree is None:
+        # _parse swallows errors for the scan paths — re-parse to surface why.
+        try:
+            tree = ast.parse(path.read_text("utf-8"))
+        except SyntaxError as e:
+            raise ValueError(
+                f"gist '{name}': syntax error at line {e.lineno}: {e.msg}"
+            ) from e
     lines: list[str] = []
 
     mod_doc = ast.get_docstring(tree)
     if mod_doc:
-        lines.append(mod_doc.split("\n")[0].strip())
+        lines.append(_first_line(mod_doc))
         lines.append("")
 
     for node in ast.iter_child_nodes(tree):
@@ -383,7 +391,7 @@ def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
 
     cls_doc = ast.get_docstring(node)
     if cls_doc:
-        lines.append(f"  {cls_doc.split('\n')[0].strip()}")
+        lines.append(f"  {_first_line(cls_doc)}")
         lines.append("")
 
     for item in node.body:
@@ -436,8 +444,7 @@ def _format_function(
 
     doc = ast.get_docstring(node)
     if doc:
-        first_line = doc.split("\n")[0].strip()
-        sig += f"  # {first_line}"
+        sig += f"  # {_first_line(doc)}"
 
     lines.append(sig)
 
@@ -607,8 +614,8 @@ def _is_old_style(func) -> bool:
 def _schema_from_signature(func, tool_name: str) -> dict:
     """Build an MCP tool schema dict from a function's signature + docstring."""
     sig = inspect.signature(func)
-    doc = inspect.getdoc(func) or ""
-    description = doc.split("\n")[0] if doc else tool_name
+    doc = inspect.getdoc(func)
+    description = _first_line(doc) or tool_name
 
     properties: dict[str, dict] = {}
     required: list[str] = []
@@ -741,9 +748,16 @@ def install(dirs: list[Path]) -> None:
     global _installed_dirs
     _installed_dirs = dirs
 
-    # Tool-mode deps dir: gist deps installed via --target land here
+    # Tool-mode deps dir: gist deps installed via --target land here. Only
+    # prepend it in the tool venv (matching install_deps's gating) — in a
+    # project venv deps install into the venv itself, and this dir may hold
+    # extension modules built for the tool venv's (different) interpreter.
     deps_dir = gist_deps._TOOL_DEPS_DIR
-    if deps_dir.is_dir() and str(deps_dir) not in sys.path:
+    if (
+        gist_deps._is_tool_venv()
+        and deps_dir.is_dir()
+        and str(deps_dir) not in sys.path
+    ):
         sys.path.insert(0, str(deps_dir))
 
     for d in dirs:

@@ -508,7 +508,7 @@ class _Context:
         asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), self.loop)
         return task_id, task["done_event"]
 
-    def snapshot(self, task_id: str) -> dict:
+    def snapshot(self, task_id: str) -> dict | None:
         return tasks.snapshot(task_id)
 
     def mark_nudged(self, task_id: str) -> None:

@@ -198,10 +198,11 @@ def spill_marker(path: str) -> str:
     return f"[full output: {path}]"
 
 
-def snapshot(task_id: str) -> dict:
+def snapshot(task_id: str) -> dict | None:
+    """State dict for a task, or None for an unknown task_id."""
     task = _tasks.get(task_id)
     if task is None:
-        return {"task_id": task_id, "error": "unknown task_id"}
+        return None
     # Full re-read per poll is fine at current poll rates; revisit with a
     # head-cache + tail-seek if multi-MB spills under polling become common.
     full = _read_from(task)

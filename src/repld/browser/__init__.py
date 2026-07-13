@@ -244,13 +244,9 @@ class Browser:
         targets = await self._session.list_targets()
         to_attach: list[tuple[str, dict]] = []
         for t in targets:
-            if t.get("type", "") in WORKER_TYPES:
-                continue
-            tid = t.get("targetId", "")
-            url = t.get("url", "")
-            if fnmatch(url, pattern) and tid:
-                if self._session.find_by_target_id(tid) is None:
-                    to_attach.append((tid, t))
+            tid = self._glob_target_id(t, pattern, set())
+            if tid and self._session.find_by_target_id(tid) is None:
+                to_attach.append((tid, t))
 
         failures: list[tuple[str, str]] = []
 
@@ -517,7 +513,7 @@ class BrowserPool:
                     "with --remote-debugging-port?"
                 ) from exc
         if port is None:
-            port = 9222
+            port = int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         if port in self._browsers and self._browsers[port]._connected:
             return self._browsers[port]
         b = Browser(port=port)

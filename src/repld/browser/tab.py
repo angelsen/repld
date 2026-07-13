@@ -11,7 +11,7 @@ import json
 import pathlib
 from typing import Any
 
-from .cdp import CDPSession
+from .cdp import _CONTROLS_PREFIX, CDPSession
 from .pin import _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
 from .png import _model_dims, _resize_png
 from .row import (
@@ -971,14 +971,14 @@ class Tab:
     def control_observations(self) -> list[dict]:
         """Parsed __controls__ observations from console.debug messages."""
         rows = self._session.query(
-            "SELECT text FROM console_entries WHERE level = 'debug' AND text LIKE '__controls__%' ORDER BY id DESC LIMIT 100"
+            f"SELECT text FROM console_entries WHERE level = 'debug' AND text LIKE '{_CONTROLS_PREFIX}%' ORDER BY id DESC LIMIT 100"
         )
         results = []
         for row in rows:
             raw = row[0]
             if not isinstance(raw, str):
                 continue
-            prefix = "__controls__ "
+            prefix = f"{_CONTROLS_PREFIX} "
             if raw.startswith(prefix):
                 raw = raw[len(prefix) :]
             try:

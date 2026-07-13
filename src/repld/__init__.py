@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     async def ask(
         prompt: str,
         *,
+        tab: Any = None,
         default: str | None = None,
         timeout: float | None = None,
     ) -> str: ...

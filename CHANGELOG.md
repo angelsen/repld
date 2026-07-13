@@ -18,9 +18,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ask()` now accepts `tab=` like `confirm()`/`choose()` — routed for symmetry, though the pill UI has no text input so the response is still typed in the terminal (previously passing `tab=` raised TypeError)
 - `tab.label` (colored identification bar, survives navigation) is now documented in `repld help browser` and the browser guide
 - Internal cleanups from a codebase health pass: `run_kernel` boot sequence split into phase helpers, deduped ready-signal polling and `__repld_usage__` extraction, removed unused parameters and redundant aliases
+- More health-pass cleanups: renamed `Dispatcher`'s doc-resource map to stop shadowing the module-level `_DOC_RESOURCES` list, `introspect()` reuses the memoized gist AST parse, first-docstring-line extraction unified in one helper (gist tool descriptions now strip whitespace), `tasks.snapshot()` returns `None` for unknown ids instead of a keyless sentinel dict, `browser.watch()` reuses `_glob_target_id`, `__controls__` prefix shared from one constant, `ask()` typing stub gained the `tab=` parameter it already accepted at runtime
 
 ### Fixed
 
+- Dev-checkout kernels prepended the tool-venv gist-deps dir (`~/.local/share/repld/deps`) to `sys.path`, shadowing the project venv's site-packages with extension modules built for a different interpreter — a stale Pillow there silently disabled the `browser` builtin at boot. The dir is now only added when actually running from the uv tool venv, matching `install_deps`'s gating
+- `browser.connect()` with no port ignored `REPLD_CHROME_PORT` and always defaulted to 9222; it now honors the env var like the rest of the browser layer
 - The per-tab DuckDB event store was read (`tab.network()`/`console()`/`body()` MCP tools) from IPC reader threads while the kernel loop wrote events through the same connection object — DuckDB connections aren't thread-safe. Reads and `clear()` now run on a per-call cursor (duplicated connection, DuckDB's sanctioned cross-thread pattern)
 - `get_task` with an unknown `task_id` returned a *successful* response whose `_meta` carried only `{task_id, error}` — no `done`/`text` fields — instead of a JSON-RPC error like `cancel` does for bad input
 - `repld help browser` listed `tab.controls()` and `tab.invoke()` under the sync DuckDB-query heading; both are async (calling them bare returns a coroutine). The browser guide's `controls()` entry also didn't say it's async

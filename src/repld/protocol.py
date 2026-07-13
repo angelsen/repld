@@ -539,7 +539,7 @@ class KernelContext(Protocol):
     loop: asyncio.AbstractEventLoop
 
     def start_task(self, src: str) -> tuple[str, threading.Event]: ...
-    def snapshot(self, task_id: str) -> dict: ...
+    def snapshot(self, task_id: str) -> dict | None: ...
     def mark_nudged(self, task_id: str) -> None: ...
     def cancel_task(self, task_id: str) -> bool: ...
 
@@ -624,6 +624,7 @@ class Dispatcher:
         task_id, done_event = self.ctx.start_task(src)
         finished = done_event.wait(timeout=timeout)
         snap = self.ctx.snapshot(task_id)
+        assert snap is not None  # task_id was just created by start_task
         if finished:
             text = _format_spill(snap, "(no output)")
             return _response(
@@ -657,7 +658,7 @@ class Dispatcher:
         if not tid:
             return _error(rid, -32602, "missing task_id")
         snap = self.ctx.snapshot(tid)
-        if "done" not in snap:  # tasks.snapshot() sentinel for unknown IDs
+        if snap is None:
             return _error(rid, -32602, f"unknown task_id: {tid}")
         return _response(
             rid,
@@ -1031,7 +1032,7 @@ class Dispatcher:
         return _response(rid, {"resources": resources})
 
     # Static docs: URI → help.py attribute name (imported lazily at read time)
-    _DOC_RESOURCES = {
+    _DOC_ATTR_MAP = {
         "repld://docs/guide": "GUIDE",
         "repld://docs/browser": "BROWSER_GUIDE",
         "repld://docs/playbook": "PLAYBOOK",
@@ -1042,10 +1043,10 @@ class Dispatcher:
         uri = params.get("uri", "")
         try:
             reader = self._RESOURCE_DISPATCH.get(uri)
-            if uri in self._DOC_RESOURCES:
+            if uri in self._DOC_ATTR_MAP:
                 from . import help as _help
 
-                text = getattr(_help, self._DOC_RESOURCES[uri])
+                text = getattr(_help, self._DOC_ATTR_MAP[uri])
             elif reader is not None:
                 text = reader(self)
             elif uri.startswith("repld://gists/"):
