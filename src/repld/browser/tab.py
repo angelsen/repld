@@ -725,8 +725,11 @@ class Tab:
     ) -> dict:
         """In-page JS fetch with Python-ergonomic args.
 
-        Returns {status: int, ok: bool, body: Any}.
-        Body is auto-parsed as JSON when content-type is json. Content-Type
+        Returns {status: int, ok: bool, body: Any, base64Encoded: bool}.
+        Body is auto-parsed as JSON when content-type is json (text responses
+        only). Binary responses (invalid UTF-8) are base64-encoded and
+        returned with base64Encoded=True, matching the {body, base64Encoded}
+        convention used by tab.body() / Fetch.getResponseBody. Content-Type
         defaults to application/json for a dict body, application/x-www-form-
         urlencoded for a string body — pass `headers={"Content-Type": ...}`
         to override (e.g. for a raw JSON string or plain text body).
@@ -763,12 +766,34 @@ class Tab:
   }};
   const r = await fetch({json.dumps(url)}, opts);
   const ct = r.headers.get('content-type') || '';
-  const text = await r.text();
-  let body = text;
-  if (ct.includes('json') && text) {{
-    try {{ body = JSON.parse(text); }} catch(e) {{}}
+  const buf = await r.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let body, base64Encoded = false;
+  try {{
+    body = new TextDecoder('utf-8', {{fatal: true}}).decode(bytes);
+    if (ct.includes('json') && body) {{
+      try {{ body = JSON.parse(body); }} catch(e) {{}}
+    }}
+  }} catch(e) {{
+    // Invalid UTF-8 — binary payload, base64-encode it
+    if (typeof bytes.toBase64 === 'function') {{
+      body = bytes.toBase64();
+    }} else {{
+      // Chunked btoa fallback for pre-Chrome-123 (String.fromCharCode
+      // spread on the full buffer blows the call stack above ~64K args)
+      const chunks = [];
+      const CHUNK = 32768;
+      for (let i = 0; i < bytes.length; i += CHUNK) {{
+        const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+        let bin = '';
+        for (let j = 0; j < slice.length; j++) bin += String.fromCharCode(slice[j]);
+        chunks.push(bin);
+      }}
+      body = btoa(chunks.join(''));
+    }}
+    base64Encoded = true;
   }}
-  return {{status: r.status, ok: r.ok, body: body}};
+  return {{status: r.status, ok: r.ok, body: body, base64Encoded: base64Encoded}};
 }})()
 """
         return await self.js(code, await_promise=True)

@@ -1069,7 +1069,7 @@ Tab (async unless noted):
   tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter")
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
-  tab.fetch(url, method=, body=, headers=)         → {status, ok, body}
+  tab.fetch(url, method=, body=, headers=)         → {status, ok, body, base64Encoded}
   tab.navigate(url)                                → None
   tab.reload()                                     → None
   tab.controls()                                   → dict | None

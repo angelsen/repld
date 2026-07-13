@@ -272,10 +272,11 @@ TOOLS = [
         "name": "browser_fetch",
         "description": (
             "Execute a fetch() in the page's context (inherits cookies/session). "
-            "Returns {status, ok, body}. Content-Type defaults to "
-            "application/json for a dict body, application/x-www-form-urlencoded "
-            "for a string body — pass headers to override (e.g. for raw JSON "
-            "text or plain text)."
+            "Returns {status, ok, body, base64Encoded}. Binary responses "
+            "(invalid UTF-8) are base64-encoded with base64Encoded=true. "
+            "Content-Type defaults to application/json for a dict body, "
+            "application/x-www-form-urlencoded for a string body — pass "
+            "headers to override (e.g. for raw JSON text or plain text)."
         ),
         "inputSchema": {
             "type": "object",
