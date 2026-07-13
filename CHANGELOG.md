@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.1.0] - 2026-07-14
+
 ### Security
 
 - Dashboard `POST /api` sent `Access-Control-Allow-Origin: *`, letting any webpage open in any local browser drive `browser.connect`/`watch` or read captured network/console data (auth headers, cookies) via CSRF/DNS-rebinding. Now requires a random per-boot bearer token (embedded in the served dashboard page) and echoes CORS headers only for the dashboard's own origin
