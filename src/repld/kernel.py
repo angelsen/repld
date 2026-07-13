@@ -410,13 +410,25 @@ class EveryHandle:
 
     def cancel(self) -> None:
         self._task.cancel()
-        _every_registry.discard(self)
+        with _every_lock:
+            _every_registry.discard(self)
 
     def __repr__(self) -> str:
         return f"<every {self.seconds}s: {self.label}>"
 
 
+# Mutated from the asyncio loop thread (_start_ticker) and from sync-cell
+# threads (EveryHandle.cancel() via asyncio.to_thread), and iterated from the
+# dashboard's HTTP handler thread — needs a lock like every other cross-thread
+# registry in this codebase (tasks._tasks_lock, gates._gates_lock).
 _every_registry: set[EveryHandle] = set()
+_every_lock = threading.Lock()
+
+
+def every_snapshot() -> list[EveryHandle]:
+    """Thread-safe copy of the active @every tickers, for cross-thread readers."""
+    with _every_lock:
+        return list(_every_registry)
 
 
 async def _start_ticker(fn, seconds: float, label: str) -> None:
@@ -429,7 +441,8 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
     task = asyncio.current_task()
     assert task is not None
     handle = EveryHandle(label, seconds, task)
-    _every_registry.add(handle)
+    with _every_lock:
+        _every_registry.add(handle)
     fn._handle = handle
     fn.cancel = handle.cancel
 
@@ -439,7 +452,8 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
             if inspect.iscoroutine(result):
                 result = await result
         except asyncio.CancelledError:
-            _every_registry.discard(handle)
+            with _every_lock:
+                _every_registry.discard(handle)
             raise
         except Exception as exc:
             _push(
@@ -473,10 +487,10 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         return decorator
 
     def _list() -> list[EveryHandle]:
-        return list(_every_registry)
+        return every_snapshot()
 
     def _cancel_all() -> None:
-        for h in list(_every_registry):
+        for h in every_snapshot():
             h.cancel()
 
     every.list = _list  # type: ignore[attr-defined]
@@ -575,7 +589,8 @@ async def _drain_loop_tasks() -> None:
     for t in targets:
         t.cancel()
     await asyncio.gather(*targets, return_exceptions=True)
-    _every_registry.clear()
+    with _every_lock:
+        _every_registry.clear()
 
 
 def _shutdown(loop: asyncio.AbstractEventLoop) -> None:

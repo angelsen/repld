@@ -34,12 +34,24 @@ __all__ = ["Browser", "BrowserPool", "LazyBrowser"]
 logger = logging.getLogger(__name__)
 
 
+class TabNotFoundError(RuntimeError):
+    """Raised when a target ID or glob pattern matches no tab — distinct from
+    other RuntimeErrors (CDP/ready-signal/reattach failures) so BrowserPool.get()
+    can retry across browsers on this specific error without masking real ones."""
+
+
 _TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$")
 
 
 def _is_target_id(s: str) -> bool:
     """True if s looks like a short target ID (e.g. '9222:a81998')."""
     return bool(_TARGET_ID_RE.match(s))
+
+
+def _split_target(target: str) -> tuple[str, str]:
+    """Split a short target ID like '9222:a1b2c3' into (port_str, prefix)."""
+    port_str, _, prefix = target.partition(":")
+    return port_str, prefix
 
 
 def make_target(port: int, chrome_id: str) -> str:
@@ -164,7 +176,7 @@ class Browser:
 
     async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
         """Resolve a target ID, attaching on demand if needed."""
-        _, prefix = target.split(":", 1)
+        _, prefix = _split_target(target)
         _sid, cdp, chrome_id = self._find_by_prefix(prefix)
         if cdp is not None:
             return Tab(cdp, chrome_id, self.port, ready=ready)
@@ -177,7 +189,9 @@ class Browser:
                 if tab is not None:
                     return tab
 
-        raise RuntimeError(f"No tab '{target}'. Attached: {self._attached_short_ids()}")
+        raise TabNotFoundError(
+            f"No tab '{target}'. Attached: {self._attached_short_ids()}"
+        )
 
     def _attached_short_ids(self) -> list[str]:
         """Short target IDs of all attached sessions, for error messages."""
@@ -228,7 +242,7 @@ class Browser:
                 break
             await asyncio.sleep(0.3)
 
-        raise RuntimeError(f"No tab matching '{pattern}'")
+        raise TabNotFoundError(f"No tab matching '{pattern}'")
 
     @staticmethod
     def _glob_target_id(info: dict, pattern: str, exclude: set[str]) -> str | None:
@@ -314,24 +328,30 @@ class Browser:
 
         if pattern is None:
             # Detach everything
-            session_ids = list(self._session._sessions.keys())
-            for sid in session_ids:
+            sessions = list(self._session._sessions.items())
+            for sid, cdp in sessions:
                 try:
+                    await self._safe_unpin(
+                        Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+                    )
                     await self._session.detach(sid)
                 except Exception as exc:
                     logger.debug("Detach %s: %s", sid, exc)
             self._session._watched_patterns.clear()
-            return f"Detached {len(session_ids)} tab(s). All patterns cleared."
+            return f"Detached {len(sessions)} tab(s). All patterns cleared."
 
         # Detach sessions matching this pattern
-        to_detach: list[str] = []
+        to_detach: list[tuple[str, CDPSession]] = []
         for sid, cdp in list(self._session._sessions.items()):
             url = cdp.target_info.get("url", "")
             if fnmatch(url, pattern):
-                to_detach.append(sid)
+                to_detach.append((sid, cdp))
 
-        for sid in to_detach:
+        for sid, cdp in to_detach:
             try:
+                await self._safe_unpin(
+                    Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+                )
                 await self._session.detach(sid)
             except Exception as exc:
                 logger.debug("Detach %s: %s", sid, exc)
@@ -362,7 +382,7 @@ class Browser:
                 raise RuntimeError(
                     f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
                 )
-            _, prefix = target.split(":", 1)
+            _, prefix = _split_target(target)
             _sid, cdp, _chrome_id = self._find_by_prefix(prefix)
             if cdp is None:
                 raise RuntimeError(
@@ -414,7 +434,7 @@ class Browser:
     async def detach_target(self, target_id: str) -> str:
         """Detach a single target by its short ID (e.g. '9222:abc123').
         Unpins first if the tab is pinned."""
-        prefix = target_id.split(":")[-1]
+        _, prefix = _split_target(target_id)
         sid, cdp, full_id = self._find_by_prefix(prefix)
         if sid is not None and cdp is not None:
             await self._safe_unpin(Tab(cdp, full_id, self.port))
@@ -554,7 +574,7 @@ class BrowserPool:
 
     def browser_for(self, target: str) -> Browser:
         """Resolve a target ID like '42829:abc123' to its Browser instance."""
-        port_str = target.split(":")[0]
+        port_str, _ = _split_target(target)
         try:
             port = int(port_str)
         except ValueError:
@@ -707,9 +727,9 @@ class BrowserPool:
             )
             try:
                 return await b.get(target, timeout=remaining, fresh=fresh, ready=ready)
-            except RuntimeError:
+            except TabNotFoundError:
                 continue
-        raise RuntimeError(
+        raise TabNotFoundError(
             f"No tab matching '{target}' across {len(self._browsers)} browser(s)"
         )
 

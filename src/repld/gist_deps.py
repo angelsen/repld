@@ -64,6 +64,21 @@ def _is_tool_venv() -> bool:
     return "uv/tools/" in sys.prefix
 
 
+def ensure_deps_on_path() -> None:
+    """Prepend the tool-mode deps dir to sys.path if not already there.
+
+    Only in the tool venv (matching install_deps's gating) — in a project
+    venv deps install into the venv itself, and this dir may hold extension
+    modules built for the tool venv's (different) interpreter.
+    """
+    if (
+        _is_tool_venv()
+        and _TOOL_DEPS_DIR.is_dir()
+        and str(_TOOL_DEPS_DIR) not in sys.path
+    ):
+        sys.path.insert(0, str(_TOOL_DEPS_DIR))
+
+
 def _read_project_name(pyproject: Path) -> str | None:
     """Read [project] name from pyproject.toml."""
     import tomllib
@@ -223,8 +238,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        if _is_tool_venv() and str(_TOOL_DEPS_DIR) not in sys.path:
-            sys.path.insert(0, str(_TOOL_DEPS_DIR))
+        ensure_deps_on_path()
         importlib.invalidate_caches()
         count = len(selected)
         _tty_write(

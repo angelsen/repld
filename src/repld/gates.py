@@ -107,9 +107,18 @@ async def _gate(
 
 
 def resolve_gate(gate_id: str, value) -> None:
-    """Called by the stdin reader when the human responds to a gate."""
+    """Called by the stdin reader when the human responds to a gate.
+
+    Terminal and browser-pill callers can race to resolve the same gate —
+    first one wins by design; set_result on an already-done future raises
+    InvalidStateError, which we swallow rather than crash the caller.
+    """
     with _gates_lock:
         fut = _gates.get(gate_id)
-    if fut is not None and not fut.done():
+    if fut is None:
+        return
+    try:
         fut.set_result(value)
-        emit(HumanPromptResponse(gate_id, value))
+    except concurrent.futures.InvalidStateError:
+        return
+    emit(HumanPromptResponse(gate_id, value))

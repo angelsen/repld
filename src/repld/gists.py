@@ -128,7 +128,15 @@ def _register(name: str) -> None:
         _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
         reg: dict = {}
         if _REGISTRY_PATH.is_file():
-            reg = json.loads(_REGISTRY_PATH.read_text("utf-8"))
+            try:
+                reg = json.loads(_REGISTRY_PATH.read_text("utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                _warn_once(
+                    "registry:corrupt",
+                    f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
+                    "rewriting it fresh",
+                )
+                reg = {}
         doc = _extract_doc(src)
         reg[name] = {
             "path": str(src),
@@ -147,7 +155,12 @@ def registry() -> dict:
     if _REGISTRY_PATH.is_file():
         try:
             return json.loads(_REGISTRY_PATH.read_text("utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            _warn_once(
+                "registry:corrupt",
+                f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
+                "treating as empty",
+            )
             return {}
     return {}
 
@@ -756,17 +769,8 @@ def install(dirs: list[Path]) -> None:
     global _installed_dirs
     _installed_dirs = dirs
 
-    # Tool-mode deps dir: gist deps installed via --target land here. Only
-    # prepend it in the tool venv (matching install_deps's gating) — in a
-    # project venv deps install into the venv itself, and this dir may hold
-    # extension modules built for the tool venv's (different) interpreter.
-    deps_dir = gist_deps._TOOL_DEPS_DIR
-    if (
-        gist_deps._is_tool_venv()
-        and deps_dir.is_dir()
-        and str(deps_dir) not in sys.path
-    ):
-        sys.path.insert(0, str(deps_dir))
+    # Tool-mode deps dir: gist deps installed via --target land here.
+    gist_deps.ensure_deps_on_path()
 
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)

@@ -786,9 +786,7 @@ class Tab:
 
     async def _wait_ready(self, timeout: float = 10) -> None:
         """Wait for the ready signal after navigation/reload, then network idle."""
-        ready = self._ready
-        if ready is None:
-            return
+        ready = self._ready or "document.readyState === 'complete'"
         await self._await_ready_signal(ready, timeout)
         await self.wait_for_idle(timeout=2.0, quiet=0.3)
 
