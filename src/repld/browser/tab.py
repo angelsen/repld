@@ -706,6 +706,24 @@ class Tab:
             await asyncio.sleep(delay)
         await self._touch("touchEnd", [])
 
+    async def scroll(
+        self,
+        selector: str,
+        dy: float = 0,
+        dx: float = 0,
+        *,
+        steps: int = 10,
+        duration_ms: int = 300,
+    ) -> None:
+        """Touch-scroll a container by (dx, dy) pixels. Auto-waits up to 2s.
+
+        Sugar over swipe() — resolves selector to its center, then swipes in
+        the opposite direction (scrollBy semantics: positive dy scrolls down,
+        positive dx scrolls right). For scrolling on mobile Chrome via ADB.
+        """
+        cx, cy = await self._element_center(selector)
+        await self.swipe(cx, cy, cx - dx, cy - dy, steps=steps, duration_ms=duration_ms)
+
     async def tree(self) -> list[str]:
         """Compact accessibility tree as text lines.
 

@@ -6,7 +6,7 @@
   `src/pages/open-graph/[...path].ts`) + Starlight `routeMiddleware` injection (docs/cards
   lack `og:image`). Terminal-noir bg + repld logo. Meta-tag plumbing already ships with a
   placeholder default in `SEO.astro`.
-- [ ] Align TerminalHero breakpoint (640px) to the site-wide 560px convention.
+- [x] Align TerminalHero breakpoint (640px) to the site-wide 560px convention (session 011).
 - [x] Deploy the reworked site (`make deploy`) + push `master` (session 010).
 - [x] **Mobile rendering pass** — horizontal overflow fixed (`overflow: hidden` on `.hero`,
   `.sect`, `.editorial .hero`); FAB bottom-right nav with slide-up bottom sheet at ≤560px
@@ -81,19 +81,6 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   Verified live: a binary favicon (ICO, 5430 bytes) round-tripped through the native
   `toBase64()` path with `base64Encoded: true`; a JSON endpoint still auto-parses to a
   dict with `base64Encoded: false` (session 011).
-- [ ] `tab.fetch(url, auth="replay")` — auto-attach auth headers a page's *own* API calls
-  use (bearer token, custom header, CSRF token) without the caller manually extracting
-  them from a captured request first. Came up because an SPA's own axios instance
-  attached a custom `autel-token` header via an interceptor, invisible to a raw in-page
-  `fetch()` — token lived in `localStorage`, requiring a manual extract-and-pass-header
-  step every call. Rejected "just support axios" as too narrow (axios instances are
-  usually closed over inside a bundled module, not exposed on `window` — wouldn't
-  generalize to ky/custom-fetch-wrapper/GraphQL-client apps). Better shape: grab the
-  most recent captured request to the same origin from `tab.network()`, diff out
-  standard browser-set headers, merge the rest into the outgoing `fetch()` — works
-  regardless of *how* the page attached the header. Bigger design surface (deciding
-  which headers are "browser-set" vs app-set, per-origin caching) — needs a real design
-  pass before implementing.
 - [x] Console error dedup — cross-tab duplicates within 2s collapsed into one push with count.
   Separate 30s hint window shows `browser.suppress("...")` nudge after 3 occurrences (session 010).
 - [x] Console error suppress — `browser.suppress(substring)` mutes matching errors. Persists
@@ -120,7 +107,12 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 ## Features (from session 002 backlog)
 
 - [x] `tab.wait_for_idle()` — network-quiet without full observation pipeline (already implemented)
-- [ ] `tab.scroll(selector, dy)` — sugar over swipe for containers
+- [x] `tab.scroll(selector, dy=0, dx=0)` — sugar over swipe for containers; resolves
+  selector to its center and swipes in the opposite direction (scrollBy semantics:
+  positive dy scrolls down, positive dx scrolls right). Verified the coordinate math
+  live (stubbed `swipe()` to capture args) — real touch-gesture scrolling doesn't
+  register reliably in this headless/CDP setup regardless, an environment quirk
+  unrelated to the new code (session 011).
 - [ ] Safari/iOS support — WebKit Inspector over usbmuxd (gist, not core)
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script
 - [ ] Vite plugin — auto-inject `data-testid` in dev mode (SvelteKit + Astro)

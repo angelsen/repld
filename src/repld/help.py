@@ -463,6 +463,12 @@ Convention: add data-testid to your root layout component.
       Touch swipe: touchStart → touchMove × steps → touchEnd.
       For scrolling on mobile Chrome via ADB.
 
+  tab.scroll(selector, dy=0, dx=0, *, steps=10, duration_ms=300) → None
+      Touch-scroll a container by (dx, dy) pixels. Sugar over swipe() —
+      resolves selector to its center, swipes the opposite direction
+      (scrollBy semantics: positive dy scrolls down, positive dx scrolls
+      right). Auto-waits up to 2s for the element.
+
   tab.tree()                                                  → list[str]
       Compact accessibility tree as text lines.  Crosses iframes — discovers
       attached iframe children by matching parentFrameId, inlines their trees.
@@ -1065,6 +1071,7 @@ Tab (async unless noted):
   tab.click(selector)                              → None (auto-waits 2s, mouse event)
   tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
+  tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, press_enter=)      → None (clears first, auto-waits)
   tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter")
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
@@ -1151,9 +1158,10 @@ Touch vs mouse:
   tab.click()  — Input.dispatchMouseEvent (works everywhere)
   tab.tap()    — Input.dispatchTouchEvent (fires touchstart/touchend)
   tab.swipe()  — touch sequence for scrolling
+  tab.scroll() — swipe sugar: scroll a container by (dx, dy) pixels
 
   Touch events may hang on complex apps (React, Messenger) where JS handlers
-  block. tap/swipe have a 3s timeout and raise TimeoutError cleanly.
+  block. tap/swipe/scroll have a 3s timeout and raise TimeoutError cleanly.
 
 Target IDs: "{port}:{6-hex}" (e.g. 9222:887d3d). Stable across navigation.
 Browser(port=N) creates a standalone instance for non-default ports (e.g. ADB-forwarded).

@@ -19,6 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard sidebar: left rail listing all live repld sessions (project name, uptime, status dot), with the current session highlighted and siblings linking to their own dashboard. New "Connections" tab shows per-port browser connections, expandable to individual targets, with disconnect/detach buttons
 - `no_display(value)` builtin: return a value from a cell without the auto-display hook re-printing it, while still binding `_`/`_N` and surviving direct assignment (`x = await foo()`) for programmatic use — for functions that already print their own output
 - `repld browser` subcommand: re-execs `repld` under `uv run` with the `browser` extra (`duckdb`+`websockets`), so browser tools work in any project without adding `repld-tool` as a dependency. Detects and preserves a local editable checkout (via `direct_url.json` distribution metadata) instead of silently swapping to the published package
+- `tab.scroll(selector, dy=0, dx=0)`: touch-scroll a container by pixel offset — sugar over `swipe()` that resolves the selector to its center and swipes the opposite direction (scrollBy semantics: positive `dy` scrolls down, positive `dx` scrolls right)
 
 ### Changed
 
