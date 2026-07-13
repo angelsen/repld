@@ -145,7 +145,10 @@ def _register(name: str) -> None:
 def registry() -> dict:
     """Read the gist registry. Returns {name: {path, description, project, last_used}}."""
     if _REGISTRY_PATH.is_file():
-        return json.loads(_REGISTRY_PATH.read_text("utf-8"))
+        try:
+            return json.loads(_REGISTRY_PATH.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
     return {}
 
 
@@ -731,7 +734,11 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
         is_legacy = any(isinstance(t, dict) and t.get("name") == name for t in legacy)
         if not is_legacy and name not in tool_names:
             continue
-        mod = _import_gist(p)
+        try:
+            mod = _import_gist(p)
+        except Exception as exc:
+            _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
+            continue
         handler = getattr(mod, f"_tool_{name}", None)
         if handler is None:
             raise AttributeError(

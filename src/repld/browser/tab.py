@@ -1075,7 +1075,7 @@ class Tab:
 
     async def cdp(self, method: str, **params: Any) -> dict:
         """Raw CDP passthrough."""
-        return await self._session.execute(method, params if params else None)
+        return await self._exec(method, params if params else None)
 
     def __repr__(self) -> str:
         return f"<Tab {self.target_id} {self.url!r}>"
