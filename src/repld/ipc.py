@@ -12,9 +12,10 @@ server-initiated notifications (channel pushes) to all connected sessions.
 import json
 import os
 import socket
+import sys
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import IO, Callable
 
 Handler = Callable[[dict, "Session"], dict | None]
 
@@ -77,6 +78,36 @@ def atomic_write_json(
     os.replace(tmp, path)
 
 
+def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
+    """Write `prompt` to the real terminal (bypassing any stdout/stderr tee)
+    and read one stripped, lowercased line of response.
+
+    Defaults to sys.__stderr__ / sys.__stdin__. Returns None if the real
+    terminal streams aren't available (e.g. no controlling tty) rather than
+    raising, so callers can treat "can't ask" the same as "declined".
+    """
+    out = stream if stream is not None else sys.__stderr__
+    stdin = sys.__stdin__
+    if out is None or stdin is None:
+        return None
+    out.write(prompt)
+    out.flush()
+    try:
+        return stdin.readline().strip().lower()
+    except OSError:
+        return None
+
+
+def default_socket_path() -> Path:
+    """Resolved at call time — cwd may change between import and run_kernel."""
+    return Path(os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock")))
+
+
+def lock_for(socket_path: Path) -> Path:
+    """Lock file lives next to the socket: /path/to/repld.sock → /path/to/repld.lock."""
+    return socket_path.with_suffix(".lock")
+
+
 def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
     """Resolve the kernel lockfile path from --socket flags, REPLD_SOCKET env,
     or the cwd default. Shared by bridge and exec subcommands.
@@ -101,7 +132,7 @@ def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
         rest.append(arg)
         i += 1
     target = sock or os.environ.get("REPLD_SOCKET")
-    lock = Path(target).with_suffix(".lock") if target else Path.cwd() / ".pyrepl.lock"
+    lock = lock_for(Path(target)) if target else Path.cwd() / ".pyrepl.lock"
     return lock, rest
 
 

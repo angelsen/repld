@@ -562,12 +562,17 @@ async def post_observe(
     # Settle across target + iframe children
     settle_ms = await settle(all_tabs, timeout=timeout, quiet=quiet)
 
-    # Build composed tree (re-discover iframes, use same children)
-    tree_lines, _ = await compose_tree(tab, session)
+    # Build composed tree — re-discovers iframes, which may differ from
+    # pre.iframe_children if the mutation added/removed one.
+    tree_lines, fresh_iframes = await compose_tree(tab, session)
 
-    # Network and console deltas
-    net_entries = network_delta(all_tabs, pre.har_snapshots)
-    console_lines = console_delta(all_tabs, pre.console_snapshots)
+    # Deltas use the post-mutation iframe set so a newly-appeared iframe's
+    # network/console activity isn't silently dropped (a stale/missing
+    # target_id in pre.*_snapshots just means "everything is new" — see
+    # network_delta/console_delta's pre_ids.get(..., 0) default).
+    all_tabs_post = [tab] + fresh_iframes
+    net_entries = network_delta(all_tabs_post, pre.har_snapshots)
+    console_lines = console_delta(all_tabs_post, pre.console_snapshots)
 
     obs = Observation(
         url=tab.url,

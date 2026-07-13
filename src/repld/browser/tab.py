@@ -27,6 +27,14 @@ from .selector import resolve as _resolve_selector
 
 __all__ = ["Tab", "BrowserJSError"]
 
+# Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
+# heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
+# Python-side give-up point (interval * max misses) via the same constants,
+# substituted into _PIN_JS at injection time (see tab.py:_inject_pin).
+_HEARTBEAT_INTERVAL_S = 5
+_HEARTBEAT_MAX_MISSES = 3
+_HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
+
 
 def _format_stack_trace(stack_trace: dict | None) -> str:
     """Render a CDP Runtime.StackTrace as a JS-style multi-line stack string."""
@@ -108,7 +116,10 @@ class Tab:
 
     @capture_bodies.setter
     def capture_bodies(self, value: bool) -> None:
-        self._session.capture_bodies = value
+        """Fire-and-forget toggle — the flag flips only once enable_fetch()/
+        disable_fetch() actually completes, not when this setter returns.
+        Callers that need the ordering guarantee should await
+        enable_capture()/disable_capture() instead."""
         loop = self._session._loop
         if loop is None:
             raise RuntimeError("tab session has no event loop (not attached)")
@@ -218,7 +229,10 @@ class Tab:
         """Set up the binding + inject the pill JS + re-apply the reason label."""
         session = self._session
         await self._setup_binding()
-        await self.js(_PIN_JS)
+        js = _PIN_JS.replace("%STALE_MS%", str(_HEARTBEAT_STALE_MS)).replace(
+            "%CHECK_MS%", str(_HEARTBEAT_INTERVAL_S * 1000)
+        )
+        await self.js(js)
         if session._pin_reason:
             await self.js(
                 f"__repld_update({{reason: {json.dumps(session._pin_reason)}}})"
@@ -247,13 +261,13 @@ class Tab:
         ) % json.dumps(origin)
         misses = 0
         while True:
-            await asyncio.sleep(5)
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
             try:
                 status = await self.js(check)
                 misses = 0
             except Exception:
                 misses += 1
-                if misses >= 3:
+                if misses >= _HEARTBEAT_MAX_MISSES:
                     break
                 continue
             if status == "ok":
@@ -263,7 +277,7 @@ class Tab:
                     await self._inject_pin()
                 except Exception:
                     misses += 1
-                    if misses >= 3:
+                    if misses >= _HEARTBEAT_MAX_MISSES:
                         break
                 continue
             # Cross-origin — pin contract broken.

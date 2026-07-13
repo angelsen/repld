@@ -32,8 +32,10 @@ _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None
 )
 _tasks: dict[str, dict] = {}
+_tasks_lock = threading.Lock()
 _CLOSED = object()  # sentinel: spill file was open, now closed by pruning
 _PRUNE_AGE = 300.0  # seconds after done_event before closing spill handle
+_EVICT_AGE = 3600.0  # seconds after done_event before dropping the entry entirely
 _PRUNE_EVERY = 50  # run pruning every N finalize() calls
 _finalize_count = 0
 
@@ -115,8 +117,22 @@ def new_task() -> tuple[str, dict]:
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
         "label": None,
     }
-    _tasks[task_id] = task
+    with _tasks_lock:
+        _tasks[task_id] = task
     return task_id, task
+
+
+def get(task_id: str) -> dict | None:
+    """Thread-safe lookup — callers outside this module should use this
+    instead of reaching into `_tasks` directly."""
+    with _tasks_lock:
+        return _tasks.get(task_id)
+
+
+def items() -> list[tuple[str, dict]]:
+    """Thread-safe snapshot of all tasks, for iteration (watchdog, dashboard)."""
+    with _tasks_lock:
+        return list(_tasks.items())
 
 
 def _read_from(task: dict, offset: int = 0) -> str:
@@ -200,7 +216,7 @@ def spill_marker(path: str) -> str:
 
 def snapshot(task_id: str) -> dict | None:
     """State dict for a task, or None for an unknown task_id."""
-    task = _tasks.get(task_id)
+    task = get(task_id)
     if task is None:
         return None
     # Full re-read per poll is fine at current poll rates; revisit with a
@@ -220,7 +236,7 @@ def snapshot(task_id: str) -> dict | None:
 
 
 def mark_nudged(task_id: str) -> None:
-    task = _tasks.get(task_id)
+    task = get(task_id)
     if task is None:
         return
     task["nudged"] = True
@@ -237,7 +253,7 @@ def mark_nudged(task_id: str) -> None:
 
 def finalize(task_id: str) -> None:
     global _finalize_count
-    task = _tasks.get(task_id)
+    task = get(task_id)
     if task is None:
         return
     # Don't close spill_file immediately: background asyncio tasks spawned by
@@ -252,17 +268,29 @@ def finalize(task_id: str) -> None:
             pass
     task["done_event"].set()
     task["done_at"] = time.monotonic()
+    # Drop the asyncio.Task reference now — it's no longer needed once the
+    # cell is done, and holding it keeps the whole coroutine frame chain alive.
+    task["asyncio_task"] = None
     _finalize_count += 1
     if _finalize_count % _PRUNE_EVERY == 0:
         _prune_spill_files()
 
 
 def _prune_spill_files() -> None:
-    """Close spill file handles on tasks completed more than _PRUNE_AGE ago."""
+    """Close spill file handles on tasks completed more than _PRUNE_AGE ago,
+    and drop entries entirely once they're older than _EVICT_AGE — otherwise
+    a long-running kernel accumulates one dict entry per exec/defer call
+    forever."""
     now = time.monotonic()
-    for task in list(_tasks.values()):
+    evict: list[str] = []
+    for task_id, task in items():
         done_at = task.get("done_at")
-        if done_at is None or now - done_at < _PRUNE_AGE:
+        if done_at is None:
+            continue
+        if now - done_at >= _EVICT_AGE:
+            evict.append(task_id)
+            continue
+        if now - done_at < _PRUNE_AGE:
             continue
         fp = task.get("spill_file")
         if fp is None or fp is _CLOSED:
@@ -272,3 +300,7 @@ def _prune_spill_files() -> None:
         except Exception:
             pass
         task["spill_file"] = _CLOSED
+    if evict:
+        with _tasks_lock:
+            for task_id in evict:
+                _tasks.pop(task_id, None)

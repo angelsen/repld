@@ -165,7 +165,7 @@ def _write_styled(
 
 
 def _emit_elision_notice(task_id: str, last_was_nl: bool) -> None:
-    path = tasks._tasks.get(task_id, {}).get("spill_path") or f"task={task_id}"
+    path = (tasks.get(task_id) or {}).get("spill_path") or f"task={task_id}"
     prefix = "" if last_was_nl else "\n"
     _out(
         f"{prefix}{_DIM}… cell {task_id[:8]} output elided "

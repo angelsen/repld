@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gists
+from .ipc import tty_prompt
 
 _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
 
@@ -151,10 +152,7 @@ def _tty_write(msg: str) -> None:
 
 def _tty_input(prompt: str) -> str:
     """Prompt on real stderr, read from real stdin."""
-    _tty_write(prompt)
-    stdin = sys.__stdin__
-    assert stdin is not None
-    return stdin.readline().strip().lower()
+    return tty_prompt(prompt) or ""
 
 
 def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:

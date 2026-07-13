@@ -29,29 +29,18 @@ from pathlib import Path
 
 from . import events, ipc, sessions, tasks
 from .events import CellDone, CellStart, ChannelPush
-from .ipc import atomic_write_json, read_lock
+from .ipc import atomic_write_json, default_socket_path, lock_for, read_lock
 from .protocol import Dispatcher
 from .tasks import _current_task, install_tee
-
-
-def _default_socket_path() -> Path:
-    """Resolved at call time — cwd may change between import and run_kernel."""
-    return Path(os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock")))
-
 
 # ---------------------------------------------------------------------------
 # Lock file
 # ---------------------------------------------------------------------------
 
 
-def _lock_for(socket_path: Path) -> Path:
-    """Lock file lives next to the socket: /path/to/repld.sock → /path/to/repld.lock."""
-    return socket_path.with_suffix(".lock")
-
-
 def _check_existing_kernel(socket_path: Path) -> None:
     """Refuse to start if another repld kernel owns this socket."""
-    lock_path = _lock_for(socket_path)
+    lock_path = lock_for(socket_path)
     lock = read_lock(lock_path)
     if isinstance(lock, dict):
         raise SystemExit(
@@ -69,7 +58,7 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
     }
     if dashboard_port is not None:
         info["dashboard_port"] = dashboard_port
-    atomic_write_json(_lock_for(socket_path), info)
+    atomic_write_json(lock_for(socket_path), info)
 
 
 _active_lock_path: Path | None = None
@@ -127,7 +116,7 @@ def _banner(
     dashboard_port: int | None = None,
 ) -> str:
     lines = [
-        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {_lock_for(socket_path).name})",
+        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {lock_for(socket_path).name})",
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
         f"(REPLD_LOOP_BLOCK_THRESHOLD)",
         f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
@@ -170,6 +159,11 @@ def _notify(content, **meta) -> None:
     push_channel(str(content), meta)
 
 
+def _push(content: str, kind: str, **meta: str) -> None:
+    """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once."""
+    push_channel(content, {"kind": kind, **meta})
+
+
 def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
     """Route otherwise-unretrieved asyncio task exceptions to a channel push.
 
@@ -185,13 +179,11 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
         summary = f"{type(exc).__name__}: {exc}"
     else:
         summary = msg
-    push_channel(
+    _push(
         f"[repld] bg asyncio task error in {task_name}: {summary}",
-        {
-            "kind": "bg_task_error",
-            "task_name": str(task_name),
-            "exception": type(exc).__name__ if exc else "",
-        },
+        "bg_task_error",
+        task_name=str(task_name),
+        exception=type(exc).__name__ if exc else "",
     )
 
 
@@ -203,12 +195,12 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
 def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | None":
     """Pick the oldest active user task to cancel.
 
-    Prefers tracked cell/defer tasks (insertion-ordered in tasks._tasks,
+    Prefers tracked cell/defer tasks (insertion-ordered in tasks.items(),
     asyncio.Task referenced directly via task["asyncio_task"]). Falls back
     to any non-internal loop task — typically an @every ticker — sorted by
     name for determinism.
     """
-    for task in list(tasks._tasks.values()):
+    for _tid, task in tasks.items():
         if task["done_event"].is_set():
             continue
         atask = task.get("asyncio_task")
@@ -247,19 +239,15 @@ def _loop_watchdog(
         try:
             future.result(timeout=threshold)
         except concurrent.futures.TimeoutError:
-            active = [
-                tid for tid, t in tasks._tasks.items() if not t["done_event"].is_set()
-            ]
+            active = [tid for tid, t in tasks.items() if not t["done_event"].is_set()]
             active_str = ",".join(active) if active else "none"
-            push_channel(
+            _push(
                 f"[repld] event loop blocked > {threshold}s "
                 f"(active tasks: {active_str}) — likely sync I/O on the "
                 "shared loop; wrap blocking calls in asyncio.to_thread()",
-                {
-                    "kind": "loop_blocked",
-                    "threshold_s": str(threshold),
-                    "active_tasks": active_str,
-                },
+                "loop_blocked",
+                threshold_s=str(threshold),
+                active_tasks=active_str,
             )
             # Escalate: wait up to kill_threshold total, then cancel the
             # longest-running non-internal task.
@@ -271,9 +259,10 @@ def _loop_watchdog(
                 if victim is not None:
                     victim_name = victim.get_name()
                     loop.call_soon_threadsafe(victim.cancel)
-                    push_channel(
+                    _push(
                         f"[repld] killed blocked task: {victim_name}",
-                        {"kind": "loop_kill", "task": victim_name},
+                        "loop_kill",
+                        task=victim_name,
                     )
         if stop.wait(interval):
             return
@@ -288,7 +277,7 @@ _exec_count = itertools.count(1)
 
 def _maybe_push_done(task_id: str) -> None:
     """Push channel notification for nudged tasks on completion."""
-    task = tasks._tasks.get(task_id)
+    task = tasks.get(task_id)
     if task is None or not task.get("nudged"):
         return
     cutoff = task.get("nudge_cutoff", 0)
@@ -334,7 +323,8 @@ async def _task_scope(task_id: str):
     CellDone, pushes channel) on the way out regardless of how the body exits.
     """
     _current_task.set(task_id)
-    task = tasks._tasks[task_id]
+    task = tasks.get(task_id)
+    assert task is not None, f"task {task_id} missing from registry"
     # Stash the asyncio.Task handle so cancel_task can call .cancel() on it
     # directly (cf.Future.cancel() on a running threadsafe-launched task
     # doesn't propagate reliably).
@@ -452,9 +442,11 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
             _every_registry.discard(handle)
             raise
         except Exception as exc:
-            push_channel(
+            _push(
                 f"@every {label}: {type(exc).__name__}: {exc}",
-                {"kind": "every", "label": label, "error": "1"},
+                "every",
+                label=label,
+                error="1",
             )
         else:
             if result is not None:
@@ -518,7 +510,7 @@ class _Context:
         """Attempt to cancel a running cell. Returns True if the cancellation
         request was scheduled. Cannot preempt tight sync loops — only
         await-yielding code is cancellable."""
-        task = tasks._tasks.get(task_id)
+        task = tasks.get(task_id)
         if task is None:
             return False
         asyncio_task = task.get("asyncio_task")
@@ -536,9 +528,11 @@ class _Context:
 def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     if not path.exists():
         sys.stderr.write(f"\033[31m[repld] --init file not found: {path}\033[0m\n")
-        push_channel(
+        _push(
             f"[repld] --init file not found: {path}",
-            {"kind": "init_error", "file": str(path), "reason": "not_found"},
+            "init_error",
+            file=str(path),
+            reason="not_found",
         )
         return
     n = next(_exec_count)
@@ -556,9 +550,10 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     except Exception:
         tb = traceback.format_exc()
         sys.stderr.write(f"\033[31m[repld] --init {path.name} raised:\n{tb}\033[0m\n")
-        push_channel(
+        _push(
             f"[repld] --init {path.name} raised: {tb.rstrip()}",
-            {"kind": "init_error", "file": str(path)},
+            "init_error",
+            file=str(path),
         )
 
 
@@ -599,21 +594,13 @@ def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
     """Ask on the real terminal (bypassing the not-yet-wired tee) whether to
     reconnect Chrome ports / re-watch patterns from the previous kernel run.
     """
-    out = sys.__stdout__
-    stdin = sys.__stdin__
-    if out is None or stdin is None:
-        return False
     parts = []
     if ports:
         parts.append(f"ports {', '.join(str(p) for p in ports)}")
     if patterns:
         parts.append(f"patterns {', '.join(patterns)}")
-    out.write(f"repld: restore previous browser session ({'; '.join(parts)})? [Y/n] ")
-    out.flush()
-    try:
-        answer = stdin.readline().strip().lower()
-    except OSError:
-        return False
+    prompt = f"repld: restore previous browser session ({'; '.join(parts)})? [Y/n] "
+    answer = ipc.tty_prompt(prompt, stream=sys.__stdout__)
     return answer in ("", "y", "yes")
 
 
@@ -801,7 +788,7 @@ def _start_services(
     _restore_browser_state(hint, loop, interactive=display and sys.stdin.isatty())
 
     _write_lockfile(sock_path, dashboard_port=dashboard_port)
-    _active_lock_path = _lock_for(sock_path)
+    _active_lock_path = lock_for(sock_path)
     atexit.register(_cleanup_lockfile)
     # _shutdown() also stops the server; this covers abnormal exits that
     # never reach it. stop_server is idempotent, so the overlap is safe.
@@ -848,7 +835,7 @@ def run_kernel(
     display: bool = True,
     init_file: str | None = None,
 ) -> int:
-    sock_path = Path(socket_path) if socket_path else _default_socket_path()
+    sock_path = Path(socket_path) if socket_path else default_socket_path()
     _check_existing_kernel(sock_path)
 
     loop = _start_loop()

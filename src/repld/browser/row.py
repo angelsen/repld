@@ -19,6 +19,10 @@ def size_str(size_bytes: int) -> str:
 class Row:
     """A row from a HAR or console query."""
 
+    # Discriminator — one of "network", "console", "sse", "lifecycle", set by
+    # the corresponding _row_from_* factory. "" only for a bare Row() (e.g. tests).
+    kind: str = ""
+
     # HAR fields (network rows)
     id: int = 0
     request_id: str = ""
@@ -73,12 +77,12 @@ class Row:
         return self._session.fetch_body(self.request_id)
 
     def __repr__(self) -> str:
-        if self.method and self.url:
+        if self.kind == "network":
             size_fmt = size_str(self.size) if self.size else "0B"
             time_str = f"{self.time_ms}ms" if self.time_ms is not None else "?"
             rid = f" rid={self.request_id}" if self.request_id else ""
             return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_fmt}){rid}>"
-        if self.level:
+        if self.kind == "console":
             text = self.text if len(self.text) <= 200 else self.text[:200] + "…"
             loc = ""
             if self.stack_url:
@@ -86,11 +90,13 @@ class Row:
                 if self.stack_line:
                     loc += f":{self.stack_line}"
             return f"<Console {self.level}: {text}{loc}>"
-        if self.data is not None:
-            data = self.data if len(self.data) <= 200 else self.data[:200] + "…"
+        if self.kind == "sse":
+            data = self.data or ""
+            if len(data) > 200:
+                data = data[:200] + "…"
             name = f" {self.event_name}" if self.event_name else ""
             return f"<SSE{name}: {data}>"
-        if self.name is not None:
+        if self.kind == "lifecycle":
             return f"<Lifecycle {self.name}>"
         return f"<Row id={self.id}>"
 
@@ -111,6 +117,7 @@ def _row_from_har(cols: tuple, session: CDPSession) -> Row:
     #   frames_received, started_datetime, last_activity, target, body_status,
     #   mime_family, is_asset, initiator_type, initiator_url
     return Row(
+        kind="network",
         id=cols[0] or 0,
         request_id=cols[1] or "",
         redirect_index=cols[2] or 0,
@@ -143,6 +150,7 @@ def _row_from_console(cols: tuple, session: CDPSession) -> Row:
     # console_entries columns: id, level, source, text, stack_url, stack_line,
     #   stack_function, timestamp, target
     return Row(
+        kind="console",
         id=cols[0] or 0,
         level=cols[1] or "",
         source=cols[2] or "",
@@ -161,6 +169,7 @@ def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
     # sse_entries columns: id, request_id, event_name, event_id, data,
     #   timestamp, target
     return Row(
+        kind="sse",
         id=cols[0] or 0,
         request_id=cols[1] or "",
         event_name=cols[2] or "",
@@ -176,6 +185,7 @@ def _row_from_lifecycle(cols: tuple, session: CDPSession) -> Row:
     """Build a Row from a lifecycle_entries query result tuple."""
     # lifecycle_entries columns: id, frame_id, loader_id, name, timestamp, target
     return Row(
+        kind="lifecycle",
         id=cols[0] or 0,
         frame_id=cols[1] or "",
         loader_id=cols[2] or "",

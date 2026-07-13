@@ -766,7 +766,7 @@ class Dispatcher:
     # ------------------------------------------------------------------
 
     def _bh_watch(self, browser, args):
-        return {"result": self._run_async(browser.watch(args["pattern"]))}
+        return self._run_async(browser.watch(args["pattern"]))
 
     def _bh_detach(self, browser, args):
         result = self._run_async(
@@ -774,7 +774,7 @@ class Dispatcher:
         )
         if result is None:
             result = self._run_async(browser.detach(args.get("pattern")))
-        return {"result": result}
+        return result
 
     def _bh_tabs(self, browser, args):
         return browser.format_tabs_nested()
@@ -783,7 +783,7 @@ class Dispatcher:
         return self._run_async(browser.pages())
 
     def _bh_clear(self, browser, args):
-        return {"result": browser.clear(args.get("target"))}
+        return browser.clear(args.get("target"))
 
     def _bh_controls(self, browser, args):
         tab = self._get_tab(browser, args)
@@ -808,6 +808,11 @@ class Dispatcher:
     def _bh_js(self, browser, args):
         tab = self._get_tab(browser, args)
         ap = args.get("await_promise", True)
+        # Wrapped (unlike watch/detach/clear's fixed prose messages): the JS
+        # result is dynamically typed (str/int/bool/dict/list/None) and
+        # _browser_tool's isinstance(result, str) check would otherwise treat
+        # a string-valued JS result as pre-formatted text and pass it through
+        # unencoded instead of JSON-encoding it.
         return {"result": self._run_async(tab.js(args["code"], await_promise=ap))}
 
     def _bh_network(self, browser, args):

@@ -261,8 +261,8 @@ def phase_6(kernel: Kernel) -> None:
         )
         result_text = resp["result"]["content"][0]["text"]
         assert_true(
-            "result" in result_text,
-            f"browser_watch returned result (got {result_text!r})",
+            "attached" in result_text.lower(),
+            f"browser_watch returned attach summary (got {result_text!r})",
         )
         print(f"  ✓ browser_watch: {result_text[:80]!r}")
 

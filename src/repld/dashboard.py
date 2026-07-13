@@ -25,13 +25,20 @@ _hint_path: Path | None = None
 _token: str = ""
 
 
+def _bound_port() -> int | None:
+    """The dashboard's listening port, or None before/without a bound server."""
+    if _server and _server.sockets:
+        return _server.sockets[0].getsockname()[1]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # State collection
 # ---------------------------------------------------------------------------
 
 
 def _collect_state() -> dict:
-    active = sum(1 for t in tasks._tasks.values() if not t["done_event"].is_set())
+    active = sum(1 for _tid, t in tasks.items() if not t["done_event"].is_set())
     from .kernel import _every_registry
 
     tickers = [{"label": h.label, "seconds": h.seconds} for h in _every_registry]
@@ -80,9 +87,7 @@ def save_hint() -> None:
     browser = getattr(__main__, "browser", None)
     pool = browser.peek() if browser else None
     hint: dict[str, Any] = {
-        "dashboard_port": _server.sockets[0].getsockname()[1]
-        if _server and _server.sockets
-        else 0,
+        "dashboard_port": _bound_port() or 0,
         "token": _token,
     }
     if pool is not None:
@@ -253,9 +258,9 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 
 def _cors_header(origin: str | None) -> str:
     """Echo Access-Control-Allow-Origin only for this dashboard's own origin."""
-    if not origin or not _server or not _server.sockets:
+    port = _bound_port()
+    if not origin or port is None:
         return ""
-    port = _server.sockets[0].getsockname()[1]
     if origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
         return f"Access-Control-Allow-Origin: {origin}\r\n"
     return ""
@@ -268,10 +273,11 @@ def _host_allowed(host: str | None) -> bool:
     browser's eyes — no Origin header, so CORS can't stop it from reading
     GET / (and the embedded token). Its requests carry Host: evil.com:<port>.
     """
-    if not host or not _server or not _server.sockets:
+    port = _bound_port()
+    if not host or port is None:
         return False
-    port = _server.sockets[0].getsockname()[1]
-    return host in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}")
+    # IPv4 loopback only — _start() binds "127.0.0.1", never "::1".
+    return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
 
 async def _send_response(

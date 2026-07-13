@@ -283,12 +283,14 @@ _PIN_JS = r"""
   };
 
   // ---- Heartbeat (liveness) ----
+  // %STALE_MS%/%CHECK_MS% substituted at injection time from tab.py's
+  // _HEARTBEAT_INTERVAL_S/_HEARTBEAT_MAX_MISSES — keep the two in lockstep.
   window.__repld_hb = Date.now();
   window.__repld_hb_timer = setInterval(function() {
-    if (Date.now() - window.__repld_hb > 15000) {
+    if (Date.now() - window.__repld_hb > %STALE_MS%) {
       if (window.__repld_remove) window.__repld_remove();
     }
-  }, 5000);
+  }, %CHECK_MS%);
 
   // ---- beforeunload guard ----
   window.__repld_beforeunload = function(e) {

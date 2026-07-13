@@ -148,6 +148,20 @@ class Browser:
                 return sid, cdp, chrome_id
         return None, None, ""
 
+    async def _attach_and_wrap(
+        self, tid: str, t: dict | None = None, *, ready: str | None = None
+    ) -> "Tab | None":
+        """Attach, enable Fetch body capture, and wrap the result in a Tab.
+
+        Returns None if attach failed (e.g. a concurrent attach for the same
+        target is already in flight) — callers keep searching in that case.
+        """
+        cdp = await self._session.attach(tid, t)
+        if cdp is None:
+            return None
+        await cdp.enable_fetch()
+        return Tab(cdp, tid, self.port, ready=ready)
+
     async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
         """Resolve a target ID, attaching on demand if needed."""
         _, prefix = target.split(":", 1)
@@ -159,10 +173,9 @@ class Browser:
         for t in await self._session.list_targets():
             tid = t.get("targetId", "")
             if tid and tid[:6].lower() == prefix:
-                cdp = await self._session.attach(tid, t)
-                if cdp is not None:
-                    await cdp.enable_fetch()
-                    return Tab(cdp, tid, self.port, ready=ready)
+                tab = await self._attach_and_wrap(tid, t, ready=ready)
+                if tab is not None:
+                    return tab
 
         raise RuntimeError(f"No tab '{target}'. Attached: {self._attached_short_ids()}")
 
@@ -207,10 +220,9 @@ class Browser:
             for t in await self._session.list_targets():
                 tid = self._glob_target_id(t, pattern, exclude)
                 if tid:
-                    cdp = await self._session.attach(tid, t)
-                    if cdp is not None:
-                        await cdp.enable_fetch()
-                        return Tab(cdp, tid, self.port, ready=ready)
+                    tab = await self._attach_and_wrap(tid, t, ready=ready)
+                    if tab is not None:
+                        return tab
 
             if deadline is None or asyncio.get_running_loop().time() >= deadline:
                 break
@@ -290,11 +302,10 @@ class Browser:
         # re-looked-up the tab via the sync _resolve_attached(), which raced the attach:
         # the new session isn't always registered with its targetId yet, so the lookup
         # would fail with "No attached tab". attach()'s return value is authoritative.
-        cdp = await self._session.attach(tid)
-        if cdp is None:
+        tab = await self._attach_and_wrap(tid)
+        if tab is None:
             raise RuntimeError(f"Failed to attach to new tab '{tid}'")
-        await cdp.enable_fetch()
-        return Tab(cdp, tid, self.port)
+        return tab
 
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""
@@ -681,11 +692,21 @@ class BrowserPool:
             b = self.browser_for(target)
             return await b.get(target, ready=ready)
         await self._ensure_any()
+        # One deadline shared across all browsers — otherwise each browser
+        # gets the full `timeout`, so N browsers can take up to N*timeout.
+        deadline = (
+            asyncio.get_running_loop().time() + timeout if timeout is not None else None
+        )
         for b in self._browsers.values():
             if not b._connected:
                 continue
+            remaining = (
+                max(0.0, deadline - asyncio.get_running_loop().time())
+                if deadline is not None
+                else None
+            )
             try:
-                return await b.get(target, timeout=timeout, fresh=fresh, ready=ready)
+                return await b.get(target, timeout=remaining, fresh=fresh, ready=ready)
             except RuntimeError:
                 continue
         raise RuntimeError(

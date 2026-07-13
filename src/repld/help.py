@@ -393,7 +393,7 @@ object.  Read this instead of diving into source code.
 
   browser.tabs                                       # list[Tab] currently attached
   browser.pages()                                    # all Chrome targets (dict list)
-  browser.patterns()                                 # active watch patterns
+  browser.patterns                                   # active watch patterns
   browser.detach("*example.com*")                    # detach pattern + tabs
   browser.detach()                                   # detach everything
   browser.clear(target=)                             # clear all captured data
@@ -936,6 +936,9 @@ def build_instructions() -> str:
                 # Usage override — show import of class name + usage hint
                 class_name = sig.split("(")[0]
                 hint = f"from {name} import {class_name}; {usage}"
+            elif usage:
+                # Usage override on a classless (function-based) gist
+                hint = f"import {name}; {usage}"
             elif sig:
                 hint = f"from {name} import {sig}"
             else:
@@ -1119,7 +1122,7 @@ Browser:
   browser.tabs                                   → list[Tab]
   browser.pages()                                → list[dict]
   browser.detach(pattern=)                       → str
-  browser.patterns()                             → list[str]  active watch patterns
+  browser.patterns                               → list[str]  active watch patterns
   browser.clear(target=)                         → str
   browser.disconnect(port=)                      → str  (unpins tabs first; port=None disconnects all)
   browser.suppress(pattern)                      → str  mute console errors matching substring
@@ -1134,7 +1137,7 @@ Browser:
   Convention: add data-testid to your root layout component.
 
 Selectors (click/tap/type_text):
-  .css-class, #id, [attr]               CSS (no focus steal — pure CDP path)
+  .css-class, #id, [attr], tag           CSS (no focus steal — pure CDP path)
   [data-testid='name']                   CSS (no focus steal — recommended for own code)
   text=Submit                            visible text match (JS eval)
   role=button[name="Save"]              ARIA role + name (JS eval)
@@ -1191,6 +1194,7 @@ Tool registration:
 
 Dependencies:
   __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
+  Use "." to depend on the gist's own project (editable install when linked elsewhere).
   Kernel scans at boot, prompts to install missing packages into the venv.
   Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
 
