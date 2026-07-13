@@ -11,6 +11,7 @@ import asyncio
 import concurrent.futures
 import threading
 import uuid
+from typing import Literal, overload
 
 from .events import HumanPromptOpen, HumanPromptResponse, emit
 
@@ -29,7 +30,7 @@ async def ask(
 
     `tab` is accepted for symmetry with confirm/choose — the pill UI has
     no text input, so the response is always typed in the terminal."""
-    return await _gate("ask", prompt, None, default, timeout, tab=tab)  # type: ignore[return-value]
+    return await _gate("ask", prompt, None, default, timeout, tab=tab)
 
 
 async def confirm(
@@ -53,10 +54,38 @@ async def choose(
     timeout: float | None = None,
 ) -> str:
     """Prompt the human to choose one of the given options."""
-    return await _gate("choose", prompt, options, default, timeout, tab=tab)  # type: ignore[return-value]
+    return await _gate("choose", prompt, options, default, timeout, tab=tab)
 
 
-async def _gate(kind, prompt, options, default, timeout, *, tab=None):
+@overload
+async def _gate(
+    kind: Literal["ask", "choose"],
+    prompt: str,
+    options: list[str] | None,
+    default: str | bool | None,
+    timeout: float | None,
+    *,
+    tab=None,
+) -> str: ...
+@overload
+async def _gate(
+    kind: Literal["confirm"],
+    prompt: str,
+    options: list[str] | None,
+    default: str | bool | None,
+    timeout: float | None,
+    *,
+    tab=None,
+) -> bool: ...
+async def _gate(
+    kind: Literal["ask", "confirm", "choose"],
+    prompt: str,
+    options: list[str] | None,
+    default: str | bool | None,
+    timeout: float | None,
+    *,
+    tab=None,
+) -> str | bool:
     # Lazy import to avoid a gates↔kernel cycle.
     from .kernel import push_channel
 

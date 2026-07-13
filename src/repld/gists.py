@@ -774,9 +774,17 @@ def install(dirs: list[Path]) -> None:
         if s not in sys.path:
             sys.path.insert(0, s)
 
-    # Install the finder at the front of sys.meta_path
-    # Guard against double-install
-    if not any(isinstance(f, _GistFinder) for f in sys.meta_path):
+    # Install the finder at the front of sys.meta_path. On repeat calls
+    # (different dirs), update the existing finder in place instead of
+    # skipping — otherwise real imports would keep resolving against the
+    # first call's dirs while _installed_dirs (and everything derived from
+    # it, e.g. _find_gist/_iter_gist_files) reflects the latest call.
+    existing_finder = next(
+        (f for f in sys.meta_path if isinstance(f, _GistFinder)), None
+    )
+    if existing_finder is not None:
+        existing_finder._dirs = dirs
+    else:
         sys.meta_path.insert(0, _GistFinder(dirs))
 
     # Wrap builtins.__import__ to intercept stale-module eviction

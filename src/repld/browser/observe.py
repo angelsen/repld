@@ -282,7 +282,7 @@ async def compose_tree(
         stripped = line.lstrip()
         indent = line[: len(line) - len(stripped)]
 
-        if stripped.lower().startswith("iframe") or "Iframe" in stripped:
+        if stripped.lower().startswith("iframe"):
             # Assign next unmatched child (parentFrameId already
             # guarantees correct children; order is best-effort)
             matched_child: "Tab | None" = None
