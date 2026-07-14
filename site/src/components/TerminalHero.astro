@@ -202,6 +202,13 @@
 	async function typeLine(line: HTMLElement) {
 		const txt = line.querySelector<HTMLElement>('.txt')!;
 		const full = txt.textContent ?? '';
+		// Lines that wrap to two visual rows at narrow (mobile) widths collapse
+		// to one row the instant textContent is cleared below, then grow back
+		// as typing refills them — pushing every later line down by a
+		// line-height. Locking min-height to the full-text size (measured while
+		// still visibility:hidden, so this doesn't itself cause a flash) keeps
+		// the reserved space stable for the whole type-out.
+		line.style.minHeight = `${line.getBoundingClientRect().height}px`;
 		txt.textContent = '';
 		line.classList.add('shown');
 		txt.appendChild(cursor);
@@ -210,6 +217,7 @@
 			await sleep(18 + Math.random() * 40);
 		}
 		await sleep(260);
+		line.style.minHeight = '';
 	}
 
 	async function play() {
