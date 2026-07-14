@@ -60,7 +60,6 @@ def _collect_state() -> dict:
     pool = browser.peek()
     if pool is None:
         state["browser"] = {
-            "available": True,
             "connected": False,
             "ports": [],
             "patterns": [],
@@ -68,7 +67,7 @@ def _collect_state() -> dict:
         }
         return state
 
-    state["browser"] = {"available": True, **pool.snapshot()}
+    state["browser"] = pool.snapshot()
     return state
 
 
@@ -804,16 +803,15 @@ function render() {
   const ptBody = $('#pattern-body');
   ptBody.innerHTML = '';
   $('#pattern-table').hidden = b.patterns.length === 0;
-  for (const p of b.patterns) {
-    const count = b.tabs.filter(t => matchGlob(t.url, p)).length;
+  for (const { pattern, count } of b.patterns) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td>' + esc(p) + '</td>'
+    tr.innerHTML = '<td>' + esc(pattern) + '</td>'
       + '<td class="size">' + count + '</td>'
       + '<td class="actions"></td>';
     const btn = document.createElement('button');
     btn.className = 'sm danger';
     btn.textContent = '\\u00d7';
-    btn.onclick = async () => { await rpc('browser.unwatch', { pattern: p }); await reload(); };
+    btn.onclick = async () => { await rpc('browser.unwatch', { pattern }); await reload(); };
     tr.querySelector('.actions').appendChild(btn);
     ptBody.appendChild(tr);
   }
@@ -1083,10 +1081,6 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s || 
 function truncUrl(url, n) { return url.length > n ? url.slice(0, n - 1) + '\\u2026' : url; }
 function urlOrigin(url) {
   try { const u = new URL(url); return u.host; } catch { return ''; }
-}
-function matchGlob(str, pattern) {
-  const re = new RegExp('^' + pattern.replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\*/g, '.*').replace(/\\?/g, '.') + '$');
-  return re.test(str);
 }
 let toastTimer = null;
 function toast(msg, isError) {

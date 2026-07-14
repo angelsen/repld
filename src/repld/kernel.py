@@ -31,7 +31,7 @@ from . import events, ipc, sessions, tasks
 from .events import CellDone, CellStart, ChannelPush
 from .ipc import atomic_write_json, default_socket_path, lock_for, read_lock
 from .protocol import Dispatcher
-from .tasks import _current_task, install_tee
+from .tasks import install_tee
 
 # ---------------------------------------------------------------------------
 # Lock file
@@ -318,7 +318,7 @@ async def _task_scope(task_id: str):
     attribution for fire-and-forget background tasks. Finalizes (emits
     CellDone, pushes channel) on the way out regardless of how the body exits.
     """
-    _current_task.set(task_id)
+    tasks.set_current_task(task_id)
     task = tasks.get(task_id)
     assert task is not None, f"task {task_id} missing from registry"
     # Stash the asyncio.Task handle so cancel_task can call .cancel() on it
@@ -460,7 +460,7 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
             )
         else:
             if result is not None:
-                push_channel(str(result), {"kind": "every", "label": label})
+                _push(str(result), "every", label=label)
         await asyncio.sleep(seconds)
 
 

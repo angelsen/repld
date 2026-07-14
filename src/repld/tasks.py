@@ -108,6 +108,12 @@ def install_tee() -> None:
         sys.stderr = _Tee(sys.__stderr__, "stderr")  # type: ignore[arg-type]
 
 
+def set_current_task(task_id: str | None) -> None:
+    """Bind the running coroutine's ContextVar so `_Tee.write` attributes
+    output (and async descendants via copy_context()) to *task_id*."""
+    _current_task.set(task_id)
+
+
 def new_task() -> tuple[str, dict]:
     task_id = uuid.uuid4().hex[:12]
     task: dict = {

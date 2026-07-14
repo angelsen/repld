@@ -623,10 +623,21 @@ class BrowserPool:
                         "title": info.get("title", ""),
                     }
                 )
+        patterns = (
+            [
+                {
+                    "pattern": p,
+                    "count": sum(1 for t in tab_list if fnmatch(t["url"], p)),
+                }
+                for p in self.patterns
+            ]
+            if self._connected
+            else []
+        )
         return {
             "connected": self._connected,
             "ports": self.ports,
-            "patterns": self.patterns if self._connected else [],
+            "patterns": patterns,
             "tabs": tab_list,
         }
 

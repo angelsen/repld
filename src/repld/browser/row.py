@@ -110,88 +110,125 @@ class Rows(list):
         return "\n".join(repr(r) for r in self)
 
 
+# Column order must track the corresponding `CREATE VIEW` in har.py — a
+# `SELECT *` there feeds these tuples positionally. Named lookup below turns
+# any drift into a KeyError instead of silently misassigned fields.
+_HAR_SUMMARY_COLS = (
+    "id", "request_id", "redirect_index", "protocol", "method", "status",
+    "url", "type", "size", "time_ms", "state", "pause_stage", "paused_id",
+    "frames_sent", "frames_received", "started_datetime", "last_activity",
+    "target", "body_status", "mime_family", "is_asset", "initiator_type",
+    "initiator_url",
+)  # fmt: skip
+
+_CONSOLE_ENTRIES_COLS = (
+    "id", "level", "source", "text", "stack_url", "stack_line",
+    "stack_function", "timestamp", "target",
+)  # fmt: skip
+
+_SSE_ENTRIES_COLS = (
+    "id", "request_id", "event_name", "event_id", "data", "timestamp", "target",
+)  # fmt: skip
+
+_LIFECYCLE_ENTRIES_COLS = (
+    "id", "frame_id", "loader_id", "name", "timestamp", "target",
+)  # fmt: skip
+
+_HAR_ENTRY_COLS = (
+    "id", "request_id", "redirect_index", "protocol", "method", "url",
+    "status", "status_text", "type", "size", "time_ms", "state",
+    "pause_stage", "paused_id", "request_headers", "post_data",
+    "response_headers", "mime_type", "timing", "error_text",
+    "request_cookies", "frames_sent", "frames_received", "ws_total_bytes",
+    "started_datetime", "last_activity", "target", "body_status",
+    "initiator_type", "initiator_url", "initiator_function",
+    "initiator_line", "loader_id", "frame_id", "auth_scheme",
+    "auth_cookies", "csrf_token_header", "mime_family", "is_asset",
+    "curl_command",
+)  # fmt: skip
+
+
 def _row_from_har(cols: tuple, session: CDPSession) -> Row:
     """Build a Row from a har_summary query result tuple."""
-    # har_summary columns: id, request_id, redirect_index, protocol, method, status,
-    #   url, type, size, time_ms, state, pause_stage, paused_id, frames_sent,
-    #   frames_received, started_datetime, last_activity, target, body_status,
-    #   mime_family, is_asset, initiator_type, initiator_url
+    assert len(cols) == len(_HAR_SUMMARY_COLS)
+    c = dict(zip(_HAR_SUMMARY_COLS, cols))
     return Row(
         kind="network",
-        id=cols[0] or 0,
-        request_id=cols[1] or "",
-        redirect_index=cols[2] or 0,
-        protocol=cols[3] or "",
-        method=cols[4] or "",
-        status=cols[5] or 0,
-        url=cols[6] or "",
-        type=cols[7] or "",
-        size=cols[8] or 0,
-        time_ms=cols[9],
-        state=cols[10] or "",
-        pause_stage=cols[11],
-        paused_id=cols[12],
-        frames_sent=cols[13],
-        frames_received=cols[14],
-        started_datetime=cols[15],
-        last_activity=cols[16],
-        target=cols[17] or "",
-        body_status=cols[18],
-        mime_family=cols[19] or "",
-        is_asset=bool(cols[20]),
-        initiator_type=cols[21],
-        initiator_url=cols[22],
+        id=c["id"] or 0,
+        request_id=c["request_id"] or "",
+        redirect_index=c["redirect_index"] or 0,
+        protocol=c["protocol"] or "",
+        method=c["method"] or "",
+        status=c["status"] or 0,
+        url=c["url"] or "",
+        type=c["type"] or "",
+        size=c["size"] or 0,
+        time_ms=c["time_ms"],
+        state=c["state"] or "",
+        pause_stage=c["pause_stage"],
+        paused_id=c["paused_id"],
+        frames_sent=c["frames_sent"],
+        frames_received=c["frames_received"],
+        started_datetime=c["started_datetime"],
+        last_activity=c["last_activity"],
+        target=c["target"] or "",
+        body_status=c["body_status"],
+        mime_family=c["mime_family"] or "",
+        is_asset=bool(c["is_asset"]),
+        initiator_type=c["initiator_type"],
+        initiator_url=c["initiator_url"],
         _session=session,
     )
 
 
 def _row_from_console(cols: tuple, session: CDPSession) -> Row:
     """Build a Row from a console_entries query result tuple."""
-    # console_entries columns: id, level, source, text, stack_url, stack_line,
-    #   stack_function, timestamp, target
+    assert len(cols) == len(_CONSOLE_ENTRIES_COLS)
+    c = dict(zip(_CONSOLE_ENTRIES_COLS, cols))
     return Row(
         kind="console",
-        id=cols[0] or 0,
-        level=cols[1] or "",
-        source=cols[2] or "",
-        text=cols[3] or "",
-        stack_url=cols[4],
-        stack_line=cols[5],
-        stack_function=cols[6],
-        timestamp=cols[7],
-        target=cols[8] or "",
+        id=c["id"] or 0,
+        level=c["level"] or "",
+        source=c["source"] or "",
+        text=c["text"] or "",
+        stack_url=c["stack_url"],
+        stack_line=c["stack_line"],
+        stack_function=c["stack_function"],
+        timestamp=c["timestamp"],
+        target=c["target"] or "",
         _session=session,
     )
 
 
 def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
     """Build a Row from an sse_entries query result tuple."""
-    # sse_entries columns: id, request_id, event_name, event_id, data,
-    #   timestamp, target
+    assert len(cols) == len(_SSE_ENTRIES_COLS)
+    c = dict(zip(_SSE_ENTRIES_COLS, cols))
     return Row(
         kind="sse",
-        id=cols[0] or 0,
-        request_id=cols[1] or "",
-        event_name=cols[2] or "",
-        event_id=cols[3] or "",
-        data=cols[4] if cols[4] is not None else "",
-        timestamp=cols[5],
-        target=cols[6] or "",
+        id=c["id"] or 0,
+        request_id=c["request_id"] or "",
+        event_name=c["event_name"] or "",
+        event_id=c["event_id"] or "",
+        data=c["data"] if c["data"] is not None else "",
+        timestamp=c["timestamp"],
+        target=c["target"] or "",
         _session=session,
     )
 
 
 def _row_from_lifecycle(cols: tuple, session: CDPSession) -> Row:
     """Build a Row from a lifecycle_entries query result tuple."""
-    # lifecycle_entries columns: id, frame_id, loader_id, name, timestamp, target
+    assert len(cols) == len(_LIFECYCLE_ENTRIES_COLS)
+    c = dict(zip(_LIFECYCLE_ENTRIES_COLS, cols))
     return Row(
         kind="lifecycle",
-        id=cols[0] or 0,
-        frame_id=cols[1] or "",
-        loader_id=cols[2] or "",
-        name=cols[3] or "",
-        timestamp=cols[4],
-        target=cols[5] or "",
+        id=c["id"] or 0,
+        frame_id=c["frame_id"] or "",
+        loader_id=c["loader_id"] or "",
+        name=c["name"] or "",
+        timestamp=c["timestamp"],
+        target=c["target"] or "",
         _session=session,
     )
 
@@ -209,75 +246,65 @@ def _parse_json(val: Any) -> Any:
 
 
 def _dict_from_har_entry(cols: tuple) -> dict:
-    """Build a structured dict from a har_entries query result tuple.
+    """Build a structured dict from a har_entries query result tuple."""
+    assert len(cols) == len(_HAR_ENTRY_COLS)
+    c = dict(zip(_HAR_ENTRY_COLS, cols))
 
-    har_entries columns (0-indexed):
-      0  id, 1  request_id, 2  redirect_index, 3  protocol, 4  method,
-      5  url, 6  status, 7  status_text, 8  type, 9  size, 10 time_ms,
-      11 state, 12 pause_stage, 13 paused_id, 14 request_headers,
-      15 post_data, 16 response_headers, 17 mime_type, 18 timing,
-      19 error_text, 20 request_cookies, 21 frames_sent, 22 frames_received,
-      23 ws_total_bytes, 24 started_datetime, 25 last_activity, 26 target,
-      27 body_status, 28 initiator_type, 29 initiator_url,
-      30 initiator_function, 31 initiator_line, 32 loader_id, 33 frame_id,
-      34 auth_scheme, 35 auth_cookies, 36 csrf_token_header, 37 mime_family,
-      38 is_asset, 39 curl_command
-    """
     d: dict[str, Any] = {
         "request": {
-            "method": cols[4] or "",
-            "url": cols[5] or "",
+            "method": c["method"] or "",
+            "url": c["url"] or "",
         },
         "response": {
-            "status": cols[6] or 0,
+            "status": c["status"] or 0,
         },
-        "state": cols[11] or "",
-        "type": cols[8] or "",
-        "size": cols[9] or 0,
-        "time_ms": cols[10],
+        "state": c["state"] or "",
+        "type": c["type"] or "",
+        "size": c["size"] or 0,
+        "time_ms": c["time_ms"],
     }
 
     # Request details
-    req_headers = _parse_json(cols[14])
+    req_headers = _parse_json(c["request_headers"])
     if req_headers:
         d["request"]["headers"] = req_headers
-    if cols[15]:
-        d["request"]["postData"] = cols[15]
+    if c["post_data"]:
+        d["request"]["postData"] = c["post_data"]
 
     # Response details
-    if cols[7]:
-        d["response"]["statusText"] = cols[7]
-    resp_headers = _parse_json(cols[16])
+    if c["status_text"]:
+        d["response"]["statusText"] = c["status_text"]
+    resp_headers = _parse_json(c["response_headers"])
     if resp_headers:
         d["response"]["headers"] = resp_headers
-    if cols[17]:
-        d["response"]["mimeType"] = cols[17]
+    if c["mime_type"]:
+        d["response"]["mimeType"] = c["mime_type"]
 
     # Timing
-    timing = _parse_json(cols[18])
+    timing = _parse_json(c["timing"])
     if timing:
         d["timing"] = timing
 
     # Error
-    if cols[19]:
-        d["error_text"] = cols[19]
+    if c["error_text"]:
+        d["error_text"] = c["error_text"]
 
     # Auth
-    if cols[34]:
-        d["auth_scheme"] = cols[34]
-    if cols[36]:
-        d["csrf_token_header"] = cols[36]
+    if c["auth_scheme"]:
+        d["auth_scheme"] = c["auth_scheme"]
+    if c["csrf_token_header"]:
+        d["csrf_token_header"] = c["csrf_token_header"]
 
     # Initiator
-    init_type = cols[28]
+    init_type = c["initiator_type"]
     if init_type:
         initiator: dict[str, Any] = {"type": init_type}
-        if cols[29]:
-            initiator["url"] = cols[29]
-        if cols[30]:
-            initiator["function"] = cols[30]
-        if cols[31]:
-            initiator["line"] = cols[31]
+        if c["initiator_url"]:
+            initiator["url"] = c["initiator_url"]
+        if c["initiator_function"]:
+            initiator["function"] = c["initiator_function"]
+        if c["initiator_line"]:
+            initiator["line"] = c["initiator_line"]
         d["initiator"] = initiator
 
     return d

@@ -299,7 +299,7 @@ class Tab:
 
     async def _setup_binding(self) -> None:
         """Register __repld_resolve CDP binding for gate callbacks."""
-        await self._session.execute("Runtime.addBinding", {"name": "__repld_resolve"})
+        await self._exec("Runtime.addBinding", {"name": "__repld_resolve"})
         self._session._binding_handler = _handle_binding
 
     async def _show_gate(
@@ -1070,7 +1070,7 @@ class Tab:
             bind_params.append(since)
 
         rows = self._filtered_query(
-            "sse_entries", conditions, bind_params, "ORDER BY rowid DESC LIMIT 500"
+            "sse_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 500"
         )
         return Rows(_row_from_sse(r, self._session) for r in rows)
 
@@ -1101,7 +1101,7 @@ class Tab:
             "lifecycle_entries",
             conditions,
             bind_params,
-            "ORDER BY rowid DESC LIMIT 500",
+            "ORDER BY id DESC LIMIT 500",
         )
         return Rows(_row_from_lifecycle(r, self._session) for r in rows)
 

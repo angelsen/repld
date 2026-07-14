@@ -341,8 +341,8 @@ def introspect(name: str) -> str:
     path = _find_gist(name)
     if path is None:
         msg = f"No gist '{name}' found in {_installed_dirs}"
-        if gist_links._linked:
-            msg += f"; linked: {', '.join(sorted(gist_links._linked))}"
+        if gist_links.linked_names():
+            msg += f"; linked: {', '.join(sorted(gist_links.linked_names()))}"
         raise FileNotFoundError(msg)
 
     tree = _parse(path)
@@ -374,8 +374,7 @@ def introspect(name: str) -> str:
 
 def _linked_path(name: str) -> Path | None:
     """Cross-project linked gist path for an exact name, if the file exists."""
-    p = gist_links._linked.get(name)
-    return p if p is not None and p.is_file() else None
+    return gist_links.linked_path(name)
 
 
 def _find_gist(name: str) -> Path | None:
@@ -575,8 +574,8 @@ def _iter_gist_files():
                 continue
             seen.add(p.stem)
             yield p
-    for name, p in sorted(gist_links._linked.items()):
-        if name in seen or not p.is_file():
+    for name, p in gist_links.linked_items():
+        if name in seen:
             continue
         seen.add(name)
         yield p
@@ -713,6 +712,15 @@ def _import_gist(p: Path):
     return mod
 
 
+def _try_import_gist(p: Path):
+    """`_import_gist`, warning once and returning None instead of raising."""
+    try:
+        return _import_gist(p)
+    except Exception as exc:
+        _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
+        return None
+
+
 def scan_tools() -> list[dict]:
     """Scan gist files for MCP tool declarations. Returns tool schemas.
 
@@ -739,10 +747,8 @@ def scan_tools() -> list[dict]:
                     results.append(schema)
             continue
 
-        try:
-            mod = _import_gist(p)
-        except Exception as exc:
-            _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
+        mod = _try_import_gist(p)
+        if mod is None:
             continue
         for tname, _, _ in declared:
             if tname in seen:
@@ -783,10 +789,8 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
         if match is None:
             continue
         _, is_legacy, _ = match
-        try:
-            mod = _import_gist(p)
-        except Exception as exc:
-            _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
+        mod = _try_import_gist(p)
+        if mod is None:
             continue
         handler = getattr(mod, f"_tool_{name}", None)
         if handler is None:

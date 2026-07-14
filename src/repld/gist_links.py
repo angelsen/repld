@@ -30,6 +30,22 @@ _linked: dict[str, Path] = {}
 _LINKS_FILENAME = ".links"
 
 
+def linked_names() -> frozenset[str]:
+    """Names currently in the live _linked overlay."""
+    return frozenset(_linked)
+
+
+def linked_path(name: str) -> Path | None:
+    """Cross-project linked gist path for an exact name, if the file still exists."""
+    p = _linked.get(name)
+    return p if p is not None and p.is_file() else None
+
+
+def linked_items() -> list[tuple[str, Path]]:
+    """(name, path) pairs for linked gists whose file still exists, name-sorted."""
+    return [(n, p) for n, p in sorted(_linked.items()) if p.is_file()]
+
+
 def read_links(gists_dir: Path) -> dict[str, str]:
     """Read the link manifest. Returns {name: abspath}; {} if absent.
 

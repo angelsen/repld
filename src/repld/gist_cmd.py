@@ -53,11 +53,12 @@ def _print_gist_usage() -> None:
 
 
 def _gist_new(argv: list[str]) -> int:
+    usage = "repld gist new <name> — scaffold ./gists/<name>.py"
     if argv and argv[0] in ("-h", "--help"):
-        print("repld gist new <name> — scaffold ./gists/<name>.py")
+        print(usage)
         return 0
     if not argv:
-        _print_gist_usage()
+        print(usage)
         return 2
     name = argv[0]
     if not name.isidentifier():
@@ -84,11 +85,12 @@ def _gist_new(argv: list[str]) -> int:
 def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
+    usage = "repld gist add <name> — link a gist registered in another project"
     if argv and argv[0] in ("-h", "--help"):
-        print("repld gist add <name> — link a gist registered in another project")
+        print(usage)
         return 0
     if not argv:
-        print("repld gist add <name> — link a gist registered in another project")
+        print(usage)
         return 2
     name = argv[0]
     gists_dir = Path.cwd() / "gists"
@@ -117,8 +119,9 @@ def _gist_add(argv: list[str]) -> int:
 def _gist_rm(argv: list[str]) -> int:
     from . import gist_links
 
+    usage = "repld gist rm <name> | --stale — unlink a gist (or all dead links)"
     if argv and argv[0] in ("-h", "--help"):
-        print("repld gist rm <name> | --stale — unlink a gist (or all dead links)")
+        print(usage)
         return 0
     gists_dir = Path.cwd() / "gists"
     try:
@@ -130,7 +133,7 @@ def _gist_rm(argv: list[str]) -> int:
                 print("no stale links")
             return 0
         if not argv:
-            print("repld gist rm <name> | --stale")
+            print(usage)
             return 2
         name = argv[0]
         if gist_links.remove_link(name, gists_dir):

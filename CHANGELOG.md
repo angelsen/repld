@@ -12,11 +12,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `browser_screenshot` tool description now warns that reapplying `Emulation.setDeviceMetricsOverride` on an already-emulated tab can leave viewport metrics inconsistent — recommend a fresh tab per distinct size and verifying `clientWidth === innerWidth` before trusting the capture
 - `BROWSER_GUIDE` (`repld help browser`) gained a "Mobile viewport testing" section: CDP emulation pitfalls and the ADB-forwarded real-device fallback (`adb forward` + `Browser(port=)`)
+- Another round of internal cleanup: `row.py`'s HAR/console/SSE/lifecycle factory functions now index SQL results by column name instead of raw tuple position (a reordered column in `har.py` used to silently corrupt fields, caught only by a hand-maintained comment); `kernel.py`/`gists.py` stopped reaching into `tasks._current_task`/`gist_links._linked` directly in favor of `tasks.set_current_task()`/`gist_links.linked_names()`/`linked_path()`/`linked_items()`; `gists.py`'s `scan_tools`/`resolve_tool` share one `_try_import_gist` helper; `kernel.py`'s `@every` ticker uses the `_push()` helper consistently; `gist_cmd.py`'s `new`/`add`/`rm` usage messages are now consistent on empty args; dashboard's unused `state["browser"]["available"]` field was dropped
 
 ### Fixed
 
 - `Tab._wait_for_node` cached the root `DOM.getDocument` nodeId once before its poll loop; a document replaced mid-wait (SPA navigation, HMR reload) left it stale, so `click()`/`type_text()`/`wait_for()` silently never matched and raised a misleading "Element not found" instead of surfacing the navigation race. Root nodeId is now re-fetched every poll iteration
 - `gists.resolve_tool` could dispatch to a typed `_tool_*` function in a gist file that also declared unrelated legacy `__repld_tools__` entries — a case `scan_tools`/`tools/list` never advertised, since a legacy-declaring file suppresses all typed tools in that file. Both now share one `_declared_tools` classifier, so listing and dispatch agree
+- `Tab._setup_binding` called `self._session.execute()` directly instead of `self._exec()`, skipping the session-gone recovery every other CDP call gets — pin setup could raise instead of self-healing across an HMR reload or navigation race
+- `Tab.sse()` and `Tab.lifecycle()` ordered results by `ORDER BY rowid`, a column their underlying views never expose (only `id`) — both raised a DuckDB `BinderException` on every call
+- Dashboard's per-pattern tab-count display recomputed glob matching in JS with a hand-rolled regex that always escaped `[`/`]`, diverging from the server's `fnmatch`-based watch matching — bracket-class patterns could show a stale count. Counts are now computed server-side in `BrowserPool.snapshot()` next to the actual match logic, and the client just renders them
 
 ### Removed
 
