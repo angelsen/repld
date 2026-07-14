@@ -1,0 +1,178 @@
+---
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+export async function getStaticPaths() {
+	const posts = await getCollection('blog');
+	return posts.map((post) => ({
+		params: { slug: post.id },
+		props: { post },
+	}));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+
+const dateFmt = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+---
+
+<BaseLayout
+	title={`${post.data.title} — repld`}
+	description={post.data.description}
+	active="blog"
+	pageType="article"
+>
+	<!-- ==================== hero ==================== -->
+	<section class="hero">
+		<p class="tag">
+			<time datetime={post.data.pubDate.toISOString()}>{dateFmt.format(post.data.pubDate)}</time>
+			{post.data.tags.length > 0 && <span> · {post.data.tags.join(' · ')}</span>}
+		</p>
+		<h1 class="display">{post.data.title}</h1>
+		<p class="hero-sub">{post.data.description}</p>
+	</section>
+
+	<!-- ==================== post body ==================== -->
+	<article class="prose">
+		<Content />
+	</article>
+</BaseLayout>
+
+<style>
+	.prose {
+		max-width: 68ch;
+		padding-bottom: 100px;
+		color: var(--color-fg);
+		font-size: 15.5px;
+		line-height: 1.8;
+	}
+	.prose :global(p) {
+		margin-bottom: 22px;
+	}
+	.prose :global(h2) {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 1.5rem;
+		letter-spacing: -0.01em;
+		margin: 52px 0 20px;
+	}
+	.prose :global(h3) {
+		font-family: var(--font-display);
+		font-weight: 700;
+		color: var(--color-bright);
+		font-size: 1.15rem;
+		margin: 40px 0 16px;
+	}
+	.prose :global(strong) {
+		color: var(--color-bright);
+		font-weight: 600;
+	}
+	.prose :global(em) {
+		font-style: italic;
+		color: var(--color-fg);
+	}
+	.prose :global(ul),
+	.prose :global(ol) {
+		margin: 0 0 22px 1.4em;
+	}
+	.prose :global(li) {
+		margin-bottom: 8px;
+	}
+	.prose :global(a) {
+		color: var(--color-accent);
+		text-decoration: none;
+		background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left bottom / 100%
+			1px;
+	}
+	.prose :global(code) {
+		color: var(--color-accent);
+		background: var(--accent-soft);
+		border: 1px solid var(--accent-line);
+		border-radius: 4px;
+		padding: 0 5px;
+		font-size: 0.88em;
+	}
+	.prose :global(pre) {
+		border: 1px solid var(--color-line);
+		border-radius: 10px;
+		background: var(--color-panel-2);
+		padding: 20px 22px;
+		overflow-x: auto;
+		margin-bottom: 22px;
+	}
+	.prose :global(pre code) {
+		background: none;
+		border: none;
+		padding: 0;
+		font-size: 13.5px;
+	}
+	.prose :global(blockquote) {
+		color: var(--color-muted);
+		font-size: 15px;
+		font-style: italic;
+		line-height: 1.8;
+		padding: 24px 28px;
+		border: 1px solid var(--color-line);
+		border-left: 3px solid var(--color-accent);
+		border-radius: 10px;
+		background: var(--color-panel);
+		margin: 0 0 22px;
+	}
+
+	/* GFM footnotes (remark-gfm) */
+	.prose :global(sup[id^='fnref-']) {
+		font-size: 0.75em;
+	}
+	.prose :global(sup[id^='fnref-'] a) {
+		color: var(--color-accent);
+		background: none;
+		font-weight: 600;
+	}
+	.prose :global(section[data-footnotes]) {
+		margin-top: 60px;
+		padding-top: 28px;
+		border-top: var(--rule);
+		font-size: 13.5px;
+	}
+	.prose :global(section[data-footnotes] h2) {
+		font-size: 0;
+		margin: 0;
+	}
+	.prose :global(section[data-footnotes] ol) {
+		margin-left: 1.4em;
+		color: var(--color-muted);
+	}
+	.prose :global(section[data-footnotes] li) {
+		margin-bottom: 10px;
+		counter-reset: backref;
+	}
+	.prose :global(section[data-footnotes] li p) {
+		display: inline;
+		margin: 0;
+	}
+	/* Hide remark-gfm's native "↩"/"↩²"/"↩³" glyphs and replace with
+	   uniform bracket-numbered back-references, e.g. [1] [2] [3]. */
+	.prose :global(a[data-footnote-backref]) {
+		font-size: 0;
+		margin-left: 4px;
+		counter-increment: backref;
+		text-decoration: none;
+	}
+	.prose :global(a[data-footnote-backref])::after {
+		content: '[' counter(backref) ']';
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--color-accent);
+	}
+
+	@media (max-width: 560px) {
+		.prose {
+			font-size: 14.5px;
+		}
+		.prose :global(h2) {
+			font-size: 1.3rem;
+			margin: 40px 0 16px;
+		}
+	}
+</style>
