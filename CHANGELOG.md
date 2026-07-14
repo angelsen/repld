@@ -15,6 +15,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab._wait_for_node` cached the root `DOM.getDocument` nodeId once before its poll loop; a document replaced mid-wait (SPA navigation, HMR reload) left it stale, so `click()`/`type_text()`/`wait_for()` silently never matched and raised a misleading "Element not found" instead of surfacing the navigation race. Root nodeId is now re-fetched every poll iteration
+- `gists.resolve_tool` could dispatch to a typed `_tool_*` function in a gist file that also declared unrelated legacy `__repld_tools__` entries — a case `scan_tools`/`tools/list` never advertised, since a legacy-declaring file suppresses all typed tools in that file. Both now share one `_declared_tools` classifier, so listing and dispatch agree
+
 ### Removed
 
 ## [0.1.0] - 2026-07-14

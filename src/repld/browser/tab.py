@@ -504,13 +504,13 @@ class Tab:
         resolved = _resolve_selector(selector)
         deadline = asyncio.get_running_loop().time() + timeout
 
-        root_id = 0
-        if resolved.css is not None:
-            doc = await self._exec("DOM.getDocument")
-            root_id = doc["root"]["nodeId"]
-
         while True:
             if resolved.css is not None:
+                # Fetch root fresh each iteration — a cached nodeId goes stale
+                # when the document is replaced mid-wait (navigation, HMR
+                # reload), silently never matching.
+                doc = await self._exec("DOM.getDocument")
+                root_id = doc["root"]["nodeId"]
                 result = await self._exec(
                     "DOM.querySelector", {"nodeId": root_id, "selector": resolved.css}
                 )

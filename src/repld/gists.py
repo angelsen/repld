@@ -605,14 +605,36 @@ def _tool_decls(p: Path) -> tuple[list[dict], list[str]] | None:
     """Parse a gist file's tool declarations, or None if it doesn't parse.
 
     Returns ``(legacy, typed_names)`` — the legacy ``__repld_tools__`` list
-    and the ``_tool_*`` function names. A non-empty *legacy* takes precedence
-    over typed names; keeping that decision here keeps ``scan_tools`` and
-    ``resolve_tool`` classifying gists identically.
+    and the ``_tool_*`` function names.
     """
     tree = _parse(p)
     if tree is None:
         return None
     return _extract_tools_from_tree(tree, p), _tool_names_from_tree(tree)
+
+
+def _declared_tools(p: Path) -> list[tuple[str, bool, dict | None]] | None:
+    """AST-only (no import) list of ``(name, is_legacy, legacy_schema)`` for gist *p*.
+
+    A file with any ``__repld_tools__`` entries exposes only those — its
+    typed ``_tool_*`` functions are suppressed, since a gist picks one
+    convention, not both. This is the single place that precedence rule is
+    decided, so ``scan_tools`` and ``resolve_tool`` classify gists
+    identically. ``legacy_schema`` is the full dict for legacy entries (no
+    import needed to build a schema); ``None`` for typed entries, whose
+    schema requires importing the module and inspecting the function.
+    """
+    decls = _tool_decls(p)
+    if decls is None:
+        return None
+    legacy, tool_names = decls
+    if legacy:
+        return [
+            (tool["name"], True, tool)
+            for tool in legacy
+            if isinstance(tool, dict) and tool.get("name")
+        ]
+    return [(tname, False, None) for tname in tool_names]
 
 
 def _is_old_style(func) -> bool:
@@ -705,29 +727,24 @@ def scan_tools() -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
     for p in _iter_gist_files():
-        decls = _tool_decls(p)
-        if decls is None:
+        declared = _declared_tools(p)
+        if not declared:
             continue
-        legacy, tool_names = decls
-        if legacy:
+        if declared[0][1]:  # is_legacy — homogeneous per file
             _warn_deprecated(p)
-            for tool in legacy:
-                if not isinstance(tool, dict):
-                    continue
-                name = tool.get("name")
-                if name and name not in seen:
+            for name, _, schema in declared:
+                assert schema is not None  # legacy entries always carry their dict
+                if name not in seen:
                     seen.add(name)
-                    results.append(tool)
+                    results.append(schema)
             continue
 
-        if not tool_names:
-            continue
         try:
             mod = _import_gist(p)
         except Exception as exc:
             _warn_once(f"{p}:import", f"repld: {p.name}: failed to import: {exc}")
             continue
-        for tname in tool_names:
+        for tname, _, _ in declared:
             if tname in seen:
                 continue
             func = getattr(mod, f"_tool_{tname}", None)
@@ -759,13 +776,13 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
     handler function.
     """
     for p in _iter_gist_files():
-        decls = _tool_decls(p)
-        if decls is None:
+        declared = _declared_tools(p)
+        if not declared:
             continue
-        legacy, tool_names = decls
-        is_legacy = any(isinstance(t, dict) and t.get("name") == name for t in legacy)
-        if not is_legacy and name not in tool_names:
+        match = next((d for d in declared if d[0] == name), None)
+        if match is None:
             continue
+        _, is_legacy, _ = match
         try:
             mod = _import_gist(p)
         except Exception as exc:
