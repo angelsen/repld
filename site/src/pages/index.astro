@@ -624,7 +624,9 @@ linked (from other projects):
 				align-items: center;
 				padding: 72px 0 120px;
 				position: relative;
-				overflow: hidden;
+				/* Not overflow:hidden — see the shared .editorial .hero comment
+				   in global.css for why clipping this glow reads as a hard
+				   edge instead of an ambient bleed. */
 			}
 			.hero::before {
 				content: '';

@@ -150,7 +150,12 @@ code.c {
 	padding: 72px 0 76px;
 	max-width: 680px;
 	position: relative;
-	overflow: hidden;
+	/* Not overflow:hidden — the glow below fades to fully transparent
+	   (at its 65% stop) well before its own box edges, so clipping it
+	   only ever cuts through still-visibly-colored pixels, reading as a
+	   hard edge instead of an ambient bleed. Body's overflow-x:clip
+	   already guards against any h-scroll, so nothing else relies on
+	   this being clipped. */
 }
 .editorial .hero::before {
 	content: '';
