@@ -52,9 +52,13 @@ def _print_gist_usage() -> None:
         print(f"  repld gist {usage:<{width}}    {desc}")
 
 
+def _wants_help(argv: list[str]) -> bool:
+    return bool(argv) and argv[0] in ("-h", "--help")
+
+
 def _gist_new(argv: list[str]) -> int:
     usage = "repld gist new <name> — scaffold ./gists/<name>.py"
-    if argv and argv[0] in ("-h", "--help"):
+    if _wants_help(argv):
         print(usage)
         return 0
     if not argv:
@@ -86,7 +90,7 @@ def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
     usage = "repld gist add <name> — link a gist registered in another project"
-    if argv and argv[0] in ("-h", "--help"):
+    if _wants_help(argv):
         print(usage)
         return 0
     if not argv:
@@ -120,7 +124,7 @@ def _gist_rm(argv: list[str]) -> int:
     from . import gist_links
 
     usage = "repld gist rm <name> | --stale — unlink a gist (or all dead links)"
-    if argv and argv[0] in ("-h", "--help"):
+    if _wants_help(argv):
         print(usage)
         return 0
     gists_dir = Path.cwd() / "gists"
@@ -153,7 +157,9 @@ def _gist_list(argv: list[str]) -> int:
     gists_dir = Path.cwd() / "gists"
 
     # Local gists (./gists), excluding privates.
-    local = sorted(p.stem for p in gists_dir.glob("*.py") if not p.name.startswith("_"))
+    local = sorted(
+        p.stem for p in gists_dir.glob("*.py") if _gists.is_public_gist_file(p)
+    )
     if local:
         print("local (./gists):")
         for name in local:

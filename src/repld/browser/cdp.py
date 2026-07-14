@@ -508,6 +508,18 @@ class CDPSession:
         finally:
             cur.close()
 
+    def query_dicts(self, sql: str, params: list | None = None) -> list[dict]:
+        """Like `query`, but rows are dicts keyed by the query's live column
+        names — a `SELECT *` reorder or rename can't silently misassign
+        fields the way a positionally-zipped tuple would."""
+        cur = self.db.cursor()
+        try:
+            result = cur.execute(sql, params) if params else cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in result.fetchall()]
+        finally:
+            cur.close()
+
     def fetch_body(self, request_id: str) -> dict:
         """Return captured body; fall back to Network.getResponseBody CDP call."""
         # Check DuckDB for captured body first

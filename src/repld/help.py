@@ -2,10 +2,14 @@
 
 `build_instructions()` composes the MCP `initialize.instructions` dynamically
 based on kernel state (browser connected? which gists available?). `OVERVIEW`
-and `_TOPICS` back the `repld help` command / `browser.help()`. Four surfaces,
-no overlap — one sanctioned exception: GUIDE's `== Builtins ==` section recaps
-the injected builtins so the guide reads standalone; keep it in sync with
-`_EXEC_MODEL`. The surfaces:
+and `_TOPICS` back the `repld help` command / `browser.help()`. Four surfaces
+at different depths, not duplicate content — Topics are terse signature
+cheat-sheets, MCP resources are prose (rationale, quirks, internals). Where a
+Topic and a resource cover the same API, the Topic stays signature-only and
+points at the resource for behavior/internals (e.g. "browser" topic's pin +
+gate bridge → BROWSER_GUIDE) rather than restating it. One sanctioned
+exception: GUIDE's `== Builtins ==` section recaps the injected builtins so
+the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
 
   INSTRUCTIONS (dynamic)  → behavioral model for the agent (terse, always loaded)
   Tool descriptions       → per-tool what + gotchas (lives in protocol.py)
@@ -1085,19 +1089,12 @@ Tab (async unless noted):
   tab.cookies()                                    → list[dict]
   tab.cdp(method, **params)                        → dict
 
-Tab — pin + gate bridge:
+Tab — pin + gate bridge (see repld://docs/browser for pill lifecycle + heartbeat detail):
   tab.pin(reason="")                 → None  inject pill + beforeunload guard; idempotent
   tab.unpin()                        → None  remove pill + guard
   tab.confirm(prompt, **kw)          → bool  gate routed to pill UI
   tab.choose(prompt, options, **kw)  → str   gate routed to pill UI
   tab.ask(prompt, **kw)              → str   terminal only (no pill UI for text input)
-
-  Pill: bottom-center floating pill, green dot when connected, amber when awaiting input.
-  Clicking pill expands panel with status, hostname, reason, and gate prompt + buttons.
-  Gates queue — active gate on top, resolve pops next. Terminal and browser resolve same
-  Future; first resolution wins.
-  Lifecycle: heartbeat every 5s. Pill self-destructs if beats stop (detach/crash/shutdown).
-  Same-origin reload auto-reinjects. Cross-origin navigation unpins + pushes channel.
 
 Tab (sync — DuckDB queries):
   tab.network(url=, method=, status=, type=, since=, include_assets=)  → Rows
@@ -1448,8 +1445,6 @@ graph stores, embedding indexes, internal services.
 
 Module docstring first line → auto-shown in MCP instructions.
 __repld_usage__ = "app = await App.connect()" → custom listing line.
-__repld_deps__ = ["httpx>=0.27"] → kernel prompts to install at boot.
-  Use "." to depend on the gist's own project (editable install when linked elsewhere).
 Type hints + one-line docstrings on public methods → auto-introspected.
 Document return shapes in the docstring FIRST line with -> {key, key, ...}
 (only the first line is surfaced) so the agent knows the dict structure

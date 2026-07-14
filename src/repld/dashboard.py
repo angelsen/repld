@@ -111,8 +111,8 @@ def save_hint() -> None:
 
 
 async def _rpc_browser_disconnect(browser, params: dict) -> Any:
+    from .browser_dispatch import route_detach
     from .kernel import push_channel
-    from .protocol import route_detach
 
     result = await route_detach(browser, params.get("target"), params.get("port"))
     if result is None:

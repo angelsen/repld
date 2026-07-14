@@ -20,7 +20,7 @@ class Row:
     """A row from a HAR or console query."""
 
     # Discriminator — one of "network", "console", "sse", "lifecycle", set by
-    # the corresponding _row_from_* factory. "" only for a bare Row() (e.g. tests).
+    # the corresponding _row_from_* factory.
     kind: str = ""
 
     # HAR fields (network rows)
@@ -110,48 +110,8 @@ class Rows(list):
         return "\n".join(repr(r) for r in self)
 
 
-# Column order must track the corresponding `CREATE VIEW` in har.py — a
-# `SELECT *` there feeds these tuples positionally. Named lookup below turns
-# any drift into a KeyError instead of silently misassigned fields.
-_HAR_SUMMARY_COLS = (
-    "id", "request_id", "redirect_index", "protocol", "method", "status",
-    "url", "type", "size", "time_ms", "state", "pause_stage", "paused_id",
-    "frames_sent", "frames_received", "started_datetime", "last_activity",
-    "target", "body_status", "mime_family", "is_asset", "initiator_type",
-    "initiator_url",
-)  # fmt: skip
-
-_CONSOLE_ENTRIES_COLS = (
-    "id", "level", "source", "text", "stack_url", "stack_line",
-    "stack_function", "timestamp", "target",
-)  # fmt: skip
-
-_SSE_ENTRIES_COLS = (
-    "id", "request_id", "event_name", "event_id", "data", "timestamp", "target",
-)  # fmt: skip
-
-_LIFECYCLE_ENTRIES_COLS = (
-    "id", "frame_id", "loader_id", "name", "timestamp", "target",
-)  # fmt: skip
-
-_HAR_ENTRY_COLS = (
-    "id", "request_id", "redirect_index", "protocol", "method", "url",
-    "status", "status_text", "type", "size", "time_ms", "state",
-    "pause_stage", "paused_id", "request_headers", "post_data",
-    "response_headers", "mime_type", "timing", "error_text",
-    "request_cookies", "frames_sent", "frames_received", "ws_total_bytes",
-    "started_datetime", "last_activity", "target", "body_status",
-    "initiator_type", "initiator_url", "initiator_function",
-    "initiator_line", "loader_id", "frame_id", "auth_scheme",
-    "auth_cookies", "csrf_token_header", "mime_family", "is_asset",
-    "curl_command",
-)  # fmt: skip
-
-
-def _row_from_har(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from a har_summary query result tuple."""
-    assert len(cols) == len(_HAR_SUMMARY_COLS)
-    c = dict(zip(_HAR_SUMMARY_COLS, cols))
+def _row_from_har(c: dict, session: CDPSession) -> Row:
+    """Build a Row from a har_summary query result row."""
     return Row(
         kind="network",
         id=c["id"] or 0,
@@ -181,10 +141,8 @@ def _row_from_har(cols: tuple, session: CDPSession) -> Row:
     )
 
 
-def _row_from_console(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from a console_entries query result tuple."""
-    assert len(cols) == len(_CONSOLE_ENTRIES_COLS)
-    c = dict(zip(_CONSOLE_ENTRIES_COLS, cols))
+def _row_from_console(c: dict, session: CDPSession) -> Row:
+    """Build a Row from a console_entries query result row."""
     return Row(
         kind="console",
         id=c["id"] or 0,
@@ -200,10 +158,8 @@ def _row_from_console(cols: tuple, session: CDPSession) -> Row:
     )
 
 
-def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from an sse_entries query result tuple."""
-    assert len(cols) == len(_SSE_ENTRIES_COLS)
-    c = dict(zip(_SSE_ENTRIES_COLS, cols))
+def _row_from_sse(c: dict, session: CDPSession) -> Row:
+    """Build a Row from an sse_entries query result row."""
     return Row(
         kind="sse",
         id=c["id"] or 0,
@@ -217,10 +173,8 @@ def _row_from_sse(cols: tuple, session: CDPSession) -> Row:
     )
 
 
-def _row_from_lifecycle(cols: tuple, session: CDPSession) -> Row:
-    """Build a Row from a lifecycle_entries query result tuple."""
-    assert len(cols) == len(_LIFECYCLE_ENTRIES_COLS)
-    c = dict(zip(_LIFECYCLE_ENTRIES_COLS, cols))
+def _row_from_lifecycle(c: dict, session: CDPSession) -> Row:
+    """Build a Row from a lifecycle_entries query result row."""
     return Row(
         kind="lifecycle",
         id=c["id"] or 0,
@@ -245,11 +199,8 @@ def _parse_json(val: Any) -> Any:
         return None
 
 
-def _dict_from_har_entry(cols: tuple) -> dict:
-    """Build a structured dict from a har_entries query result tuple."""
-    assert len(cols) == len(_HAR_ENTRY_COLS)
-    c = dict(zip(_HAR_ENTRY_COLS, cols))
-
+def _dict_from_har_entry(c: dict) -> dict:
+    """Build a structured dict from a har_entries query result row."""
     d: dict[str, Any] = {
         "request": {
             "method": c["method"] or "",

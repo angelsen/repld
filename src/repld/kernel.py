@@ -54,7 +54,7 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
         "pid": os.getpid(),
         "socket_path": str(socket_path),
         "cwd": os.getcwd(),
-        "started": time.time(),
+        "started_at": time.time(),
     }
     if dashboard_port is not None:
         info["dashboard_port"] = dashboard_port
@@ -414,9 +414,11 @@ class EveryHandle:
 
 
 # Mutated from the asyncio loop thread (_start_ticker) and from sync-cell
-# threads (EveryHandle.cancel() via asyncio.to_thread), and iterated from the
-# dashboard's HTTP handler thread — needs a lock like every other cross-thread
-# registry in this codebase (tasks._tasks_lock, gates._gates_lock).
+# threads (EveryHandle.cancel() via asyncio.to_thread) — needs a lock like
+# every other cross-thread registry in this codebase (tasks._tasks_lock,
+# gates._gates_lock). The dashboard's HTTP handler reads it via every_snapshot()
+# too, but that runs on the same shared loop (dashboard.start_dashboard
+# schedules onto `loop`), not a separate thread.
 _every_registry: set[EveryHandle] = set()
 _every_lock = threading.Lock()
 
@@ -495,7 +497,7 @@ def _make_every(loop: asyncio.AbstractEventLoop):
 
 
 # ---------------------------------------------------------------------------
-# KernelContext (implements protocol.KernelContext)
+# KernelContext (implements kernel_context.KernelContext)
 # ---------------------------------------------------------------------------
 
 
@@ -602,8 +604,10 @@ def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
-    """Ask on the real terminal (bypassing the not-yet-wired tee) whether to
-    reconnect Chrome ports / re-watch patterns from the previous kernel run.
+    """Ask on the real terminal (writing to sys.__stdout__ to bypass the
+    tee, which by this point in boot has already redirected sys.stdout for
+    task-output capture) whether to reconnect Chrome ports / re-watch
+    patterns from the previous kernel run.
     """
     parts = []
     if ports:
@@ -743,7 +747,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
 
         def _browser_cleanup() -> None:
             b = getattr(__main__, "browser", None)
-            real = getattr(b, "_real", None) if hasattr(b, "_real") else b
+            real = getattr(b, "_real", b)
             if real is not None and hasattr(real, "disconnect"):
                 try:
                     fut = asyncio.run_coroutine_threadsafe(real.disconnect(), loop)

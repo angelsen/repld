@@ -236,7 +236,7 @@ class _GistFinder(importlib.abc.MetaPathFinder):
                     )
         # Cross-project linked gist (exact name only — local dirs win above;
         # same precedence rule as _find_gist and _iter_gist_files).
-        linked = _linked_path(fullname)
+        linked = gist_links.linked_path(fullname)
         if linked is not None:
             _managed[fullname] = linked
             _mtimes[fullname] = linked.stat().st_mtime
@@ -372,11 +372,6 @@ def introspect(name: str) -> str:
     return "\n".join(lines)
 
 
-def _linked_path(name: str) -> Path | None:
-    """Cross-project linked gist path for an exact name, if the file exists."""
-    return gist_links.linked_path(name)
-
-
 def _find_gist(name: str) -> Path | None:
     """Resolve gist name to a single .py file for AST introspection.
 
@@ -387,7 +382,7 @@ def _find_gist(name: str) -> Path | None:
         p = d / f"{name}.py"
         if p.is_file():
             return p
-    return _linked_path(name)
+    return gist_links.linked_path(name)
 
 
 def _init_args(node: ast.ClassDef) -> str:
@@ -559,6 +554,11 @@ def _extract_tools_from_tree(tree: ast.Module, path: Path) -> list[dict]:
     return []
 
 
+def is_public_gist_file(p: Path) -> bool:
+    """A gist file is public unless its name starts with an underscore."""
+    return not p.name.startswith("_")
+
+
 def _iter_gist_files():
     """Yield non-private .py gist paths: installed dirs first, then linked.
 
@@ -570,7 +570,7 @@ def _iter_gist_files():
         if not d.is_dir():
             continue
         for p in sorted(d.glob("*.py")):
-            if p.name.startswith("_") or p.stem in seen:
+            if not is_public_gist_file(p) or p.stem in seen:
                 continue
             seen.add(p.stem)
             yield p
@@ -648,7 +648,9 @@ def _is_old_style(func) -> bool:
 
 def _resolve_json_type(annotation) -> str | None:
     """Map a parameter annotation to a JSON Schema type, unwrapping
-    ``X | None`` / ``Optional[X]`` to the non-None arm. None if unmapped."""
+    ``X | None`` / ``Optional[X]`` to the non-None arm and parameterized
+    generics (``list[str]``, ``dict[str, int]``) to their base type.
+    None if unmapped."""
     mapped = _TYPE_MAP.get(annotation)
     if mapped is not None:
         return mapped
@@ -656,7 +658,10 @@ def _resolve_json_type(annotation) -> str | None:
     if origin is typing.Union or origin is types.UnionType:
         args = [a for a in typing.get_args(annotation) if a is not type(None)]
         if len(args) == 1:
-            return _TYPE_MAP.get(args[0])
+            return _resolve_json_type(args[0])
+        return None
+    if origin is not None:
+        return _TYPE_MAP.get(origin)
     return None
 
 

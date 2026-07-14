@@ -11,14 +11,11 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from .row import size_str
-
-if TYPE_CHECKING:
-    from .session import BrowserSession
-    from .tab import Tab
+from .session import BrowserSession
+from .tab import Tab
 
 # ---------------------------------------------------------------------------
 # Role filtering sets
@@ -180,8 +177,6 @@ async def _discover_iframe_children(
 
     Uses CDP target metadata directly — no JS eval or URL heuristics.
     """
-    from .tab import Tab as _Tab
-
     parent_id = tab._session.chrome_target_id
     children: list["Tab"] = []
     for cdp_session in session._sessions.values():
@@ -190,7 +185,7 @@ async def _discover_iframe_children(
             continue
         if info.get("parentFrameId") == parent_id:
             target_id = info.get("targetId", "")
-            children.append(_Tab(cdp_session, target_id, tab._port))
+            children.append(Tab(cdp_session, target_id, tab._port))
     return children
 
 
@@ -217,7 +212,6 @@ async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[
         return []
 
     from . import make_target
-    from .tab import Tab as _Tab
 
     warnings: list[str] = []
     for cdp_session in session._sessions.values():
@@ -228,7 +222,7 @@ async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[
         if not target_id:
             continue
 
-        parent_tab = _Tab(cdp_session, target_id, tab._port)
+        parent_tab = Tab(cdp_session, target_id, tab._port)
         try:
             result = await parent_tab.js(_DIALOG_DETECT_JS)
         except Exception:
