@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `browser_screenshot` tool description now warns that reapplying `Emulation.setDeviceMetricsOverride` on an already-emulated tab can leave viewport metrics inconsistent — recommend a fresh tab per distinct size and verifying `clientWidth === innerWidth` before trusting the capture
+- `BROWSER_GUIDE` (`repld help browser`) gained a "Mobile viewport testing" section: CDP emulation pitfalls and the ADB-forwarded real-device fallback (`adb forward` + `Browser(port=)`)
+
 ### Fixed
 
 ### Removed
