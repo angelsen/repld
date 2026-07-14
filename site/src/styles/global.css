@@ -18,6 +18,17 @@ html {
 	background: var(--color-ink);
 	color: var(--color-fg);
 	color-scheme: dark;
+	/* <html>, not <body>, is the actual root scroller in standard mode — clipping
+	   overflow only on body (below) doesn't reliably stop document.scrollWidth /
+	   window.innerWidth from reflecting descendants that extend past the viewport
+	   (e.g. decorative bleeds like the hero glow or toast overshoot, or elements
+	   mid-reveal-animation sitting translated off-screen while visibility:hidden
+	   — which still occupy their layout box). Confirmed on real Android Chrome
+	   hardware: this stray overflow gets latched into window.innerWidth at
+	   initial page load, which then mis-sizes every position:fixed;left:0;right:0
+	   element on the page (nav sheet/backdrop/FAB) against the wrong, wider
+	   value. Root-level overflow-x:hidden here is what actually prevents that. */
+	overflow-x: hidden;
 }
 
 body {

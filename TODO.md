@@ -96,7 +96,12 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 - [ ] Auto-viewport in `tab.screenshot()` — temporarily set `Emulation.setDeviceMetricsOverride`
   with `deviceScaleFactor: 1` and model-optimal dims before capture, then restore. Avoids
   client-side downscale entirely; text rendered at target resolution. Tradeoff: responsive
-  breakpoints may trigger on viewport resize.
+  breakpoints may trigger on viewport resize. **Must verify `document.documentElement.clientWidth
+  === window.innerWidth` after applying the override, before capturing** — confirmed on real
+  hardware that reapplying the override on an already-emulated tab can leave the two
+  disagreeing (a self-contradicting state a real browser never produces on a fresh load), which
+  silently corrupts the capture. Fall back to a fresh tab/reload if mismatched rather than
+  proceeding on bad viewport data (session 011).
 - [x] PNG unfilter bug — `_resize_png` read filtered scanlines as raw pixel data; Chrome's
   PNG encoder uses Sub/Up/Average/Paeth filters, so every resized screenshot was garbled.
   Added standard unfilter pass before nearest-neighbor sampling (session 010).

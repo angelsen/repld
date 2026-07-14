@@ -117,6 +117,23 @@ choice = await tab.choose("Which environment?", ["staging", "production"])
 
 Watched tabs push console errors and uncaught exceptions to the channel the instant they happen — no polling. Duplicate errors firing across tabs within 2 seconds collapse into one follow-up message. Mute a noisy pattern (a dev-server HMR warning, a third-party script) with `browser.suppress("substring")`; `browser.unsuppress(...)` un-mutes, `browser.suppressed` lists active patterns.
 
+## Mobile viewport testing
+
+CDP's `Emulation.setDeviceMetricsOverride` works for one-shot mobile screenshots, but reapplying a different override on the same tab can leave `document.documentElement.clientWidth` and `window.innerWidth` disagreeing — a state real browsers never produce. Prefer a fresh tab per distinct viewport size, and verify `clientWidth === innerWidth` before trusting the capture.
+
+For definitive results, connect to a real device over ADB instead of emulating:
+
+```bash
+adb forward tcp:9333 localabstract:chrome_devtools_remote
+```
+
+```python
+mobile = browser.connect(9333)
+tab = mobile.tabs[0]
+```
+
+This sidesteps emulation entirely — touch events, viewport metrics, and screenshots all reflect the actual hardware.
+
 ## What's next
 
 - [Browser reference](/repld/docs/reference/browser/) — full Tab API with every method and property

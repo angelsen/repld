@@ -1050,6 +1050,23 @@ linked (from other projects):
 				.pane pre {
 					font-size: 12px;
 				}
+				.pane .gistlist {
+					/* At 12px the longest line (62 chars) renders wider than
+					   .pane's own content box on every mobile viewport, forcing
+					   real horizontal overflow. That overflow gets latched into
+					   window.innerWidth at initial page load (confirmed via a
+					   completely unrelated test element and a bare example.com
+					   load for comparison), which then mis-sizes every
+					   position:fixed;left:0;right:0 element on the page (the
+					   mobile nav sheet/backdrop/FAB) against the wider, wrong
+					   value — not fixable by patching those elements themselves,
+					   since the actual cause is upstream. Shrinking this one
+					   line to fit removes the overflow at its source instead.
+					   7px keeps a real margin (not just barely fitting) down to
+					   ~360px-wide phones; only the smallest legacy devices
+					   (~320px) may still see marginal overflow. */
+					font-size: 7px;
+				}
 				.sc-body {
 					font-size: 12px;
 				}

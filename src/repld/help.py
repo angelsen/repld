@@ -1163,6 +1163,21 @@ Touch vs mouse:
   Touch events may hang on complex apps (React, Messenger) where JS handlers
   block. tap/swipe/scroll have a 3s timeout and raise TimeoutError cleanly.
 
+Mobile viewport testing:
+  Emulation.setDeviceMetricsOverride (via tab.cdp) can leave viewport metrics
+  inconsistent if reapplied on a tab that already has a different override —
+  confirmed on real hardware: document.documentElement.clientWidth and
+  window.innerWidth can disagree on the same page load, which a real browser
+  never does on a fresh one. Use a fresh tab per distinct size, and verify
+  clientWidth === innerWidth before trusting anything measured or captured.
+
+  For definitive results, or when emulation disagrees with itself, a real
+  device over ADB sidesteps emulation entirely: `adb forward tcp:PORT
+  localabstract:chrome_devtools_remote`, then Browser(port=PORT) connects to
+  the device's actual Chrome — same Tab API, real rendering. Worth a gist for
+  repeated use (connect, forward, `adb shell screencap` for true
+  native-resolution screenshots instead of CDP's).
+
 Target IDs: "{port}:{6-hex}" (e.g. 9222:887d3d). Stable across navigation.
 Browser(port=N) creates a standalone instance for non-default ports (e.g. ADB-forwarded).
 Requires: Chrome --remote-debugging-port=9222

@@ -365,7 +365,7 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a PNG screenshot of a tab, resized to the vision API token grid. Returns path + coordinate mapping. Use Read to view. For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}.",
+        "description": "Capture a PNG screenshot of a tab, resized to the vision API token grid. Returns path + coordinate mapping. Use Read to view. For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}. Reapplying the override on an already-emulated tab can leave viewport metrics inconsistent (clientWidth != innerWidth) — prefer a fresh tab per distinct size, and verify document.documentElement.clientWidth === window.innerWidth before trusting the capture.",
         "inputSchema": {
             "type": "object",
             "properties": {
