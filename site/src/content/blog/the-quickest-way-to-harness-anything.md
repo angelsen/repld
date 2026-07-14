@@ -1,12 +1,12 @@
 ---
 title: "The Quickest Way to Harness Anything"
 pubDate: 2026-07-14
-description: "\"Agent harness\" became this year's word for the loop that drives an LLM. There's an older, plainer sense of the word repld actually lives in — and it's not that one."
+description: "\"Agent harness\" became this summer's word for the loop that drives an LLM. There's an older, plainer sense of the word repld actually lives in — and it's not that one."
 tags: ["agent-harness", "positioning", "controls", "gists"]
 model: "claude-sonnet-5"
 ---
 
-This is the year "harness" became the word. Every model release comes with a harness post attached. LangChain wrote an anatomy of one.[^langchain] Martin Fowler wrote a mental model for building your own.[^fowler] Hugging Face had to publish a glossary because nobody at ICLR could agree what it meant.[^hf] Cursor blogs about "continually improving our agent harness." OpenAI shipped an entire engineering post just titled *Harness Engineering*.
+This is the summer "harness" became the word. Every model release comes with a harness post attached. LangChain wrote an anatomy of one.[^langchain] Martin Fowler wrote a mental model for building your own.[^fowler] Hugging Face had to publish a glossary because nobody at ICLR could agree what it meant.[^hf] Cursor blogs about "continually improving our agent harness." OpenAI shipped an entire engineering post just titled *Harness Engineering*.
 
 The definition that's converged is precise, and it's useful: **Agent = Model + Harness**.[^hf] The model takes text in, produces text out, and forgets everything the moment the call returns. The harness is everything else — the loop that calls the model, parses its tool calls, decides when to stop, decides what it's allowed to touch. Claude Code's own docs say it outright: *"Claude Code serves as the agentic harness around Claude."*[^hf] Codex, Cursor, Antigravity — same shape, different choices. Two products wrapped around the same model can feel completely different, because the harness is where all the actual design happens.
 
