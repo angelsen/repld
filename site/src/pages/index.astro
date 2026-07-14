@@ -389,8 +389,20 @@ linked (from other projects):
 			function playHero() {
 				if (reduced) return;
 				headingFontReady().then(() => {
-					const split = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
-					gsap.set('.hero h1', { visibility: 'visible' }); // lines masked offscreen — no flash
+					const h1 = document.querySelector<HTMLElement>('.hero h1')!;
+					// SplitText restructures h1's content into per-line wrapper
+					// elements, which changes h1's measured intrinsic width just
+					// enough to nudge .hero's CSS grid column split (~46px) —
+					// arriving ~1.6s in, well after first paint, that's a real,
+					// measured layout shift on .hero/main (confirmed via the
+					// Layout Instability API's before/after rects). Locking h1's
+					// own box for the split → mask → animate → revert lifecycle
+					// means the grid never needs to remeasure it at all.
+					const rect = h1.getBoundingClientRect();
+					h1.style.width = `${rect.width}px`;
+					h1.style.height = `${rect.height}px`;
+					const split = SplitText.create(h1, { type: 'lines', mask: 'lines' });
+					gsap.set(h1, { visibility: 'visible' }); // lines masked offscreen — no flash
 					gsap
 						.timeline()
 						.from('.kicker', { y: 18, autoAlpha: 0, duration: 0.5, ease: 'power3.out' })
@@ -401,7 +413,11 @@ linked (from other projects):
 								duration: 0.9,
 								stagger: 0.09,
 								ease: 'power4.out',
-								onComplete: () => split.revert(), // restore glow/text-shadow
+								onComplete: () => {
+									split.revert(); // restore glow/text-shadow
+									h1.style.width = '';
+									h1.style.height = '';
+								},
 							},
 							0.05,
 						)
