@@ -361,6 +361,9 @@ def introspect(name: str) -> str:
         lines.append(_first_line(mod_doc))
         lines.append("")
 
+    lines.append(import_hint(name))
+    lines.append("")
+
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             _format_class(node, lines)
@@ -518,13 +521,55 @@ def usage_for(name: str) -> str | None:
     return _usage_value(tree)
 
 
+def import_hint(name: str) -> str:
+    """Shortest correct 'how to bring this gist in' line, e.g.
+
+    'from gigahost import Gigahost; gh = Gigahost.from_env()' or
+    'import gigahost' when there's no public class/usage to show.
+
+    Shared by build_instructions() and introspect() so the always-loaded
+    instructions and the on-demand repld://gists/{name} resource can't
+    show different (or no) import advice for the same gist.
+    """
+    sig = signature(name)
+    usage = usage_for(name)
+    if usage and sig:
+        class_name = sig.split("(")[0]
+        return f"from {name} import {class_name}; {usage}"
+    if usage:
+        return f"import {name}; {usage}"
+    if sig:
+        return f"from {name} import {sig}"
+    return f"import {name}"
+
+
+def _is_exception_class(node: ast.ClassDef) -> bool:
+    """True if node looks like an exception type, not an entry-point class.
+
+    Name- and base-suffix heuristic (e.g. GigahostError(RuntimeError)) — gists
+    commonly define a custom error type before their main class, and that
+    error type should never win "the" signature() pick.
+    """
+    if node.name.endswith(("Error", "Exception")):
+        return True
+    for base in node.bases:
+        base_name = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+        if base_name.endswith(("Error", "Exception")):
+            return True
+    return False
+
+
 def signature_for_path(path: Path) -> str:
     """Like signature(), but for a path already in hand (no _installed_dirs lookup)."""
     tree = _parse(path)
     if tree is None:
         return ""
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+        if (
+            isinstance(node, ast.ClassDef)
+            and not node.name.startswith("_")
+            and not _is_exception_class(node)
+        ):
             has_async = any(
                 isinstance(item, ast.AsyncFunctionDef) for item in node.body
             )

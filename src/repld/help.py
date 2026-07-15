@@ -940,19 +940,7 @@ def build_instructions() -> str:
     if available:
         lines = ["Available gists:"]
         for name, doc in available:
-            sig = gists.signature(name)
-            usage = gists.usage_for(name)
-            if usage and sig:
-                # Usage override — show import of class name + usage hint
-                class_name = sig.split("(")[0]
-                hint = f"from {name} import {class_name}; {usage}"
-            elif usage:
-                # Usage override on a classless (function-based) gist
-                hint = f"import {name}; {usage}"
-            elif sig:
-                hint = f"from {name} import {sig}"
-            else:
-                hint = f"import {name}"
+            hint = gists.import_hint(name)
             lines.append(f"  {hint:<55s} {doc}")
         parts.append("\n".join(lines))
 
@@ -1011,6 +999,7 @@ Commands:
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
   repld gist list          Show local + linked gists
+  repld gist lint [NAME]   Check gist(s) for common authoring gaps
   repld browser ARGS...    Re-exec with browser deps (duckdb/websockets)
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
@@ -1217,6 +1206,15 @@ Dependencies:
   Use "." to depend on the gist's own project (editable install when linked elsewhere).
   Kernel scans at boot, prompts to install missing packages into the venv.
   Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
+
+Linting:
+  repld gist lint [name...]   Check gist(s) for common authoring gaps
+  Rules: firstline (module docstring's first line must stand alone),
+  shape (dict/list-returning public methods need -> {shape} in their
+  docstring's first line), deps (non-stdlib imports need __repld_deps__),
+  legacy (__repld_tools__ is deprecated, catches it before a tool call
+  would trigger the runtime warning).
+  Suppress one: # gistlint: ignore=<rule> on the flagged line.
 
 Cross-project links:
   repld gist list             local + linked gists in this project
@@ -1531,6 +1529,14 @@ output, stable downstream code, and a shape that fits in a docstring.
 Module-level state resets on reload. Globals (clients, caches) re-initialize
 when the gist auto-reloads; stale connections are not closed. Keep such
 state disposable — lazy-init clients, caches that can rebuild.
+
+Lint before calling it done. `repld gist lint [name...]` checks: the module
+docstring's first line stands alone (it's what gets truncated into tool
+listings and instructions); public methods returning dict/list document the
+shape on the docstring's first line (`-> {key, ...}`); every non-stdlib
+import is covered by `__repld_deps__`; no lingering `__repld_tools__` (the
+deprecated tool-registration override). Suppress a specific finding with
+`# gistlint: ignore=<rule>` on the flagged line (or the line above).
 
 === Writing portable gists ===
 

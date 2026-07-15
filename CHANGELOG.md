@@ -8,8 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld gist lint [name...]` — AST-based best-practices checker for gist files. Four rules: `firstline` (module docstring's first line must stand alone — it's what gets truncated into tool listings/instructions/resource descriptions), `shape` (public methods returning dict/list/Any should document the return shape on the docstring's first line), `deps` (non-stdlib imports should be declared in `__repld_deps__`), `legacy` (flags `__repld_tools__` statically instead of only warning reactively at tool-call time). Suppress a finding with `# gistlint: ignore=<rule>` on the flagged line or the line above. Scans the same dirs + precedence a live kernel resolves against (`~/.repld/gists`, `./gists`, and `.links`), not just the local project. Documented in `repld://docs/guide`'s Conventions section, `repld help gists`, and `repld help`'s command list
+
 ### Changed
 
+- `gists.import_hint()` is now a shared helper — `build_instructions()` (always-loaded MCP instructions) and `introspect()` (the on-demand `repld://gists/{name}` resource) both call it instead of each computing their own import line, so they can't show different (or no) import advice for the same gist
 - `browser_screenshot` tool description now warns that reapplying `Emulation.setDeviceMetricsOverride` on an already-emulated tab can leave viewport metrics inconsistent — recommend a fresh tab per distinct size and verifying `clientWidth === innerWidth` before trusting the capture
 - `BROWSER_GUIDE` (`repld help browser`) gained a "Mobile viewport testing" section: CDP emulation pitfalls and the ADB-forwarded real-device fallback (`adb forward` + `Browser(port=)`)
 - Another round of internal cleanup: `row.py`'s HAR/console/SSE/lifecycle factory functions now index SQL results by column name instead of raw tuple position (a reordered column in `har.py` used to silently corrupt fields, caught only by a hand-maintained comment); `kernel.py`/`gists.py` stopped reaching into `tasks._current_task`/`gist_links._linked` directly in favor of `tasks.set_current_task()`/`gist_links.linked_names()`/`linked_path()`/`linked_items()`; `gists.py`'s `scan_tools`/`resolve_tool` share one `_try_import_gist` helper; `kernel.py`'s `@every` ticker uses the `_push()` helper consistently; `gist_cmd.py`'s `new`/`add`/`rm` usage messages are now consistent on empty args; dashboard's unused `state["browser"]["available"]` field was dropped
@@ -23,6 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Tab.sse()` and `Tab.lifecycle()` ordered results by `ORDER BY rowid`, a column their underlying views never expose (only `id`) — both raised a DuckDB `BinderException` on every call
 - Dashboard's per-pattern tab-count display recomputed glob matching in JS with a hand-rolled regex that always escaped `[`/`]`, diverging from the server's `fnmatch`-based watch matching — bracket-class patterns could show a stale count. Counts are now computed server-side in `BrowserPool.snapshot()` next to the actual match logic, and the client just renders them
 - `gists._resolve_json_type` didn't unwrap parameterized generics (`list[str]`, `dict[str, int]`) when inferring an MCP tool schema from a `_tool_*` signature — fell through to the "unmapped type" warning and silently schema'd the param as `"string"`
+- `gists.signature_for_path` (and `signature()`) picked a gist's *first* public class by file order for the "here's how to import this" hint, with no regard for whether it was the entry point — a custom exception type declared before the main class (a common pattern, e.g. `GigahostError(RuntimeError)` before `Gigahost`) would win instead, producing a hint that imported the wrong class. Now skips classes whose name or base ends in `Error`/`Exception`
 
 ### Removed
 

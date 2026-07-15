@@ -150,6 +150,52 @@ def _gist_rm(argv: list[str]) -> int:
         return 1
 
 
+def _gist_lint(argv: list[str]) -> int:
+    from . import gist_lint
+    from . import gists as _gists
+
+    usage = (
+        "repld gist lint [name...] — check gist(s) against best practices "
+        "(default: everything a kernel here would import — ~/.repld/gists, "
+        "./gists, and linked)"
+    )
+    if _wants_help(argv):
+        print(usage)
+        return 0
+    # Same dirs + precedence a live kernel resolves against (kernel.py boot).
+    _gists.install([Path.home() / ".repld" / "gists", Path.cwd() / "gists"])
+
+    if argv:
+        paths = []
+        missing = []
+        for name in argv:
+            p = _gists._find_gist(name)
+            if p is None:
+                missing.append(name)
+            else:
+                paths.append(p)
+        if missing:
+            for name in missing:
+                print(f"error: '{name}' not found (local, global, or linked)")
+            return 2
+    else:
+        paths = sorted(_gists._iter_gist_files())
+        if not paths:
+            print("no gists found")
+            return 0
+
+    findings = gist_lint.lint_paths(paths)
+    for f in findings:
+        print(f)
+    if findings:
+        print(
+            f"\n{len(findings)} finding(s) in {len({f.path for f in findings})} file(s)"
+        )
+        return 1
+    print(f"clean: {len(paths)} gist(s) checked")
+    return 0
+
+
 def _gist_list(argv: list[str]) -> int:
     from . import gist_links
     from . import gists as _gists
@@ -220,4 +266,5 @@ _GIST_COMMANDS = {
     "add": (_gist_add, "add <name>", "link a gist registered in another project"),
     "rm": (_gist_rm, "rm <name>", "unlink (use --stale to drop all dead links)"),
     "list": (_gist_list, "list", "show local + linked + linkable gists"),
+    "lint": (_gist_lint, "lint [name...]", "check gist(s) against best practices"),
 }
