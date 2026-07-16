@@ -235,7 +235,22 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     if uv:
         if _is_tool_venv():
             _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
-            cmd = [uv, "pip", "install", "--target", str(_TOOL_DEPS_DIR), *req_args]
+            # --python pins resolution to the interpreter actually running this
+            # kernel. Without it, uv resolves against its own default/preferred
+            # Python, which can silently differ from sys.executable — a binary
+            # wheel (cffi, cryptography, numpy, ...) built for the wrong ABI
+            # lands in _TOOL_DEPS_DIR and fails with a bare ModuleNotFoundError
+            # for its compiled extension, not an obviously-version-related error.
+            cmd = [
+                uv,
+                "pip",
+                "install",
+                "--target",
+                str(_TOOL_DEPS_DIR),
+                "--python",
+                sys.executable,
+                *req_args,
+            ]
         else:
             cmd = [uv, "pip", "install", "--python", sys.executable, *req_args]
     else:
