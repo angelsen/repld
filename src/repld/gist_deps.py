@@ -1,10 +1,13 @@
 """Gist dependency management — __repld_deps__ scanning + interactive install.
 
 Gists declare external dependencies via `__repld_deps__ = ["httpx>=0.27"]`
-(or "." for the gist's own project as an editable install). scan_deps()
-AST-scans gist files at boot; install_deps() prompts on the real tty and
-installs into the current venv (or a --target dir when repld runs as a uv
-tool) via `uv pip install`.
+(or "." for the gist's own project as an editable install, or
+"path:some/dir" to prepend a local directory to sys.path — for vendored,
+non-pip-installable code). scan_deps() AST-scans gist files at boot;
+install_deps() prompts on the real tty and installs into the current venv
+(or a --target dir when repld runs as a uv tool) via `uv pip install`. Path
+deps skip install_deps() entirely — resolved and added to sys.path directly
+by scan_deps() since there's nothing to install.
 
 Shares the parse cache and file iterator with gists.py; the two modules
 import each other and access attributes at call time (never
@@ -111,6 +114,41 @@ def _resolve_dot_dep(gist_path: Path) -> _DepInfo | None:
     )
 
 
+def resolve_path_target(rel_path: str, gist_path: Path) -> Path:
+    """Resolve a 'path:' dep string to an absolute directory.
+
+    Relative paths resolve from the gist's project root (same convention as
+    '.'); absolute paths pass through as-is. Pure resolution — no existence
+    check, no sys.path mutation. Shared with gist_lint's deps rule so both
+    agree on where a path dep points.
+    """
+    p = Path(rel_path.strip().rstrip("/"))
+    if not p.is_absolute():
+        p = gist_path.parent.parent / p
+    return p.resolve()
+
+
+def _resolve_path_dep(rel_path: str, gist_path: Path) -> Path | None:
+    """Resolve a 'path:' dep and prepend it to sys.path — no pip install.
+
+    Missing directories fail loudly (submodule-init hint) instead of
+    surfacing as a bare ModuleNotFoundError the first time the gist runs.
+    """
+    resolved = resolve_path_target(rel_path, gist_path)
+    if not resolved.is_dir():
+        gists._warn_once(
+            f"{gist_path}:path:{rel_path}",
+            f"repld: {gist_path.name}: path dep '{rel_path}' not found at "
+            f"{resolved} — did you run `git submodule update --init`?",
+        )
+        return None
+    resolved_str = str(resolved)
+    if resolved_str in sys.path:
+        return resolved
+    sys.path.insert(0, resolved_str)
+    return resolved
+
+
 def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
     """AST-scan gist files for __repld_deps__. Returns missing deps with their sources.
 
@@ -151,6 +189,9 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
                         deps[key].gists.append(p.stem)
                     else:
                         deps[key] = info
+                continue
+            if req_str.startswith("path:"):
+                _resolve_path_dep(req_str[len("path:") :], p)
                 continue
             pkg = _parse_pkg_name(req_str)
             if _is_importable(pkg):

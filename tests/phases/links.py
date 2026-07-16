@@ -1,18 +1,19 @@
-"""Phase 12: Cross-project gist links — add / sibling / boot-import / list / rm / stale."""
+"""Phase 12: Cross-project gist links — add / sibling / boot-import / list / rm / stale / path deps."""
 
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
 
-from repld import gist_deps, gists
+from repld import gist_deps, gist_lint, gists
 from repld import gist_links as g
 
 
 def phase_12_gist_links(kernel: Kernel) -> None:
-    """Link a gist from another project: manifest, sibling co-link, boot import, prune."""
+    """Link a gist from another project: manifest, sibling co-link, boot import, prune, path deps."""
     other = Path(tempfile.mkdtemp(prefix="repld-link-src-"))
     proj = Path(tempfile.mkdtemp(prefix="repld-link-proj-"))
     gd = proj / "gists"
@@ -69,6 +70,53 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(pkg("httpx[http2]>=0.27"), "httpx", "extras + specifier")
         assert_eq(pkg("httpx[http2]"), "httpx", "bare extras")
         print("  ✓ _parse_pkg_name handles multi-clause requirements and extras")
+
+        # --- path: dep resolves relative to project root, lands on sys.path ---
+        vendor = other / "vendor" / "mylib"
+        vendor.mkdir(parents=True)
+        (vendor / "common.py").write_text("VALUE = 42\n")
+        (src / "pathdep.py").write_text(
+            '"""Path-dep gist."""\n__repld_deps__ = ["path:vendor/mylib"]\n'
+        )
+        missing = gist_deps.scan_deps(paths=[src / "pathdep.py"])
+        assert_eq(missing, [], "path: dep produces no installable _DepInfo")
+        resolved_str = str(vendor.resolve())
+        assert_true(resolved_str in sys.path, "path: dep prepended to sys.path")
+        print("  ✓ path: dep resolves relative to project root, lands on sys.path")
+
+        # --- idempotent: a second gist declaring the same path doesn't duplicate it ---
+        (src / "pathdep2.py").write_text(
+            '"""Second path-dep gist."""\n__repld_deps__ = ["path:vendor/mylib"]\n'
+        )
+        gist_deps.scan_deps(paths=[src / "pathdep2.py"])
+        assert_eq(
+            sys.path.count(resolved_str), 1, "path: dep not duplicated in sys.path"
+        )
+        sys.path.remove(resolved_str)
+        print("  ✓ path: dep is idempotent across multiple declaring gists")
+
+        # --- missing path: dep warns instead of crashing, no _DepInfo produced ---
+        (src / "ghostdep.py").write_text(
+            '"""Missing path-dep gist."""\n__repld_deps__ = ["path:vendor/nope"]\n'
+        )
+        missing = gist_deps.scan_deps(paths=[src / "ghostdep.py"])
+        assert_eq(missing, [], "missing path: dep produces no _DepInfo, doesn't raise")
+        print("  ✓ missing path: dep warns instead of crashing")
+
+        # --- gist lint: path: dep suppresses the deps rule's false positive ---
+        (src / "usespath.py").write_text(
+            '"""Uses vendored common."""\n'
+            '__repld_deps__ = ["path:vendor/mylib"]\n'
+            "from common import VALUE\n"
+        )
+        findings = gist_lint.lint_file(src / "usespath.py")
+        deps_findings = [f for f in findings if f.rule == "deps"]
+        assert_eq(
+            deps_findings,
+            [],
+            f"path: dep suppresses deps finding (got {deps_findings})",
+        )
+        print("  ✓ gist lint: path: dep suppresses false-positive deps finding")
 
         # --- boot a fresh kernel in the project: linked gist imports + sibling resolves ---
         sub = Kernel(proj)

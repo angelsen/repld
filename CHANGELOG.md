@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `repld gist lint [name...]` — AST-based best-practices checker for gist files. Four rules: `firstline` (module docstring's first line must stand alone — it's what gets truncated into tool listings/instructions/resource descriptions), `shape` (public methods returning dict/list/Any should document the return shape on the docstring's first line), `deps` (non-stdlib imports should be declared in `__repld_deps__`), `legacy` (flags `__repld_tools__` statically instead of only warning reactively at tool-call time). Suppress a finding with `# gistlint: ignore=<rule>` on the flagged line or the line above. Scans the same dirs + precedence a live kernel resolves against (`~/.repld/gists`, `./gists`, and `.links`), not just the local project. Documented in `repld://docs/guide`'s Conventions section, `repld help gists`, and `repld help`'s command list
+- `__repld_deps__` gained a `"path:some/dir"` form — prepends a local, non-pip-installable directory to `sys.path` (e.g. a vendored git submodule), relative to the gist's project root. No install step; a missing directory warns loudly with a `git submodule update --init` hint instead of a bare `ModuleNotFoundError` the first time the gist runs. `gist lint`'s `deps` rule treats top-level modules/packages found in the resolved directory as declared, so imports from it don't false-positive
 
 ### Changed
 

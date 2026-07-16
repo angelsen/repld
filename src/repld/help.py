@@ -79,8 +79,9 @@ _GISTS_MODEL = (
     "callable directly without exec, discoverable in tools/list. Schema is "
     "inferred from type hints and the docstring's first line.\n"
     'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
-    'use "." to depend on the gist\'s own project. '
-    "Kernel prompts to install missing ones at boot.\n"
+    'use "." to depend on the gist\'s own project; use "path:vendor/lib" to '
+    "add a local (non-pip-installable) directory to sys.path, relative to "
+    "the project root. Kernel prompts to install missing PyPI ones at boot.\n"
     "Read repld://gists/_registry to see gists written in other projects; the "
     "user can link one in with `repld gist add <name>` (no copy)."
 )
@@ -1204,7 +1205,11 @@ Tool registration:
 Dependencies:
   __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
   Use "." to depend on the gist's own project (editable install when linked elsewhere).
-  Kernel scans at boot, prompts to install missing packages into the venv.
+  Use "path:vendor/lib" to prepend a local, non-pip-installable directory to
+  sys.path (relative to the project root; absolute paths pass through as-is).
+  No install step, no auto-reload — a missing directory warns with a
+  git-submodule hint instead of failing later with a bare ModuleNotFoundError.
+  Kernel scans at boot, prompts to install missing PyPI packages into the venv.
   Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
 
 Linting:
@@ -1463,6 +1468,7 @@ Template:
 
   __repld_deps__ = ["httpx>=0.27"]  # PyPI packages, auto-installed at boot
   # __repld_deps__ = ["."]          # depend on the project itself (editable install)
+  # __repld_deps__ = ["path:vendor/lib"]  # local dir added to sys.path, not pip-installed
   __repld_usage__ = "app = await AppName.connect()"
 
 

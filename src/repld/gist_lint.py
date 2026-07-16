@@ -173,7 +173,18 @@ def _root_module(dotted: str) -> str:
     return dotted.split(".")[0]
 
 
-def _declared_deps(tree: ast.Module) -> set[str]:
+def _importable_stems(directory: Path) -> set[str]:
+    """Top-level module/package names importable from a path: dep directory."""
+    stems: set[str] = set()
+    for child in directory.iterdir():
+        if child.is_file() and child.suffix == ".py" and child.stem != "__init__":
+            stems.add(child.stem)
+        elif child.is_dir() and (child / "__init__.py").is_file():
+            stems.add(child.name)
+    return stems
+
+
+def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
     node = gists._dunder_value(tree, "__repld_deps__")
     if node is None:
         return set()
@@ -183,7 +194,18 @@ def _declared_deps(tree: ast.Module) -> set[str]:
         return set()
     if not isinstance(reqs, list):
         return set()
-    return {gist_deps._parse_pkg_name(str(r)) for r in reqs if str(r) != "."}
+    declared: set[str] = set()
+    for r in reqs:
+        req_str = str(r)
+        if req_str == ".":
+            continue
+        if req_str.startswith("path:"):
+            target = gist_deps.resolve_path_target(req_str[len("path:") :], gist_path)
+            if target.is_dir():
+                declared.update(_importable_stems(target))
+            continue
+        declared.add(gist_deps._parse_pkg_name(req_str))
+    return declared
 
 
 def _sibling_gist_names(path: Path) -> set[str]:
@@ -193,7 +215,7 @@ def _sibling_gist_names(path: Path) -> set[str]:
 def _check_deps(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
-    declared = _declared_deps(tree)
+    declared = _declared_deps(tree, path)
     siblings = _sibling_gist_names(path)
     seen: set[str] = set()
     findings: list[Finding] = []
