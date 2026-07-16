@@ -191,7 +191,13 @@ def registry_summary() -> str:
 
 
 def _check_reload(fullname: str) -> None:
-    """If the gist file changed, evict from sys.modules so next import reloads it."""
+    """If the gist file changed, evict from sys.modules so next import reloads it.
+
+    Also re-checks __repld_deps__ for just this file and prompts for anything
+    newly declared — otherwise a dependency added after kernel boot would sit
+    silently unchecked until someone thought to restart the whole process
+    (scan_deps() only ever ran once, at boot, before this).
+    """
     src = _managed.get(fullname)
     if src is None or not src.is_file():
         return
@@ -199,6 +205,9 @@ def _check_reload(fullname: str) -> None:
     prev = _mtimes.get(fullname)
     if prev is not None and mtime > prev:
         sys.modules.pop(fullname, None)
+        missing = gist_deps.scan_deps(paths=[src])
+        if missing:
+            gist_deps.install_deps(missing)
         # Don't update _mtimes here — let find_spec update it on reload
 
 
@@ -261,10 +270,13 @@ class _GistImportHook:
         else:
             base = name
 
-        # Check if this module (or its top-level) is a managed gist
+        # Check if this module (or its top-level) is a managed gist. Dedupe
+        # base/top when equal (the common flat-gist case) — _check_reload's
+        # dep-scan prompt would otherwise fire twice for one reload, since
+        # _mtimes isn't updated until find_spec runs, below.
         top = base.split(".")[0]
-        _check_reload(base)
-        _check_reload(top)
+        for candidate in {base, top}:
+            _check_reload(candidate)
 
         result = self._original(name, globals, locals, fromlist, level)
 
