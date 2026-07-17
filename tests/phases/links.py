@@ -1,5 +1,6 @@
 """Phase 12: Cross-project gist links — add / sibling / boot-import / list / rm / stale / path deps."""
 
+import importlib.metadata
 import json
 import os
 import shutil
@@ -72,6 +73,28 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(pkg("httpx[http2]>=0.27"), "httpx", "extras + specifier")
         assert_eq(pkg("httpx[http2]"), "httpx", "bare extras")
         print("  ✓ _parse_pkg_name handles multi-clause requirements and extras")
+
+        # --- _is_importable falls back to a distribution's real import name
+        # (e.g. pyyaml -> yaml) instead of reporting it missing forever ---
+        orig_pd = importlib.metadata.packages_distributions
+        importlib.metadata.packages_distributions = lambda: {
+            "json": ["phantom-dist-match"],  # stdlib, always importable
+            "no_such_module_xyz": ["phantom-dist-nomatch"],
+        }
+        gist_deps._dist_to_import = None
+        try:
+            assert_true(
+                gist_deps._is_importable("phantom-dist-match"),
+                "falls back to the distribution's real import name",
+            )
+            assert_true(
+                not gist_deps._is_importable("phantom-dist-nomatch"),
+                "still missing when neither the name nor its import name resolves",
+            )
+        finally:
+            importlib.metadata.packages_distributions = orig_pd
+            gist_deps._dist_to_import = None
+        print("  ✓ _is_importable falls back to the distribution's real import name")
 
         # --- path: dep resolves relative to project root, lands on sys.path ---
         vendor = other / "vendor" / "mylib"

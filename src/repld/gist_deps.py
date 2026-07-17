@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.metadata
 import importlib.util
 import sys
 from dataclasses import dataclass
@@ -40,17 +41,52 @@ def _parse_pkg_name(req: str) -> str:
     return name.split("[")[0].strip()
 
 
+_dist_to_import: dict[str, list[str]] | None = None
+
+
+def _distribution_import_names(dist_name: str) -> list[str]:
+    """Import names an installed distribution actually provides, e.g.
+    'pyyaml' -> ['yaml', '_yaml'] — the PyPI project name and the importable
+    module name are unrelated for a fair number of packages (pyyaml/yaml,
+    beautifulsoup4/bs4, ...), so name.replace("-", "_") alone can't find them.
+
+    Caches importlib.metadata's reverse mapping — scanning installed-package
+    metadata on every _is_importable() call would be wasteful. Reset after
+    install_deps() actually installs something, so a dep installed mid-session
+    is picked up without needing a kernel restart.
+    """
+    global _dist_to_import
+    if _dist_to_import is None:
+        reverse: dict[str, list[str]] = {}
+        for imp, dists in importlib.metadata.packages_distributions().items():
+            for dist in dists:
+                reverse.setdefault(dist.lower(), []).append(imp)
+        _dist_to_import = reverse
+    return _dist_to_import.get(dist_name.lower(), [])
+
+
 def _is_importable(name: str) -> bool:
-    """Check if a package is importable. Tries the name as-is (covers most packages).
+    """Check if a package is importable. Tries the name as-is (covers most
+    packages), then falls back to the installed distribution's actual
+    top-level import name(s) — otherwise a dep like "pyyaml" (imports as
+    "yaml") would report "missing" forever, install or not.
 
     find_spec raises ModuleNotFoundError for dotted names whose parent is
     missing (e.g. "ruamel.yaml") and ValueError for malformed names — treat
     both as "not importable" so a gist dep can never crash boot.
     """
     try:
-        return importlib.util.find_spec(name.replace("-", "_")) is not None
+        if importlib.util.find_spec(name.replace("-", "_")) is not None:
+            return True
     except (ImportError, ValueError):
-        return False
+        pass
+    for import_name in _distribution_import_names(name):
+        try:
+            if importlib.util.find_spec(import_name) is not None:
+                return True
+        except (ImportError, ValueError):
+            continue
+    return False
 
 
 @dataclass
@@ -307,6 +343,8 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     if result.returncode == 0:
         ensure_deps_on_path()
         importlib.invalidate_caches()
+        global _dist_to_import
+        _dist_to_import = None  # newly installed dists aren't in the cached map yet
         count = len(selected)
         _tty_write(
             f"  \033[32m✓\033[0m installed {count} package{'s' * (count != 1)}\n"
