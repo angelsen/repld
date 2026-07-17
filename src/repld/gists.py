@@ -218,6 +218,20 @@ def _check_reload(fullname: str) -> None:
         # Don't update _mtimes here — let find_spec update it on reload
 
 
+def _scan_new_deps(src: Path) -> None:
+    """First-sight __repld_deps__ scan for a module find_spec hasn't tracked yet.
+
+    Boot-time scan_deps() covers everything that exists when the kernel starts;
+    _check_reload's edit-triggered rescan covers every later change. Neither
+    covers a gist written and imported for the first time in the same session
+    -- this closes that gap at the one point a never-before-seen module is
+    guaranteed to pass through.
+    """
+    missing = gist_deps.scan_deps(paths=[src])
+    if missing:
+        gist_deps.install_deps(missing)
+
+
 class _GistFinder(importlib.abc.MetaPathFinder):
     """Finder that checks gist directories and tracks mtimes for auto-reload.
 
@@ -245,6 +259,8 @@ class _GistFinder(importlib.abc.MetaPathFinder):
             # Check package (dir/__init__.py) or module (.py)
             for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
                 if p.is_file():
+                    if fullname not in _managed:
+                        _scan_new_deps(p)
                     mtime = p.stat().st_mtime
                     _managed[fullname] = p
                     _mtimes[fullname] = mtime
@@ -259,6 +275,8 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         # same precedence rule as _find_gist and _iter_gist_files).
         linked = gist_links.linked_path(fullname)
         if linked is not None:
+            if fullname not in _managed:
+                _scan_new_deps(linked)
             _managed[fullname] = linked
             _mtimes[fullname] = linked.stat().st_mtime
             return importlib.util.spec_from_file_location(fullname, linked)
@@ -270,6 +288,8 @@ class _GistFinder(importlib.abc.MetaPathFinder):
             candidate = d.joinpath(*parts)
             for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
                 if p.is_file():
+                    if fullname not in _managed:
+                        _scan_new_deps(p)
                     _managed[fullname] = p
                     _mtimes[fullname] = p.stat().st_mtime
                     _path_dep_modules.add(fullname)

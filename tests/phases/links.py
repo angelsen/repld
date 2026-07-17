@@ -158,6 +158,33 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         gists._mtimes.pop("common", None)
         gists._path_dep_modules.discard("common")
 
+        # --- first-sight dep scan: a gist created after boot gets __repld_deps__
+        # checked the moment it's first imported, not just on a later edit ---
+        scanned: list[list[Path] | None] = []
+        orig_scan_deps = gist_deps.scan_deps
+        gist_deps.scan_deps = lambda paths=None: (
+            scanned.append(paths),
+            orig_scan_deps(paths=paths),
+        )[1]
+        try:
+            (src / "freshgist.py").write_text('"""Fresh gist."""\nVALUE = 1\n')
+            finder = gists._GistFinder([src])
+            spec = finder.find_spec("freshgist", None)
+            assert_true(spec is not None, "finder resolves the new gist")
+            assert_eq(len(scanned), 1, "first sight of a new gist triggers a dep scan")
+            finder.find_spec("freshgist", None)  # already tracked -- no rescan
+            assert_eq(
+                len(scanned), 1, "already-managed gist isn't rescanned on find_spec"
+            )
+        finally:
+            gist_deps.scan_deps = orig_scan_deps
+            gists._managed.pop("freshgist", None)
+            gists._mtimes.pop("freshgist", None)
+        print(
+            "  ✓ first-sight dep scan: new gist checked on first import, "
+            "not rescanned after"
+        )
+
         # --- boot a fresh kernel in the project: linked gist imports + sibling resolves ---
         sub = Kernel(proj)
         b = Bridge(proj)
