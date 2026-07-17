@@ -1,9 +1,11 @@
 """Phase 12: Cross-project gist links — add / sibling / boot-import / list / rm / stale / path deps."""
 
 import json
+import os
 import shutil
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
@@ -117,6 +119,44 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             f"path: dep suppresses deps finding (got {deps_findings})",
         )
         print("  ✓ gist lint: path: dep suppresses false-positive deps finding")
+
+        # --- path: dep modules get gist-style mtime auto-reload, without the
+        # gist-registry/API-summary side effects a real gist import triggers ---
+        finder = gists._GistFinder([])  # empty gist dirs — only the path-dep tier fires
+        common_path = (vendor / "common.py").resolve()
+        spec = finder.find_spec("common", None)
+        assert_true(spec is not None, "finder resolves 'common' via a path: dep dir")
+        assert_eq(
+            gists._managed.get("common"), common_path, "tracked under the resolved path"
+        )
+        assert_true("common" in gists._path_dep_modules, "flagged as a path-dep module")
+
+        registered_before = set(gists._registered)
+        hook = gists._GistImportHook(lambda *a, **k: None)
+        hook("common")
+        assert_eq(
+            gists._registered,
+            registered_before,
+            "path-dep import doesn't write to the gist registry",
+        )
+        print("  ✓ path: dep import skips _register()/introspect() side effects")
+
+        stale_mtime = gists._mtimes["common"]
+        common_path.write_text("VALUE = 99\n")
+        os.utime(common_path, (stale_mtime + 1, stale_mtime + 1))
+        sys.modules["common"] = types.ModuleType(
+            "common"
+        )  # stand in for a prior import
+        gists._check_reload("common")
+        assert_true(
+            "common" not in sys.modules, "changed path-dep module evicted like a gist"
+        )
+        print("  ✓ path: dep modules get gist-style mtime auto-reload")
+
+        sys.modules.pop("common", None)
+        del gists._managed["common"]
+        gists._mtimes.pop("common", None)
+        gists._path_dep_modules.discard("common")
 
         # --- boot a fresh kernel in the project: linked gist imports + sibling resolves ---
         sub = Kernel(proj)

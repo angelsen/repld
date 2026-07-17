@@ -1207,8 +1207,9 @@ Dependencies:
   Use "." to depend on the gist's own project (editable install when linked elsewhere).
   Use "path:vendor/lib" to prepend a local, non-pip-installable directory to
   sys.path (relative to the project root; absolute paths pass through as-is).
-  No install step, no auto-reload — a missing directory warns with a
-  git-submodule hint instead of failing later with a bare ModuleNotFoundError.
+  No install step; modules imported from it auto-reload like gists do. A
+  missing directory warns with a git-submodule hint instead of failing later
+  with a bare ModuleNotFoundError.
   Kernel scans at boot, prompts to install missing PyPI packages into the venv.
   Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
 

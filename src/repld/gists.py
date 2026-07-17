@@ -43,6 +43,13 @@ _managed: dict[str, Path] = {}  # fullname → source .py path
 _mtimes: dict[str, float] = {}  # fullname → last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
+# Subset of _managed sourced from a 'path:' dep directory rather than a real
+# gist dir or link. Still gets _check_reload's mtime-eviction, but is excluded
+# from _register()/introspect() — those assume gist authoring conventions
+# (docstring-as-description, registry entries) that don't apply to vendored
+# third-party code.
+_path_dep_modules: set[str] = set()
+
 # Dedup warnings (malformed __repld_tools__ / __repld_deps__, deprecation
 # notices, ...) so boot warns once but subsequent tools/list scans stay quiet.
 _malformed_warned: set[str] = set()
@@ -214,6 +221,11 @@ def _check_reload(fullname: str) -> None:
 class _GistFinder(importlib.abc.MetaPathFinder):
     """Finder that checks gist directories and tracks mtimes for auto-reload.
 
+    Also checks 'path:' dep directories (see gist_deps._path_dep_dirs), so
+    vendored code gets the same reload tracking as gists — modules found
+    there are flagged in _path_dep_modules to skip gist-specific side
+    effects on import.
+
     Must be placed first in sys.meta_path so it's consulted before the standard
     PathFinder can return the cached module.
     """
@@ -250,6 +262,24 @@ class _GistFinder(importlib.abc.MetaPathFinder):
             _managed[fullname] = linked
             _mtimes[fullname] = linked.stat().st_mtime
             return importlib.util.spec_from_file_location(fullname, linked)
+        # 'path:' dep directories (vendored code prepended to sys.path) —
+        # same mtime tracking as above, flagged in _path_dep_modules so the
+        # import hook skips the gist-authoring side effects for it.
+        for s in gist_deps._path_dep_dirs:
+            d = Path(s)
+            candidate = d.joinpath(*parts)
+            for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
+                if p.is_file():
+                    _managed[fullname] = p
+                    _mtimes[fullname] = p.stat().st_mtime
+                    _path_dep_modules.add(fullname)
+                    return importlib.util.spec_from_file_location(
+                        fullname,
+                        p,
+                        submodule_search_locations=(
+                            [str(candidate)] if p.name == "__init__.py" else None
+                        ),
+                    )
         return None
 
 
@@ -281,7 +311,10 @@ class _GistImportHook:
         result = self._original(name, globals, locals, fromlist, level)
 
         # Auto-inject API summary on gist import + register in central registry.
-        if top in _managed:
+        # Skipped for path: dep modules — they're vendored third-party code,
+        # not gists, so gist-authoring conventions (docstring-as-description,
+        # registry entries) don't apply.
+        if top in _managed and top not in _path_dep_modules:
             _register(top)
             try:
                 summary = introspect(top)

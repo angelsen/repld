@@ -62,6 +62,11 @@ class _DepInfo:
 
 _TOOL_DEPS_DIR = Path.home() / ".local" / "share" / "repld" / "deps"
 
+# Resolved 'path:' dep directories (as strings, matching what's inserted
+# into sys.path). gists.py's _GistFinder checks membership here to extend
+# auto-reload to path deps without conflating them with real gist dirs.
+_path_dep_dirs: set[str] = set()
+
 
 def _is_tool_venv() -> bool:
     return "uv/tools/" in sys.prefix
@@ -143,6 +148,7 @@ def _resolve_path_dep(rel_path: str, gist_path: Path) -> Path | None:
         )
         return None
     resolved_str = str(resolved)
+    _path_dep_dirs.add(resolved_str)
     if resolved_str in sys.path:
         return resolved
     sys.path.insert(0, resolved_str)
