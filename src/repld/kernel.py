@@ -746,6 +746,12 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         setattr(_repld_mod, "browser", _lazy_browser)
 
         def _browser_cleanup() -> None:
+            # _shutdown() always stops the loop before atexit runs, so
+            # run_coroutine_threadsafe's future would never resolve — without
+            # this guard, every browser-attached shutdown blocked a full 5s
+            # waiting on a coroutine nothing was left to drive forward.
+            if not loop.is_running():
+                return
             b = getattr(__main__, "browser", None)
             real = getattr(b, "_real", b)
             if real is not None and hasattr(real, "disconnect"):

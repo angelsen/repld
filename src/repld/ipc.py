@@ -232,6 +232,15 @@ class Session:
             self.sock.close()
         except OSError:
             pass
+        # Close the makefile() wrappers explicitly. Left to GC/interpreter-
+        # shutdown finalization instead, their buffered close() flushing
+        # against the now-dead socket surfaces as an uncatchable "Exception
+        # ignored in" BrokenPipeError instead of being swallowed here.
+        for f in (self.wfile, self.rfile):
+            try:
+                f.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
 
     def close(self) -> None:
         with self.write_lock:

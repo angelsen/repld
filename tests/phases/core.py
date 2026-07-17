@@ -1,9 +1,12 @@
 """Phases 2–3: Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task."""
 
+import socket
 import time
 from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
+
+from repld.ipc import Session
 
 
 def phase_3(kernel: Kernel) -> None:
@@ -142,5 +145,20 @@ def phase_3(kernel: Kernel) -> None:
             f"no_display() still bound to _ (got {content!r})",
         )
         print("  ✓ no_display(): suppressed on display, bound to _")
+
+        # --- Session.close() explicitly closes rfile/wfile, not just the
+        # raw socket -- otherwise their buffered close() is left to GC/
+        # interpreter-shutdown finalization, which can surface an
+        # uncatchable BrokenPipeError instead of being handled here ---
+        sock, peer = socket.socketpair()
+        session = Session(sock)
+        try:
+            assert_true(not session.rfile.closed, "rfile open before close()")
+            session.close()
+            assert_true(session.rfile.closed, "rfile closed by Session.close()")
+            assert_true(session.wfile.closed, "wfile closed by Session.close()")
+        finally:
+            peer.close()
+        print("  ✓ Session.close() explicitly closes rfile/wfile, not just the socket")
     finally:
         b.close()
