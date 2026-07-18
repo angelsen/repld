@@ -69,8 +69,25 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   JSON string instead of sending an object — now `["object", "string"]`. Swept all
   other tool schemas in `protocol.py`; no other property is missing a `type`.
 
+## Gist deps tooling
+
+- [ ] `repld doctor`-style check for `_TOOL_DEPS_DIR` binary-ABI mismatches — came up
+  organically in session 018 debugging a `_cffi_backend` `ModuleNotFoundError` three causes
+  deep (tool-venv deps installed against the wrong Python ABI after a missing `--python`
+  pin, since fixed in `b6b2758e`). A static scan of installed `.so` files' `cpython-NNN`
+  tags against the actually-running interpreter's version would catch this class of bug
+  before it manifests as a confusing runtime import error for a compiled extension.
+
 ## Browser
 
+- [ ] `Tab._reattach()` auto-remap across a genuine target swap — currently (session 019) a
+  destroyed-and-replaced target (cross-origin/site-isolation process swap) surfaces a clear error
+  pointing at `browser_tabs` rather than silently recovering. Considered and deferred:
+  re-resolving the same `Tab` handle to a freshly-created target matching its watched glob
+  pattern, transparently. Bigger semantic shift than it sounds — changes what a `Tab` *means*
+  (pinned to one immutable CDP target → "logically the same tab" across swaps), with more places
+  to get subtly wrong (pin state, event bindings, DuckDB event history keyed by the old target
+  id). Revisit if a real cross-origin swap actually bites in practice, not preemptively.
 - [x] `Tab.fetch()` corrupts binary responses — `browser/tab.py` `fetch()` always did
   `await r.text()`, so any non-text payload (ZIP, PDF, image, protobuf) came back as
   mangled mojibake instead of the actual bytes. Fixed: fetch as `arrayBuffer()`, try
@@ -122,9 +139,84 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script
 - [ ] Vite plugin — auto-inject `data-testid` in dev mode (SvelteKit + Astro)
 
-## UX
+## OpenCode channel support
 
-- [ ] "Synced to sheet" badge — could link directly to the sheet/row
+Researched while comparing Claude Code's Channels feature to other coding agents. `push_channel()`
+(`kernel.py`) is Claude-Code-specific by construction — it declares `claude/channel` +
+`claude/channel/permission` in the MCP `initialize` capabilities and broadcasts
+`notifications/claude/channel` over the MCP connection. That's a dead end for OpenCode: its MCP
+client (`packages/opencode/src/mcp/index.ts`) only registers handlers for the two standard MCP
+notification types (`LoggingMessageNotification`, `ToolListChangedNotification`) — any custom
+notification method, including ours, is silently dropped.
+
+- [ ] Add a second delivery path in `push_channel()` for OpenCode targets, over HTTP instead of
+  the MCP connection — the two mechanisms are unrelated:
+  - Requires the OpenCode instance be launched network-reachable: plain `opencode` (not just
+    `opencode serve`) accepts `--port`/`--hostname` (`withNetworkOptions` in `cli/network.ts`);
+    without those flags it only talks to itself over an in-process fake URL. Auth is opt-in via
+    `OPENCODE_SERVER_PASSWORD`/`_USERNAME` (HTTP Basic) — fine to skip for localhost-only.
+  - Two calls needed, not one: `POST /tui/append-prompt` (`{text, workspace}` — routes by
+    `directory`/`workspace` query params, no session ID needed) just inserts text into the visible
+    input buffer; it does **not** execute. `POST /tui/submit-prompt` (no payload — submits
+    whatever's currently in the box) is the separate call that actually runs it. Mirrors
+    typing + Enter as two HTTP calls.
+  - **Gotcha**: `append-prompt`'s handler does `input.insertText(...)` — inserts at cursor,
+    does not replace. No `GET`-style endpoint exists to read the current buffer first. So a push
+    landing while the user has an unsent draft typed will splice into it rather than queue
+    cleanly or get rejected. Only defensive option is an unconditional `clear-prompt` before
+    `append-prompt`, which is safe against garbling but silently destroys any in-progress human
+    draft with no way to detect one first.
+  - Source refs (OpenCode repo, `github.com/anomalyco/opencode`): `packages/opencode/src/mcp/index.ts`
+    (notification handlers), `packages/opencode/src/server/routes/instance/httpapi/groups/tui.ts`
+    + `handlers/tui.ts` (route defs), `packages/tui/src/component/prompt/index.tsx:237`
+    (client-side append handler), `packages/sdk/js/src/v2/server.ts` (`createOpencodeServer`
+    defaults to `127.0.0.1:4096`).
+
+**Alternative to the HTTP workaround above: upstream native support.** OpenCode's MCP client is
+built directly on the official `@modelcontextprotocol/sdk` (`Client`/`Protocol` classes, not a
+custom implementation), and that SDK's `Protocol` base class already exposes
+`fallbackNotificationHandler?: (notification: Notification) => Promise<void>` — a catch-all for
+any notification method without a registered schema handler (confirmed in the SDK's own
+`shared/protocol.d.ts:265`). OpenCode just doesn't use it. This would be a small, additive PR
+rather than an architectural one — the exact pattern already exists twice in the same function.
+
+- [ ] Sketch a PR against `packages/opencode/src/mcp/index.ts`'s `watch(s, name, client, bridge,
+  timeout)` function (where the two existing `setNotificationHandler` calls live), adding:
+  ```ts
+  // alongside the existing setNotificationHandler(LoggingMessageNotificationSchema, ...) call
+  client.fallbackNotificationHandler = async (notification) => {
+    if (notification.method !== "notifications/claude/channel") return
+    // gate on the server having declared the capability, mirroring the existing
+    // `if (!client.getServerCapabilities()?.tools) return` pattern below — a server that
+    // never declared claude/channel shouldn't be able to inject via this method name
+    if (!client.getServerCapabilities()?.experimental?.["claude/channel"]) return
+    const { content } = notification.params as { content: string; meta?: Record<string, unknown> }
+    await bridge.promise(
+      events
+        .publish(TuiEvent.PromptAppend, { text: content, workspace: directory })
+        .pipe(
+          Effect.andThen(events.publish(TuiEvent.CommandExecute, { command: "prompt.submit" })),
+          Effect.ignore,
+        ),
+    )
+  }
+  ```
+  No HTTP round-trip needed at all — `events` (`EventV2Bridge.Service`) and `TuiEvent` are
+  already imported in this file and used for the identical push pattern (`TuiEvent.ToastShow`,
+  e.g. the "MCP Authentication Required" toasts a few lines above `watch()`). `directory` (the
+  workspace this MCP connection belongs to) is already threaded through the enclosing scope via
+  `InstanceState.directory` — may need promoting from closure-capture to an explicit `watch()`
+  parameter depending on exact call-site scoping, the one part not fully nailed down.
+  - **Open design question, not just implementation**: whether to literally adopt Claude Code's
+    `claude/channel` capability name + `notifications/claude/channel` method (so repld's
+    `push_channel()` works against OpenCode with **zero changes on repld's side**, and any other
+    tool built for Claude Code Channels gets OpenCode support for free) vs. inventing an
+    OpenCode-native `opencode/channel` equivalent. Adopting Claude's naming is a de facto
+    cross-tool standard bet; inventing a new one avoids depending on another vendor's unstable
+    (research-preview) contract. Worth raising as the actual PR discussion point, not deciding
+    unilaterally in the diff.
+  - If this lands upstream, repld's HTTP-bridge item above becomes unnecessary — `push_channel()`
+    already speaks the protocol this PR would make OpenCode listen for.
 
 ## Infra
 
