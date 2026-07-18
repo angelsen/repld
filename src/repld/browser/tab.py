@@ -402,13 +402,29 @@ class Tab(TabQueryMixin):
         On HMR reload or navigation, the Chrome session ID changes but the
         target ID stays the same. Detects "session not found", re-attaches,
         waits for the ready signal, and retries once.
+
+        If the re-attach itself fails, the *target* was destroyed outright,
+        not just its session — e.g. a cross-origin navigation Chrome handled
+        with a process swap, or the tab/window was closed. _reattach() still
+        addresses the old target ID (per its own docstring's "usually
+        survives" caveat), so that failure is Target.attachToTarget's raw
+        CDP error, e.g. "No target with given id found" — not obviously
+        actionable on its own. Re-raised here as a clear, distinct error
+        pointing at browser_tabs, since this Tab handle can't recover itself.
         """
         try:
             return await self._session.execute(method, params, timeout)
         except RuntimeError as exc:
             if not self._is_session_gone(exc):
                 raise
-            await self._reattach()
+            try:
+                await self._reattach()
+            except Exception as reattach_exc:
+                raise RuntimeError(
+                    f"target {self.target_id} no longer exists (destroyed, not "
+                    "just its session) -- call browser_tabs to find its "
+                    "replacement, if any"
+                ) from reattach_exc
             return await self._session.execute(method, params, timeout)
 
     # ------------------------------------------------------------------
