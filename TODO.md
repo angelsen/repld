@@ -77,6 +77,22 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   pin, since fixed in `b6b2758e`). A static scan of installed `.so` files' `cpython-NNN`
   tags against the actually-running interpreter's version would catch this class of bug
   before it manifests as a confusing runtime import error for a compiled extension.
+- [x] `install_deps()` (`gist_deps.py:277-297`) resolved each install independently —
+  `uv pip install --target <_TOOL_DEPS_DIR> <newly-missing-only>` per call, never
+  re-solved against what's already sitting in the shared target dir. Hit this live
+  (termtap2 prototyping, session 020): `pydantic 2.13.4` + `pydantic-core 2.46.4`
+  (mutually compatible) were installed by one gist's deps; a later `fastmcp` install
+  resolved its own requirement graph in isolation and pulled `pydantic-core 2.47.0`
+  (satisfying fastmcp's constraint) while leaving the already-present `pydantic 2.13.4`
+  untouched (it already satisfied fastmcp's own `pydantic` requirement, so `uv` had no
+  reason to touch it) — cross-package version skew, `pydantic._ensure_pydantic_core_version()`
+  hard-fails on import. Not a one-off: any two independently-installed gists whose
+  transitive requirements shift over time could produce this, since `--target` installs
+  don't treat the target dir as a coherent environment to solve against. Fixed
+  (`fadcec24`): `install_deps()` now maintains `.repld-manifest.txt` under
+  `_TOOL_DEPS_DIR`, accumulating every requirement ever installed there, and re-resolves
+  the full set on each install instead of just the newly-missing package(s). Manually
+  reconciled the immediate pydantic/pydantic-core/fastmcp skew as part of the same pass.
 
 ## Browser
 

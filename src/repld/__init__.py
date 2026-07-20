@@ -37,5 +37,9 @@ if TYPE_CHECKING:
     ) -> str: ...
     def no_display(value: Any) -> Any: ...
 
+    from .browser import LazyBrowser as _LazyBrowser
+
+    browser: _LazyBrowser
+
 
 __all__ = ["main"]
