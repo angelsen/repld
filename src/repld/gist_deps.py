@@ -9,6 +9,12 @@ install_deps() prompts on the real tty and installs into the current venv
 deps skip install_deps() entirely — resolved and added to sys.path directly
 by scan_deps() since there's nothing to install.
 
+The --target dir (_TOOL_DEPS_DIR) is a flat, cross-project shared directory,
+so each install must be resolved against everything ever installed there —
+not just the newly-missing packages — or independent installs can leave
+mutually-incompatible transitive pins on disk. `_read_manifest()` /
+`_write_manifest()` track the accumulated requirement set for that purpose.
+
 Shares the parse cache and file iterator with gists.py; the two modules
 import each other and access attributes at call time (never
 `from x import y`), which keeps the cycle safe.
@@ -97,6 +103,7 @@ class _DepInfo:
 
 
 _TOOL_DEPS_DIR = Path.home() / ".local" / "share" / "repld" / "deps"
+_MANIFEST_PATH = _TOOL_DEPS_DIR / ".repld-manifest.txt"
 
 # Resolved 'path:' dep directories (as strings, matching what's inserted
 # into sys.path). gists.py's _GistFinder checks membership here to extend
@@ -106,6 +113,39 @@ _path_dep_dirs: set[str] = set()
 
 def _is_tool_venv() -> bool:
     return "uv/tools/" in sys.prefix
+
+
+def _read_manifest() -> dict[str, str]:
+    """Read the accumulated tool-venv requirements manifest.
+
+    Returns {pkg_name: requirement_string} for regular deps, keyed by
+    normalized package name so a repeat install of the same package
+    replaces its old specifier instead of duplicating. Editable deps are
+    keyed by their full "-e <path>" entry. Empty dict if no manifest yet.
+    """
+    if not _MANIFEST_PATH.is_file():
+        return {}
+    entries: dict[str, str] = {}
+    for line in _MANIFEST_PATH.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-e "):
+            entries[line] = line
+        else:
+            entries[_parse_pkg_name(line)] = line
+    return entries
+
+
+def _write_manifest(entries: dict[str, str]) -> None:
+    """Persist the tool-venv requirements manifest. Call only after a
+    successful install — an install failure must not desync the manifest
+    from what's actually on disk in _TOOL_DEPS_DIR.
+    """
+    _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
+    _MANIFEST_PATH.write_text(
+        "\n".join(sorted(entries.values())) + "\n", encoding="utf-8"
+    )
 
 
 def ensure_deps_on_path() -> None:
@@ -315,9 +355,32 @@ def install_deps(missing: list[_DepInfo]) -> bool:
         else:
             req_args.append(d.requirement)
 
+    manifest: dict[str, str] | None = None
+
     if uv:
         if _is_tool_venv():
             _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
+            # _TOOL_DEPS_DIR is shared across every project's gists. Passing
+            # only the newly-selected deps would let uv resolve them in
+            # isolation from what's already installed there, silently
+            # skewing shared transitive pins (e.g. pydantic-core) between
+            # unrelated installs. Merge into the accumulated manifest and
+            # re-resolve the whole set every time instead.
+            manifest = _read_manifest()
+            for d in selected:
+                if d.editable:
+                    key = f"-e {d.requirement}"
+                    manifest[key] = key
+                else:
+                    manifest[_parse_pkg_name(d.requirement)] = d.requirement
+
+            full_req_args: list[str] = []
+            for entry in sorted(manifest.values()):
+                if entry.startswith("-e "):
+                    full_req_args.extend(["-e", entry[3:]])
+                else:
+                    full_req_args.append(entry)
+
             # --python pins resolution to the interpreter actually running this
             # kernel. Without it, uv resolves against its own default/preferred
             # Python, which can silently differ from sys.executable — a binary
@@ -332,7 +395,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
                 str(_TOOL_DEPS_DIR),
                 "--python",
                 sys.executable,
-                *req_args,
+                *full_req_args,
             ]
         else:
             cmd = [uv, "pip", "install", "--python", sys.executable, *req_args]
@@ -341,6 +404,8 @@ def install_deps(missing: list[_DepInfo]) -> bool:
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
+        if manifest is not None:
+            _write_manifest(manifest)
         ensure_deps_on_path()
         importlib.invalidate_caches()
         global _dist_to_import
