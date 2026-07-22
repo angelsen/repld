@@ -40,7 +40,7 @@ class TabNotFoundError(RuntimeError):
     can retry across browsers on this specific error without masking real ones."""
 
 
-_TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$")
+_TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$", re.IGNORECASE)
 _ATTACH_POLL_INTERVAL_S = 0.3  # retry cadence while waiting for a tab to appear/attach
 
 
@@ -50,9 +50,14 @@ def _is_target_id(s: str) -> bool:
 
 
 def _split_target(target: str) -> tuple[str, str]:
-    """Split a short target ID like '9222:a1b2c3' into (port_str, prefix)."""
+    """Split a short target ID like '9222:a1b2c3' into (port_str, prefix).
+
+    Prefix is lowercased — short IDs are canonically lowercase hex
+    (make_target()), but _is_target_id() accepts either case, so any
+    case-insensitive comparison downstream needs a normalized prefix.
+    """
     port_str, _, prefix = target.partition(":")
-    return port_str, prefix
+    return port_str, prefix.lower()
 
 
 def make_target(port: int, chrome_id: str) -> str:

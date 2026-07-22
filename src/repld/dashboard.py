@@ -128,7 +128,7 @@ async def _rpc_browser_connect(browser, params: dict) -> Any:
     b = await browser.connect(port)
     targets = await b.pages()
     page_lines = [
-        f"  {port}:{t.get('targetId', '')[:6]}  {t.get('url', '')}"
+        f"  {port}:{t.get('targetId', '')[:6].lower()}  {t.get('url', '')}"
         for t in targets
         if t.get("type") == "page"
     ]

@@ -195,7 +195,7 @@ def _push_error_text(
     text = text[:300]
     if not text or _is_suppressed(text):
         return
-    short_id = f"{port}:{target_id[:6]}"
+    short_id = f"{port}:{target_id[:6].lower()}"
     _dedup_push(
         f"[console:error] {short_id}: {text}",
         {"kind": "console_error", "target": short_id},
