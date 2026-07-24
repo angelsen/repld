@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.1.1] - 2026-07-24
+
+### Added
+
 - `repld gist lint [name...]` — AST-based best-practices checker for gist files. Four rules: `firstline` (module docstring's first line must stand alone — it's what gets truncated into tool listings/instructions/resource descriptions), `shape` (public methods returning dict/list/Any should document the return shape on the docstring's first line), `deps` (non-stdlib imports should be declared in `__repld_deps__`), `legacy` (flags `__repld_tools__` statically instead of only warning reactively at tool-call time). Suppress a finding with `# gistlint: ignore=<rule>` on the flagged line or the line above. Scans the same dirs + precedence a live kernel resolves against (`~/.repld/gists`, `./gists`, and `.links`), not just the local project. Documented in `repld://docs/guide`'s Conventions section, `repld help gists`, and `repld help`'s command list
 - `__repld_deps__` gained a `"path:some/dir"` form — prepends a local, non-pip-installable directory to `sys.path` (e.g. a vendored git submodule), relative to the gist's project root. No install step; a missing directory warns loudly with a `git submodule update --init` hint instead of a bare `ModuleNotFoundError` the first time the gist runs. `gist lint`'s `deps` rule treats top-level modules/packages found in the resolved directory as declared, so imports from it don't false-positive. Modules imported from a path dep get the same mtime-based auto-reload as gists — `_GistFinder` tracks them too, flagged separately so editing vendored code re-imports the new version without a kernel restart, but without triggering the gist-registry/API-summary side effects that don't apply to third-party code
 
@@ -38,7 +48,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Tab._reattach()` only recovers from CDP *session* invalidation (same target, new session — e.g. HMR reload); when a target is destroyed outright and replaced (a genuine cross-origin/site-isolation process swap), it still re-attaches by the old target id, so `Target.attachToTarget`'s raw CDP error ("No target with given id found") propagated straight out of `_exec()` uncaught, unexplained. Now catches that failure and raises a clear error pointing at `browser_tabs` to find the replacement, instead of passing Chrome's raw text through unchanged
 - `repld/__init__.py`'s `TYPE_CHECKING` block stubbed `notify`/`defer`/`every`/etc. for `import repld; repld.notify(...)` gist patterns but never added `browser`, despite `kernel.py` genuinely injecting it into the module at runtime — every gist referencing `repld.browser` type-checked as an attribute-access error
 
-### Removed
 
 ## [0.1.0] - 2026-07-14
 
