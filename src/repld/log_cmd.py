@@ -11,6 +11,9 @@ import sys
 from . import eventlog, paths, render, state
 from .render import DIM as _DIM, RED as _RED, RESET as _RESET
 
+# Rendered as a raw byte stream rather than as lines — see _emit.
+_CHUNK_TYPES = ("StdoutChunk", "StderrChunk")
+
 _USAGE = """\
 repld log — recent activity from this project's kernel
 
@@ -36,13 +39,15 @@ def _render(rec: dict) -> str | None:
         head = render.cell_header(str(rec.get("task_id", "")), t)
         body = render.cell_source_block(rec.get("source") or "")
         return f"{head}\n{body}" if body else head
-    if kind in ("StdoutChunk", "StderrChunk"):
+    if kind in _CHUNK_TYPES:
+        # Verbatim, newlines and all — _emit writes these raw. See its comment.
         text = rec.get("text") or ""
         if not text:
             return None
-        text = text.rstrip("\n")
         if rec.get("truncated"):
-            text += f"\n{_DIM}… output elided (per-cell cap){_RESET}"
+            text = (
+                text.rstrip("\n") + f"\n{_DIM}… output elided (per-cell cap){_RESET}\n"
+            )
         return f"{_RED}{text}{_RESET}" if kind == "StderrChunk" else text
     if kind == "CellDone":
         return render.cell_done_line(
@@ -73,13 +78,35 @@ def _render(rec: dict) -> str | None:
     return f"{_DIM}{kind}{_RESET}"
 
 
+# Whether the last thing written ended a line. Cell output is the only thing
+# that can leave us mid-line, and a structured record printed onto the end of a
+# half-finished line is unreadable — the TUI pads for the same reason
+# (display._render_cell_done).
+_at_line_start = True
+
+
 def _emit(rec: dict, as_json: bool) -> None:
+    global _at_line_start
     if as_json:
         print(json.dumps(rec))
         return
     line = _render(rec)
-    if line is not None:
-        print(line)
+    if line is None:
+        return
+    if rec.get("type") in _CHUNK_TYPES:
+        # Cell output is a byte stream, not a line stream: one print() in user
+        # code arrives as several chunks ("deferred:", " ", "abc123", "\n"), and
+        # a chunk can be a bare newline. print()-ing each one turns a single
+        # line into four and doubles every blank. Write verbatim, like the TUI's
+        # _out() does, and let the newlines in the data do the work.
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        _at_line_start = line.endswith("\n")
+        return
+    if not _at_line_start:
+        sys.stdout.write("\n")
+    print(line)
+    _at_line_start = True
 
 
 def run_log(argv: list[str]) -> int:
