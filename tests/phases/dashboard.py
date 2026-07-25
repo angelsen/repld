@@ -19,7 +19,7 @@ def _get_status(port: int, host_header: str) -> int:
 
 def phase_14_dashboard(kernel: Kernel) -> None:
     """GET / serves the panel for a loopback Host and 403s a rebound hostname."""
-    lock = json.loads((kernel.cwd / ".pyrepl.lock").read_text())
+    lock = json.loads(kernel.lock_path.read_text())
     port = lock.get("dashboard_port")
     assert_true(bool(port), f"lockfile has dashboard_port (got {lock!r})")
 

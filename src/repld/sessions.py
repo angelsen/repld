@@ -2,8 +2,8 @@
 
 Each running kernel writes `$XDG_RUNTIME_DIR/repld/sessions/<pid>.json` on
 boot and removes it on shutdown. Unlike the per-project lockfile
-(`.pyrepl.lock`), this index doesn't depend on being inside the project
-cwd — any repld instance (or its dashboard) can enumerate all live
+(`projects/<slug>/kernel.lock`), this index doesn't depend on knowing the
+project cwd — any repld instance (or its dashboard) can enumerate all live
 siblings by reading this directory.
 
 Stale entries (dead PIDs, corrupt files) are pruned lazily whenever the
@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from .ipc import atomic_write_json, pid_alive
-from .tasks import RUNTIME_DIR
+from .paths import RUNTIME_DIR
 
 __all__ = ["register", "unregister", "list_sessions"]
 

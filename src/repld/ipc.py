@@ -9,6 +9,7 @@ and on-demand writes (held under a per-session lock). `broadcast()` delivers
 server-initiated notifications (channel pushes) to all connected sessions.
 """
 
+import fcntl
 import json
 import os
 import socket
@@ -16,6 +17,8 @@ import sys
 import threading
 from pathlib import Path
 from typing import IO, Callable
+
+from . import paths
 
 Handler = Callable[[dict, "Session"], dict | None]
 
@@ -40,10 +43,7 @@ def read_lock(lock_path: Path) -> dict | str:
     error message string (missing / unreadable / stale pid) otherwise.
     """
     if not lock_path.exists():
-        return (
-            f"no kernel found (missing {lock_path.name}); "
-            f"start `repld` in this cwd first"
-        )
+        return f"no kernel running for this project (no {lock_path.name})"
     try:
         lock = json.loads(lock_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
@@ -100,20 +100,19 @@ def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
 
 def default_socket_path() -> Path:
     """Resolved at call time — cwd may change between import and run_kernel."""
-    return Path(os.environ.get("REPLD_SOCKET", str(Path.cwd() / ".pyrepl.sock")))
+    override = os.environ.get("REPLD_SOCKET")
+    return Path(override) if override else paths.socket_path()
 
 
-def lock_for(socket_path: Path) -> Path:
-    """Lock file lives next to the socket: /path/to/repld.sock → /path/to/repld.lock."""
-    return socket_path.with_suffix(".lock")
+lock_for = paths.lock_for
 
 
-def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
-    """Resolve the kernel lockfile path from --socket flags, REPLD_SOCKET env,
-    or the cwd default. Shared by bridge and exec subcommands.
+def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
+    """Resolve the kernel socket path from --socket flags, REPLD_SOCKET env,
+    or the per-project XDG default. Shared by every client subcommand.
 
     Parses AND consumes every ``--socket PATH`` / ``--socket=PATH`` occurrence
-    (first value wins), returning (lock_path, argv_without_socket_flags) so
+    (first value wins), returning (socket_path, argv_without_socket_flags) so
     callers never re-implement the flag syntax.
     """
     sock: str | None = None
@@ -132,8 +131,34 @@ def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
         rest.append(arg)
         i += 1
     target = sock or os.environ.get("REPLD_SOCKET")
-    lock = lock_for(Path(target)) if target else Path.cwd() / ".pyrepl.lock"
-    return lock, rest
+    return (Path(target) if target else paths.socket_path()), rest
+
+
+def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
+    """``resolve_socket_path`` for callers that want the lockfile instead."""
+    sock, rest = resolve_socket_path(argv)
+    return lock_for(sock), rest
+
+
+def acquire_lock(flock_path: Path) -> int | None:
+    """Take the single-kernel-per-project mutex.
+
+    Returns the held fd (which the caller must keep open for its whole life —
+    closing it releases the lock), or None if another kernel owns it.
+
+    O_CREAT *without* O_TRUNC: opening must not clobber anything before we
+    know whether we win, and this file is never replaced by an atomic rename,
+    so the flock keeps referring to the inode every contender opened.
+    """
+    flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    os.write(fd, f"{os.getpid()}\n".encode())
+    return fd
 
 
 def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
@@ -177,6 +202,10 @@ class Session:
         # threading.Timer(1.0) retry hack.
         self.pending: list[dict] = []
         self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def _write_msg(self, msg: dict) -> None:
         """Write one NDJSON line + flush; close the session on I/O failure.
@@ -328,6 +357,15 @@ class Server:
         for s in targets:
             s.post_channel(msg)
 
+    def post_to(self, session: Session, msg: dict) -> bool:
+        """Post to one session. True if delivered, False if it's gone."""
+        with self.sessions_lock:
+            live = session in self.sessions
+        if not live or session.closed:
+            return False
+        session.post_channel(msg)
+        return not session.closed
+
     def stop(self) -> None:
         if self._stop:
             return
@@ -366,3 +404,15 @@ def stop_server() -> None:
 def broadcast_channel(msg: dict) -> None:
     if _server is not None:
         _server.broadcast_channel(msg)
+
+
+def post_to(session: Session, msg: dict) -> bool:
+    """Deliver a server-initiated notification to one session only.
+
+    False means the session disconnected — callers drop the message rather
+    than falling back to a broadcast, which would leak one session's output
+    into every other one.
+    """
+    if _server is None:
+        return False
+    return _server.post_to(session, msg)

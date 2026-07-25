@@ -44,7 +44,7 @@ This creates `.mcp.json` (so Claude Code discovers the MCP server) and adds runt
 repld
 ```
 
-The kernel writes `.pyrepl.lock` with its PID and socket path, then listens for connections. It stays up until you stop it. It also prints a dashboard URL — a built-in web control panel, no setup required. See the [dashboard guide](/repld/docs/guides/dashboard/).
+The kernel writes its PID and socket path to `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock`, then listens for connections. It stays up until you stop it with `repld stop` — and you don't have to start it by hand at all: `repld bridge` spawns a headless one when Claude Code connects, and `repld log -f` shows you what it's doing. It also prints a dashboard URL — a built-in web control panel, no setup required. See the [dashboard guide](/repld/docs/guides/dashboard/).
 
 ## Connect Claude Code
 

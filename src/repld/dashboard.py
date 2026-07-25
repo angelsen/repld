@@ -80,7 +80,7 @@ def _resolve_tab(browser, target_id: str):
 
 
 def save_hint() -> None:
-    """Persist dashboard port + browser state to .pyrepl.dashboard."""
+    """Persist dashboard port + browser state to the hint file."""
     if _hint_path is None:
         return
     browser = getattr(__main__, "browser", None)

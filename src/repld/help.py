@@ -643,7 +643,8 @@ browser.connect(port) adds a Chrome instance to the pool.  Call it multiple
   await browser.watch("*localhost:5200*")   # watches across both
   browser.tabs                              # tabs from all instances
 
-Browser state (connected ports + watch patterns) persists in .pyrepl.dashboard
+Browser state (connected ports + watch patterns) persists in the kernel's
+  dashboard hint file ($XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.dashboard)
   across kernel restarts.  On boot, repld prompts on the terminal before
   reconnecting/re-watching ([Y/n], default yes); headless boot (--no-display)
   or non-tty stdin skips the restore.
@@ -982,20 +983,31 @@ OVERVIEW = """\
 repld — persistent Python kernel exposed to LLM agents over MCP.
 
 Architecture:
-  Terminal pane: `repld --init repl.py`   kernel + display
-  Editor pane:   `claude` (or equivalent) agent talks to kernel via MCP
+  Editor pane:   `claude` (or equivalent) — the bridge starts a headless
+                 kernel for the cwd if one isn't running, and heals it if
+                 it dies. Nothing to start by hand.
+  Terminal pane: `repld --init repl.py`   kernel + live display, when you
+                 want to watch it; `repld log -f` works either way.
+
+Runtime state lives in $XDG_RUNTIME_DIR/repld/projects/<slug>/, never in
+the project directory.
 
 One asyncio loop, one __main__ namespace shared with the agent. Cells run
 via the MCP `exec` tool. Long tasks defer; channel pushes wake the agent
 when work completes, files change, webhooks fire, or human gates resolve.
 
 Commands:
-  repld                    Start a kernel in cwd
+  repld                    Start a kernel in cwd (with the live display)
   repld --init FILE        Start a kernel, exec FILE first (project bootstrap)
   repld exec CODE          One-shot: run code in kernel, print result, exit
   repld exec               Interactive REPL (state persists in kernel)
+  repld log [-f]           Recent kernel activity; -f streams it live
+  repld status [--json]    pid / uptime / dashboard + live kernels elsewhere
+  repld stop [--all]       Stop this project's kernel (or every one)
+  repld restart            Stop, then start a fresh headless kernel
+  repld dashboard          Open the kernel's web control panel
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
-  repld init               Scaffold .mcp.json + .gitignore in cwd
+  repld init               Scaffold .mcp.json + CLAUDE.md block in cwd
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
@@ -1620,14 +1632,17 @@ Combine with project context for dev workflows:
 
 
 def _check_state(cwd: Path) -> dict:
+    from . import paths
+
+    lock_path = paths.lock_path(cwd)
     state: dict = {
-        "lock_exists": (cwd / ".pyrepl.lock").exists(),
+        "lock_exists": lock_path.exists(),
         "lock_alive": False,
         "mcp_configured": False,
         "repl_py_exists": (cwd / "repl.py").exists(),
     }
     if state["lock_exists"]:
-        state["lock_alive"] = isinstance(read_lock(cwd / ".pyrepl.lock"), dict)
+        state["lock_alive"] = isinstance(read_lock(lock_path), dict)
     mcp = cwd / ".mcp.json"
     if mcp.exists():
         try:
@@ -1644,17 +1659,22 @@ def _suggestion(cwd: Path) -> str:
     if not s["mcp_configured"]:
         return (
             "Suggested next step:\n"
-            "  repld init   # scaffold .mcp.json + .gitignore in cwd\n"
+            "  repld init   # scaffold .mcp.json + CLAUDE.md block in cwd\n"
         )
     if s["lock_alive"]:
-        return "Kernel running in cwd. Open Claude Code: `claude`\n"
-    if s["lock_exists"] and not s["lock_alive"]:
         return (
-            "Stale .pyrepl.lock detected (kernel pid not alive).\n"
-            "  rm .pyrepl.lock   # then `repld` to start fresh\n"
+            "Kernel running for this project. Open Claude Code: `claude`\n"
+            "  repld log -f    # watch what it's doing\n"
+            "  repld status    # pid, uptime, dashboard\n"
         )
+    # A stale lockfile is no longer something to clean up by hand: the flock
+    # mutex settles ownership, and the next bridge overwrites it on spawn.
     cmd = "repld --init repl.py" if s["repl_py_exists"] else "repld"
-    return f"Suggested next step:\n  {cmd}   # start the kernel\n"
+    return (
+        "No kernel running. Either is fine:\n"
+        "  claude         # the bridge starts a headless kernel for you\n"
+        f"  {cmd}   # start one yourself, with the live display\n"
+    )
 
 
 def run_help(argv: list[str]) -> int:

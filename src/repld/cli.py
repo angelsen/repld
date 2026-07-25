@@ -7,8 +7,25 @@ from importlib import import_module
 # keeping `repld bridge` (spawned every session) a dict lookup + one import.
 _SUBCOMMANDS = {
     "bridge": ("bridge", "run_bridge", "stdio MCP bridge (Claude Code spawns this)"),
-    "init": ("scaffold", "run_init", "scaffold .mcp.json + .gitignore in cwd"),
+    "init": ("scaffold", "run_init", "scaffold .mcp.json + CLAUDE.md block in cwd"),
     "exec": ("exec_cmd", "run_exec", "one-shot code or interactive REPL"),
+    "log": ("log_cmd", "run_log", "recent kernel activity (-f to follow)"),
+    "status": ("lifecycle_cmd", "run_status", "kernel pid/uptime + live siblings"),
+    "stop": (
+        "lifecycle_cmd",
+        "run_stop",
+        "stop this project's kernel (--all for every one)",
+    ),
+    "restart": (
+        "lifecycle_cmd",
+        "run_restart",
+        "stop, then start a fresh headless kernel",
+    ),
+    "dashboard": (
+        "dashboard_cmd",
+        "run_dashboard",
+        "open the kernel's web control panel",
+    ),
     "help": ("help", "run_help", "agent/human docs"),
     "gist": ("gist_cmd", "run_gist", "new / add / rm / list gists"),
     "browser": (
@@ -21,8 +38,9 @@ _SUBCOMMANDS = {
 
 def _subcommands_text() -> str:
     lines = ["subcommands:"]
+    width = max(len(n) for n in _SUBCOMMANDS)
     for name, (_, _, desc) in _SUBCOMMANDS.items():
-        lines.append(f"  {name:<9} {desc}")
+        lines.append(f"  {name:<{width}} {desc}")
     return "\n".join(lines)
 
 
@@ -58,7 +76,7 @@ def main() -> None:
     parser.add_argument(
         "--socket",
         default=None,
-        help="Unix socket path (default: ./.pyrepl.sock)",
+        help="Unix socket path (default: $XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.sock)",
     )
     parser.add_argument(
         "--no-display",

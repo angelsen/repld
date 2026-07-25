@@ -10,7 +10,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 # ---------------------------------------------------------------------------
 # Event types
@@ -96,6 +96,11 @@ _queue: "queue.Queue[Event] | None" = None
 _pre_init_buf: list[Event] = []
 _pre_init_lock = threading.Lock()
 
+# Optional second consumer, independent of whoever drains the queue.
+# eventlog.install() registers itself here; keeping it a registered callback
+# (rather than importing eventlog) is what lets eventlog import display.
+_sink: "Callable[[Event], None] | None" = None
+
 # Drop counter + warning throttle
 _drop_count = 0
 _last_drop_warn: float = 0.0
@@ -122,13 +127,29 @@ def get_queue() -> "queue.Queue[Event]":
     return _queue
 
 
+def set_sink(fn: "Callable[[Event], None] | None") -> None:
+    """Register (or clear) a tee that sees every event as it is emitted."""
+    global _sink
+    _sink = fn
+
+
 def emit(ev: Event) -> None:
     """Emit an event. Non-blocking.
 
     Before `init_event_queue()` is called the event is buffered in-process
     and flushed when the queue is created. After init, if the queue is full
     the oldest event is dropped and a drop-count warning is scheduled.
+
+    The registered sink (the event log) sees the event regardless — it is
+    not subject to the queue's drop-oldest policy.
     """
+    sink = _sink
+    if sink is not None:
+        try:
+            sink(ev)
+        except Exception:
+            pass  # a broken log must never break the kernel
+
     q = _queue
     if q is None:
         with _pre_init_lock:

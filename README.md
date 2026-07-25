@@ -20,9 +20,16 @@ uv tool install repld-tool
 uv tool install repld-tool        # global install (recommended)
 
 cd your-project
-repld init                         # writes .mcp.json + updates .gitignore
-repld                              # starts the kernel
+repld init                         # writes .mcp.json + a CLAUDE.md block
+claude                             # the bridge starts a kernel for you
 ```
+
+You don't have to start the kernel yourself: `repld bridge` spawns a headless
+one for the project if none is running, and restarts it if it dies. Run `repld`
+in a terminal when you want the live display instead — either way, `repld log -f`
+tails it, `repld status` shows what's running, and `repld stop` shuts it down.
+Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
+project directory and there's nothing to `.gitignore`.
 
 Project-local alternative: `uv add --dev repld-tool`, then point `.mcp.json` at `uv run repld bridge`.
 

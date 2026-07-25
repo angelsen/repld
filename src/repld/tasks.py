@@ -14,10 +14,10 @@ import sys
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Literal
 
 from .events import StdoutChunk, StderrChunk, emit
+from .paths import RUNTIME_DIR
 
 # Inline preview budget. Full output is always on disk; preview bounds only
 # what's returned in the `exec` / `get_task` response body.
@@ -25,8 +25,6 @@ PREVIEW_HEAD_LINES = 5
 PREVIEW_TAIL_LINES = 5
 PREVIEW_MAX_BYTES = 4 * 1024  # wire budget — independent of display.VIEWER_MAX_BYTES
 PREVIEW_MAX_LINE = 400  # per-line clamp for unbroken-text lines
-
-RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "repld"
 
 _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None
@@ -114,7 +112,16 @@ def set_current_task(task_id: str | None) -> None:
     _current_task.set(task_id)
 
 
-def new_task() -> tuple[str, dict]:
+def current_task_id() -> str | None:
+    """The task whose context the calling code is running in, if any.
+
+    Lets `defer()` inherit the originating session of the cell that called it,
+    so a background task's completion push lands where the work was asked for.
+    """
+    return _current_task.get()
+
+
+def new_task(origin: object = None) -> tuple[str, dict]:
     task_id = uuid.uuid4().hex[:12]
     task: dict = {
         "done_event": threading.Event(),
@@ -125,6 +132,9 @@ def new_task() -> tuple[str, dict]:
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
         "label": None,
+        # ipc.Session that asked for this work, or None for ambient tasks
+        # (--init file, @every bodies). Drives targeted vs. broadcast push.
+        "origin": origin,
     }
     with _tasks_lock:
         _tasks[task_id] = task

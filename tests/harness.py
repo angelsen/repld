@@ -15,6 +15,23 @@ from queue import Empty, Queue
 REPO = Path(__file__).resolve().parent.parent
 
 
+def lock_path_for(cwd: Path) -> Path:
+    """The kernel lockfile a kernel started in `cwd` will write.
+
+    Runtime state lives under $XDG_RUNTIME_DIR, not the project directory, so
+    tests have to resolve it the same way the kernel does.
+    """
+    from repld import paths
+
+    return paths.lock_path(cwd)
+
+
+def runtime_dir_for(cwd: Path) -> Path:
+    from repld import paths
+
+    return paths.project_dir(cwd)
+
+
 class Bridge:
     """Subprocess wrapper. One bridge = one MCP session.
 
@@ -141,8 +158,12 @@ class Kernel:
         )
         self._wait_lockfile()
 
+    @property
+    def lock_path(self) -> Path:
+        return lock_path_for(self.cwd)
+
     def _wait_lockfile(self, timeout: float = 10.0) -> None:
-        lock = self.cwd / ".pyrepl.lock"
+        lock = self.lock_path
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if lock.exists():

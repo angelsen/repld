@@ -10,11 +10,11 @@ Every kernel runs a small HTTP control panel alongside the socket — no setup, 
 The kernel prints the URL at boot:
 
 ```
-[repld] pid=4821  socket=.pyrepl.sock
+[repld] pid=4821  socket=/run/user/1000/repld/projects/myapp-3f2a91c4/kernel.sock
   dashboard: http://localhost:53021
 ```
 
-The port is ephemeral by default (stable across restarts when possible) and also recorded in `.pyrepl.lock` (`dashboard_port` field) if you need to script against it. Open the URL in any browser — it's a plain page, no auth beyond what's described in [Security](#security) below.
+The port is ephemeral by default (stable across restarts when possible) and also recorded in the kernel's lockfile (`dashboard_port` field) if you need to script against it — or just run `repld dashboard`, which resolves the port and opens it (`--print` to only print the URL). Open the URL in any browser — it's a plain page, no auth beyond what's described in [Security](#security) below.
 
 ## Layout
 

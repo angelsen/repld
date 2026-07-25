@@ -30,6 +30,7 @@ from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
 from phases.gist_tools import phase_9_gist_tools
+from phases.headless import phase_15_headless
 from phases.links import phase_12_gist_links
 from phases.lockfile import phase_5, phase_5_init
 from phases.resources import phase_8_gist_resources
@@ -54,12 +55,15 @@ PHASES = {
     12: phase_12_gist_links,
     13: phase_13_sessions,
     14: phase_14_dashboard,
+    15: phase_15_headless,
 }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", type=int, default=3, help="highest phase to run")
+    ap.add_argument(
+        "--phase", type=int, default=3, help="highest phase to run (ceiling: 15)"
+    )
     args = ap.parse_args()
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
@@ -94,6 +98,10 @@ def main() -> int:
     finally:
         if kernel is not None:
             kernel.stop()
+        # Runtime state lives outside the project dir now — clean up both.
+        from harness import runtime_dir_for
+
+        shutil.rmtree(runtime_dir_for(tmp), ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

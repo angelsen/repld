@@ -538,7 +538,7 @@ class Dispatcher(BrowserDispatchMixin):
         if method == "tools/list":
             return self._tools_list(rid)
         if method == "tools/call":
-            return self._tools_call(rid, req.get("params", {}))
+            return self._tools_call(rid, req.get("params", {}), session)
         if method == "resources/list":
             return self._resources_list(rid)
         if method == "resources/templates/list":
@@ -555,8 +555,12 @@ class Dispatcher(BrowserDispatchMixin):
             {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
-                    "tools": {},
-                    "resources": {},
+                    # listChanged is load-bearing, not decorative: the bridge
+                    # emits notifications/tools/list_changed after it respawns
+                    # a dead kernel, and both parties may only use capabilities
+                    # that were negotiated at initialize time.
+                    "tools": {"listChanged": True},
+                    "resources": {"listChanged": True},
                     "experimental": {
                         "claude/channel": {},
                         "claude/channel/permission": {},
@@ -579,11 +583,11 @@ class Dispatcher(BrowserDispatchMixin):
         ]
         return _response(rid, {"tools": tools + gists.scan_tools()})
 
-    def _tools_call(self, rid, params: dict) -> dict:
+    def _tools_call(self, rid, params: dict, session=None) -> dict:
         name = params.get("name")
         args = params.get("arguments") or {}
         if name == "exec":
-            return self._exec(rid, args)
+            return self._exec(rid, args, session)
         if name == "get_task":
             return self._get_task(rid, args)
         if name == "cancel":
@@ -594,10 +598,12 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, "missing tool name")
         return self._gist_tool(rid, name, args)
 
-    def _exec(self, rid, args: dict) -> dict:
+    def _exec(self, rid, args: dict, session=None) -> dict:
         src = args.get("code", "")
         timeout = float(args.get("timeout", 2.0))
-        task_id, done_event = self.ctx.start_task(src)
+        # origin=session: if this cell outruns `timeout`, its completion push
+        # goes back to the caller alone, not to every connected session.
+        task_id, done_event = self.ctx.start_task(src, origin=session)
         finished = done_event.wait(timeout=timeout)
         snap = self.ctx.snapshot(task_id)
         assert snap is not None  # task_id was just created by start_task

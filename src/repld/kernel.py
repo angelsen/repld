@@ -27,9 +27,9 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import events, ipc, sessions, tasks
+from . import events, eventlog, ipc, paths, sessions, tasks
 from .events import CellDone, CellStart, ChannelPush
-from .ipc import atomic_write_json, default_socket_path, lock_for, read_lock
+from .ipc import atomic_write_json, default_socket_path, lock_for
 from .protocol import Dispatcher
 from .tasks import install_tee
 
@@ -38,15 +38,27 @@ from .tasks import install_tee
 # ---------------------------------------------------------------------------
 
 
-def _check_existing_kernel(socket_path: Path) -> None:
-    """Refuse to start if another repld kernel owns this socket."""
-    lock_path = lock_for(socket_path)
-    lock = read_lock(lock_path)
-    if isinstance(lock, dict):
-        raise SystemExit(
-            f"\033[31m[repld] another kernel (pid={lock.get('pid')}) is running "
-            f"({lock_path}). Stop it or remove the lock file if stale.\033[0m"
-        )
+def _claim_project(socket_path: Path) -> int:
+    """Take the one-kernel-per-project flock, or exit 0 if we lost the race.
+
+    Losing is not an error: a bridge that raced another bridge (or a human who
+    started `repld` while a headless kernel was already up) should just talk to
+    the incumbent. Exiting 0 without touching the winner's lockfile is what
+    makes an externally-started kernel adopted rather than competed with.
+    """
+    fd = ipc.acquire_lock(paths.flock_for(socket_path))
+    if fd is None:
+        holder = ipc.read_lock(lock_for(socket_path))
+        pid = holder.get("pid") if isinstance(holder, dict) else "?"
+        stderr = sys.__stderr__
+        if stderr is not None:
+            stderr.write(
+                f"\033[90m[repld] kernel already running for this project "
+                f"(pid={pid}) — nothing to do\033[0m\n"
+            )
+            stderr.flush()
+        raise SystemExit(0)
+    return fd
 
 
 def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> None:
@@ -62,6 +74,9 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
 
 
 _active_lock_path: Path | None = None
+# flock fd for the one-kernel-per-project mutex. Module-level because it must
+# stay open for the process's whole life — closing it releases the lock.
+_project_lock_fd: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +131,7 @@ def _banner(
     dashboard_port: int | None = None,
 ) -> str:
     lines = [
-        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}  (lock: {lock_for(socket_path).name})",
+        f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}",
         f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
         f"(REPLD_LOOP_BLOCK_THRESHOLD)",
         f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
@@ -129,7 +144,8 @@ def _banner(
     lines += [
         "  register:  claude mcp add -s project repld -- repld bridge",
         "  launch:    claude --dangerously-load-development-channels server:repld",
-        "  human:     repld exec   # interactive REPL (state shared with agent)\033[0m",
+        "  human:     repld exec   # interactive REPL (state shared with agent)",
+        "  observe:   repld log -f · repld status · repld dashboard\033[0m",
     ]
     return "\n".join(lines)
 
@@ -139,18 +155,34 @@ def _banner(
 # ---------------------------------------------------------------------------
 
 
-def push_channel(content: str, meta: dict | None = None) -> None:
-    """Broadcast a notifications/claude/channel notification to all sessions
-    AND emit a local ChannelPush event so the pane mirrors what the MCP agent
-    receives. Single source of truth for every channel push."""
+def push_channel(
+    content: str,
+    meta: dict | None = None,
+    *,
+    session: "ipc.Session | None" = None,
+) -> None:
+    """Send a notifications/claude/channel notification AND emit a local
+    ChannelPush event so the pane and the event log mirror what the MCP agent
+    receives. Single source of truth for every channel push.
+
+    `session=None` broadcasts — that's the right thing for genuinely ambient
+    output (@every errors, console errors, browser connect/disconnect, bare
+    `notify()` from shared user code) in repld's shared-__main__ model.
+    Passing a session targets the one that asked for the work. If that session
+    has since disconnected the push is *dropped*, never downgraded to a
+    broadcast: leaking one session's output into every other one is worse than
+    silence, and the local event still reaches `repld log`.
+    """
     meta = meta or {}
-    ipc.broadcast_channel(
-        {
-            "jsonrpc": "2.0",
-            "method": "notifications/claude/channel",
-            "params": {"content": content, "meta": meta},
-        }
-    )
+    msg = {
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {"content": content, "meta": meta},
+    }
+    if session is None:
+        ipc.broadcast_channel(msg)
+    else:
+        ipc.post_to(session, msg)
     events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
 
 
@@ -159,9 +191,9 @@ def _notify(content, **meta) -> None:
     push_channel(str(content), meta)
 
 
-def _push(content: str, kind: str, **meta: str) -> None:
+def _push(content: str, kind: str, *, session=None, **meta: str) -> None:
     """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once."""
-    push_channel(content, {"kind": kind, **meta})
+    push_channel(content, {"kind": kind, **meta}, session=session)
 
 
 def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
@@ -299,7 +331,7 @@ def _maybe_push_done(task_id: str) -> None:
     }
     if label:
         meta_dict["label"] = label
-    push_channel("\n".join(parts), meta_dict)
+    push_channel("\n".join(parts), meta_dict, session=task.get("origin"))
 
 
 def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:
@@ -380,7 +412,11 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
                 f"defer() expects a coroutine object, got {type(coro).__name__}. "
                 "Call it as: defer(my_async_fn())"
             )
-        task_id, task = tasks.new_task()
+        # Inherit the calling cell's originating session so a background task
+        # reports back to whoever asked for it. defer() from an @every body or
+        # the --init file has no current task, so it stays ambient.
+        parent = tasks.get(tasks.current_task_id() or "")
+        task_id, task = tasks.new_task(origin=parent.get("origin") if parent else None)
         task["nudged"] = True
         task["nudge_cutoff"] = 0
         if label is not None:
@@ -505,9 +541,9 @@ class _Context:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self.loop = loop
 
-    def start_task(self, src: str):
+    def start_task(self, src: str, *, origin=None):
         n = next(_exec_count)
-        task_id, task = tasks.new_task()
+        task_id, task = tasks.new_task(origin=origin)
         events.emit(CellStart(task_id, src, time.time()))
         asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), self.loop)
         return task_id, task["done_event"]
@@ -686,9 +722,13 @@ def _start_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-def _boot_runtime() -> None:
-    """2. Event queue, tee, .env, gists — before any user code runs."""
+def _boot_runtime(sock_path: Path) -> None:
+    """2. Event queue, event log, tee, .env, gists — before any user code runs."""
     events.init_event_queue()
+    # Installed before the tee so a headless kernel's very first output is
+    # already on disk for `repld log`.
+    eventlog.install(paths.eventlog_for(sock_path))
+    atexit.register(eventlog.close)
     install_tee()
 
     # 2b. Load .env from project root (same dir as socket/lockfile/gists).
@@ -782,7 +822,7 @@ def _start_services(
     from . import dashboard
 
     _kernel_start_time = time.monotonic()
-    dash_hint = sock_path.with_suffix(".dashboard")
+    dash_hint = paths.hint_for(sock_path)
     hint: dict = {}
     try:
         loaded = json.loads(dash_hint.read_text())
@@ -856,11 +896,12 @@ def run_kernel(
     display: bool = True,
     init_file: str | None = None,
 ) -> int:
+    global _project_lock_fd
     sock_path = Path(socket_path) if socket_path else default_socket_path()
-    _check_existing_kernel(sock_path)
+    _project_lock_fd = _claim_project(sock_path)
 
     loop = _start_loop()
-    _boot_runtime()
+    _boot_runtime(sock_path)
     _inject_builtins(loop)
     dashboard_port = _start_services(loop, sock_path, display)
     stop = _start_watchdog(loop, sock_path, dashboard_port)

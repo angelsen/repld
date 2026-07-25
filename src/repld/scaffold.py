@@ -1,8 +1,11 @@
 """Project scaffolding (`repld init`).
 
-Writes the per-project files repld needs (.mcp.json, .gitignore additions,
-CLAUDE.md block) without touching anything project-specific. Idempotent:
-re-running surfaces existing state instead of overwriting it.
+Writes the per-project files repld needs (.mcp.json, CLAUDE.md block) without
+touching anything project-specific. Idempotent: re-running surfaces existing
+state instead of overwriting it.
+
+Nothing to .gitignore: runtime state (socket, lockfile, dashboard hint, event
+log) lives under $XDG_RUNTIME_DIR, never in the project directory.
 """
 
 import json
@@ -25,8 +28,6 @@ def _mcp_entry(cwd: Path) -> dict:
         "env": {},
     }
 
-
-_GITIGNORE_ENTRIES = [".pyrepl.lock", ".pyrepl.sock", ".pyrepl.dashboard"]
 
 _CLAUDE_MD_BLOCK = """\
 <!-- repld:start -->
@@ -60,24 +61,6 @@ def _write_mcp_json(cwd: Path) -> str:
         return f"updated: {path.name} (added repld entry)"
     path.write_text(json.dumps({"mcpServers": {"repld": entry}}, indent=2) + "\n")
     return f"created: {path.name}"
-
-
-def _update_gitignore(cwd: Path) -> str:
-    path = cwd / ".gitignore"
-    existing_text = ""
-    existing_lines: set[str] = set()
-    if path.exists():
-        existing_text = path.read_text()
-        existing_lines = {ln.strip() for ln in existing_text.splitlines()}
-    missing = [e for e in _GITIGNORE_ENTRIES if e not in existing_lines]
-    if not missing:
-        return f"ok:      {path.name} already ignores repld runtime files"
-    sep = "" if not existing_text or existing_text.endswith("\n") else "\n"
-    block = sep + "\n# repld runtime state\n" + "\n".join(missing) + "\n"
-    with open(path, "a") as f:
-        f.write(block)
-    verb = "updated" if existing_text else "created"
-    return f"{verb}: {path.name} (added {', '.join(missing)})"
 
 
 def _update_claude_md(cwd: Path, *, force: bool = False) -> str:
@@ -126,18 +109,20 @@ def _next_steps(cwd: Path) -> str:
 Next:
   1. (Optional) Write repl.py to pre-load project state (clients, sessions,
      app handles).
-  2. Start the kernel:
+  2. Open Claude Code in this directory:
+       claude
+     The MCP bridge connects automatically via .mcp.json, and starts a
+     headless kernel if one isn't already running.
+  3. (Optional) Start the kernel yourself to get the live TUI:
        {run}                       # bare kernel
        {run} --init repl.py        # with project bootstrap
-  3. Open Claude Code in this directory:
-       claude
-     The MCP bridge connects automatically via .mcp.json.
+     Otherwise: `repld log -f` to watch it, `repld stop` to stop it.
 """
 
 
 def run_init(argv: list[str]) -> int:
     if argv and argv[0] in ("-h", "--help"):
-        print("repld init — scaffold .mcp.json + .gitignore + CLAUDE.md block")
+        print("repld init — scaffold .mcp.json + CLAUDE.md block")
         print()
         print("Run with no arguments. Idempotent.")
         print("  --force    Overwrite existing repld block in CLAUDE.md")
@@ -149,7 +134,6 @@ def run_init(argv: list[str]) -> int:
         return 2
     cwd = Path.cwd()
     print(_write_mcp_json(cwd))
-    print(_update_gitignore(cwd))
     print(_update_claude_md(cwd, force=force))
     print()
     print(_next_steps(cwd))

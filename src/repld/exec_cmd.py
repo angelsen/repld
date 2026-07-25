@@ -3,7 +3,7 @@
 One-shot:     repld exec 'await browser.watch("*gmail*")'
 Interactive:  repld exec
 
-Connects to the kernel via its unix socket (.pyrepl.lock), sends JSON-RPC
+Connects to the kernel via its unix socket (kernel.lock), sends JSON-RPC
 tools/call requests, and renders results. State persists in the kernel
 across invocations.
 """
@@ -101,7 +101,10 @@ def _connect(lock_path: Path) -> tuple[socket.socket, IO[str], IO[str], dict] | 
     """
     result = connect_to_kernel(lock_path)
     if isinstance(result, str):
-        _err(result)
+        _err(
+            f"{result}\n  start one with `repld`, or open `claude` — the MCP "
+            "bridge starts a headless kernel on connect"
+        )
         return None
     sock, lock = result
 

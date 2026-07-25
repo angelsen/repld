@@ -1,16 +1,17 @@
-"""Phase 5: Lockfile conflict detection, --init file execution."""
+"""Phase 5: single-kernel flock mutex, --init file execution."""
 
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from harness import REPO, Bridge, Kernel, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true
 
 
 def phase_5(kernel: Kernel) -> None:
-    """Refuse to start a second kernel in the same cwd (lockfile check)."""
-    # Try to start a *second* kernel in the same cwd. Should fail.
+    """A second kernel in the same cwd loses the flock and stands down."""
+    before = json.loads(kernel.lock_path.read_text())
     env = os.environ.copy()
     proc = subprocess.run(
         ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
@@ -22,13 +23,16 @@ def phase_5(kernel: Kernel) -> None:
         timeout=10,
         env=env,
     )
-    assert_true(proc.returncode != 0, "second kernel exits non-zero")
+    # Exit 0, not an error: a racing bridge should just use the incumbent.
+    assert_eq(proc.returncode, 0, "second kernel exits 0")
     combined = (proc.stdout or "") + (proc.stderr or "")
     assert_true(
-        "another kernel" in combined,
-        f"second-kernel error mentions 'another kernel' (got: {combined!r})",
+        "already running" in combined,
+        f"second-kernel notice mentions 'already running' (got: {combined!r})",
     )
-    print("  ✓ stale-lockfile check: second kernel refused to start")
+    after = json.loads(kernel.lock_path.read_text())
+    assert_eq(after["pid"], before["pid"], "winner's lockfile left intact")
+    print("  ✓ flock mutex: second kernel stood down, incumbent untouched")
 
 
 def phase_5_init(_kernel: Kernel) -> None:

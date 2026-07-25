@@ -23,28 +23,44 @@ Two things happened at once:
 ```
 Project cwd
  └─ .mcp.json                   → tells Claude Code to spawn `repld bridge`
- └─ .pyrepl.lock                → {pid, socket_path} of the running kernel
 
-Terminal 1: `repld`             Kernel (asyncio loop) + IPC server (unix socket in cwd)
-Terminal 2: `claude …`          spawns `repld bridge` via stdio MCP
-                                bridge proxies stdio ↔ IPC socket
-                                channel notifications flow through
+$XDG_RUNTIME_DIR/repld/
+ └─ projects/<slug>/            → per-project runtime state, 0700
+     ├─ kernel.sock             → unix-domain IPC socket
+     ├─ kernel.lock             → {pid, socket_path, cwd, dashboard_port}
+     ├─ kernel.flock            → single-kernel-per-project mutex
+     ├─ kernel.dashboard        → dashboard port/token + browser restore hint
+     └─ kernel.events           → NDJSON event log (`repld log` reads this)
+ └─ sessions/<pid>.json         → user-scoped index of every live kernel
+
+Terminal 1: `claude …`          spawns `repld bridge` via stdio MCP.
+                                The bridge starts a headless kernel if none
+                                is running, and heals it if it dies.
+Terminal 2 (optional): `repld`  Kernel with the live TUI display, when you
+                                want to watch it rather than `repld log -f`
 Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 ```
 
-Six CLI subcommands, all dispatched from `repld:main`:
+Eleven CLI subcommands, all dispatched from `repld:main`:
 
-- `repld` — long-running Python kernel in the project cwd. Writes `./.pyrepl.lock` with `{pid, socket_path}`; listens on a unix-domain socket for IPC.
-- `repld bridge` — short-lived stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, reads the lockfile, proxies stdio MCP ↔ the kernel's IPC socket. Also relays channel notifications (`notifications/claude/channel`) back to the client.
+- `repld` — long-running Python kernel for the cwd, with the live display. Takes a flock mutex; if a kernel already owns the project it prints a note and exits 0 rather than competing.
+- `repld bridge` — stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, guarantees a kernel exists (spawning a headless one if needed), and proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld exec [CODE]` — execute Python in a running kernel via IPC. With no args, drops into a minimal interactive REPL (readline history at `~/.repld/history`). With a string arg, runs one-shot and prints the result.
-- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and appends `.pyrepl.lock` / `.pyrepl.sock` to `.gitignore`.
+- `repld log [-n N] [-f] [--json]` — replay (or follow) the kernel's event log: the same cells, output, and channel pushes the TUI renders, for a kernel with no pane.
+- `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned ones don't accumulate unseen.
+- `repld stop [--all]` — SIGTERM this project's kernel and wait for it to clear; `--all` stops every live kernel in the session registry.
+- `repld restart` — stop, then spawn a fresh headless kernel.
+- `repld dashboard [--print]` — resolve the dashboard port and open it, printing the URL when a browser can't be opened.
+- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and the CLAUDE.md block. No `.gitignore` changes — nothing repld writes lands in the project directory.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field.
-- `repld gist <name>` — scaffold a tool gist in `./gists/<name>.py` with `__repld_tools__` declaration and `_tool_*` handler skeleton.
+- `repld gist <verb>` — `new` / `add` / `rm` / `list` / `lint` for tool gists in `./gists/`.
 
 ## Design properties
 
-- **Stdio MCP subprocess** — canonical shape per channel docs. Claude Code spawns it; no always-on daemon, no port management, no gateway.
-- **Per-cwd lockfile** — the kernel's IPC path lives in `./.pyrepl.lock`. Both the bridge and `repld exec` inherit `cwd`, read the lockfile, connect.
+- **Stdio MCP subprocess** — canonical shape per channel docs. Claude Code spawns it; no port management, no gateway. The kernel it manages persists until explicitly stopped, so in-memory state survives a Claude Code restart.
+- **Per-cwd runtime dir** — the kernel's IPC path lives in `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock`, where `<slug>` is `{basename}-{sha256(realpath)[:8]}`. Both the bridge and `repld exec` inherit `cwd`, resolve the same slug, read the lockfile, connect. `--socket` / `REPLD_SOCKET` override it, and every sibling file follows the socket by suffix.
+- **One kernel per project, enforced by flock** — the winner holds the fd for its whole life; a loser exits 0 without touching the winner's lockfile. That is what makes an externally-started kernel adopted rather than raced.
+- **The bridge outlives the kernel** — MCP client dispatchers are single-shot, so a bridge that exits on kernel EOF would end the session permanently. It never closes its own stdout, caches the client's `initialize` for replay onto a fresh kernel, and probes liveness *before* forwarding (never retries after a failure — `exec` runs arbitrary code and must not run twice).
 - **Stdlib REPL** — `compile()` + `eval()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT`. Last-expression auto-display binds to `_` and `_N`. AST split lets `x = 1; "last"` still display the trailing expression.
 - **Shared asyncio loop** — one process-wide loop on a daemon thread. `asyncio.create_task(...)` works from anywhere, tasks survive the exec return. A watchdog channel-pushes if the loop wedges.
 - **Stdlib only in core** — zero required dependencies. Optional extras: `repld[pretty]` (rich-rendered display), `repld[browser]` (CDP + DuckDB for browser integration).
@@ -83,6 +99,11 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Gist dependency management — `__repld_deps__` declaration, boot-time scan + interactive install prompt
 - [x] Dynamic `__version__` — `importlib.metadata.version("repld-tool")`, `repld --version` CLI flag
 - [x] `tab.wait_for_idle()` — network idle detection exposed on Tab API; replaces hardcoded 300ms in ready signal
+- [x] XDG runtime paths — socket/lockfile/hint/event log under `$XDG_RUNTIME_DIR/repld/projects/<slug>/`; nothing lands in the project directory
+- [x] Single-kernel flock mutex — losers exit 0, externally-started kernels are adopted
+- [x] Slim loader — `repld bridge` auto-spawns a headless kernel and heals it across kernel death (handshake replay, `-31001` for orphaned requests)
+- [x] Targeted channel push — a task's completion notifies the session that started it; ambient pushes stay broadcast
+- [x] Event log + `repld log` / `status` / `stop` / `restart` / `dashboard` — a headless kernel is observable and controllable from any terminal
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@watch("/path")` — poll-based file watcher → channel (stdlib only)
 - [ ] `@webhook("/path")` — stdlib asyncio HTTP server → channel

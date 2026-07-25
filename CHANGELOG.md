@@ -8,11 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Headless kernel.** `repld bridge` is now a slim loader: when Claude Code connects and no kernel is running for the project, it spawns a detached headless one and waits for it to answer. Starting `repld` by hand first is no longer required — do it only when you want the live TUI display. The kernel it spawns persists until explicitly stopped, so in-memory state survives a Claude Code restart
+- **Self-healing bridge.** If the kernel dies mid-session the bridge no longer exits with it. It answers each orphaned in-flight request with a `-31001` error (rather than leaving the client hanging), then re-spawns and reconnects on the next inbound request, replaying the client's cached `initialize` + `notifications/initialized` onto the fresh kernel so channel pushes keep flowing, and emitting `notifications/tools/list_changed`. It never closes its own stdout: MCP client dispatchers are single-shot and cannot re-handshake, so a bridge that exited on kernel EOF would end the session permanently. Liveness is probed *before* forwarding, never by retrying a failed request — `exec` runs arbitrary user code and must never run twice
+- **One kernel per project, enforced by flock.** A second `repld` in the same project now prints a note and exits 0 instead of failing, so a racing bridge (or a human) simply connects to the incumbent. An externally-started or supervised kernel is adopted, never competed with
+- `repld log [-n N] [-f] [--json]` — replay or follow a headless kernel's activity (cells, output, channel pushes) from any terminal, rendered the way the TUI renders it. Backed by a new NDJSON event log written next to the socket; previously `--no-display` mode discarded every event and nothing persisted
+- `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard URL, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned kernels in other projects are visible rather than silently accumulating
+- `repld stop [--all]` / `repld restart` — lifecycle control for kernels you never started
+- `repld dashboard [--print]` — resolve the running kernel's dashboard port and open it, printing the URL when a browser can't be opened
+- `python -m repld` entry point (`src/repld/__main__.py`), which is how the bridge spawns kernels
+
 ### Changed
+
+- **Runtime state moved out of the project directory** into `$XDG_RUNTIME_DIR/repld/projects/{basename}-{sha256(realpath)[:8]}/` (created 0700), alongside the existing `sessions/` and task spill files. The socket, lockfile, dashboard hint, and new event log are all there as `kernel.sock` / `.lock` / `.flock` / `.dashboard` / `.events` — every file is the socket path with a different suffix, so `--socket` and `REPLD_SOCKET` still move the whole set together. New `paths.py` is the single source of truth; the `./.pyrepl.*` fallbacks are gone
+- **Channel pushes caused by a specific request now go only to the session that made it.** A deferred `exec` completing (or a timed-out one finishing later) notifies the bridge that called it instead of every connected session; `defer()` inherits the originating session of the cell that called it. Genuinely ambient pushes stay broadcast — `@every` errors, watched-tab console errors, browser connect/disconnect, and bare `notify()` from shared user code. If the originating session disconnected before its task completed the push is dropped rather than downgraded to a broadcast, which would leak one session's output into every other one; it still reaches `repld log` and the task's spill file
+- The MCP `initialize` response now declares `listChanged: true` for tools and resources — a prerequisite for the bridge's post-respawn `list_changed` notification, since both parties may only use negotiated capabilities
 
 ### Fixed
 
+- `repld help`'s state check stat'd `./.pyrepl.lock` and advised deleting a stale one by hand — a file that no longer exists, and advice the flock mutex made wrong anyway
+
 ### Removed
+
+- `repld init` no longer writes `.gitignore` entries, and no longer creates a `.gitignore` to hold them: nothing repld writes at runtime lands in the project directory any more. Existing `.pyrepl.*` lines in a project's `.gitignore` are harmless and can be deleted
 
 ## [0.1.1] - 2026-07-24
 

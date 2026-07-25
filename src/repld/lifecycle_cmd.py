@@ -1,0 +1,239 @@
+"""`repld stop` / `restart` / `status` — lifecycle control for kernels nobody started.
+
+Auto-spawn creates kernels the user never launched in a pane, so it has to ship
+with the means to see and stop them. `status` lists live siblings from the
+user-scoped session registry, so headless kernels in other projects are visible
+rather than silently accumulating.
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+from . import ipc, paths, sessions
+
+_STOP_USAGE = """\
+repld stop — stop this project's kernel
+
+  repld stop [--all] [--socket PATH]
+
+  --all   stop every live repld kernel, not just this project's
+"""
+
+_RESTART_USAGE = """\
+repld restart — stop this project's kernel and start a fresh headless one
+
+  repld restart [--socket PATH]
+"""
+
+_STATUS_USAGE = """\
+repld status — this project's kernel plus live siblings
+
+  repld status [--json] [--socket PATH]
+"""
+
+_DIM = "\033[2m"
+_GREEN = "\033[32m"
+_RESET = "\033[0m"
+
+
+def _uptime(started_at: float | None) -> str:
+    if not started_at:
+        return "?"
+    secs = int(time.time() - started_at)
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m{secs % 60:02d}s"
+    return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
+
+
+def _wait_gone(pid: int, lock_path: Path, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not ipc.pid_alive(pid) and not lock_path.exists():
+            return True
+        time.sleep(0.1)
+    return not ipc.pid_alive(pid)
+
+
+def _stop_one(pid: int, lock_path: Path, label: str) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        print(f"{label}: pid {pid} was already gone")
+        return True
+    except PermissionError:
+        print(f"{label}: not permitted to signal pid {pid}", file=sys.stderr)
+        return False
+    if _wait_gone(pid, lock_path):
+        print(f"{label}: stopped (pid {pid})")
+        return True
+    print(f"{label}: pid {pid} did not exit within 10s", file=sys.stderr)
+    return False
+
+
+def run_stop(argv: list[str]) -> int:
+    if any(a in ("-h", "--help") for a in argv):
+        print(_STOP_USAGE)
+        return 0
+    sock_path, rest = ipc.resolve_socket_path(argv)
+    stop_all = "--all" in rest
+    unknown = [a for a in rest if a != "--all"]
+    if unknown:
+        print(f"repld stop: unknown argument {unknown[0]!r}\n")
+        print(_STOP_USAGE)
+        return 2
+
+    if stop_all:
+        live = sessions.list_sessions()
+        if not live:
+            print("no repld kernels running")
+            return 0
+        ok = True
+        for s in live:
+            pid = int(s["pid"])
+            label = Path(s.get("cwd", "?")).name or str(pid)
+            lock = ipc.lock_for(Path(s.get("socket_path", "")))
+            ok = _stop_one(pid, lock, label) and ok
+        return 0 if ok else 1
+
+    lock_path = ipc.lock_for(sock_path)
+    lock = ipc.read_lock(lock_path)
+    if isinstance(lock, str):
+        print(f"nothing to stop: {lock}")
+        return 0
+    return 0 if _stop_one(int(lock["pid"]), lock_path, "repld") else 1
+
+
+def _spawn_headless(sock_path: Path) -> int:
+    cmd = [sys.executable, "-m", "repld", "--no-display"]
+    if sock_path != paths.socket_path():
+        cmd += ["--socket", str(sock_path)]
+    subprocess.Popen(
+        cmd,
+        cwd=os.getcwd(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    lock_path = ipc.lock_for(sock_path)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if isinstance(ipc.read_lock(lock_path), dict):
+            return 0
+        time.sleep(0.1)
+    print("repld restart: new kernel never came up", file=sys.stderr)
+    return 1
+
+
+def run_restart(argv: list[str]) -> int:
+    if any(a in ("-h", "--help") for a in argv):
+        print(_RESTART_USAGE)
+        return 0
+    sock_path, rest = ipc.resolve_socket_path(argv)
+    if rest:
+        print(f"repld restart: unknown argument {rest[0]!r}\n")
+        print(_RESTART_USAGE)
+        return 2
+    rc = run_stop(["--socket", str(sock_path)])
+    if rc != 0:
+        return rc
+    rc = _spawn_headless(sock_path)
+    if rc == 0:
+        print("repld: fresh headless kernel started")
+    return rc
+
+
+def _live_state(lock: dict, hint_path: Path) -> dict | None:
+    """Ask the dashboard for task/ticker counts.
+
+    Reuses the existing `POST /api {"method": "state"}` with the token from the
+    0600 hint file — no new IPC surface for a read-only status line.
+    """
+    port = lock.get("dashboard_port")
+    if not port:
+        return None
+    try:
+        token = json.loads(hint_path.read_text()).get("token")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not token:
+        return None
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api",
+        data=json.dumps({"method": "state"}).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Host": f"127.0.0.1:{port}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            body = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+    return body.get("result") if isinstance(body, dict) else None
+
+
+def run_status(argv: list[str]) -> int:
+    if any(a in ("-h", "--help") for a in argv):
+        print(_STATUS_USAGE)
+        return 0
+    sock_path, rest = ipc.resolve_socket_path(argv)
+    as_json = "--json" in rest
+    unknown = [a for a in rest if a != "--json"]
+    if unknown:
+        print(f"repld status: unknown argument {unknown[0]!r}\n")
+        print(_STATUS_USAGE)
+        return 2
+
+    lock_path = ipc.lock_for(sock_path)
+    lock = ipc.read_lock(lock_path)
+    here: dict | None = None
+    if isinstance(lock, dict):
+        here = dict(lock)
+        state = _live_state(lock, paths.hint_for(sock_path))
+        if state:
+            kernel = state.get("kernel", {})
+            here["tasks_active"] = kernel.get("tasks_active")
+            here["tickers"] = len(kernel.get("tickers") or [])
+
+    mine = int(here["pid"]) if here else None
+    siblings = [s for s in sessions.list_sessions() if int(s["pid"]) != mine]
+
+    if as_json:
+        print(json.dumps({"kernel": here, "siblings": siblings}, indent=2))
+        return 0
+
+    if here is None:
+        print(lock if isinstance(lock, str) else "no kernel running for this project")
+    else:
+        print(
+            f"{_GREEN}●{_RESET} kernel pid={here['pid']}  up {_uptime(here.get('started_at'))}"
+        )
+        print(f"  socket:    {here.get('socket_path')}")
+        print(f"  cwd:       {here.get('cwd')}")
+        if here.get("dashboard_port"):
+            print(f"  dashboard: http://127.0.0.1:{here['dashboard_port']}/")
+        if here.get("tasks_active") is not None:
+            print(
+                f"  active:    {here['tasks_active']} task(s), {here['tickers']} ticker(s)"
+            )
+        print("  log:       repld log -f")
+
+    if siblings:
+        print(f"\n{_DIM}live kernels elsewhere:{_RESET}")
+        for s in sorted(siblings, key=lambda x: str(x.get("cwd", ""))):
+            port = s.get("dashboard_port")
+            dash = f"  http://127.0.0.1:{port}/" if port else ""
+            print(f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{_RESET}")
+    return 0
