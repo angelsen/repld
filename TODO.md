@@ -124,24 +124,26 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 - [ ] **Drop the legacy gist tool API in 0.3** — `__repld_tools__` + old-style
   `_tool_*(args: dict)` handlers, deprecated in 0.1.0 (2026-07-14) in favour of typed
   `_tool_*` functions. Kept through 0.2 deliberately: it is published on PyPI and only
-  eleven days old at the 0.2 cut, so it gets a release cycle to age out. **Blocked on
-  migrating three of our own gists first** (scanned 2026-07-25 across all 51 registered
-  gists on disk — these are the only users):
-  - `private/playbook/gists/fiken.py` — `__repld_tools__` (4 entries, line 877) +
-    `_tool_fiken_linjer` / `_drill_down` / `_kontomatch` / `_kontakter`
-  - `private/playbook/gists/kontoplan.py` — `__repld_tools__` (2 entries, line 121) +
-    `_tool_konto_search` / `_konto_get`
-  - `private/learn-freecad/gists/freecad.py` — `__repld_tools__` (3 entries, line 1254) +
-    `_tool_freecad_eval` / `_objects` / `_export`
+  eleven days old at the 0.2 cut, so it gets a release cycle to age out.
 
-  All nine handlers sit at the bottom of their files, so each conversion is mechanical:
-  delete the `__repld_tools__` block, turn `def _tool_x(args: dict)` into a typed
-  signature, and let the schema be inferred. `repld gist lint` flags every one today
-  (`legacy` rule) — run it before and after. Removing the API deletes ~120 lines:
-  `gists._warn_deprecated` / `_extract_tools_from_tree` / `_is_old_style` and the legacy
-  branches in `_declared_tools` / `scan_tools` / `resolve_tool`, `protocol.py`'s
-  `old_style` dispatch, the `gist_lint` rule itself, three `help.py` mentions, and the
-  phase-9 legacy test case.
+  Migration is **lint-driven, not a blocking sweep**: `repld gist lint`'s `legacy` rule
+  now flags both halves (it previously only knew about `__repld_tools__` — an old-style
+  handler in a typed-declaring file was invisible until someone called the tool). Fix
+  each gist opportunistically while working in its project; run `repld gist lint` there
+  to confirm. Conversion is mechanical — drop the `__repld_tools__` block, give each
+  argument its own typed parameter, let the schema be inferred.
+
+  Full-disk scan on 2026-07-25 (55 gist files across 39 `gists/` dirs — the filesystem,
+  not just the 51 in the registry) found exactly **3 affected files, 12 findings**:
+  `private/playbook/gists/fiken.py` (4 tools), `private/playbook/gists/kontoplan.py`
+  (2), `private/learn-freecad/gists/freecad.py` (3). Re-run the scan before removing —
+  new gists may have copied the old pattern from these.
+
+  Removing the API deletes ~120 lines: `gists._warn_deprecated` /
+  `_extract_tools_from_tree` / `_is_old_style` and the legacy branches in
+  `_declared_tools` / `scan_tools` / `resolve_tool`, `protocol.py`'s `old_style`
+  dispatch, the `gist_lint` rule itself, the `help.py` mentions, and the phase-9 legacy
+  test case.
 - [ ] ~~`__repld_tools__` dict shorthand~~ — obsolete. Superseded by typed `_tool_*`
   functions in 0.1.0; do not build new features on the declaration list that is on its
   way out.

@@ -1230,8 +1230,9 @@ Linting:
   Rules: firstline (module docstring's first line must stand alone),
   shape (dict/list-returning public methods need -> {shape} in their
   docstring's first line), deps (non-stdlib imports need __repld_deps__),
-  legacy (__repld_tools__ is deprecated, catches it before a tool call
-  would trigger the runtime warning).
+  legacy (the pre-0.1.0 tool convention -- both __repld_tools__ and
+  _tool_x(args: dict) handlers, which repld 0.3 removes; catches them
+  before a tool call would, and the handler signature nothing else does).
   Suppress one: # gistlint: ignore=<rule> on the flagged line.
 
 Cross-project links:

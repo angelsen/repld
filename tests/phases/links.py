@@ -143,6 +143,56 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         )
         print("  ✓ gist lint: path: dep suppresses false-positive deps finding")
 
+        # --- gist lint: the legacy rule catches BOTH halves of the pre-0.1.0
+        # tool convention. The handler signature is the one nothing else finds:
+        # gists._warn_deprecated only fires on __repld_tools__, so a file that
+        # declares tools the modern way but still takes a single dict stays
+        # silent until someone actually calls the tool. ---
+        (src / "oldtools.py").write_text(
+            '"""Legacy declaration + legacy handler."""\n'
+            '__repld_tools__ = [{"name": "a", "description": "d"}]\n'
+            "def _tool_a(args: dict):\n"
+            '    """Do a."""\n'
+            "    return {}\n"
+        )
+        rules = [f.rule for f in gist_lint.lint_file(src / "oldtools.py")]
+        assert_eq(rules.count("legacy"), 2, "legacy rule flags both dunder + handler")
+
+        (src / "halfold.py").write_text(
+            '"""Modern declaration, legacy handler."""\n'
+            "def _tool_b(args: dict):\n"
+            '    """Do b."""\n'
+            "    return {}\n"
+        )
+        half = [
+            f for f in gist_lint.lint_file(src / "halfold.py") if f.rule == "legacy"
+        ]
+        assert_eq(len(half), 1, "legacy rule flags an old-style handler on its own")
+        assert_true("_tool_b" in half[0].message, "finding names the offending handler")
+
+        (src / "typedtools.py").write_text(
+            '"""Typed tools."""\n'
+            "def _tool_c(query: str, limit: int = 10):\n"
+            '    """Do c. -> {ok}"""\n'
+            "    return {}\n"
+        )
+        typed = [
+            f for f in gist_lint.lint_file(src / "typedtools.py") if f.rule == "legacy"
+        ]
+        assert_eq(typed, [], f"typed handler is not flagged (got {typed})")
+
+        (src / "ignored.py").write_text(
+            '"""Suppressed legacy handler."""\n'
+            "def _tool_d(args: dict):  # gistlint: ignore=legacy\n"
+            '    """Do d."""\n'
+            "    return {}\n"
+        )
+        supp = [
+            f for f in gist_lint.lint_file(src / "ignored.py") if f.rule == "legacy"
+        ]
+        assert_eq(supp, [], f"gistlint: ignore=legacy suppresses it (got {supp})")
+        print("  ✓ gist lint: legacy rule covers __repld_tools__ + old handler sigs")
+
         # --- path: dep modules get gist-style mtime auto-reload, without the
         # gist-registry/API-summary side effects a real gist import triggers ---
         finder = gists._GistFinder([])  # empty gist dirs — only the path-dep tier fires
