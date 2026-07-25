@@ -37,6 +37,7 @@ from phases.lockfile import (
     phase_5_init,
     phase_5_permissions,
     phase_5_sweep,
+    phase_5_zombie,
 )
 from phases.resources import phase_8_gist_resources
 from phases.sessions import phase_13_sessions
@@ -49,6 +50,7 @@ PHASES = {
         phase_5(k),
         phase_5_init(k),
         phase_5_permissions(k),
+        phase_5_zombie(k),
         phase_5_sweep(k),
     ),
     6: lambda k: (

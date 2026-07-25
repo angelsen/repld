@@ -25,17 +25,53 @@ from typing import IO, Any, Literal, overload
 _PID_PREFIX = re.compile(r"^(\d+)-")
 
 
+def _is_zombie(pid: int) -> bool:
+    """True if *pid* has exited but hasn't been reaped by its parent.
+
+    Linux only — everywhere else there is no procfs to ask and this reports
+    False, leaving `pid_alive` exactly as accurate as it was before.
+
+    Reading ``/proc/<pid>/stat`` rather than ``status`` because the process
+    name sits in parentheses and may itself contain spaces, newlines, or more
+    parentheses; splitting after the *last* ``)`` is the only parse that
+    survives a process called ``foo) Z (bar``.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read()
+    except OSError:
+        return False
+    rparen = data.rfind(b")")
+    if rparen == -1:
+        return False
+    fields = data[rparen + 1 :].split()
+    return bool(fields) and fields[0] == b"Z"
+
+
 def pid_alive(pid) -> bool:
+    """True if *pid* names a process that is actually still running.
+
+    ``os.kill(pid, 0)`` alone is not enough: it succeeds for a **zombie**, a
+    process that has already exited and is only waiting to be reaped. repld
+    creates them routinely — `spawn.spawn_headless` never waits on the kernel
+    it starts, so a kernel that dies before its bridge stays a zombie until the
+    bridge exits. Counting one as alive means `repld stop` reporting "did not
+    exit within 10s" about a process that did, `read_lock` blessing a lockfile
+    whose kernel is gone, and `sweep_dead_pid_files` declining to reclaim its
+    spill files.
+    """
     if not isinstance(pid, int) or pid <= 0:
         return False
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Process exists but isn't ours — still alive.
+        # Exists but isn't ours. Not a process we could have failed to reap,
+        # so the zombie check would only ever be answering about someone
+        # else's bookkeeping.
         return True
+    return not _is_zombie(pid)
 
 
 def read_lock(lock_path: Path) -> dict | str:

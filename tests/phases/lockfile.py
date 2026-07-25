@@ -52,6 +52,38 @@ def _a_dead_pid() -> int:
     raise RuntimeError("could not find a dead pid to test with")
 
 
+def phase_5_zombie(_kernel: Kernel) -> None:
+    """A zombie is not alive, however cheerfully os.kill(pid, 0) answers.
+
+    repld manufactures these: `spawn.spawn_headless` never waits on the kernel
+    it starts, so a kernel that dies before its bridge sits unreaped. Counting
+    one as alive made `repld stop` report a false timeout and kept the boot
+    sweep off its spill files.
+    """
+    import time
+
+    from repld import state
+
+    proc = subprocess.Popen(["true"])  # exits immediately; deliberately not reaped
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not state._is_zombie(proc.pid):
+            time.sleep(0.02)
+        if not state._is_zombie(proc.pid):
+            # No procfs (non-Linux), or it got reaped out from under us.
+            print("  ~ zombie check skipped (could not produce one to test)")
+            return
+        assert_true(
+            os.kill(proc.pid, 0) is None,
+            "os.kill(pid, 0) still succeeds for the zombie (the trap)",
+        )
+        assert_eq(state.pid_alive(proc.pid), False, "pid_alive() sees through it")
+    finally:
+        proc.wait()
+    assert_eq(state.pid_alive(proc.pid), False, "still dead once reaped")
+    print("  ✓ pid_alive: a zombie reads as dead, not alive")
+
+
 def phase_5_sweep(kernel: Kernel) -> None:
     """A booting kernel reclaims what dead kernels left in RUNTIME_DIR.
 
