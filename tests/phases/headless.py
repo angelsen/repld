@@ -172,6 +172,34 @@ def _targeted_push(tmp: Path) -> None:
         c.close()
 
 
+def _no_display_skips_queue(tmp: Path) -> None:
+    """A headless kernel never builds the display queue in the first place.
+
+    Guards the invariant, not the optimisation: with no TUI, `eventlog`'s sink
+    is the sole consumer, and an initialized-but-unread queue would pin at
+    _MAXSIZE and put every later emit() on the drop-oldest path. Nothing else
+    in the suite fails if someone restores an unconditional
+    init_event_queue() — the events still reach the log either way.
+    """
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        resp = _exec(
+            b,
+            "import repld.events as _e\n"
+            "print(f'{_e._disabled}:{_e._queue is None}:{len(_e._pre_init_buf)}')",
+        )
+        out = resp["result"]["content"][0]["text"]
+        assert_true(
+            "True:True:0" in out,
+            f"headless kernel disabled the queue and dropped the pre-init buffer "
+            f"(got {out!r})",
+        )
+        print("  ✓ headless kernel skips the display queue entirely")
+    finally:
+        b.close()
+
+
 def _event_log(tmp: Path) -> None:
     """The headless kernel writes an event log and `repld log` reads it back."""
     out = subprocess.run(
@@ -290,6 +318,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
     try:
         _autospawn_and_heal(tmp)
         _targeted_push(tmp)
+        _no_display_skips_queue(tmp)
         _event_log(tmp)
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)

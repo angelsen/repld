@@ -1,9 +1,19 @@
-"""Event types and module-level queue for the display layer.
+"""Event types, the display queue, and the event-log sink.
 
-All display-bound output flows through a single bounded queue of typed events.
-The queue is initialized by `init_event_queue()` (called from kernel.run_kernel
-before anything else). `emit()` is safe to call before init — events are
-buffered in `_pre_init_buf` and flushed on first init.
+`emit()` fans one typed event out to two independent destinations:
+
+  - the **sink**, a callback registered by `eventlog.install()` that writes the
+    event to disk. Always runs, and runs first.
+  - the **queue**, a bounded `queue.Queue` drained by the live TUI.
+
+The queue exists only for the TUI. A headless kernel (`--no-display`, which is
+how every auto-spawned kernel runs) has no consumer for it, so `run_kernel`
+calls `disable_queue()` instead of `init_event_queue()` and `emit()` returns
+after the sink. See `disable_queue` for why the queue can't simply be left
+unread.
+
+`emit()` is safe to call before either — events are buffered in
+`_pre_init_buf` and flushed on init, or dropped if the queue is disabled.
 """
 
 import queue
@@ -95,6 +105,10 @@ _MAXSIZE = 10_000
 _queue: "queue.Queue[Event] | None" = None
 _pre_init_buf: list[Event] = []
 _pre_init_lock = threading.Lock()
+# Set once at boot by disable_queue(), never cleared. Distinguishes "no queue
+# because nothing will ever read one" from "no queue *yet*" — both have
+# _queue is None, but the first drops and the second buffers.
+_disabled = False
 
 # Optional second consumer, independent of whoever drains the queue.
 # eventlog.install() registers itself here; keeping it a registered callback
@@ -120,6 +134,28 @@ def init_event_queue(maxsize: int = _MAXSIZE) -> None:
         _put_nonblocking(q, ev)
 
 
+def disable_queue() -> None:
+    """Run without a display queue: `emit()` stops after the sink.
+
+    Called instead of `init_event_queue()` when nothing will consume the
+    queue — i.e. `--no-display`, which is how every auto-spawned kernel runs.
+    One-way and boot-only; the queue can't be turned back on.
+
+    The alternative — initializing a queue and draining it into nothing — is
+    what this replaces, and it is not something the drain thread was free to
+    stop doing: an unread queue pins at `_MAXSIZE`, after which every `emit()`
+    takes the drop-oldest path below, which is strictly more work per event
+    than draining. The queue is the redundant part, not the drain.
+
+    Drops anything buffered pre-init: it was only ever headed for the TUI, and
+    the sink has already written it to the event log.
+    """
+    global _disabled
+    with _pre_init_lock:
+        _disabled = True
+        _pre_init_buf.clear()
+
+
 def get_queue() -> "queue.Queue[Event]":
     """Return the live queue. Raises RuntimeError if not yet initialized."""
     if _queue is None:
@@ -138,10 +174,12 @@ def emit(ev: Event) -> None:
 
     Before `init_event_queue()` is called the event is buffered in-process
     and flushed when the queue is created. After init, if the queue is full
-    the oldest event is dropped and a drop-count warning is scheduled.
+    the oldest event is dropped and a drop-count warning is scheduled. After
+    `disable_queue()` the queue half is skipped entirely.
 
     The registered sink (the event log) sees the event regardless — it is
-    not subject to the queue's drop-oldest policy.
+    not subject to the queue's drop-oldest policy, and runs first so that a
+    kernel with no queue at all still has a complete history on disk.
     """
     sink = _sink
     if sink is not None:
@@ -150,9 +188,16 @@ def emit(ev: Event) -> None:
         except Exception:
             pass  # a broken log must never break the kernel
 
+    # Unlocked read: _disabled only ever goes False → True, once, during boot.
+    # A stale False costs one lock acquisition and is caught below.
+    if _disabled:
+        return
+
     q = _queue
     if q is None:
         with _pre_init_lock:
+            if _disabled:
+                return
             if _queue is None:
                 _pre_init_buf.append(ev)
                 return

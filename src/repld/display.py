@@ -52,9 +52,9 @@ _RESET = render.RESET
 
 
 # Pinned at import time. typeshed types these as Optional (None in GUI /
-# no-console contexts); run_display() checks at entry, and --no-display
-# (make_drainer) never touches them — so importing this module must stay
-# safe without a terminal.
+# no-console contexts); run_display() checks at entry, and a --no-display
+# kernel never imports this module at all — so importing it must stay safe
+# without a terminal.
 _STDOUT = cast(TextIO, sys.__stdout__)
 _STDIN = cast(TextIO, sys.__stdin__)
 
@@ -368,29 +368,3 @@ def run_display(stop: threading.Event) -> None:
                 pass
         except queue.Empty:
             break
-
-
-def make_drainer(stop: threading.Event) -> threading.Thread:
-    """In --no-display mode, drain the queue so memory doesn't grow.
-
-    Returns a daemon thread (already started) that simply discards events
-    until `stop` is set.
-    """
-    q = get_queue()
-
-    def _drain():
-        while not stop.is_set():
-            try:
-                q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-        # Final drain
-        while True:
-            try:
-                q.get_nowait()
-            except queue.Empty:
-                break
-
-    t = threading.Thread(target=_drain, daemon=True, name="repld-drainer")
-    t.start()
-    return t

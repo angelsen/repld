@@ -1,7 +1,8 @@
 """NDJSON event log — what makes a headless kernel observable.
 
-`display.make_drainer` throws every event away in `--no-display` mode, so an
-auto-spawned kernel would otherwise have no history at all. This module tees
+A `--no-display` kernel has no TUI, and therefore no consumer for the event
+queue — `events.disable_queue()` turns that half off, leaving this module's
+sink as the only thing an auto-spawned kernel's events reach. It tees
 `events.emit()` to one line-per-event file next to the socket, which
 `repld log` reads back (and follows).
 

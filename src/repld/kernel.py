@@ -694,9 +694,15 @@ def _start_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-def _boot_runtime(sock_path: Path) -> None:
+def _boot_runtime(sock_path: Path, display: bool) -> None:
     """2. Event queue, event log, tee, .env, gists — before any user code runs."""
-    events.init_event_queue()
+    # The queue is the TUI's, and only the TUI's. Headless, the event log's
+    # sink is the sole consumer, so skip the queue rather than paying a put +
+    # a cross-thread wakeup per event to move it nowhere.
+    if display:
+        events.init_event_queue()
+    else:
+        events.disable_queue()
 
     # 2a. Reclaim what dead kernels left in RUNTIME_DIR. Boot is the only
     # sensible moment: nothing runs on the way out of a SIGKILL, and a kernel
@@ -884,7 +890,7 @@ def run_kernel(
     _project_lock_fd = _claim_project(sock_path)
 
     loop = _start_loop()
-    _boot_runtime(sock_path)
+    _boot_runtime(sock_path, display)
     _inject_builtins(loop)
     dashboard_port = _start_services(loop, sock_path, display)
     stop = _start_watchdog(loop, sock_path, dashboard_port)
@@ -902,9 +908,7 @@ def run_kernel(
 
         run_display(stop)
     else:
-        from .display import make_drainer
-
-        make_drainer(stop)
+        # Nothing to consume — _boot_runtime disabled the queue. Just park.
         stop.wait()
 
     _shutdown(loop)
