@@ -24,6 +24,8 @@ from typing import Iterator
 
 from . import events
 from .display import VIEWER_MAX_BYTES
+from .paths import ensure_runtime_dir
+from .state import open_private
 
 MAX_BYTES = 8 * 1024 * 1024
 CHUNK_CAP_BYTES = VIEWER_MAX_BYTES
@@ -45,8 +47,9 @@ def install(path: Path) -> None:
     global _fp, _written
     with _lock:
         _close_locked()
+        ensure_runtime_dir()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _fp = open(path, "w", encoding="utf-8")
+        _fp = open_private(path)
         _written = 0
         _chunk_bytes.clear()
         _chunk_capped.clear()

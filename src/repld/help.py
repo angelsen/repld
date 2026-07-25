@@ -26,7 +26,7 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
 import json
 from pathlib import Path
 
-from .ipc import read_lock
+from .state import read_lock
 
 # ---------------------------------------------------------------------------
 # Composable instruction blocks (agent-facing, behavioral model only)

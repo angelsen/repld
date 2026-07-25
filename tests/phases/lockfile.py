@@ -1,12 +1,45 @@
-"""Phase 5: single-kernel flock mutex, --init file execution."""
+"""Phase 5: single-kernel flock mutex, --init file execution, state file modes."""
 
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+
+
+def _mode(p: Path) -> str:
+    return oct(stat.S_IMODE(p.stat().st_mode))
+
+
+def phase_5_permissions(kernel: Kernel) -> None:
+    """Runtime state is unreadable to other users, on every platform.
+
+    Under $XDG_RUNTIME_DIR this is belt-and-braces (/run/user/N is already
+    0700), but the fallback is /tmp/repld-{uid}, where these modes are the only
+    thing protecting spill files and the session registry. Enforced at
+    RUNTIME_DIR so the assertion holds either way.
+    """
+    from repld import paths
+
+    pid = json.loads(kernel.lock_path.read_text())["pid"]
+
+    assert_eq(_mode(paths.RUNTIME_DIR), "0o700", f"{paths.RUNTIME_DIR} is 0700")
+
+    session_file = paths.RUNTIME_DIR / "sessions" / f"{pid}.json"
+    assert_true(session_file.exists(), f"session file exists ({session_file})")
+    assert_eq(_mode(session_file), "0o600", "session file is 0600")
+
+    # Earlier phases exec'd cells that printed, and every cell with output
+    # spills from byte 1 — so this kernel has spill files by now.
+    spills = list(paths.RUNTIME_DIR.glob(f"{pid}-*.out"))
+    assert_true(spills, f"kernel {pid} wrote at least one spill file")
+    for s in spills:
+        assert_eq(_mode(s), "0o600", f"spill file {s.name} is 0600")
+
+    print(f"  ✓ runtime state private: dir 0700, session + {len(spills)} spill(s) 0600")
 
 
 def phase_5(kernel: Kernel) -> None:

@@ -870,7 +870,8 @@ class Tab(TabQueryMixin):
         """
         import time
 
-        from ..tasks import RUNTIME_DIR, _ensure_spill_dir
+        from ..paths import RUNTIME_DIR, ensure_runtime_dir
+        from ..state import open_private
 
         params: dict = {"format": "png"}
         if full_page:
@@ -906,12 +907,20 @@ class Tab(TabQueryMixin):
         if path:
             out = pathlib.Path(path)
         else:
-            _ensure_spill_dir()
+            ensure_runtime_dir()
             tid = self.target_id.replace(":", "-")
             out = RUNTIME_DIR / f"screenshot-{tid}-{int(time.time())}.png"
-        await asyncio.get_running_loop().run_in_executor(
-            None, out.write_bytes, img_bytes
-        )
+
+        def write(data: bytes) -> None:
+            if path:
+                # Caller picked the location — respect their umask.
+                out.write_bytes(data)
+                return
+            # 0600: a screenshot can show authenticated page content.
+            with open_private(out, "wb") as f:
+                f.write(data)
+
+        await asyncio.get_running_loop().run_in_executor(None, write, img_bytes)
         return {
             "path": str(out),
             "source": {"width": src_w, "height": src_h},

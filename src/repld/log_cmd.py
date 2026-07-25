@@ -9,7 +9,7 @@ import json
 import sys
 import time
 
-from . import eventlog, ipc, paths
+from . import eventlog, paths, state
 
 _DIM = "\033[2m"
 _RED = "\033[31m"
@@ -95,7 +95,7 @@ def run_log(argv: list[str]) -> int:
         print(_USAGE)
         return 0
 
-    sock_path, rest = ipc.resolve_socket_path(argv)
+    sock_path, rest = paths.resolve_socket_path(argv)
     follow = False
     as_json = False
     tail = 200
@@ -120,7 +120,7 @@ def run_log(argv: list[str]) -> int:
         i += 1
 
     log_path = paths.eventlog_for(sock_path)
-    lock = ipc.read_lock(ipc.lock_for(sock_path))
+    lock = state.read_lock(paths.lock_for(sock_path))
     if isinstance(lock, str) and not log_path.exists():
         print(f"repld log: {lock}", file=sys.stderr)
         return 1

@@ -7,7 +7,7 @@
 import sys
 import webbrowser
 
-from . import ipc
+from . import paths, state
 
 _USAGE = """\
 repld dashboard — open this project's kernel dashboard
@@ -23,7 +23,7 @@ def run_dashboard(argv: list[str]) -> int:
         print(_USAGE)
         return 0
 
-    lock_path, rest = ipc.resolve_lock_path(argv)
+    lock_path, rest = paths.resolve_lock_path(argv)
     print_only = "--print" in rest
     unknown = [a for a in rest if a != "--print"]
     if unknown:
@@ -31,7 +31,7 @@ def run_dashboard(argv: list[str]) -> int:
         print(_USAGE)
         return 2
 
-    lock = ipc.read_lock(lock_path)
+    lock = state.read_lock(lock_path)
     if isinstance(lock, str):
         print(f"repld dashboard: {lock}", file=sys.stderr)
         return 1

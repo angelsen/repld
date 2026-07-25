@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import tasks
-from .ipc import atomic_write_json
+from .state import atomic_write_json
 
 _start_time: float = 0.0
 _socket_path: str = ""
@@ -80,25 +80,43 @@ def _resolve_tab(browser, target_id: str):
 
 
 def save_hint() -> None:
-    """Persist dashboard port + browser state to the hint file."""
+    """Persist dashboard port + API token + browser state to the hint file.
+
+    Written once as soon as the server binds — `repld status` reads the token
+    from here to ask for task/ticker counts, and a restart reads the port back
+    to reclaim it — and again whenever browser state changes.
+
+    Merges rather than replaces, and only rewrites the browser keys when a pool
+    actually exists. Every browser-initiated call has one (they're BrowserPool
+    methods); the startup call does not, and blanking `chrome_ports` /
+    `patterns` there would discard the previous kernel's restorable session
+    before `_restore_browser_state` has read it — silently, on a headless
+    kernel, which never prompts to restore.
+    """
     if _hint_path is None:
         return
+    hint: dict[str, Any] = {}
+    try:
+        loaded = json.loads(_hint_path.read_text())
+        if isinstance(loaded, dict):
+            hint = loaded
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    hint["dashboard_port"] = _bound_port() or 0
+    hint["token"] = _token
+
     browser = getattr(__main__, "browser", None)
     pool = browser.peek() if browser else None
-    hint: dict[str, Any] = {
-        "dashboard_port": _bound_port() or 0,
-        "token": _token,
-    }
     if pool is not None:
         hint["chrome_ports"] = pool.connected_ports
         hint["patterns"] = pool.patterns
-    try:
         from .browser.cdp import _suppress_patterns
 
         if _suppress_patterns:
             hint["suppress"] = sorted(_suppress_patterns)
-    except ImportError:
-        pass
+        else:
+            hint.pop("suppress", None)
     try:
         atomic_write_json(_hint_path, hint, chmod=0o600)
     except OSError:
@@ -454,7 +472,13 @@ def start_dashboard(
     future = asyncio.run_coroutine_threadsafe(
         _start(socket_path, start_time, preferred_port), loop
     )
-    return future.result(timeout=5.0)
+    port = future.result(timeout=5.0)
+    # The port and token exist now; publish them before anything can ask.
+    # Previously only browser code ever wrote this file, so a kernel that never
+    # touched the browser left `repld status` unable to authenticate and lost
+    # its dashboard port on every restart.
+    save_hint()
+    return port
 
 
 def stop_dashboard() -> None:

@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from . import gists
-from .ipc import atomic_write_json
+from .state import atomic_write_json
 
 # Cross-project linked gists: name → absolute source path. Populated from
 # ./gists/.links at install() time; consulted by the finder + iterators after

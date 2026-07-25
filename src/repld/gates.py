@@ -1,17 +1,24 @@
-"""Human-gate primitives: ask, confirm, choose.
+"""Human-gate primitives: ask, confirm, choose — plus the boot-time `tty_prompt`.
 
 Gates are async coroutines — `await ask("name?")` yields to the asyncio loop
 while waiting on the human, so uvicorn / watchdog / other bg tasks keep
 running. The display thread's stdin reader calls `resolve_gate(gate_id, ...)`
 when the human types a response; that resolves the underlying future and
 the awaiting cell resumes.
+
+`tty_prompt` is the synchronous sibling at the bottom of this file: same job
+(ask the human), different mechanism. It runs during boot — installing gist
+deps, restoring a browser session — before the loop, the display, or the
+output tee exist, so it talks straight to the controlling terminal instead of
+routing through an event.
 """
 
 import asyncio
 import concurrent.futures
+import sys
 import threading
 import uuid
-from typing import Literal
+from typing import IO, Literal
 
 from .events import HumanPromptOpen, HumanPromptResponse, emit
 
@@ -122,3 +129,28 @@ def resolve_gate(gate_id: str, value) -> None:
     except concurrent.futures.InvalidStateError:
         return
     emit(HumanPromptResponse(gate_id, value))
+
+
+# ---------------------------------------------------------------------------
+# Boot-time prompt (pre-loop, pre-display)
+# ---------------------------------------------------------------------------
+
+
+def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
+    """Write `prompt` to the real terminal (bypassing any stdout/stderr tee)
+    and read one stripped, lowercased line of response.
+
+    Defaults to sys.__stderr__ / sys.__stdin__. Returns None if the real
+    terminal streams aren't available (e.g. no controlling tty) rather than
+    raising, so callers can treat "can't ask" the same as "declined".
+    """
+    out = stream if stream is not None else sys.__stderr__
+    stdin = sys.__stdin__
+    if out is None or stdin is None:
+        return None
+    out.write(prompt)
+    out.flush()
+    try:
+        return stdin.readline().strip().lower()
+    except OSError:
+        return None

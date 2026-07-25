@@ -9,14 +9,13 @@ rather than silently accumulating.
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import ipc, paths, sessions
+from . import paths, sessions, spawn, state
 
 _STOP_USAGE = """\
 repld stop — stop this project's kernel
@@ -57,10 +56,10 @@ def _uptime(started_at: float | None) -> str:
 def _wait_gone(pid: int, lock_path: Path, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not ipc.pid_alive(pid) and not lock_path.exists():
+        if not state.pid_alive(pid) and not lock_path.exists():
             return True
         time.sleep(0.1)
-    return not ipc.pid_alive(pid)
+    return not state.pid_alive(pid)
 
 
 def _stop_one(pid: int, lock_path: Path, label: str) -> bool:
@@ -83,7 +82,7 @@ def run_stop(argv: list[str]) -> int:
     if any(a in ("-h", "--help") for a in argv):
         print(_STOP_USAGE)
         return 0
-    sock_path, rest = ipc.resolve_socket_path(argv)
+    sock_path, rest = paths.resolve_socket_path(argv)
     stop_all = "--all" in rest
     unknown = [a for a in rest if a != "--all"]
     if unknown:
@@ -100,12 +99,19 @@ def run_stop(argv: list[str]) -> int:
         for s in live:
             pid = int(s["pid"])
             label = Path(s.get("cwd", "?")).name or str(pid)
-            lock = ipc.lock_for(Path(s.get("socket_path", "")))
-            ok = _stop_one(pid, lock, label) and ok
+            # A session file with no socket_path can't be resolved to a
+            # lockfile — Path("").with_suffix() raises. Skip it rather than
+            # letting one malformed entry abort the whole sweep.
+            sock = s.get("socket_path")
+            if not sock:
+                print(f"{label}: session file has no socket_path — skipped")
+                ok = False
+                continue
+            ok = _stop_one(pid, paths.lock_for(Path(sock)), label) and ok
         return 0 if ok else 1
 
-    lock_path = ipc.lock_for(sock_path)
-    lock = ipc.read_lock(lock_path)
+    lock_path = paths.lock_for(sock_path)
+    lock = state.read_lock(lock_path)
     if isinstance(lock, str):
         print(f"nothing to stop: {lock}")
         return 0
@@ -113,21 +119,14 @@ def run_stop(argv: list[str]) -> int:
 
 
 def _spawn_headless(sock_path: Path) -> int:
-    cmd = [sys.executable, "-m", "repld", "--no-display"]
-    if sock_path != paths.socket_path():
-        cmd += ["--socket", str(sock_path)]
-    subprocess.Popen(
-        cmd,
-        cwd=os.getcwd(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    lock_path = ipc.lock_for(sock_path)
+    if not spawn.spawn_headless(sock_path):
+        return 1
+    # 10s, unlike the bridge's 5s: there's a human waiting at a terminal here,
+    # not a tool call that would rather fail than hang.
+    lock_path = paths.lock_for(sock_path)
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
-        if isinstance(ipc.read_lock(lock_path), dict):
+        if isinstance(state.read_lock(lock_path), dict):
             return 0
         time.sleep(0.1)
     print("repld restart: new kernel never came up", file=sys.stderr)
@@ -138,7 +137,7 @@ def run_restart(argv: list[str]) -> int:
     if any(a in ("-h", "--help") for a in argv):
         print(_RESTART_USAGE)
         return 0
-    sock_path, rest = ipc.resolve_socket_path(argv)
+    sock_path, rest = paths.resolve_socket_path(argv)
     if rest:
         print(f"repld restart: unknown argument {rest[0]!r}\n")
         print(_RESTART_USAGE)
@@ -188,7 +187,7 @@ def run_status(argv: list[str]) -> int:
     if any(a in ("-h", "--help") for a in argv):
         print(_STATUS_USAGE)
         return 0
-    sock_path, rest = ipc.resolve_socket_path(argv)
+    sock_path, rest = paths.resolve_socket_path(argv)
     as_json = "--json" in rest
     unknown = [a for a in rest if a != "--json"]
     if unknown:
@@ -196,14 +195,14 @@ def run_status(argv: list[str]) -> int:
         print(_STATUS_USAGE)
         return 2
 
-    lock_path = ipc.lock_for(sock_path)
-    lock = ipc.read_lock(lock_path)
+    lock_path = paths.lock_for(sock_path)
+    lock = state.read_lock(lock_path)
     here: dict | None = None
     if isinstance(lock, dict):
         here = dict(lock)
-        state = _live_state(lock, paths.hint_for(sock_path))
-        if state:
-            kernel = state.get("kernel", {})
+        live_state = _live_state(lock, paths.hint_for(sock_path))
+        if live_state:
+            kernel = live_state.get("kernel", {})
             here["tasks_active"] = kernel.get("tasks_active")
             here["tickers"] = len(kernel.get("tickers") or [])
 

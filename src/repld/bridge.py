@@ -25,15 +25,13 @@ Two rules that fall out of running arbitrary user code:
 """
 
 import json
-import os
 import socket
-import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
-from . import ipc
+from . import ipc, paths, spawn, state
 
 # 5s spawn window, polled at 100ms — long enough for a cold kernel with gists
 # to bind its socket, short enough that a broken spawn fails a tool call
@@ -56,7 +54,7 @@ def _err(msg: str) -> None:
 class Bridge:
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
-        self.lock_path = ipc.lock_for(socket_path)
+        self.lock_path = paths.lock_for(socket_path)
         self._sock: socket.socket | None = None
         self._kernel_pid: int | None = None
         self._generation = 0
@@ -64,7 +62,6 @@ class Bridge:
         self._inflight: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
-        self._spawned_once = False
 
     # -- client I/O ---------------------------------------------------------
 
@@ -87,35 +84,8 @@ class Bridge:
     # -- kernel liveness ----------------------------------------------------
 
     def _spawn_kernel(self) -> None:
-        """Start a detached headless kernel for this cwd.
-
-        Detached (`start_new_session`) so it survives this bridge — in-memory
-        state is meant to outlive a Claude Code restart. If two bridges race
-        here, the kernel's flock mutex settles it and the loser exits 0.
-        """
-        cmd = [sys.executable, "-m", "repld", "--no-display"]
-        if self._explicit_socket:
-            cmd += ["--socket", str(self.socket_path)]
-        try:
-            subprocess.Popen(
-                cmd,
-                cwd=os.getcwd(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError as e:
-            _err(f"could not spawn kernel: {e}")
-            return
-        self._spawned_once = True
-        _err("no kernel running for this project — spawned a headless one")
-
-    @property
-    def _explicit_socket(self) -> bool:
-        from . import paths
-
-        return self.socket_path != paths.socket_path()
+        if spawn.spawn_headless(self.socket_path):
+            _err("no kernel running for this project — spawned a headless one")
 
     def _ensure_kernel(self) -> bool:
         """Cheapest-first liveness ladder, run before every forward.
@@ -124,7 +94,7 @@ class Bridge:
         spawning a kernel if the lockfile is missing, stale, or unreachable.
         """
         if self._sock is not None:
-            if self._kernel_pid is not None and ipc.pid_alive(self._kernel_pid):
+            if self._kernel_pid is not None and state.pid_alive(self._kernel_pid):
                 return True
             self._on_kernel_gone()
         return self._reconnect()
@@ -320,5 +290,5 @@ class Bridge:
 
 
 def run_bridge(argv: list[str]) -> int:
-    socket_path, _ = ipc.resolve_socket_path(argv)
+    socket_path, _ = paths.resolve_socket_path(argv)
     return Bridge(socket_path).run()

@@ -27,9 +27,10 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import events, eventlog, ipc, paths, sessions, tasks
+from . import events, eventlog, gates, ipc, paths, sessions, state, tasks
 from .events import CellDone, CellStart, ChannelPush
-from .ipc import atomic_write_json, default_socket_path, lock_for
+from .paths import default_socket_path, lock_for
+from .state import atomic_write_json
 from .protocol import Dispatcher
 from .tasks import install_tee
 
@@ -46,9 +47,9 @@ def _claim_project(socket_path: Path) -> int:
     the incumbent. Exiting 0 without touching the winner's lockfile is what
     makes an externally-started kernel adopted rather than competed with.
     """
-    fd = ipc.acquire_lock(paths.flock_for(socket_path))
+    fd = state.acquire_lock(paths.flock_for(socket_path))
     if fd is None:
-        holder = ipc.read_lock(lock_for(socket_path))
+        holder = state.read_lock(lock_for(socket_path))
         pid = holder.get("pid") if isinstance(holder, dict) else "?"
         stderr = sys.__stderr__
         if stderr is not None:
@@ -70,7 +71,9 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
     }
     if dashboard_port is not None:
         info["dashboard_port"] = dashboard_port
-    atomic_write_json(lock_for(socket_path), info)
+    # 0600 to match the session file, which carries the same facts. The project
+    # dir is already 0700, so this is defence in depth rather than the barrier.
+    atomic_write_json(lock_for(socket_path), info, chmod=0o600)
 
 
 _active_lock_path: Path | None = None
@@ -651,7 +654,7 @@ def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
     if patterns:
         parts.append(f"patterns {', '.join(patterns)}")
     prompt = f"repld: restore previous browser session ({'; '.join(parts)})? [Y/n] "
-    answer = ipc.tty_prompt(prompt, stream=sys.__stdout__)
+    answer = gates.tty_prompt(prompt, stream=sys.__stdout__)
     return answer in ("", "y", "yes")
 
 

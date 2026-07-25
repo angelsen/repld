@@ -24,7 +24,7 @@ Two things happened at once:
 Project cwd
  └─ .mcp.json                   → tells Claude Code to spawn `repld bridge`
 
-$XDG_RUNTIME_DIR/repld/
+$XDG_RUNTIME_DIR/repld/        → 0700; /tmp/repld-{uid} if XDG is unset
  └─ projects/<slug>/            → per-project runtime state, 0700
      ├─ kernel.sock             → unix-domain IPC socket
      ├─ kernel.lock             → {pid, socket_path, cwd, dashboard_port}
@@ -32,6 +32,10 @@ $XDG_RUNTIME_DIR/repld/
      ├─ kernel.dashboard        → dashboard port/token + browser restore hint
      └─ kernel.events           → NDJSON event log (`repld log` reads this)
  └─ sessions/<pid>.json         → user-scoped index of every live kernel
+ └─ {pid}-{task_id}.out         → task spill files (per-process, not per-project)
+
+Every file above is created 0600, the directories 0700 — the tree holds cell
+output and socket paths, and the /tmp fallback has no protected parent.
 
 Terminal 1: `claude …`          spawns `repld bridge` via stdio MCP.
                                 The bridge starts a headless kernel if none

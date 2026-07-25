@@ -15,8 +15,8 @@ import os
 import time
 from pathlib import Path
 
-from .ipc import atomic_write_json, pid_alive
-from .paths import RUNTIME_DIR
+from .paths import RUNTIME_DIR, ensure_runtime_dir
+from .state import atomic_write_json, pid_alive
 
 __all__ = ["register", "unregister", "list_sessions"]
 
@@ -28,8 +28,9 @@ def _session_path(pid: int | None = None) -> Path:
 
 
 def register(cwd: str, socket_path: str, dashboard_port: int | None) -> None:
-    """Write this process's session file."""
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    """Write this process's session file (0600 — it names every project cwd)."""
+    ensure_runtime_dir()
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     info: dict[str, object] = {
         "pid": os.getpid(),
         "cwd": cwd,
@@ -37,7 +38,7 @@ def register(cwd: str, socket_path: str, dashboard_port: int | None) -> None:
         "dashboard_port": dashboard_port,
         "started_at": time.time(),
     }
-    atomic_write_json(_session_path(), info)
+    atomic_write_json(_session_path(), info, chmod=0o600)
 
 
 def unregister() -> None:

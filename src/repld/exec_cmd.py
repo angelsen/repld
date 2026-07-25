@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import IO, Any
 
 from . import __version__
-from .ipc import connect_to_kernel, resolve_lock_path
+from .ipc import connect_to_kernel
+from .paths import resolve_lock_path
 from .tasks import spill_marker
 
 HISTORY_DIR = Path.home() / ".repld"

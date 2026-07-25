@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gists
-from .ipc import tty_prompt
+from .gates import tty_prompt
 
 _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
 

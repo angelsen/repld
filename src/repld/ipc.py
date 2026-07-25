@@ -1,164 +1,29 @@
 """Unix-socket IPC server (kernel side).
 
-NDJSON wire protocol: one JSON-RPC object per line, \\n-terminated. The bridge
-(src/repld/bridge.py) is a dumb byte-pipe that forwards verbatim between its
-stdio and this socket. The socket is the session — there is no session id.
+NDJSON wire protocol: one JSON-RPC object per line, \\n-terminated. The socket
+is the session — there is no session id. What sits on the other end is
+`bridge.py`, a stateful proxy rather than a byte-pipe; see its module docstring
+for why it can't be one.
 
 Each connection gets a reader thread (parses NDJSON, dispatches via handler)
-and on-demand writes (held under a per-session lock). `broadcast()` delivers
-server-initiated notifications (channel pushes) to all connected sessions.
+and on-demand writes (held under a per-session lock). `broadcast_channel()`
+delivers server-initiated notifications (channel pushes) to all connected
+sessions; `post_to()` targets one.
+
+Scope: this module is the socket layer only. Where state files live is
+`paths.py`; how they're written and validated is `state.py`.
 """
 
-import fcntl
 import json
 import os
 import socket
-import sys
 import threading
 from pathlib import Path
-from typing import IO, Callable
+from typing import Callable
 
-from . import paths
+from .state import read_lock
 
 Handler = Callable[[dict, "Session"], dict | None]
-
-
-def pid_alive(pid) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but isn't ours — still alive.
-        return True
-
-
-def read_lock(lock_path: Path) -> dict | str:
-    """Read + validate a kernel lockfile.
-
-    Returns the lock dict if the file parses and its pid is alive, or an
-    error message string (missing / unreadable / stale pid) otherwise.
-    """
-    if not lock_path.exists():
-        return f"no kernel running for this project (no {lock_path.name})"
-    try:
-        lock = json.loads(lock_path.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        return f"cannot read {lock_path.name}: {e}"
-    if not pid_alive(lock.get("pid", -1)):
-        return f"kernel pid {lock.get('pid')} is not running (stale {lock_path.name})"
-    return lock
-
-
-def atomic_write_json(
-    path: Path,
-    obj: object,
-    *,
-    indent: int | None = None,
-    chmod: int | None = None,
-) -> None:
-    """Write JSON via tmp + os.replace so concurrent readers never see a torn file.
-
-    indent=N also appends a trailing newline (pretty files are committed or
-    hand-read). chmod is applied to the tmp file before the rename, so the
-    final file never exists with wrong permissions. The tmp name carries the
-    pid so concurrent writers (e.g. two kernels booting) can't clobber each
-    other's tmp — last rename wins cleanly.
-    """
-    text = json.dumps(obj, indent=indent)
-    if indent is not None:
-        text += "\n"
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, "utf-8")
-    if chmod is not None:
-        tmp.chmod(chmod)
-    os.replace(tmp, path)
-
-
-def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
-    """Write `prompt` to the real terminal (bypassing any stdout/stderr tee)
-    and read one stripped, lowercased line of response.
-
-    Defaults to sys.__stderr__ / sys.__stdin__. Returns None if the real
-    terminal streams aren't available (e.g. no controlling tty) rather than
-    raising, so callers can treat "can't ask" the same as "declined".
-    """
-    out = stream if stream is not None else sys.__stderr__
-    stdin = sys.__stdin__
-    if out is None or stdin is None:
-        return None
-    out.write(prompt)
-    out.flush()
-    try:
-        return stdin.readline().strip().lower()
-    except OSError:
-        return None
-
-
-def default_socket_path() -> Path:
-    """Resolved at call time — cwd may change between import and run_kernel."""
-    override = os.environ.get("REPLD_SOCKET")
-    return Path(override) if override else paths.socket_path()
-
-
-lock_for = paths.lock_for
-
-
-def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
-    """Resolve the kernel socket path from --socket flags, REPLD_SOCKET env,
-    or the per-project XDG default. Shared by every client subcommand.
-
-    Parses AND consumes every ``--socket PATH`` / ``--socket=PATH`` occurrence
-    (first value wins), returning (socket_path, argv_without_socket_flags) so
-    callers never re-implement the flag syntax.
-    """
-    sock: str | None = None
-    rest: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--socket" and i + 1 < len(argv):
-            sock = sock or argv[i + 1]
-            i += 2
-            continue
-        if arg.startswith("--socket="):
-            sock = sock or arg.split("=", 1)[1]
-            i += 1
-            continue
-        rest.append(arg)
-        i += 1
-    target = sock or os.environ.get("REPLD_SOCKET")
-    return (Path(target) if target else paths.socket_path()), rest
-
-
-def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
-    """``resolve_socket_path`` for callers that want the lockfile instead."""
-    sock, rest = resolve_socket_path(argv)
-    return lock_for(sock), rest
-
-
-def acquire_lock(flock_path: Path) -> int | None:
-    """Take the single-kernel-per-project mutex.
-
-    Returns the held fd (which the caller must keep open for its whole life —
-    closing it releases the lock), or None if another kernel owns it.
-
-    O_CREAT *without* O_TRUNC: opening must not clobber anything before we
-    know whether we win, and this file is never replaced by an atomic rename,
-    so the flock keeps referring to the inode every contender opened.
-    """
-    flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        return None
-    os.write(fd, f"{os.getpid()}\n".encode())
-    return fd
 
 
 def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:

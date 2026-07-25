@@ -199,6 +199,18 @@ def _event_log(tmp: Path) -> None:
     assert_true(status["kernel"] is not None, "repld status found the kernel")
     print("  ✓ repld status reported a kernel this terminal never started")
 
+    # tasks_active comes from the dashboard API, authenticated with the token in
+    # the hint file. That file used to be written only by browser code, so on a
+    # kernel that never touched the browser these keys were silently absent.
+    kernel = status["kernel"]
+    assert_true(kernel.get("dashboard_port"), "status carries the dashboard port")
+    assert_true(
+        kernel.get("tasks_active") is not None,
+        f"status queried the dashboard for live counts (got {kernel!r})",
+    )
+    assert_true("tickers" in kernel, "status carries the ticker count")
+    print("  ✓ repld status read live task/ticker counts without the browser")
+
 
 def _concurrent_boots(tmp: Path) -> None:
     """Racing kernel boots in one project yield exactly one survivor."""
@@ -232,12 +244,54 @@ def _concurrent_boots(tmp: Path) -> None:
             p.kill()
 
 
+def _log_renderer_covers_every_event() -> None:
+    """`repld log` must render every event type the TUI can.
+
+    log_cmd._render and display._render are deliberately separate — one is
+    stateless plain-ANSI over capped records, the other is stateful and rich-
+    aware — but that means a new events.Event member renders in the pane and
+    silently degrades to a bare type name in `repld log`. This is the seam
+    that catches it.
+    """
+    import dataclasses
+    import typing
+
+    from repld import events, log_cmd
+
+    def _sample(annotation) -> object:
+        """A value of roughly the right shape — renderers do format it."""
+        s = str(annotation)
+        if "float" in s:
+            return 0.0
+        if "int" in s:
+            return 0
+        if "dict" in s:
+            return {}
+        if "list" in s:
+            return []
+        return ""
+
+    members = typing.get_args(events.Event)
+    assert_true(len(members) >= 9, f"found {len(members)} Event members to check")
+    for cls in members:
+        rec = {"type": cls.__name__}
+        rec.update({f.name: _sample(f.type) for f in dataclasses.fields(cls)})
+        rendered = log_cmd._render(rec)
+        assert_true(
+            rendered != f"{log_cmd._DIM}{cls.__name__}{log_cmd._RESET}",
+            f"log_cmd._render handles {cls.__name__} (fell through to the "
+            "unknown-type fallback)",
+        )
+    print(f"  ✓ repld log renders all {len(members)} event types")
+
+
 def phase_15_headless(_kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-headless-"))
     try:
         _autospawn_and_heal(tmp)
         _targeted_push(tmp)
         _event_log(tmp)
+        _log_renderer_covers_every_event()
         _stop_kernel(tmp)
         _concurrent_boots(tmp)
     finally:

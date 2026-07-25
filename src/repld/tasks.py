@@ -17,7 +17,8 @@ import uuid
 from typing import Literal
 
 from .events import StdoutChunk, StderrChunk, emit
-from .paths import RUNTIME_DIR
+from .paths import RUNTIME_DIR, ensure_runtime_dir
+from .state import open_private
 
 # Inline preview budget. Full output is always on disk; preview bounds only
 # what's returned in the `exec` / `get_task` response body.
@@ -38,14 +39,13 @@ _PRUNE_EVERY = 50  # run pruning every N finalize() calls
 _finalize_count = 0
 
 
-def _ensure_spill_dir() -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def _open_spill(task: dict, task_id: str) -> io.TextIOWrapper:
-    _ensure_spill_dir()
+    # 0600, not 0644: a spill holds whatever the cell printed — tokens, API
+    # responses, query results — and under the /tmp fallback the directory is
+    # the only other thing standing between it and other local users.
+    ensure_runtime_dir()
     path = RUNTIME_DIR / f"{os.getpid()}-{task_id}.out"
-    fp = open(path, "w")
+    fp = open_private(path)
     task["spill_file"] = fp
     task["spill_path"] = str(path)
     return fp
@@ -165,7 +165,9 @@ def _read_from(task: dict, offset: int = 0) -> str:
             fp.flush()
         except Exception:
             pass
-    with open(path, "r") as f:
+    # Match open_private's utf-8; errors="replace" because seeking to a byte
+    # offset can land mid-codepoint on a partially-flushed spill.
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(offset)
         return f.read()
 
@@ -225,11 +227,11 @@ def spill_text(text: str, label: str = "output") -> dict:
     preview, truncated = _make_preview(text)
     spill_path = None
     if len(text) > PREVIEW_MAX_BYTES:
-        _ensure_spill_dir()
+        ensure_runtime_dir()
         tid = uuid.uuid4().hex[:12]
         path = RUNTIME_DIR / f"{os.getpid()}-{label}-{tid}.out"
         tmp = path.with_suffix(".tmp")
-        with open(tmp, "w") as f:
+        with open_private(tmp) as f:
             f.write(text)
         tmp.rename(path)  # atomic on same filesystem
         spill_path = str(path)

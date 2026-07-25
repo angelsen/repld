@@ -22,7 +22,7 @@ from pathlib import Path
 # time (never `from x import y`), which is cycle-safe and keeps test
 # monkeypatching (e.g. gists.registry) effective.
 from . import gist_deps, gist_links
-from .ipc import atomic_write_json
+from .state import atomic_write_json
 
 __all__ = [
     "install",
