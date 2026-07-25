@@ -110,9 +110,10 @@ def _render_cell_start(ev: CellStart) -> None:
         from rich.syntax import Syntax
 
         console = _get_console()
-        # Same header text as render.cell_header, in rich's markup dialect —
-        # console.print would emit our raw escapes literally.
-        header = f"[dim]── cell {ev.task_id[:8]} · {render.clock(ev.t)} ──[/dim]"
+        # Same header text as render.cell_header, wrapped in rich's markup
+        # dialect instead of ANSI — console.print would emit raw escapes
+        # literally. The text itself must keep coming from render.py.
+        header = f"[dim]{render.cell_header_text(ev.task_id, ev.t)}[/dim]"
         console.print(header, markup=True)
         src = ev.source.rstrip()
         if src:
@@ -150,7 +151,7 @@ def _write_styled(
         else:
             _out(text)
         return
-    short_id = task_id[:8]
+    short_id = render.short_task(task_id)
     color = _RED if is_stderr else ""
     prefix = f"{_DIM}[{short_id}]{_RESET}{color} "
     parts = []
@@ -168,7 +169,7 @@ def _emit_elision_notice(task_id: str, last_was_nl: bool) -> None:
     path = (tasks.get(task_id) or {}).get("spill_path") or f"task={task_id}"
     prefix = "" if last_was_nl else "\n"
     _out(
-        f"{prefix}{_DIM}… cell {task_id[:8]} output elided "
+        f"{prefix}{_DIM}… cell {render.short_task(task_id)} output elided "
         f"({VIEWER_MAX_BYTES // 1024}KB cap); full: {path}{_RESET}\n"
     )
 

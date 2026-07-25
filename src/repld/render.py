@@ -27,7 +27,9 @@ RESET = "\033[0m"
 
 # Task ids are uuid4().hex[:12]; 8 is enough to eyeball. Chrome target ids are
 # `{port}:{6-hex}`, which is already short — 12 is a guard, not a squeeze.
-_TASK_ID_CHARS = 8
+# TASK_ID_CHARS is public because the TUI labels out-of-band output with the
+# same abbreviation outside any of the formatters below.
+TASK_ID_CHARS = 8
 _TARGET_ID_CHARS = 12
 
 
@@ -35,8 +37,21 @@ def clock(t: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(t))
 
 
+def short_task(task_id: str) -> str:
+    return task_id[:TASK_ID_CHARS]
+
+
+def cell_header_text(task_id: str, t: float) -> str:
+    """The header without styling — for renderers that apply their own.
+
+    `display.py`'s rich path needs the same text in rich's markup dialect,
+    since console.print would emit this module's raw escapes literally.
+    """
+    return f"── cell {short_task(task_id)} · {clock(t)} ──"
+
+
 def cell_header(task_id: str, t: float) -> str:
-    return f"{DIM}── cell {task_id[:_TASK_ID_CHARS]} · {clock(t)} ──{RESET}"
+    return f"{DIM}{cell_header_text(task_id, t)}{RESET}"
 
 
 def cell_source_block(source: str) -> str:
@@ -49,7 +64,7 @@ def cell_source_block(source: str) -> str:
 
 
 def cell_done_line(task_id: str, elapsed_ms: float, error: str | None) -> str:
-    short = task_id[:_TASK_ID_CHARS]
+    short = short_task(task_id)
     ms = f"{elapsed_ms:.0f}ms"
     if error:
         return f"{RED}✗{RESET} {DIM}{short} · err({error}) · {ms}{RESET}"

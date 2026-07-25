@@ -108,8 +108,15 @@ class BrowserSession:
         if discover:
             await self.execute("Target.setDiscoverTargets", {"discover": True})
 
-    async def disconnect(self) -> None:
-        """Close the WebSocket and cancel recv task."""
+    async def _teardown_ws(self) -> None:
+        """Stop the recv loop and close the WebSocket. Never raises.
+
+        Both ways out of a live connection go through here — `disconnect()`
+        and `_reconnect()`'s tear-down phase — and they differ only in what
+        they do with `_pending` and `_sessions` afterwards. Keeping the socket
+        half in one place is what stops a future step (a Chrome-side detach, a
+        drain) from being added to only one of them.
+        """
         if self._recv_task and not self._recv_task.done():
             self._recv_task.cancel()
             try:
@@ -122,6 +129,10 @@ class BrowserSession:
             except Exception:
                 pass
             self._ws = None
+
+    async def disconnect(self) -> None:
+        """Close the WebSocket and cancel recv task."""
+        await self._teardown_ws()
 
         # Fail all pending futures
         for fut in self._pending.values():
@@ -181,19 +192,10 @@ class BrowserSession:
                     if tid:
                         old_cdps[tid] = cdp
 
-                # Tear down old connection
-                if self._recv_task and not self._recv_task.done():
-                    self._recv_task.cancel()
-                    try:
-                        await self._recv_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._ws is not None:
-                    try:
-                        await self._ws.close()
-                    except Exception:
-                        pass
-                    self._ws = None
+                # Tear down old connection. Unlike disconnect(), pending
+                # futures are dropped rather than failed — the caller that is
+                # driving this reconnect is about to retry them.
+                await self._teardown_ws()
                 self._pending.clear()
                 self._sessions.clear()
                 self._session_remap.clear()

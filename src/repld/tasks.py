@@ -5,6 +5,10 @@ $XDG_RUNTIME_DIR/repld/{pid}-{task_id}.out, opened lazily on first write.
 The MCP `exec` / `get_task` responses return a small head+tail preview
 sliced from that file; agents use the standard Read/Grep tools on the
 spill path for anything beyond the preview.
+
+A spill lives for _EVICT_AGE after its cell completes, then `_prune_spill_files`
+drops the task entry and unlinks the file. That bound is what keeps a kernel
+running for weeks from filling tmpfs with one file per cell.
 """
 
 import contextvars
@@ -310,31 +314,57 @@ def finalize(task_id: str) -> None:
         _prune_spill_files()
 
 
+def _close_spill(task: dict) -> None:
+    """Close the task's spill handle if it is still open. Idempotent."""
+    fp = task.get("spill_file")
+    if fp is None or fp is _CLOSED:
+        return
+    try:
+        fp.close()
+    except Exception:
+        pass
+    task["spill_file"] = _CLOSED
+
+
 def _prune_spill_files() -> None:
     """Close spill file handles on tasks completed more than _PRUNE_AGE ago,
-    and drop entries entirely once they're older than _EVICT_AGE — otherwise
-    a long-running kernel accumulates one dict entry per exec/defer call
-    forever."""
+    and drop entries — and their spill files — once they're older than
+    _EVICT_AGE.
+
+    Both halves exist because a kernel is meant to run for weeks: without the
+    eviction it accumulates one dict entry per exec/defer call forever, and
+    without the unlink it accumulates one file per output-producing cell.
+    `state.sweep_dead_pid_files` can't help there — it only reclaims what a
+    *dead* pid left behind, and a live kernel's own files are untouchable by
+    construction. Evicting the entry without unlinking would in fact make them
+    unreclaimable until the kernel exits.
+
+    _EVICT_AGE is therefore also the retention window on a spill path handed
+    to an agent: after an hour, `[full output: …]` from an old response stops
+    resolving. Anything still wanted by then belongs somewhere durable.
+    """
     now = time.monotonic()
-    evict: list[str] = []
+    evict: list[tuple[str, str | None]] = []
     for task_id, task in items():
         done_at = task.get("done_at")
         if done_at is None:
             continue
         if now - done_at >= _EVICT_AGE:
-            evict.append(task_id)
+            _close_spill(task)
+            evict.append((task_id, task.get("spill_path")))
             continue
         if now - done_at < _PRUNE_AGE:
             continue
-        fp = task.get("spill_file")
-        if fp is None or fp is _CLOSED:
+        _close_spill(task)
+    if not evict:
+        return
+    with _tasks_lock:
+        for task_id, _ in evict:
+            _tasks.pop(task_id, None)
+    for _, path in evict:
+        if path is None:
             continue
         try:
-            fp.close()
-        except Exception:
+            os.unlink(path)
+        except OSError:
             pass
-        task["spill_file"] = _CLOSED
-    if evict:
-        with _tasks_lock:
-            for task_id in evict:
-                _tasks.pop(task_id, None)

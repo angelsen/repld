@@ -35,6 +35,7 @@ from phases.links import phase_12_gist_links
 from phases.lockfile import (
     phase_5,
     phase_5_init,
+    phase_5_evict,
     phase_5_permissions,
     phase_5_sweep,
     phase_5_zombie,
@@ -51,6 +52,7 @@ PHASES = {
         phase_5_init(k),
         phase_5_permissions(k),
         phase_5_zombie(k),
+        phase_5_evict(k),
         phase_5_sweep(k),
     ),
     6: lambda k: (

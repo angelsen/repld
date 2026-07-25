@@ -84,6 +84,37 @@ def phase_5_zombie(_kernel: Kernel) -> None:
     print("  ✓ pid_alive: a zombie reads as dead, not alive")
 
 
+def phase_5_evict(_kernel: Kernel) -> None:
+    """A live kernel reclaims its own spills; the boot sweep can't do it for it.
+
+    `sweep_dead_pid_files` only touches files a *dead* pid owns, so a kernel
+    meant to run for weeks has to unlink its own — one file per output-producing
+    cell, in tmpfs. Evicting the task entry without the unlink would make them
+    unreclaimable until the process exits.
+    """
+    import time
+
+    from repld import tasks
+
+    task_id, task = tasks.new_task()
+    tasks._open_spill(task, task_id).write("evict me")
+    spill = Path(task["spill_path"])
+    assert_true(spill.is_file(), f"spill written ({spill.name})")
+
+    tasks.finalize(task_id)
+    tasks._prune_spill_files()
+    assert_true(spill.is_file(), "a just-finished task keeps its spill")
+    assert_true(tasks.get(task_id) is not None, "and keeps its registry entry")
+
+    # Backdate past the retention window rather than sleeping an hour.
+    task["done_at"] = time.monotonic() - tasks._EVICT_AGE - 1
+    tasks._prune_spill_files()
+    assert_eq(tasks.get(task_id), None, "evicted task entry dropped")
+    assert_true(not spill.exists(), "evicted task's spill file unlinked")
+
+    print(f"  ✓ spill eviction: entry + file reclaimed after {tasks._EVICT_AGE:.0f}s")
+
+
 def phase_5_sweep(kernel: Kernel) -> None:
     """A booting kernel reclaims what dead kernels left in RUNTIME_DIR.
 

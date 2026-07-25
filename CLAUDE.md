@@ -48,7 +48,7 @@ prior release). Verify with the simple index (fast) — the JSON API lags:
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.
 - **4:** Channel notifications — task_done push, notify() from user code, pre-gate queuing.
-- **5:** Single-kernel flock mutex (a second boot in the same project exits 0 and leaves the incumbent's lockfile intact), `--init` file execution, runtime-state permissions (`RUNTIME_DIR` 0700; session + spill files 0600).
+- **5:** Single-kernel flock mutex (a second boot in the same project exits 0 and leaves the incumbent's lockfile intact), `--init` file execution, runtime-state permissions (`RUNTIME_DIR` 0700; session + spill files 0600), spill eviction (entry + file reclaimed at `_EVICT_AGE`).
 - **6:** Tool registration, gist auto-reload, browser integration (requires Chrome 140+ with `--remote-debugging-port=9222`).
 - **7:** `defer()` — fire-and-forget with channel push on completion.
 - **8:** Gist resources — `resources/list` includes one entry per loaded gist (with first-docstring-line as description); `resources/read repld://gists/{name}` returns the introspected API.
@@ -94,7 +94,7 @@ Eleven CLI subcommands, all dispatched from `repld:main`:
 - `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and the CLAUDE.md block. No `.gitignore` writes: nothing repld creates at runtime lands in the project directory.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (composed by `src/repld/help.py:build_instructions()`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
-- `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (local + linked + linkable-from-registry). Unknown verbs error (no verb-less scaffold alias). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
+- `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (local + linked + linkable-from-registry), `lint [name...]` (AST checks — docstring first line, return-shape docs, undeclared `__repld_deps__`, legacy tool API; `gist_lint.py`, suppress with `# gistlint: ignore=<rule>`). Unknown verbs error (no verb-less scaffold alias). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.
 - `repld browser [ARGS...]` — re-exec `repld ARGS...` under `uv run` with the `browser` extra (`duckdb`+`websockets`), so browser features work without adding `repld-tool` to the project's dependencies. Preserves a local editable checkout (detected via `direct_url.json` distribution metadata) instead of silently falling back to the published package, so dev changes are picked up (`src/repld/relaunch.py`).
 
 Key invariants to preserve when building this out:
