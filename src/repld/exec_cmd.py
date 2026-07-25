@@ -330,7 +330,7 @@ def run_exec(argv: list[str]) -> int:
             pid = lock.get("pid", "?")
             console = RemoteConsole(rfile, wfile, json_mode)
             console.interact(
-                banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, defer, every, ask, confirm, choose",
+                banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, defer, every, ask, confirm, choose, no_display",
                 exitmsg="",
             )
             return 0

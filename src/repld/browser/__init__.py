@@ -42,6 +42,10 @@ class TabNotFoundError(RuntimeError):
 
 _TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$", re.IGNORECASE)
 _ATTACH_POLL_INTERVAL_S = 0.3  # retry cadence while waiting for a tab to appear/attach
+# Empty state of format_tabs_nested. A constant because BrowserPool compares
+# against it to drop the empty per-port renders before joining: reworded in one
+# place only, the pool would emit one of these lines per connected browser.
+_NO_TABS = "(no attached tabs)"
 
 
 def _is_target_id(s: str) -> bool:
@@ -502,7 +506,7 @@ class Browser:
                         f"{child['target']}  {child['type']} → {parent_short}  {child['url']}"
                     )
 
-        return "\n".join(lines) if lines else "(no attached tabs)"
+        return "\n".join(lines) if lines else _NO_TABS
 
     def help(self) -> None:
         """Print the Python API reference for the browser object."""
@@ -795,9 +799,9 @@ class BrowserPool:
         for b in self._browsers.values():
             if b._connected:
                 text = b.format_tabs_nested()
-                if text != "(no attached tabs)":
+                if text != _NO_TABS:
                     parts.append(text)
-        return "\n".join(parts) if parts else "(no attached tabs)"
+        return "\n".join(parts) if parts else _NO_TABS
 
     @property
     def _connected(self) -> bool:

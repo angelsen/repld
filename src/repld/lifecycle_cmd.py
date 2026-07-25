@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 from . import paths, sessions, spawn, state
+from .render import DIM as _DIM, GREEN as _GREEN, RESET as _RESET
 
 _STOP_USAGE = """\
 repld stop — stop this project's kernel
@@ -36,10 +37,6 @@ repld status — this project's kernel plus live siblings
 
   repld status [--json] [--socket PATH]
 """
-
-_DIM = "\033[2m"
-_GREEN = "\033[32m"
-_RESET = "\033[0m"
 
 
 def _uptime(started_at: float | None) -> str:

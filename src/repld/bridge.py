@@ -107,7 +107,7 @@ class Bridge:
 
         self._spawn_kernel()
         for _ in range(WAIT_STEPS):
-            threading.Event().wait(WAIT_STEP_SECONDS)
+            time.sleep(WAIT_STEP_SECONDS)
             result = ipc.connect_to_kernel(self.lock_path)
             if not isinstance(result, str):
                 self._attach(*result)
