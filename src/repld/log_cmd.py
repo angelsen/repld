@@ -7,15 +7,9 @@ back off the NDJSON event log (eventlog.py) and renders it in the same shapes.
 
 import json
 import sys
-import time
 
-from . import eventlog, paths, state
-
-_DIM = "\033[2m"
-_RED = "\033[31m"
-_CYAN = "\033[36m"
-_GREEN = "\033[32m"
-_RESET = "\033[0m"
+from . import eventlog, paths, render, state
+from .render import DIM as _DIM, RED as _RED, RESET as _RESET
 
 _USAGE = """\
 repld log — recent activity from this project's kernel
@@ -28,19 +22,19 @@ repld log — recent activity from this project's kernel
 """
 
 
-def _ts(rec: dict) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(rec.get("t", 0)))
-
-
 def _render(rec: dict) -> str | None:
-    """One line (or block) per record, mirroring the TUI's vocabulary."""
+    """One line (or block) per record, in the TUI's vocabulary.
+
+    The formats come from `render.py` so the two surfaces can't drift; what is
+    local here is reading them back out of a JSON record instead of a
+    dataclass, and the fact that a replay has no cursor to keep — every gate
+    prompt is already answered by the time it is read.
+    """
     kind = rec.get("type")
-    ts = _ts(rec)
+    t = rec.get("t", 0)
     if kind == "CellStart":
-        tid = str(rec.get("task_id", ""))[:8]
-        src = (rec.get("source") or "").rstrip()
-        head = f"{_DIM}── cell {tid} · {ts} ──{_RESET}"
-        body = "\n".join(f"  {ln}" for ln in src.splitlines())
+        head = render.cell_header(str(rec.get("task_id", "")), t)
+        body = render.cell_source_block(rec.get("source") or "")
         return f"{head}\n{body}" if body else head
     if kind in ("StdoutChunk", "StderrChunk"):
         text = rec.get("text") or ""
@@ -51,31 +45,29 @@ def _render(rec: dict) -> str | None:
             text += f"\n{_DIM}… output elided (per-cell cap){_RESET}"
         return f"{_RED}{text}{_RESET}" if kind == "StderrChunk" else text
     if kind == "CellDone":
-        tid = str(rec.get("task_id", ""))[:8]
-        ms = f"{rec.get('elapsed_ms', 0):.0f}ms"
-        if rec.get("error"):
-            return f"{_RED}✗{_RESET} {_DIM}{tid} · err({rec['error']}) · {ms}{_RESET}"
-        return f"{_GREEN}✓{_RESET} {_DIM}{tid} · done · {ms}{_RESET}"
+        return render.cell_done_line(
+            str(rec.get("task_id", "")),
+            float(rec.get("elapsed_ms", 0)),
+            rec.get("error"),
+        )
     if kind == "ChannelPush":
-        lines = [f"{_CYAN}┌─ channel · {ts} ─{_RESET}"]
-        lines += [
-            f"{_CYAN}│{_RESET} {ln}"
-            for ln in (rec.get("content") or "").rstrip().splitlines()
-        ]
-        meta = rec.get("meta") or {}
-        if meta:
-            joined = "  ".join(f"{k}={v}" for k, v in meta.items())
-            lines.append(f"{_CYAN}│{_RESET} {_DIM}{joined}{_RESET}")
-        lines.append(f"{_CYAN}└───────────{_RESET}")
-        return "\n".join(lines)
+        return render.channel_block(
+            rec.get("content") or "", rec.get("meta") or {}, t=t
+        )
     if kind == "HumanPromptOpen":
-        return f"{_CYAN}? {rec.get('prompt', '')}{_RESET} {_DIM}({rec.get('kind')}){_RESET}"
+        # rstrip the trailing "': '" — it exists to park a live cursor, and a
+        # replay is printing a finished line.
+        return render.prompt_open(
+            str(rec.get("kind", "")), rec.get("prompt", ""), rec.get("options")
+        ).rstrip()
     if kind == "HumanPromptResponse":
-        return f"{_DIM}↳ {rec.get('value')}{_RESET}"
+        return render.prompt_response(rec.get("value"))
     if kind == "BrowserTabAttached":
-        return f"{_DIM}[browser] attached {str(rec.get('target', ''))[:12]} {rec.get('url', '')}{_RESET}"
+        return render.browser_attached(
+            str(rec.get("target", "")), rec.get("url", ""), rec.get("title", "")
+        )
     if kind == "BrowserTabDetached":
-        return f"{_DIM}[browser] detached {str(rec.get('target', ''))[:12]}{_RESET}"
+        return render.browser_detached(str(rec.get("target", "")))
     if kind == "LogRotated":
         return f"{_DIM}… {rec.get('note', 'log rotated')}{_RESET}"
     return f"{_DIM}{kind}{_RESET}"

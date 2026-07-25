@@ -16,8 +16,13 @@ import fcntl
 import io
 import json
 import os
+import re
 from pathlib import Path
 from typing import IO, Any, Literal, overload
+
+# `{pid}-…` — the naming convention every per-process runtime file follows, and
+# the whole basis of sweep_dead_pid_files().
+_PID_PREFIX = re.compile(r"^(\d+)-")
 
 
 def pid_alive(pid) -> bool:
@@ -94,6 +99,39 @@ def open_private(path: Path, mode: str = "w") -> IO[Any]:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     encoding = None if "b" in mode else "utf-8"
     return os.fdopen(os.open(path, flags, 0o600), mode, encoding=encoding)
+
+
+def sweep_dead_pid_files(directory: Path) -> int:
+    """Unlink `{pid}-*` files in *directory* whose pid is no longer running.
+
+    Everything a process scribbles into the runtime dir — task spills, resource
+    spills, screenshots — is named `{pid}-…` precisely so this one rule can
+    reclaim it. Nothing cleans up on the way out: a kernel can be SIGKILLed,
+    and files outlive the atexit hooks either way. Under a real
+    ``$XDG_RUNTIME_DIR`` the accumulation is tmpfs, i.e. RAM held until logout;
+    under the ``/tmp/repld-{uid}`` fallback it is forever.
+
+    Only files are considered, and only ones a *dead* pid owns. A recycled pid
+    makes this conservative (a file is kept that could have gone), never
+    destructive — a live kernel's own output is untouchable by construction.
+    """
+    removed = 0
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        m = _PID_PREFIX.match(entry.name)
+        if m is None:
+            continue
+        try:
+            if not entry.is_file() or pid_alive(int(m.group(1))):
+                continue
+            entry.unlink()
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def acquire_lock(flock_path: Path) -> int | None:

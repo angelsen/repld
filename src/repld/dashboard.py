@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import tasks
+from .channel import push_channel
 from .state import atomic_write_json
 
 _start_time: float = 0.0
@@ -130,7 +131,6 @@ def save_hint() -> None:
 
 async def _rpc_browser_disconnect(browser, params: dict) -> Any:
     from .browser_dispatch import route_detach
-    from .kernel import push_channel
 
     result = await route_detach(browser, params.get("target"), params.get("port"))
     if result is None:
@@ -140,8 +140,6 @@ async def _rpc_browser_disconnect(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_connect(browser, params: dict) -> Any:
-    from .kernel import push_channel
-
     port = params.get("port", 9222)
     b = await browser.connect(port)
     targets = await b.pages()
@@ -177,8 +175,6 @@ async def _rpc_browser_targets(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_watch(browser, params: dict) -> Any:
-    from .kernel import push_channel
-
     pattern = params.get("pattern", "")
     if not pattern:
         raise RuntimeError("pattern is required")
@@ -194,8 +190,6 @@ async def _rpc_browser_watch(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_unwatch(browser, params: dict) -> Any:
-    from .kernel import push_channel
-
     pattern = params.get("pattern", "")
     if not pattern:
         raise RuntimeError("pattern is required")

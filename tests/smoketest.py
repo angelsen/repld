@@ -32,7 +32,12 @@ from phases.every import phase_10_every
 from phases.gist_tools import phase_9_gist_tools
 from phases.headless import phase_15_headless
 from phases.links import phase_12_gist_links
-from phases.lockfile import phase_5, phase_5_init, phase_5_permissions
+from phases.lockfile import (
+    phase_5,
+    phase_5_init,
+    phase_5_permissions,
+    phase_5_sweep,
+)
 from phases.resources import phase_8_gist_resources
 from phases.sessions import phase_13_sessions
 from phases.shutdown import phase_11_shutdown
@@ -40,7 +45,12 @@ from phases.shutdown import phase_11_shutdown
 PHASES = {
     3: phase_3,
     4: lambda k: (phase_4(k), phase_4b_pregate(k)),
-    5: lambda k: (phase_5(k), phase_5_init(k), phase_5_permissions(k)),
+    5: lambda k: (
+        phase_5(k),
+        phase_5_init(k),
+        phase_5_permissions(k),
+        phase_5_sweep(k),
+    ),
     6: lambda k: (
         phase_6_png_resize(k),
         phase_6_tools_and_gists(k),

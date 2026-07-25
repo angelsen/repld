@@ -160,7 +160,7 @@ async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
             quiet = isinstance(result, _NoDisplay)
             if quiet:
                 result = result.value
-            if not quiet and result is not None:
+            if not quiet:
                 if isinstance(result, str) and "\n" in result:
                     print(result)
                 else:

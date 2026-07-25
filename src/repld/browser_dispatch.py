@@ -206,10 +206,7 @@ class BrowserDispatchMixin:
 
     def _session_for(self, browser, tab):
         """Get the BrowserSession that owns this tab (multi-browser aware)."""
-        if hasattr(browser, "browser_for"):
-            return browser.browser_for(tab.target_id)._session
-        # Fallback for a plain Browser bound to __main__.browser (no pool).
-        return browser._session
+        return browser.browser_for(tab.target_id)._session
 
     def _bh_tree(self, browser, args):
         from .browser.observe import compose_tree

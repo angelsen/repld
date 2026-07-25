@@ -42,6 +42,60 @@ def phase_5_permissions(kernel: Kernel) -> None:
     print(f"  ✓ runtime state private: dir 0700, session + {len(spills)} spill(s) 0600")
 
 
+def _a_dead_pid() -> int:
+    """A pid that is definitely not running, for the sweep sentinel."""
+    from repld import state
+
+    for candidate in range(4_000_000, 3_900_000, -1):
+        if not state.pid_alive(candidate):
+            return candidate
+    raise RuntimeError("could not find a dead pid to test with")
+
+
+def phase_5_sweep(kernel: Kernel) -> None:
+    """A booting kernel reclaims what dead kernels left in RUNTIME_DIR.
+
+    Nothing runs on the way out of a SIGKILL, so per-process scratch (task
+    spills, resource spills, screenshots) can only be collected by whoever
+    boots next. It is all named `{pid}-…` so one liveness check covers it.
+    """
+    import tempfile as _tmp
+
+    from repld import paths
+
+    dead = _a_dead_pid()
+    sentinels = [
+        paths.RUNTIME_DIR / f"{dead}-sweeptest.out",
+        paths.RUNTIME_DIR / f"{dead}-screenshot-9222-abc123-1700000000.png",
+    ]
+    for s in sentinels:
+        s.write_text("stale")
+
+    live_pid = json.loads(kernel.lock_path.read_text())["pid"]
+    live_spills = set(paths.RUNTIME_DIR.glob(f"{live_pid}-*.out"))
+    assert_true(live_spills, f"live kernel {live_pid} has spills to protect")
+
+    tmp = Path(_tmp.mkdtemp(prefix="repld-sweep-"))
+    try:
+        fresh = Kernel(tmp)
+        try:
+            for s in sentinels:
+                assert_true(not s.exists(), f"swept dead pid's {s.name}")
+            survivors = set(paths.RUNTIME_DIR.glob(f"{live_pid}-*.out"))
+            assert_true(
+                live_spills <= survivors,
+                f"live kernel {live_pid}'s own spills untouched by the sweep",
+            )
+        finally:
+            fresh.stop()
+    finally:
+        for s in sentinels:
+            s.unlink(missing_ok=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print(f"  ✓ boot sweep: dropped dead pid {dead}'s files, kept the live kernel's")
+
+
 def phase_5(kernel: Kernel) -> None:
     """A second kernel in the same cwd loses the flock and stands down."""
     before = json.loads(kernel.lock_path.read_text())

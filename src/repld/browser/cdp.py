@@ -10,6 +10,7 @@ import logging
 import re
 from typing import Any
 
+from ..channel import push_channel
 from .har import _create_views
 
 __all__ = ["CDPSession"]
@@ -82,8 +83,6 @@ def _flush_dedup(key: str) -> None:
     if entry is None or entry.count == 0:
         return
     try:
-        from ..kernel import push_channel
-
         total = entry.count + 1
         msg = f"{entry.text} (×{total} tabs)"
         if _hint_counts.get(key, _HintTracker()).count >= _HINT_THRESHOLD:
@@ -105,8 +104,6 @@ def _dedup_push(
         return
 
     try:
-        from ..kernel import push_channel
-
         show_hint = _track_hint(dedup_key, loop)
         msg = text + _SUPPRESS_HINT if show_hint else text
         push_channel(msg, meta)
@@ -168,8 +165,6 @@ def _check_controls_observation(params: dict, target_id: str) -> None:
     if error:
         line += f" ERROR: {error}"
     try:
-        from ..kernel import push_channel
-
         meta: dict[str, str] = {
             "kind": "controls",
             "control": control,

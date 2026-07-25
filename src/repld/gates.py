@@ -20,6 +20,7 @@ import threading
 import uuid
 from typing import IO, Literal
 
+from .channel import push_channel
 from .events import HumanPromptOpen, HumanPromptResponse, emit
 
 _gates: dict[str, concurrent.futures.Future] = {}
@@ -75,9 +76,6 @@ async def _gate(
     *,
     tab=None,
 ) -> str | bool:
-    # Lazy import to avoid a gates↔kernel cycle.
-    from .kernel import push_channel
-
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:

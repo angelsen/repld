@@ -225,8 +225,6 @@ class Bridge:
             msg = None
 
         rid = msg.get("id") if isinstance(msg, dict) else None
-        if isinstance(msg, dict) and msg.get("method") == "initialize":
-            self._client_init = msg
 
         if not self._ensure_kernel():
             if rid is not None:
@@ -242,6 +240,14 @@ class Bridge:
                     }
                 )
             return
+
+        # Cached *after* _ensure_kernel, never before: this same message is
+        # about to be forwarded, and a kernel attached while it is already in
+        # _client_init would have the handshake replayed onto it — firing
+        # list_changed at a client that hasn't yet had its `initialize`
+        # answered. Only a kernel attached from here on is a *fresh* one.
+        if isinstance(msg, dict) and msg.get("method") == "initialize":
+            self._client_init = msg
 
         # Registered before the write, so a send that fails mid-flight is
         # answered by _on_kernel_gone rather than hanging the client.

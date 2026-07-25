@@ -1,6 +1,8 @@
 """MCP JSON-RPC tool schemas + dispatch.
 
-Shared by the kernel; the bridge is a dumb byte-pipe and never touches this.
+Kernel-side only. `bridge.py` is a stateful proxy — it tracks in-flight ids and
+replays the client's handshake onto a fresh kernel — but it never interprets a
+tool call, so every schema and handler below lives on this side of the socket.
 """
 
 import __main__

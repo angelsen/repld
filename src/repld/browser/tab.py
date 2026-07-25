@@ -12,6 +12,7 @@ import json
 import pathlib
 from typing import Any
 
+from ..channel import push_channel
 from .cdp import CDPSession
 from .pin import _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
 from .png import _model_dims, _resize_png
@@ -278,8 +279,6 @@ class Tab(TabQueryMixin):
                         break
                 continue
             # Cross-origin — pin contract broken.
-            from ..kernel import push_channel
-
             push_channel(
                 f"pinned tab navigated away from {origin}",
                 {"kind": "pin_lost", "target": self.target_id},
@@ -802,22 +801,11 @@ class Tab(TabQueryMixin):
       try {{ body = JSON.parse(body); }} catch(e) {{}}
     }}
   }} catch(e) {{
-    // Invalid UTF-8 — binary payload, base64-encode it
-    if (typeof bytes.toBase64 === 'function') {{
-      body = bytes.toBase64();
-    }} else {{
-      // Chunked btoa fallback for pre-Chrome-123 (String.fromCharCode
-      // spread on the full buffer blows the call stack above ~64K args)
-      const chunks = [];
-      const CHUNK = 32768;
-      for (let i = 0; i < bytes.length; i += CHUNK) {{
-        const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-        let bin = '';
-        for (let j = 0; j < slice.length; j++) bin += String.fromCharCode(slice[j]);
-        chunks.push(bin);
-      }}
-      body = btoa(chunks.join(''));
-    }}
+    // Invalid UTF-8 — binary payload. toBase64() is Chrome 140+, which is
+    // repld's floor; the btoa fallback it replaced had to chunk by hand,
+    // because String.fromCharCode spread over a whole buffer blows the call
+    // stack somewhere north of 64K arguments.
+    body = bytes.toBase64();
     base64Encoded = true;
   }}
   return {{status: r.status, ok: r.ok, body: body, base64Encoded: base64Encoded}};
@@ -868,6 +856,7 @@ class Tab(TabQueryMixin):
         then resizes via Pillow off the event loop (in a thread executor, so
         the resize's CPU cost doesn't stall the kernel's shared asyncio loop).
         """
+        import os
         import time
 
         from ..paths import RUNTIME_DIR, ensure_runtime_dir
@@ -909,7 +898,9 @@ class Tab(TabQueryMixin):
         else:
             ensure_runtime_dir()
             tid = self.target_id.replace(":", "-")
-            out = RUNTIME_DIR / f"screenshot-{tid}-{int(time.time())}.png"
+            # `{pid}-` prefix like task spills: it is what lets a later kernel
+            # boot sweep this file once this process is gone.
+            out = RUNTIME_DIR / f"{os.getpid()}-screenshot-{tid}-{int(time.time())}.png"
 
         def write(data: bytes) -> None:
             if path:

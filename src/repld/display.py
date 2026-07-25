@@ -10,10 +10,9 @@ Falls back to plain ANSI coloring when `rich` is not installed.
 import queue
 import sys
 import threading
-import time
 from typing import TextIO, cast
 
-from . import tasks
+from . import render, tasks
 from .events import (
     BrowserTabAttached,
     BrowserTabDetached,
@@ -44,12 +43,12 @@ except ImportError:
 # ANSI helpers (always available)
 # ---------------------------------------------------------------------------
 
-_DIM = "\033[2m"
-_RED = "\033[31m"
-_CYAN = "\033[36m"
-_GREEN = "\033[32m"
-_RESET = "\033[0m"
-_BOLD = "\033[1m"
+# Shared with `repld log` — the two surfaces render the same events and are
+# meant to look identical. Formats live in render.py; only the couple of
+# strings unique to a live terminal are built here.
+_DIM = render.DIM
+_RED = render.RED
+_RESET = render.RESET
 
 
 # Pinned at import time. typeshed types these as Optional (None in GUI /
@@ -107,13 +106,13 @@ def _get_console() -> "_RichConsole":
 def _render_cell_start(ev: CellStart) -> None:
     global _foreground_task_id
     _foreground_task_id = ev.task_id
-    short_id = ev.task_id[:8]
-    ts = time.strftime("%H:%M:%S", time.localtime(ev.t))
     if _HAS_RICH:
         from rich.syntax import Syntax
 
         console = _get_console()
-        header = f"[dim]── cell {short_id} · {ts} ──[/dim]"
+        # Same header text as render.cell_header, in rich's markup dialect —
+        # console.print would emit our raw escapes literally.
+        header = f"[dim]── cell {ev.task_id[:8]} · {render.clock(ev.t)} ──[/dim]"
         console.print(header, markup=True)
         src = ev.source.rstrip()
         if src:
@@ -127,9 +126,10 @@ def _render_cell_start(ev: CellStart) -> None:
                 )
             )
     else:
-        _out(f"{_DIM}── cell {short_id} · {ts} ──{_RESET}\n")
-        for line in ev.source.rstrip().splitlines():
-            _out(f"  {line}\n")
+        _out(render.cell_header(ev.task_id, ev.t) + "\n")
+        body = render.cell_source_block(ev.source)
+        if body:
+            _out(body + "\n")
 
 
 def _write_styled(
@@ -212,18 +212,11 @@ def _render_stderr(ev: StderrChunk) -> None:
 
 def _render_cell_done(ev: CellDone) -> None:
     global _foreground_task_id
-    short_id = ev.task_id[:8]
-    ms = f"{ev.elapsed_ms:.0f}ms"
     # If the last output didn't end with a newline, pad so the done marker
     # lands on its own line instead of gluing onto mid-line text.
     _, last_nl = _viewer_state.get(ev.task_id, (0, True))
     pad = "" if last_nl else "\n"
-    if ev.error:
-        marker = f"{_RED}✗{_RESET}"
-        line = f"{marker} {_DIM}{short_id} · err({ev.error}) · {ms}{_RESET}"
-    else:
-        marker = f"{_GREEN}✓{_RESET}"
-        line = f"{marker} {_DIM}{short_id} · done · {ms}{_RESET}"
+    line = render.cell_done_line(ev.task_id, ev.elapsed_ms, ev.error)
     _out(pad + line + "\n")
     if ev.task_id == _foreground_task_id:
         _foreground_task_id = None
@@ -246,44 +239,31 @@ def _render_channel_push(ev: ChannelPush) -> None:
             body.append(meta_line, style="dim")
         console.print(Panel(body, title="[cyan]channel[/cyan]", border_style="cyan"))
     else:
-        _out(f"{_CYAN}┌─ channel ─\n")
-        for line in ev.content.rstrip().splitlines():
-            _out(f"│ {line}\n")
-        meta_line = "  ".join(f"{k}={v}" for k, v in ev.meta.items())
-        if meta_line:
-            _out(f"│ {_DIM}{meta_line}{_RESET}\n")
-        _out(f"{_CYAN}└───────────{_RESET}\n")
+        _out(render.channel_block(ev.content, ev.meta) + "\n")
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
     global _awaiting_gate, _awaiting_gate_kind
     _awaiting_gate = ev.gate_id
     _awaiting_gate_kind = ev.kind
-    _out(f"{_BOLD}{_CYAN}? {ev.prompt}{_RESET}")
-    if ev.kind == "confirm":
-        _out(f" {_DIM}[y/n]{_RESET}")
-    elif ev.kind == "choose" and ev.options:
-        opts = ", ".join(f"{i + 1}={o}" for i, o in enumerate(ev.options))
-        _out(f" {_DIM}[{opts}]{_RESET}")
-    _out(": ")
+    # No newline — the cursor stays on this line for the stdin reader.
+    _out(render.prompt_open(ev.kind, ev.prompt, ev.options))
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:
     global _awaiting_gate, _awaiting_gate_kind
     _awaiting_gate = None
     _awaiting_gate_kind = None
-    _out(f"\n{_DIM}↳ response recorded: {ev.value}{_RESET}\n")
+    # Leading newline closes the line the prompt left the cursor on.
+    _out("\n" + render.prompt_response(ev.value) + "\n")
 
 
 def _render_browser_attached(ev: BrowserTabAttached) -> None:
-    short = ev.target[:12]
-    title = f" ({ev.title})" if ev.title else ""
-    _out(f"{_DIM}[browser] attached {short} {ev.url}{title}{_RESET}\n")
+    _out(render.browser_attached(ev.target, ev.url, ev.title) + "\n")
 
 
 def _render_browser_detached(ev: BrowserTabDetached) -> None:
-    short = ev.target[:12]
-    _out(f"{_DIM}[browser] detached {short}{_RESET}\n")
+    _out(render.browser_detached(ev.target) + "\n")
 
 
 def _render(ev: Event) -> None:

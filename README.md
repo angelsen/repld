@@ -141,7 +141,7 @@ defer(coro, label=None)              # fire-and-forget, channel push on completi
 
 ## Browser
 
-`repld[browser]` attaches to Chrome via CDP (`--remote-debugging-port=9222`). You log in normally; the agent sees your traffic, discovers the API surface, and works with your authenticated sessions.
+`repld[browser]` attaches to Chrome via CDP (`--remote-debugging-port=9222`, **Chrome 140+**). You log in normally; the agent sees your traffic, discovers the API surface, and works with your authenticated sessions.
 
 ```python
 tab = await browser.get("*example.com*")     # find tab by URL glob

@@ -28,11 +28,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import events, eventlog, gates, ipc, paths, sessions, state, tasks
-from .events import CellDone, CellStart, ChannelPush
+from .channel import push_channel, push_kind as _push
+from .events import CellDone, CellStart
 from .paths import default_socket_path, lock_for
 from .state import atomic_write_json
 from .protocol import Dispatcher
 from .tasks import install_tee
+
+# Re-exported: `push_channel` lived here before it moved to channel.py, and
+# `from repld.kernel import push_channel` is a plausible line in a gist.
+__all__ = ["push_channel", "run_kernel"]
 
 # ---------------------------------------------------------------------------
 # Lock file
@@ -158,45 +163,9 @@ def _banner(
 # ---------------------------------------------------------------------------
 
 
-def push_channel(
-    content: str,
-    meta: dict | None = None,
-    *,
-    session: "ipc.Session | None" = None,
-) -> None:
-    """Send a notifications/claude/channel notification AND emit a local
-    ChannelPush event so the pane and the event log mirror what the MCP agent
-    receives. Single source of truth for every channel push.
-
-    `session=None` broadcasts — that's the right thing for genuinely ambient
-    output (@every errors, console errors, browser connect/disconnect, bare
-    `notify()` from shared user code) in repld's shared-__main__ model.
-    Passing a session targets the one that asked for the work. If that session
-    has since disconnected the push is *dropped*, never downgraded to a
-    broadcast: leaking one session's output into every other one is worse than
-    silence, and the local event still reaches `repld log`.
-    """
-    meta = meta or {}
-    msg = {
-        "jsonrpc": "2.0",
-        "method": "notifications/claude/channel",
-        "params": {"content": content, "meta": meta},
-    }
-    if session is None:
-        ipc.broadcast_channel(msg)
-    else:
-        ipc.post_to(session, msg)
-    events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
-
-
 def _notify(content, **meta) -> None:
     """Push a channel notification to all connected MCP sessions. meta keys become XML attributes."""
     push_channel(str(content), meta)
-
-
-def _push(content: str, kind: str, *, session=None, **meta: str) -> None:
-    """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once."""
-    push_channel(content, {"kind": kind, **meta}, session=session)
 
 
 def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
@@ -728,6 +697,17 @@ def _start_loop() -> asyncio.AbstractEventLoop:
 def _boot_runtime(sock_path: Path) -> None:
     """2. Event queue, event log, tee, .env, gists — before any user code runs."""
     events.init_event_queue()
+
+    # 2a. Reclaim what dead kernels left in RUNTIME_DIR. Boot is the only
+    # sensible moment: nothing runs on the way out of a SIGKILL, and a kernel
+    # can't tidy up after files it hasn't written yet. Best-effort — a failed
+    # sweep is never a reason to refuse to start.
+    try:
+        paths.ensure_runtime_dir()
+        state.sweep_dead_pid_files(paths.RUNTIME_DIR)
+    except Exception as e:
+        print(f"repld: could not sweep stale runtime files: {e}", file=sys.stderr)
+
     # Installed before the tee so a headless kernel's very first output is
     # already on disk for `repld log`.
     eventlog.install(paths.eventlog_for(sock_path))
@@ -757,7 +737,7 @@ def _boot_runtime(sock_path: Path) -> None:
 
 def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
     """3. Inject helpers into __main__ + repld module."""
-    from . import gates, runtime
+    from . import runtime
     import pydoc
     import repld as _repld_mod
 
@@ -829,8 +809,8 @@ def _start_services(
     hint: dict = {}
     try:
         loaded = json.loads(dash_hint.read_text())
-        # Older kernels wrote a bare port int here; current code expects an object.
-        # Ignore anything that isn't a dict so a stale hint can't crash boot.
+        # Narrowing, not migration: `_restore_browser_state` calls .get() on
+        # this outside any try, so a hand-mangled hint would take boot down.
         if isinstance(loaded, dict):
             hint = loaded
     except (OSError, json.JSONDecodeError):

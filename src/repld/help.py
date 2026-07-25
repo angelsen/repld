@@ -1179,7 +1179,7 @@ Mobile viewport testing:
 
 Target IDs: "{port}:{6-hex}" (e.g. 9222:887d3d). Stable across navigation.
 Browser(port=N) creates a standalone instance for non-default ports (e.g. ADB-forwarded).
-Requires: Chrome --remote-debugging-port=9222
+Requires: Chrome 140+ with --remote-debugging-port=9222
 """,
     "gists": """\
 Paths:

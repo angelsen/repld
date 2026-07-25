@@ -17,8 +17,12 @@ the socket wherever the caller pointed it.
     kernel.dashboard  dashboard port + token + browser restore hint (0600)
     kernel.events     NDJSON event log
 
-Task spill files (``{pid}-{task_id}.out``) are the one exception: they belong
-to the process rather than to any project, so they sit directly in RUNTIME_DIR.
+Per-process scratch is the one exception: task spills, resource spills, and
+browser screenshots belong to the process rather than to any project, so they
+sit directly in RUNTIME_DIR. They all share a ``{pid}-…`` prefix, which is what
+lets a booting kernel sweep everything a dead pid left behind in one pass
+(``state.sweep_dead_pid_files``) — nothing runs on the way out of a SIGKILL,
+and under the /tmp fallback the leftovers would otherwise be permanent.
 
 Without ``XDG_RUNTIME_DIR`` (macOS, most containers, any env-scrubbed spawn)
 the tree falls back to ``/tmp/repld-{uid}``. The uid suffix is load-bearing:
