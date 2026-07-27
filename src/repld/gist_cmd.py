@@ -155,31 +155,48 @@ def _gist_lint(argv: list[str]) -> int:
     from . import gists as _gists
 
     usage = (
-        "repld gist lint [name...] — check gist(s) against best practices "
-        "(default: everything a kernel here would import — ~/.repld/gists, "
-        "./gists, and linked)"
+        "repld gist lint [--local] [name...] — check gist(s) against best "
+        "practices (default: everything a kernel here would import — "
+        "~/.repld/gists, ./gists, and linked; --local restricts to ./gists, "
+        "so the exit code is usable as a gate for this project alone)"
     )
     if _wants_help(argv):
         print(usage)
         return 0
+    local_only = "--local" in argv
+    argv = [a for a in argv if a != "--local"]
+    gists_dir = Path.cwd() / "gists"
     # Same dirs + precedence a live kernel resolves against (kernel.py boot).
-    _gists.install([Path.home() / ".repld" / "gists", Path.cwd() / "gists"])
+    # Needed even under --local: _find_gist resolves names against them.
+    _gists.install([Path.home() / ".repld" / "gists", gists_dir])
 
     if argv:
         paths = []
         missing = []
+        nonlocal_hits = []
         for name in argv:
             p = _gists._find_gist(name)
             if p is None:
                 missing.append(name)
+            elif local_only and p.parent.resolve() != gists_dir.resolve():
+                nonlocal_hits.append((name, p))
             else:
                 paths.append(p)
-        if missing:
+        if missing or nonlocal_hits:
             for name in missing:
                 print(f"error: '{name}' not found (local, global, or linked)")
+            for name, p in nonlocal_hits:
+                print(f"error: '{name}' is not a local gist (found at {p})")
             return 2
     else:
-        paths = sorted(_gists._iter_gist_files())
+        # include_private: privates aren't gists, but they are imported, so
+        # their deps/shape/legacy problems are real. lint_file() skips the
+        # firstline rule on them, which is the only one that doesn't apply.
+        paths = sorted(
+            gists_dir.glob("*.py")
+            if local_only
+            else _gists._iter_gist_files(include_private=True)
+        )
         if not paths:
             print("no gists found")
             return 0
@@ -266,5 +283,9 @@ _GIST_COMMANDS = {
     "add": (_gist_add, "add <name>", "link a gist registered in another project"),
     "rm": (_gist_rm, "rm <name>", "unlink (use --stale to drop all dead links)"),
     "list": (_gist_list, "list", "show local + linked + linkable gists"),
-    "lint": (_gist_lint, "lint [name...]", "check gist(s) against best practices"),
+    "lint": (
+        _gist_lint,
+        "lint [--local] [name...]",
+        "check gist(s) against best practices",
+    ),
 }

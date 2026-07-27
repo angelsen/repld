@@ -4,11 +4,14 @@ Checks:
   firstline  Module docstring's first line must stand alone as a complete
              sentence -- it's what gets auto-extracted into tool listings,
              resource descriptions, and MCP instructions (gists.scan() /
-             gists.introspect() both take doc.split("\\n")[0]).
-  shape      Public functions/methods returning dict/list/Any should
-             document the return shape on the docstring's first line
-             (`-> {key, ...}` or `-> [{key, ...}]`), per the gist-authoring
-             convention in repld://docs/guide.
+             gists.introspect() both take doc.split("\\n")[0]). Skipped for
+             private (underscore-prefixed) files, whose docstring is never
+             extracted; the other three rules still apply to them.
+  shape      Public functions/methods returning dict/list/Any should say
+             what comes back on the docstring's first line, marked with an
+             `->` (the convention in repld://docs/guide is `-> {key, ...}`
+             or `-> [{key, ...}]`, but the check only requires the arrow --
+             prose like `-> the new record's id` is fine).
   deps       Every top-level import of a non-stdlib, non-sibling-gist
              package should be declared in __repld_deps__ so
              gist_deps.install_deps() can offer to install it for a
@@ -72,7 +75,12 @@ def lint_file(path: Path) -> list[Finding]:
 
     ignores = _parse_ignores(source)
     findings: list[Finding] = []
-    findings.extend(_check_firstline(path, tree, ignores))
+    # firstline only matters for files whose docstring actually gets extracted.
+    # gists.scan() skips privates, so a private helper's first line is never
+    # surfaced anywhere and the rule has nothing to protect. The other three
+    # apply regardless — a private file is imported for real.
+    if gists.is_public_gist_file(path):
+        findings.extend(_check_firstline(path, tree, ignores))
     findings.extend(_check_shape(path, tree, ignores))
     findings.extend(_check_deps(path, tree, ignores))
     findings.extend(_check_legacy_tools(path, tree, ignores))
@@ -164,8 +172,8 @@ def _check_shape(
                     node.lineno,
                     "shape",
                     f"{node.name}() returns {ret} but its docstring's first "
-                    "line has no '-> {shape}' -- document the fields the "
-                    "caller gets back",
+                    "line has no '->' saying what comes back -- e.g. "
+                    "'-> {id, name, price}'",
                 )
             )
     return findings
@@ -186,7 +194,60 @@ def _importable_stems(directory: Path) -> set[str]:
     return stems
 
 
+# Distribution name -> import root, for packages whose two names are unrelated.
+# Deliberately short and deliberately *here* rather than in gist_deps: that
+# module answers "is this installed?" from real metadata and must stay
+# authoritative, while this is a hardcoded guess that only exists because lint
+# is a static check and routinely runs where the dep isn't installed at all.
+# The tail of aliased packages is what `# gistlint: ignore=deps` is for.
+_IMPORT_ALIASES = {
+    "pillow": ("PIL",),
+    "beautifulsoup4": ("bs4",),
+    "pyyaml": ("yaml",),
+    "python-dateutil": ("dateutil",),
+    "opencv-python": ("cv2",),
+}
+
+
+def _normalize_dist(name: str) -> str:
+    """PEP 503 name normalization, so `Pillow` and `pillow` hit the same key."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _import_names(dist: str) -> set[str]:
+    """Import roots a declared distribution can satisfy.
+
+    A declaration is a *distribution* name and an import is a *module* name;
+    the two are unrelated for a fair number of packages, so comparing them
+    directly flags correctly-declared gists. Three tiers, cheapest first:
+    the name normalized (resvg-py -> resvg_py), the installed distribution's
+    real top-level modules (the same map gist_deps._is_importable trusts),
+    and the static alias table for what's declared but not installed here.
+    """
+    names = {dist, dist.replace("-", "_")}
+    names.update(gist_deps._distribution_import_names(dist))
+    names.update(_IMPORT_ALIASES.get(_normalize_dist(dist), ()))
+    return names
+
+
+def _dot_dep_import_names(gist_path: Path) -> set[str]:
+    """Import roots the '.' self-dep provides -- the gist's own project.
+
+    Mirrors gist_deps._resolve_dot_dep: project root is the gist directory's
+    parent, name from [project] in its pyproject.toml, directory name as the
+    fallback. Unlike that function this stays quiet when there's no
+    pyproject -- a linter shouldn't manufacture a finding out of a missing
+    file. Shares its blind spot too: a project whose package name differs
+    from its distribution name won't match either way.
+    """
+    project_root = gist_path.parent.parent
+    pyproject = project_root / "pyproject.toml"
+    name = gist_deps._read_project_name(pyproject) if pyproject.is_file() else None
+    return _import_names(name or project_root.name)
+
+
 def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
+    """Import roots covered by __repld_deps__ -- import names, not dist names."""
     node = gists._dunder_value(tree, "__repld_deps__")
     if node is None:
         return set()
@@ -198,20 +259,28 @@ def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
         return set()
     declared: set[str] = set()
     for r in reqs:
-        req_str = str(r)
+        req_str = str(r).strip()
         if req_str == ".":
+            declared.update(_dot_dep_import_names(gist_path))
             continue
         if req_str.startswith("path:"):
             target = gist_deps.resolve_path_target(req_str[len("path:") :], gist_path)
             if target.is_dir():
                 declared.update(_importable_stems(target))
             continue
-        declared.add(gist_deps._parse_pkg_name(req_str))
+        declared.update(_import_names(gist_deps._parse_pkg_name(req_str)))
     return declared
 
 
 def _sibling_gist_names(path: Path) -> set[str]:
-    return {p.stem for p in path.parent.glob("*.py") if gists.is_public_gist_file(p)}
+    """Module names importable from the gist's own directory.
+
+    Deliberately *not* filtered through gists.is_public_gist_file(): that
+    predicate decides what gets listed and exposed as a gist, not what
+    resolves at import time. The directory is on sys.path either way, so
+    `from _helpers import x` works and is never a pip dep to declare.
+    """
+    return {p.stem for p in path.parent.glob("*.py")}
 
 
 def _check_deps(

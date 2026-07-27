@@ -669,23 +669,34 @@ def is_public_gist_file(p: Path) -> bool:
     return not p.name.startswith("_")
 
 
-def _iter_gist_files():
-    """Yield non-private .py gist paths: installed dirs first, then linked.
+def _iter_gist_files(*, include_private: bool = False):
+    """Yield .py gist paths: installed dirs first, then linked.
 
     Deduped by stem so a local gist shadows a linked one of the same name, and
     stale linked paths are skipped.
+
+    Private (underscore-prefixed) files are excluded by default: they're
+    importable — the directory is on sys.path — but deliberately not *gists*,
+    so they must stay out of the MCP instructions, tool discovery, and name
+    hints. ``include_private=True`` is for the consumers that care about every
+    file a kernel here can import, regardless of whether it's exposed as a
+    gist: dependency scanning and ``repld gist lint``.
     """
     seen: set[str] = set()
     for d in _installed_dirs:
         if not d.is_dir():
             continue
         for p in sorted(d.glob("*.py")):
-            if not is_public_gist_file(p) or p.stem in seen:
+            if (not include_private and not is_public_gist_file(p)) or p.stem in seen:
                 continue
             seen.add(p.stem)
             yield p
     for name, p in gist_links.linked_items():
-        if name in seen:
+        # link_targets() co-links siblings without a public/private check, so a
+        # private can land in the manifest; it gets the same treatment here as
+        # a local one. Imports are unaffected either way — _GistFinder resolves
+        # through the gist_links._linked overlay, not through this iterator.
+        if name in seen or (not include_private and not is_public_gist_file(p)):
             continue
         seen.add(name)
         yield p

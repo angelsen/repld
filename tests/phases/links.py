@@ -1,6 +1,8 @@
 """Phase 12: Cross-project gist links — add / sibling / boot-import / list / rm / stale / path deps."""
 
+import contextlib
 import importlib.metadata
+import io
 import json
 import os
 import shutil
@@ -11,7 +13,7 @@ from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
 
-from repld import gist_deps, gist_lint, gists
+from repld import gist_cmd, gist_deps, gist_lint, gists
 from repld import gist_links as g
 
 
@@ -142,6 +144,86 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             f"path: dep suppresses deps finding (got {deps_findings})",
         )
         print("  ✓ gist lint: path: dep suppresses false-positive deps finding")
+
+        # --- gist lint: a declaration is a *distribution* name, an import is a
+        # *module* name. Comparing them directly flagged correctly-declared
+        # gists (pillow/PIL, resvg-py/resvg_py). Neither package is installed
+        # for the test run, so this pins the static tiers specifically. ---
+        (src / "aliased.py").write_text(
+            '"""Aliased deps."""\n'
+            '__repld_deps__ = ["pillow>=12", "resvg-py>=0.3"]\n'
+            "import resvg_py\n"
+            "from PIL import Image\n"
+        )
+        aliased = [
+            f for f in gist_lint.lint_file(src / "aliased.py") if f.rule == "deps"
+        ]
+        assert_eq(aliased, [], f"dist-vs-import names reconciled (got {aliased})")
+
+        # --- gist lint: the '.' self-dep resolves to the project's own package
+        # instead of being skipped. Its own tmpdir — dropping a pyproject.toml
+        # into `other` would change what the rest of this phase sees. ---
+        selfproj = Path(tempfile.mkdtemp(prefix="repld-link-self-"))
+        (selfproj / "pyproject.toml").write_text(
+            '[project]\nname = "repld-self-dep-fixture"\nversion = "0"\n'
+        )
+        selfgists = selfproj / "gists"
+        selfgists.mkdir()
+        (selfgists / "usesself.py").write_text(
+            '"""Uses its own project."""\n'
+            '__repld_deps__ = ["."]\n'
+            "from repld_self_dep_fixture import thing\n"
+        )
+        dot = [
+            f
+            for f in gist_lint.lint_file(selfgists / "usesself.py")
+            if f.rule == "deps"
+        ]
+        assert_eq(dot, [], f"'.' dep resolves to the project package (got {dot})")
+        shutil.rmtree(selfproj, ignore_errors=True)
+
+        # --- gist lint: an underscore-prefixed file is hidden from gist
+        # listings but still imports fine from the same directory, so it's a
+        # sibling for the deps rule's purposes. ---
+        (src / "_helper.py").write_text("VALUE = 1\n")
+        (src / "usesprivate.py").write_text(
+            '"""Uses a private sibling."""\nfrom _helper import VALUE\n'
+        )
+        priv = [
+            f for f in gist_lint.lint_file(src / "usesprivate.py") if f.rule == "deps"
+        ]
+        assert_eq(priv, [], f"private sibling import isn't a deps finding (got {priv})")
+
+        # --- ...and the rule still bites. Without this, any over-broad fix to
+        # the three above would turn the deps rule into a no-op silently. ---
+        (src / "undeclared.py").write_text(
+            '"""Undeclared dep."""\n'
+            '__repld_deps__ = ["httpx>=0.27"]\n'
+            "import httpx\n"
+            "import repld_phantom_pkg_xyz\n"
+        )
+        undecl = [
+            f for f in gist_lint.lint_file(src / "undeclared.py") if f.rule == "deps"
+        ]
+        assert_eq(len(undecl), 1, f"genuinely undeclared import still flagged {undecl}")
+        assert_true(
+            "repld_phantom_pkg_xyz" in undecl[0].message,
+            "the finding names the undeclared package, not the declared one",
+        )
+        print("  ✓ gist lint: deps rule reconciles dist/import names, '.', privates")
+
+        # --- gist lint: the shape rule checks for an '->' and nothing more.
+        # The looseness is deliberate (`-> [DnsRecord(...)]`, `-> the new id`),
+        # so the message says arrow, not brace. ---
+        (src / "prose.py").write_text(
+            '"""Prose shape."""\n'
+            "def fetch() -> dict:\n"
+            '    """Fetch it. -> product id and title."""\n'
+            "    return {}\n"
+        )
+        prose = [f for f in gist_lint.lint_file(src / "prose.py") if f.rule == "shape"]
+        assert_eq(prose, [], f"prose '->' note satisfies the shape rule (got {prose})")
+        print("  ✓ gist lint: shape rule accepts any '->' note, as its message says")
 
         # --- gist lint: the legacy rule catches BOTH halves of the pre-0.1.0
         # tool convention. The handler signature is the one nothing else finds:
@@ -332,6 +414,127 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(dropped, ["sib"], "remove_stale_links drops the dead entry")
         assert_eq(json.loads((gd / ".links").read_text()), {}, "manifest emptied")
         print("  ✓ stale link skipped at load + pruned by rm --stale")
+
+        # --- lint scope: which files get checked at all. Unlike the rule tests
+        # above, these drive discovery (and the CLI), so they need the module's
+        # gist dirs, $HOME and cwd pointed somewhere known -- all restored in
+        # the inner finally so nothing leaks into later phases. ---
+        orig_dirs = gists._installed_dirs
+        orig_linked = dict(g._linked)
+        orig_path = list(sys.path)
+        orig_home = os.environ.get("HOME")
+        orig_cwd = os.getcwd()
+        finder = next(
+            (f for f in sys.meta_path if isinstance(f, gists._GistFinder)), None
+        )
+        orig_finder_dirs = finder._dirs if finder is not None else None
+        scope = Path(tempfile.mkdtemp(prefix="repld-link-scope-"))
+        try:
+            sd = scope / "gists"
+            sd.mkdir()
+            (sd / "pub.py").write_text('"""Public gist."""\nVALUE = 1\n')
+            # Wrapped first line *and* an undeclared import: firstline should
+            # fire on one of these files and not the other, deps on both.
+            privtext = (
+                '"""Private helper\n\nwrapped onto a second line.\n"""\n'
+                "import repld_phantom_pkg_xyz\n"
+            )
+            (sd / "_priv.py").write_text(privtext)
+            gists._installed_dirs = [sd]
+            g._linked.clear()
+
+            assert_eq(
+                [p.name for p in gists._iter_gist_files()],
+                ["pub.py"],
+                "privates stay out of the default iteration",
+            )
+            assert_eq(
+                sorted(p.name for p in gists._iter_gist_files(include_private=True)),
+                ["_priv.py", "pub.py"],
+                "include_private=True yields them",
+            )
+
+            # --- the private is linted, but firstline is skipped on it: its
+            # docstring is never extracted, so there's nothing to truncate ---
+            priv_rules = sorted(f.rule for f in gist_lint.lint_file(sd / "_priv.py"))
+            assert_eq(
+                priv_rules, ["deps"], f"private: deps but no firstline {priv_rules}"
+            )
+            (sd / "pubwrap.py").write_text(privtext)
+            pub_rules = sorted(f.rule for f in gist_lint.lint_file(sd / "pubwrap.py"))
+            assert_eq(
+                pub_rules, ["deps", "firstline"], f"same content, public {pub_rules}"
+            )
+            (sd / "pubwrap.py").unlink()
+            print("  ✓ gist lint: privates checked, firstline skipped on them")
+
+            # --- a private helper's __repld_deps__ is a real declaration: it's
+            # imported by its siblings, so scan_deps has to see it ---
+            (sd / "_deps.py").write_text(
+                '"""Private with deps."""\n'
+                '__repld_deps__ = ["repld_phantom_priv_xyz"]\n'
+            )
+            missing = gist_deps.scan_deps()
+            assert_true(
+                any("repld_phantom_priv_xyz" in d.requirement for d in missing),
+                f"scan_deps sees a private's deps (got {[d.requirement for d in missing]})",
+            )
+            (sd / "_deps.py").unlink()
+
+            # --- link_targets co-links siblings with no public/private check,
+            # so a private can land in the manifest. It must not then surface
+            # as a gist -- the linked branch used to have no filter at all ---
+            outside = scope / "elsewhere"
+            outside.mkdir()
+            (outside / "_shared.py").write_text('"""Shared private."""\nV = 1\n')
+            g._linked["_shared"] = outside / "_shared.py"
+            assert_true(
+                "_shared.py" not in [p.name for p in gists._iter_gist_files()],
+                "co-linked private isn't listed as a gist",
+            )
+            assert_true(
+                "_shared.py"
+                in [p.name for p in gists._iter_gist_files(include_private=True)],
+                "...but stays reachable for deps + lint",
+            )
+            g._linked.clear()
+            print("  ✓ co-linked private stays out of gist listings")
+
+            # --- --local: a dirty *global* gist must not fail this project's
+            # gate. $HOME is redirected so _gist_lint's hardcoded
+            # ~/.repld/gists resolves into the fixture. ---
+            (sd / "_priv.py").unlink()  # leave ./gists clean
+            globaldir = scope / ".repld" / "gists"
+            globaldir.mkdir(parents=True)
+            (globaldir / "bad.py").write_text(
+                '"""Bad gist."""\nimport repld_phantom_pkg_xyz\n'
+            )
+            os.environ["HOME"] = str(scope)
+            os.chdir(scope)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc_local = gist_cmd._gist_lint(["--local"])
+                rc_all = gist_cmd._gist_lint([])
+                rc_reject = gist_cmd._gist_lint(["--local", "bad"])
+            assert_eq(
+                rc_local, 0, f"--local passes on a clean ./gists\n{buf.getvalue()}"
+            )
+            assert_eq(rc_all, 1, "default run still fails on the dirty global gist")
+            assert_eq(rc_reject, 2, "--local rejects a name resolving outside ./gists")
+            print("  ✓ gist lint --local scopes to ./gists, rejects outside names")
+        finally:
+            os.chdir(orig_cwd)
+            if orig_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = orig_home
+            gists._installed_dirs = orig_dirs
+            if finder is not None and orig_finder_dirs is not None:
+                finder._dirs = orig_finder_dirs
+            g._linked.clear()
+            g._linked.update(orig_linked)
+            sys.path[:] = orig_path
+            shutil.rmtree(scope, ignore_errors=True)
     finally:
         gists.registry = orig_registry
         g._linked.clear()

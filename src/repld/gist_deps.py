@@ -235,10 +235,16 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
     """AST-scan gist files for __repld_deps__. Returns missing deps with their sources.
 
     Scans `paths` when given (used by `gist add` for just-linked files), else all
-    local + linked gist files.
+    local + linked gist files, private ones included.
     """
     deps: dict[str, _DepInfo] = {}
-    for p in paths if paths is not None else gists._iter_gist_files():
+    # include_private: a private helper is imported by its siblings at runtime,
+    # so its __repld_deps__ is a real declaration. Skipping it meant the deps
+    # never installed and the importing sibling died on a bare
+    # ModuleNotFoundError, with nothing pointing at the file that needed them.
+    for p in (
+        paths if paths is not None else gists._iter_gist_files(include_private=True)
+    ):
         tree = gists._parse(p)
         if tree is None:
             continue
