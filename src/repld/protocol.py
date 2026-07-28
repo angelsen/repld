@@ -577,13 +577,20 @@ class Dispatcher(BrowserDispatchMixin):
         )
 
     def _tools_list(self, rid) -> dict:
-        from . import gists
+        from . import bridge_tools, gists
 
         has_browser = _has_browser()
         tools = [
             t for t in TOOLS if has_browser or not t["name"].startswith("browser_")
         ]
-        return _response(rid, {"tools": tools + gists.scan_tools()})
+        # bridge_tools.SCHEMAS is advertised from here rather than injected into
+        # this response by the bridge: the bridge relays raw lines untouched in
+        # both directions, and parsing + re-serializing every tools/list reply
+        # to append a couple of entries would cost it that property. The bridge
+        # intercepts the matching tools/call on the way in instead.
+        return _response(
+            rid, {"tools": tools + bridge_tools.SCHEMAS + gists.scan_tools()}
+        )
 
     def _tools_call(self, rid, params: dict, session=None) -> dict:
         name = params.get("name")
@@ -598,6 +605,17 @@ class Dispatcher(BrowserDispatchMixin):
             return self._browser_tool(rid, name, args)
         if not name:
             return _error(rid, -32602, "missing tool name")
+        if name in _bridge_tool_names():
+            # We advertise these but never serve them — the bridge answers them
+            # on the way in. Arriving here means the client is talking to the
+            # socket directly, so say that rather than reporting "unknown tool"
+            # for a name that is right there in tools/list.
+            return _error(
+                rid,
+                -32601,
+                f"{name} is served by `repld bridge`, not the kernel — this "
+                "connection bypassed it",
+            )
         return self._gist_tool(rid, name, args)
 
     def _exec(self, rid, args: dict, session=None) -> dict:
@@ -825,6 +843,12 @@ def _format_spill(sp: dict, fallback: str) -> str:
 
 def _has_browser() -> bool:
     return "browser" in __main__.__dict__
+
+
+def _bridge_tool_names() -> frozenset[str]:
+    from . import bridge_tools
+
+    return frozenset(bridge_tools.BRIDGE_TOOLS)
 
 
 def _response(rid, result: dict) -> dict:

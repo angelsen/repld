@@ -126,6 +126,81 @@ def _autospawn_and_heal(tmp: Path) -> None:
         b.close()
 
 
+def _bridge_served_tools(tmp: Path) -> None:
+    """repld_restart is advertised by the kernel but answered by the bridge.
+
+    The split matters: a kernel cannot reply to "restart yourself" — the
+    response would still be in flight when the process goes away, so the client
+    would get -31001 for something that actually worked.
+    """
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        first_pid = _wait_lock(tmp)["pid"]
+
+        listed = b.call("tools/list", {}, timeout=30)["result"]["tools"]
+        names = [t["name"] for t in listed]
+        assert_true("repld_restart" in names, f"bridge tool advertised (got {names})")
+        assert_true("exec" in names, "kernel tools still listed alongside it")
+
+        _exec(b, "SENTINEL = 1")
+
+        resp = b.call(
+            "tools/call", {"name": "repld_restart", "arguments": {}}, timeout=60
+        )
+        assert_true("error" not in resp, f"answered in-band, not orphaned: {resp}")
+        assert_eq(resp["result"].get("isError"), False, "restart reported success")
+        meta = resp["result"].get("_meta", {})
+        assert_eq(str(meta.get("old_pid")), str(first_pid), "result names the old pid")
+        assert_true(
+            meta.get("new_pid") and meta["new_pid"] != meta.get("old_pid"),
+            f"a different kernel took over (got {meta})",
+        )
+        print("  ✓ bridge tool answered in-band (no -31001), kernel replaced")
+
+        resp = _exec(b, "print('SENTINEL' in dir())", timeout=40)
+        assert_true(
+            "False" in resp["result"]["content"][0]["text"],
+            "restarted kernel has a fresh namespace",
+        )
+        _exec(b, "notify('after restart')")
+        b.wait_notification("notifications/claude/channel", timeout=10)
+        print("  ✓ session survived the restart: handshake replayed, push lands")
+    finally:
+        b.close()
+
+
+def _bridge_tool_bypass_error(tmp: Path) -> None:
+    """A client on the socket directly gets a named error, not 'unknown tool'.
+
+    The kernel advertises these tools, so falling through to the gist-tool
+    lookup would report a name that is right there in tools/list as unknown.
+    """
+    from repld import ipc
+
+    result = ipc.connect_to_kernel(lock_path_for(tmp))
+    if isinstance(result, str):  # str is the failure channel, not a socket
+        raise AssertionError(f"could not connect to the kernel: {result}")
+    sock, _ = result
+    try:
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "repld_restart", "arguments": {}},
+        }
+        sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
+        msg = json.loads(sock.makefile("r", encoding="utf-8").readline())
+        assert_true("error" in msg, f"kernel refuses to serve a bridge tool: {msg}")
+        assert_true(
+            "bridge" in msg["error"]["message"],
+            f"error says why (got {msg['error']['message']!r})",
+        )
+    finally:
+        sock.close()
+    print("  ✓ bridge tool reaching the kernel directly gets a named error")
+
+
 def _targeted_push(tmp: Path) -> None:
     """A task's completion notifies the session that started it, and only it."""
     a = Bridge(tmp)
@@ -317,6 +392,8 @@ def phase_15_headless(_kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-headless-"))
     try:
         _autospawn_and_heal(tmp)
+        _bridge_served_tools(tmp)
+        _bridge_tool_bypass_error(tmp)
         _targeted_push(tmp)
         _no_display_skips_queue(tmp)
         _event_log(tmp)

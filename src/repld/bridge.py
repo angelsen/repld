@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import ipc, paths, spawn, state
+from . import bridge_tools, ipc, paths, spawn, state
 
 # 5s spawn window, polled at 100ms — long enough for a cold kernel with gists
 # to bind its socket, short enough that a broken spawn fails a tool call
@@ -140,6 +140,54 @@ class Bridge:
             )
             _err("reconnected to a fresh kernel; handshake replayed")
 
+    def restart_kernel(self) -> tuple[int | None, int | None]:
+        """Stop this project's kernel and bring a fresh one up.
+
+        Returns ``(old_pid, new_pid)``; ``new_pid`` is None if the replacement
+        never became reachable.
+
+        The wait between SIGTERM and respawn is load-bearing, not politeness:
+        one kernel per project is enforced by an flock the dying kernel still
+        holds, so a replacement spawned too early loses the race and exits 0 —
+        leaving `_reconnect` polling for a kernel that deliberately gave up.
+
+        Teardown goes through `_on_kernel_gone` so requests already in flight
+        get their `-31001` reply instead of hanging, exactly as they do when a
+        kernel dies on its own.
+        """
+        import os
+        import signal
+
+        old_pid = self._kernel_pid
+        if old_pid is not None:
+            try:
+                os.kill(old_pid, signal.SIGTERM)
+            except OSError:
+                pass  # already gone; fall through to the reconnect ladder
+            for _ in range(WAIT_STEPS):
+                if not state.pid_alive(old_pid):
+                    break
+                time.sleep(WAIT_STEP_SECONDS)
+        self._on_kernel_gone()
+        if not self._reconnect():
+            return old_pid, None
+        return old_pid, self._kernel_pid
+
+    # -- bridge-served tools -------------------------------------------------
+
+    def _handle_bridge_tool(self, rid, name: str, args: dict) -> None:
+        entry = bridge_tools.BRIDGE_TOOLS[name]
+        try:
+            result = entry["handler"](self, args)
+        except Exception as e:  # a bridge tool must never take the session down
+            _err(f"{name} failed: {type(e).__name__}: {e}")
+            result = {
+                "content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],
+                "isError": True,
+            }
+        if rid is not None:
+            self._to_client({"jsonrpc": "2.0", "id": rid, "result": result})
+
     def _replay_handshake(self) -> None:
         """Re-run the client's one-and-only initialize against a new kernel.
 
@@ -225,6 +273,18 @@ class Bridge:
             msg = None
 
         rid = msg.get("id") if isinstance(msg, dict) else None
+
+        # Bridge-served tools are answered *before* the liveness ladder. They
+        # exist for the cases where the kernel is dead or is about to be
+        # replaced, so insisting on a live one first would be backwards — and
+        # for a restart it would spawn a kernel only to kill it.
+        if isinstance(msg, dict) and msg.get("method") == "tools/call":
+            params = msg.get("params") or {}
+            if params.get("name") in bridge_tools.BRIDGE_TOOLS:
+                self._handle_bridge_tool(
+                    rid, params["name"], params.get("arguments") or {}
+                )
+                return
 
         if not self._ensure_kernel():
             if rid is not None:
