@@ -8,11 +8,13 @@ packages import anywhere. Splicing it anyway *half*-works, which is worse to
 debug than a clean refusal — so the refusal assertion is the important one here.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from harness import Kernel, assert_eq, assert_true
@@ -36,6 +38,111 @@ def _make_venv(root: Path, python: str | None = None) -> Path | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return (root / ".venv") if r.returncode == 0 else None
+
+
+def _systemd_spawn_argv(tmp: Path) -> None:
+    """The systemd-run invocation, asserted without creating any units."""
+    from repld import paths, spawn
+
+    a, b = tmp / "alpha", tmp / "beta"
+    assert_true(
+        spawn._systemd_unit_name(a) != spawn._systemd_unit_name(b),
+        "different projects get different unit names",
+    )
+    assert_eq(
+        spawn._systemd_unit_name(a),
+        spawn._systemd_unit_name(a),
+        "and the same project is stable across calls",
+    )
+    assert_true(
+        paths.project_slug(a) in spawn._systemd_unit_name(a),
+        "unit name reuses the project slug rather than a second scheme",
+    )
+
+    env = {
+        "PATH": "/usr/bin",
+        "REPLD_SOCKET": "/tmp/x.sock",
+        "INVOCATION_ID": "leaked",
+        "LISTEN_FDS": "3",
+    }
+    argv = spawn._systemd_run_argv(["python", "-m", "repld"], a, env)
+    setenv = [x for x in argv if x.startswith("--setenv=")]
+    assert_true(f"--working-directory={a}" in argv, f"cwd is the project ({argv})")
+    assert_true("--collect" in argv, "failed units don't squat the name")
+    assert_true("--setenv=PATH=/usr/bin" in setenv, "ordinary vars pass through")
+    assert_true("--setenv=REPLD_SOCKET=/tmp/x.sock" in setenv, "so does REPLD_SOCKET")
+    assert_true(
+        not any("INVOCATION_ID" in s or "LISTEN_FDS" in s for s in setenv),
+        f"systemd's own unit vars aren't forwarded (got {setenv})",
+    )
+    assert_eq(argv[-3:], ["python", "-m", "repld"], "the command comes last")
+
+    assert_true(
+        not any("MemoryHigh" in x for x in argv),
+        "no memory ceiling unless asked for",
+    )
+    assert_true(
+        not any("OOMScoreAdjust" in x for x in argv),
+        "and the manager's OOM policy is left alone unless asked",
+    )
+    tuned = spawn._systemd_run_argv(
+        ["python"],
+        a,
+        {**env, "REPLD_MEMORY_HIGH": "4G", "REPLD_OOM_SCORE_ADJUST": "100"},
+    )
+    assert_true("MemoryHigh=4G" in tuned, f"REPLD_MEMORY_HIGH applied (got {tuned})")
+    assert_true("OOMScoreAdjust=100" in tuned, "REPLD_OOM_SCORE_ADJUST applied")
+    print("  ✓ systemd-run argv: per-project unit, cwd, env filtered, opt-in limits")
+
+
+def _systemd_spawn_live(tmp: Path) -> None:
+    """A real kernel lands in its own cgroup, not the caller's.
+
+    The whole point of the change: `start_new_session` detaches from the
+    terminal but leaves the process in the spawner's cgroup and parented to it.
+    """
+    from repld import spawn
+
+    if shutil.which("systemd-run") is None or not os.environ.get("XDG_RUNTIME_DIR"):
+        print("  ⚠ no systemd-run / XDG_RUNTIME_DIR — skipping live unit check")
+        return
+    probe = subprocess.run(
+        ["systemctl", "--user", "is-system-running"], capture_output=True, text=True
+    )
+    if probe.returncode != 0 and "running" not in probe.stdout:
+        print(f"  ⚠ user manager not usable ({probe.stdout.strip()}) — skipping")
+        return
+
+    proj = tmp / "unitproj"
+    proj.mkdir()
+    unit = spawn._systemd_unit_name(proj)
+    sock = proj / "k.sock"
+    orig_cwd = os.getcwd()
+    try:
+        os.chdir(proj)
+        assert_true(spawn.spawn_headless(sock), "kernel spawned via systemd-run")
+        pid = 0
+        for _ in range(150):
+            try:
+                pid = int(json.loads((proj / "k.lock").read_text())["pid"])
+                break
+            except (OSError, ValueError, KeyError):
+                time.sleep(0.2)
+        assert_true(pid > 0, "kernel wrote its lockfile")
+
+        cgroup = Path(f"/proc/{pid}/cgroup").read_text().strip()
+        assert_true(unit in cgroup, f"kernel is in its own unit cgroup (got {cgroup})")
+        caller_cg = Path(f"/proc/{os.getpid()}/cgroup").read_text().strip()
+        assert_true(cgroup != caller_cg, "...which is not the caller's cgroup")
+        ppid = int(Path(f"/proc/{pid}/stat").read_text().split(") ")[1].split()[1])
+        assert_true(ppid != os.getpid(), f"reparented away from the spawner ({ppid})")
+        print("  ✓ kernel runs in its own systemd unit cgroup, reparented")
+    finally:
+        os.chdir(orig_cwd)
+        subprocess.run(
+            ["systemctl", "--user", "stop", unit], capture_output=True, timeout=30
+        )
+        subprocess.run(["systemctl", "--user", "reset-failed"], capture_output=True)
 
 
 def phase_16_venv_binding(_kernel: Kernel) -> None:
@@ -138,6 +245,9 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
         assert_eq(cmd[1:3], ["run", "--with-editable"], f"uses uv run (got {cmd})")
         assert_eq(cmd[-2:], ["repld", "bridge"], "re-runs the same subcommand")
         print("  ✓ uv_run_argv targets a local checkout, preserving argv")
+
+        _systemd_spawn_argv(tmp)
+        _systemd_spawn_live(tmp)
     finally:
         os.chdir(orig_cwd)
         if orig_virtual_env is None:
