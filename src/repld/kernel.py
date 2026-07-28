@@ -906,6 +906,34 @@ def _start_watchdog(
     return stop
 
 
+def _report_boot_failure() -> None:
+    """Put the in-flight exception on the *real* stderr, bypassing the tee.
+
+    `install_tee()` runs partway through `_boot_runtime`, and `_Tee.write`
+    deliberately never touches `self.real` — the display thread owns the
+    terminal. Anything that dies after that point therefore reaches only the
+    event log, and there is no display thread yet to render it, so a kernel
+    that fails to boot exits non-zero having printed nothing at all. That is
+    how a too-long `--socket` path or an already-bound port presents: a silent
+    exit 1.
+
+    The exception is re-raised by the caller, so the event log still gets its
+    copy through the normal unhandled-exception path — this only adds the
+    destination a human is actually looking at.
+    """
+    import traceback
+
+    real = sys.__stderr__
+    if real is None:  # stderr closed (detached spawn) — the event log has it
+        return
+    try:
+        real.write("\nrepld: kernel failed to start\n")
+        traceback.print_exc(file=real)
+        real.flush()
+    except (OSError, ValueError):
+        pass
+
+
 def run_kernel(
     socket_path: str | None = None,
     *,
@@ -917,14 +945,20 @@ def run_kernel(
     _project_lock_fd = _claim_project(sock_path)
 
     loop = _start_loop()
-    _boot_runtime(sock_path, display)
-    _inject_builtins(loop)
-    dashboard_port = _start_services(loop, sock_path, display)
-    stop = _start_watchdog(loop, sock_path, dashboard_port)
+    try:
+        _boot_runtime(sock_path, display)
+        _inject_builtins(loop)
+        dashboard_port = _start_services(loop, sock_path, display)
+        stop = _start_watchdog(loop, sock_path, dashboard_port)
 
-    # 7. Optionally run init file.
-    if init_file:
-        _run_init_file(Path(init_file), loop)
+        # 7. Optionally run init file.
+        if init_file:
+            _run_init_file(Path(init_file), loop)
+    except Exception:
+        # Not BaseException: a Ctrl-C during boot needs no banner, and the
+        # operator already knows why it stopped.
+        _report_boot_failure()
+        raise
 
     # 8. Main thread: display or headless.
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -185,6 +185,47 @@ def phase_5(kernel: Kernel) -> None:
     print("  ✓ flock mutex: second kernel stood down, incumbent untouched")
 
 
+def phase_5_boot_failure(_kernel: Kernel) -> None:
+    """A kernel that dies during boot says so on the real stderr.
+
+    `install_tee()` runs partway through boot and `_Tee.write` never touches
+    the underlying stream, so everything after it goes to the event log only —
+    and there is no display thread yet to render it. A boot failure therefore
+    used to be a completely silent exit 1. An over-long `--socket` is the
+    cheapest deterministic way to fail past that point: AF_UNIX paths cap at
+    ~108 bytes, and the bind happens in `_start_services`, well after the tee.
+    """
+    import sys as _sys
+    import tempfile as _tmp
+
+    tmp = Path(_tmp.mkdtemp(prefix="repld-bootfail-"))
+    try:
+        too_long = tmp / ("d" * 120) / "kernel.sock"
+        too_long.parent.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["REPLD_BOUND"] = "1"  # don't re-exec; this is about the boot path
+        r = subprocess.run(
+            [_sys.executable, "-m", "repld", "--socket", str(too_long), "--no-display"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp,
+            env=env,
+        )
+        assert_true(r.returncode != 0, "a failed boot exits non-zero")
+        assert_true(
+            "kernel failed to start" in r.stderr,
+            f"stderr names the failure (got {r.stderr[-400:]!r})",
+        )
+        assert_true(
+            "AF_UNIX path too long" in r.stderr,
+            f"...and carries the traceback (got {r.stderr[-400:]!r})",
+        )
+        print("  ✓ boot failure reaches the terminal instead of exiting silently")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def phase_5_init(_kernel: Kernel) -> None:
     """Spawn a dedicated kernel with --init to verify init-file execution."""
     import tempfile as _tmp
