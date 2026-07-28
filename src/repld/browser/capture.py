@@ -90,11 +90,15 @@ async def _fast_continue(
 
 
 def _should_capture_body(params: dict) -> bool:
-    """Decide whether to capture a response body.
+    """Decide whether to even attempt a response body fetch.
 
-    Captures any response under 500KB.  Skips redirects (CDP puts them
-    in kRedirectReceived state — getResponseBody errors) and SSE
-    (infinite stream — getResponseBody blocks forever).
+    Skips redirects (CDP puts them in kRedirectReceived state —
+    getResponseBody errors) and SSE (infinite stream — getResponseBody
+    blocks forever). NOT a size gate: Content-Length is absent on
+    chunked responses and, when present, reflects the wire (possibly
+    compressed) size rather than the decoded body getResponseBody
+    returns — the actual cap is enforced in _handle_response after the
+    body comes back.
     """
     status = params.get("responseStatusCode", 0)
     if status in (301, 302, 303, 307, 308):
@@ -102,21 +106,12 @@ def _should_capture_body(params: dict) -> bool:
 
     response_headers = params.get("responseHeaders", [])
     content_type = ""
-    content_length = -1
     for h in response_headers:
-        name = h.get("name", "").lower()
-        if name == "content-type":
+        if h.get("name", "").lower() == "content-type":
             content_type = h.get("value", "").lower()
-        elif name == "content-length":
-            try:
-                content_length = int(h.get("value", -1))
-            except (ValueError, TypeError):
-                pass
+            break
 
     if "text/event-stream" in content_type:
-        return False
-
-    if content_length > _MAX_BODY_SIZE:
         return False
 
     return True
@@ -144,13 +139,27 @@ async def _handle_response(
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         body = result.get("body", "")
         b64 = result.get("base64Encoded", False)
-        _store_response_body(
-            session,
-            network_id,
-            body,
-            b64,
-            {"ok": True, "elapsed_ms": elapsed_ms},
-        )
+        decoded_size = len(base64.b64decode(body)) if b64 else len(body.encode())
+        if decoded_size > _MAX_BODY_SIZE:
+            _store_response_body(
+                session,
+                network_id,
+                "",
+                False,
+                {
+                    "ok": False,
+                    "error": f"body too large ({decoded_size} bytes > {_MAX_BODY_SIZE})",
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+        else:
+            _store_response_body(
+                session,
+                network_id,
+                body,
+                b64,
+                {"ok": True, "elapsed_ms": elapsed_ms},
+            )
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         _store_response_body(

@@ -205,6 +205,27 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
 # ---------------------------------------------------------------------------
 
 
+def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future[None]":
+    """Schedule the watchdog's no-op liveness probe under a repld- name.
+
+    Named at task-creation time (not from inside the coroutine) so it's
+    already excluded from _pick_victim's candidate filter even while
+    pending — a plain run_coroutine_threadsafe(asyncio.sleep(0), loop)
+    creates an anonymous Task that the fallback victim search can select
+    instead of the actual offending task.
+    """
+    fut: "concurrent.futures.Future[None]" = concurrent.futures.Future()
+
+    def _start() -> None:
+        task = loop.create_task(asyncio.sleep(0), name="repld-watchdog-probe")
+        task.add_done_callback(
+            lambda _t: fut.set_result(None) if not fut.done() else None
+        )
+
+    loop.call_soon_threadsafe(_start)
+    return fut
+
+
 def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | None":
     """Pick the oldest active user task to cancel.
 
@@ -248,7 +269,7 @@ def _loop_watchdog(
     while not stop.is_set():
         # Probe first so `threshold` is the actual hang-detection time
         # (not threshold + interval).
-        future = asyncio.run_coroutine_threadsafe(asyncio.sleep(0), loop)
+        future = _probe_future(loop)
         try:
             future.result(timeout=threshold)
         except concurrent.futures.TimeoutError:

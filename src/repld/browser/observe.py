@@ -560,6 +560,17 @@ async def post_observe(
     # pre.iframe_children if the mutation added/removed one.
     tree_lines, fresh_iframes = await compose_tree(tab, session)
 
+    # A mutation can spawn a brand-new iframe (e.g. an OAuth popup frame)
+    # that wasn't in pre.iframe_children and so never got a quiet-period
+    # wait above — settle it too before taking deltas, or its own
+    # in-flight requests get counted as "already done" prematurely.
+    # _discover_iframe_children makes a fresh Tab per call, so compare by
+    # target_id rather than object identity.
+    pre_ids = {t.target_id for t in all_tabs}
+    new_iframes = [f for f in fresh_iframes if f.target_id not in pre_ids]
+    if new_iframes:
+        settle_ms += await settle(new_iframes, timeout=timeout, quiet=quiet)
+
     # Deltas use the post-mutation iframe set so a newly-appeared iframe's
     # network/console activity isn't silently dropped (a stale/missing
     # target_id in pre.*_snapshots just means "everything is new" — see

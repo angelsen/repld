@@ -105,7 +105,7 @@ class TabQueryMixin:
             bind_params.append(since)
 
         rows = self._filtered_query(
-            "console_entries", conditions, bind_params, "LIMIT 200"
+            "console_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 200"
         )
         return Rows(_row_from_console(r, self._session) for r in rows)
 
