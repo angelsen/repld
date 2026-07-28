@@ -137,6 +137,26 @@ def _systemd_spawn_live(tmp: Path) -> None:
         ppid = int(Path(f"/proc/{pid}/stat").read_text().split(") ")[1].split()[1])
         assert_true(ppid != os.getpid(), f"reparented away from the spawner ({ppid})")
         print("  ✓ kernel runs in its own systemd unit cgroup, reparented")
+
+        # --- a second spawn is a racing boot, not a failure. This must come
+        # from asking the manager: systemd words a taken unit name as "was
+        # already loaded or has a fragment file", so the obvious string match
+        # on "already exists" never fires and would silently double-spawn. ---
+        assert_eq(
+            spawn._spawn_via_systemd(spawn._kernel_argv(sock), proj),
+            spawn.INCUMBENT,
+            "a taken unit name reads as a racing boot",
+        )
+        assert_true(
+            not spawn.spawn_headless(sock),
+            "spawn_headless doesn't start a second kernel behind systemd's back",
+        )
+        assert_eq(
+            int(json.loads((proj / "k.lock").read_text())["pid"]),
+            pid,
+            "and the incumbent is untouched",
+        )
+        print("  ✓ racing boot adopts the incumbent instead of double-spawning")
     finally:
         os.chdir(orig_cwd)
         subprocess.run(

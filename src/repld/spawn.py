@@ -116,28 +116,62 @@ def _kernel_argv(sock_path: Path) -> list[str]:
     return cmd
 
 
-def _spawn_via_systemd(cmd: list[str], cwd: Path) -> bool:
-    """Hand the kernel to the user manager. False means "didn't start it"."""
+STARTED, INCUMBENT, FAILED = "started", "incumbent", "failed"
+
+
+def _systemd_available() -> bool:
+    """Whether this is a systemd user session at all.
+
+    Two cheap checks instead of a doomed subprocess: the binary, and the
+    runtime dir carrying the user bus that `systemd-run --user` needs to reach
+    the manager.
+    """
+    return bool(shutil.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR"))
+
+
+def _unit_running(cwd: Path) -> bool:
+    """Whether this project's unit is already up (or on its way up)."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", _systemd_unit_name(cwd)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # `activating` counts: a racing boot's incumbent may still be starting, and
+    # treating that as absent is exactly the double-spawn this check prevents.
+    return r.stdout.strip() in ("active", "activating")
+
+
+def _spawn_via_systemd(cmd: list[str], cwd: Path) -> str:
+    """Hand the kernel to the user manager.
+
+    STARTED, INCUMBENT (a racing boot got there first) or FAILED — three
+    outcomes the caller must tell apart, since only FAILED should fall through
+    to a bare process.
+    """
     argv = _systemd_run_argv(cmd, cwd, dict(os.environ))
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"repld: systemd-run failed ({e}); spawning directly", file=sys.stderr)
-        return False
+        print(f"repld: systemd-run failed ({e})", file=sys.stderr)
+        return FAILED
     if r.returncode == 0:
-        return True
-    # A taken unit name is a racing boot, which the kernel.flock mutex already
-    # arbitrates — the caller polls and adopts the incumbent either way. Say so
-    # quietly rather than falling through and starting a second kernel.
+        return STARTED
+    # Ask the manager rather than reading the failure text. systemd words a
+    # taken unit name as "was already loaded or has a fragment file" — not
+    # "already exists" — and the wording is both version-specific and
+    # translatable, so matching on it is dead code waiting to happen.
+    if _unit_running(cwd):
+        return INCUMBENT
     detail = (r.stderr or r.stdout).strip().splitlines()
-    if any("already exists" in line for line in detail):
-        return False
     print(
-        f"repld: systemd-run failed ({detail[-1] if detail else r.returncode}); "
-        "spawning directly",
+        f"repld: systemd-run failed ({detail[-1] if detail else r.returncode})",
         file=sys.stderr,
     )
-    return False
+    return FAILED
 
 
 def _spawn_directly(cmd: list[str], cwd: Path) -> bool:
@@ -167,26 +201,14 @@ def spawn_headless(sock_path: Path) -> bool:
     """
     cwd = Path(os.getcwd())
     cmd = _kernel_argv(sock_path)
-    if shutil.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR"):
-        if _spawn_via_systemd(cmd, cwd):
+    if _systemd_available():
+        outcome = _spawn_via_systemd(cmd, cwd)
+        if outcome == STARTED:
             return True
-        # The unit may exist already (a racing boot). Don't start a second
-        # kernel behind systemd's back — the caller's poll adopts the incumbent.
-        if _systemd_unit_active(cwd):
+        if outcome == INCUMBENT:
+            # A kernel already exists for this project; the caller polls and
+            # adopts it. Starting a second one behind systemd's back would only
+            # give the flock mutex something to reject.
             return False
+        print("repld: spawning a detached child instead", file=sys.stderr)
     return _spawn_directly(cmd, cwd)
-
-
-def _systemd_unit_active(cwd: Path) -> bool:
-    """Whether this project's unit is already running, so a failed spawn
-    doesn't get retried as a bare process alongside it."""
-    try:
-        r = subprocess.run(
-            ["systemctl", "--user", "is-active", _systemd_unit_name(cwd)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.stdout.strip() == "active"
