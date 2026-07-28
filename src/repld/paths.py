@@ -16,6 +16,9 @@ the socket wherever the caller pointed it.
                   atomic rewrites of kernel.lock
     kernel.dashboard  dashboard port + token + browser restore hint (0600)
     kernel.events     NDJSON event log
+    kernel.cache      last-computed instructions/tools/resources (0600) —
+                      lets the bridge answer MCP discovery without a live
+                      kernel; survives kernel death, superseded on next boot
 
 Per-process scratch is the one exception: task spills, resource spills, and
 browser screenshots belong to the process rather than to any project, so they
@@ -106,6 +109,10 @@ def hint_for(sock: Path) -> Path:
 
 def eventlog_for(sock: Path) -> Path:
     return sock.with_suffix(".events")
+
+
+def cache_for(sock: Path) -> Path:
+    return sock.with_suffix(".cache")
 
 
 def lock_path(cwd: Path | None = None) -> Path:

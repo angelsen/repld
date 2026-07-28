@@ -30,7 +30,9 @@ $XDG_RUNTIME_DIR/repld/        → 0700; /tmp/repld-{uid} if XDG is unset
      ├─ kernel.lock             → {pid, socket_path, cwd, dashboard_port}
      ├─ kernel.flock            → single-kernel-per-project mutex
      ├─ kernel.dashboard        → dashboard port/token + browser restore hint
-     └─ kernel.events           → NDJSON event log (`repld log` reads this)
+     ├─ kernel.events           → NDJSON event log (`repld log` reads this)
+     └─ kernel.cache            → last-computed instructions/tools/resources,
+                                  read by the bridge before a kernel exists
  └─ sessions/<pid>.json         → user-scoped index of every live kernel
  └─ {pid}-{task_id}.out         → task spill files (per-process, not per-project)
 
@@ -38,8 +40,10 @@ Every file above is created 0600, the directories 0700 — the tree holds cell
 output and socket paths, and the /tmp fallback has no protected parent.
 
 Terminal 1: `claude …`          spawns `repld bridge` via stdio MCP.
-                                The bridge starts a headless kernel if none
-                                is running, and heals it if it dies.
+                                Attaches to a kernel already running, or —
+                                if none is — answers MCP discovery from
+                                kernel.cache and starts one lazily on first
+                                real tool call. Heals it if it dies.
 Terminal 2 (optional): `repld`  Kernel with the live TUI display, when you
                                 want to watch it rather than `repld log -f`
 Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
@@ -48,7 +52,7 @@ Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 Eleven CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel for the cwd, with the live display. Takes a flock mutex; if a kernel already owns the project it prints a note and exits 0 rather than competing.
-- `repld bridge` — stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, guarantees a kernel exists (spawning a headless one if needed), and proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.
+- `repld bridge` — stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd; attaches to a kernel that's already running, or, if none exists, answers MCP discovery from `kernel.cache` and spawns a headless one lazily on the first real tool call. Proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld exec [CODE]` — execute Python in a running kernel via IPC. With no args, drops into a minimal interactive REPL (readline history at `~/.repld/history`). With a string arg, runs one-shot and prints the result.
 - `repld log [-n N] [-f] [--json]` — replay (or follow) the kernel's event log: the same cells, output, and channel pushes the TUI renders, for a kernel with no pane.
 - `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned ones don't accumulate unseen.
@@ -106,6 +110,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] XDG runtime paths — socket/lockfile/hint/event log under `$XDG_RUNTIME_DIR/repld/projects/<slug>/`; nothing lands in the project directory
 - [x] Single-kernel flock mutex — losers exit 0, externally-started kernels are adopted
 - [x] Slim loader — `repld bridge` auto-spawns a headless kernel and heals it across kernel death (handshake replay, `-31001` for orphaned requests)
+- [x] Lazy kernel spawn — MCP discovery served from `kernel.cache` when no kernel is running; a real tool call is what actually spawns one, so a session that never uses repld never pays for it
 - [x] Targeted channel push — a task's completion notifies the session that started it; ambient pushes stay broadcast
 - [x] Event log + `repld log` / `status` / `stop` / `restart` / `dashboard` — a headless kernel is observable and controllable from any terminal
 - [ ] `notify_on_logs` — stdlib logging → channel

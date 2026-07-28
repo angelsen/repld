@@ -64,15 +64,20 @@ def _stop_kernel(cwd: Path) -> None:
 
 
 def _autospawn_and_heal(tmp: Path) -> None:
-    """Bridge with no kernel spawns one; killing it heals on the next call."""
+    """Bridge with no kernel defers spawn until real use; killing it heals on the next call."""
     b = Bridge(tmp)
     try:
         _handshake(b)
-        lock = _wait_lock(tmp)
-        first_pid = lock["pid"]
-        print(f"  ✓ bridge auto-spawned a headless kernel (pid {first_pid})")
+        assert_true(
+            not lock_path_for(tmp).exists(),
+            "handshake alone did not spawn a kernel (discovery served lazily)",
+        )
+        print("  ✓ initialize + notifications/initialized spawned no kernel")
 
         _exec(b, "SENTINEL = 1")
+        lock = _wait_lock(tmp)
+        first_pid = lock["pid"]
+        print(f"  ✓ first real tool call spawned a headless kernel (pid {first_pid})")
 
         # Kill it with a request in flight: the bridge owes the client a reply
         # the dead kernel will never send.
@@ -170,6 +175,102 @@ def _bridge_served_tools(tmp: Path) -> None:
         b.close()
 
 
+def _lazy_discovery_from_cache(tmp: Path) -> None:
+    """No kernel running: discovery is served from `kernel.cache`, not by
+    spawning one. A real `tools/call` still spawns and reconciles via
+    `notifications/tools/list_changed`."""
+    from repld import paths
+
+    _stop_kernel(tmp)
+    cache_path = paths.cache_for(paths.socket_path(tmp))
+    assert_true(
+        cache_path.exists(), f"kernel.cache persisted after shutdown ({cache_path})"
+    )
+    cached_names = {t["name"] for t in json.loads(cache_path.read_text())["tools"]}
+    assert_true(
+        {"exec", "get_task", "cancel"} <= cached_names,
+        f"cache carries the full tool list (got {sorted(cached_names)})",
+    )
+
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        assert_true(
+            not lock_path_for(tmp).exists(), "handshake alone did not spawn a kernel"
+        )
+
+        listed = b.call("tools/list", {}, timeout=10)["result"]["tools"]
+        assert_eq(
+            {t["name"] for t in listed}, cached_names, "tools/list served from cache"
+        )
+        assert_true(
+            not lock_path_for(tmp).exists(), "tools/list did not spawn a kernel"
+        )
+
+        resp = b.call("resources/read", {"uri": "repld://docs/guide"}, timeout=10)
+        text = resp["result"]["contents"][0]["text"]
+        assert_true(len(text) > 1000, f"static doc served in full ({len(text)} bytes)")
+        assert_true(
+            not lock_path_for(tmp).exists(), "doc resource read did not spawn a kernel"
+        )
+        print("  ✓ tools/list + resources/read(docs) served from cache, no spawn")
+
+        resp = _exec(b, "print('post-cache spawn')", timeout=40)
+        assert_true(
+            "post-cache spawn" in resp["result"]["content"][0]["text"],
+            "exec worked after the lazy spawn",
+        )
+        lock = _wait_lock(tmp)
+        b.wait_notification("notifications/tools/list_changed", timeout=10)
+        print(
+            f"  ✓ first real tools/call spawned a kernel (pid {lock['pid']}) "
+            "and fired list_changed"
+        )
+    finally:
+        b.close()
+
+
+def _version_mismatch_cache_discarded(tmp: Path) -> None:
+    """A cache written by a different repld version is ignored, not trusted."""
+    from repld import paths
+
+    _stop_kernel(tmp)
+    cache_path = paths.cache_for(paths.socket_path(tmp))
+    cached = json.loads(cache_path.read_text())
+    cached["version"] = "0.0.0-does-not-exist"
+    cached["tools"] = [
+        {
+            "name": "bogus_tool_from_old_version",
+            "description": "x",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
+    ]
+    cache_path.write_text(json.dumps(cached))
+
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        listed = b.call("tools/list", {}, timeout=10)["result"]["tools"]
+        names = {t["name"] for t in listed}
+        assert_true(
+            "bogus_tool_from_old_version" not in names,
+            f"version-mismatched cache was discarded (got {sorted(names)})",
+        )
+        assert_true(
+            {"exec", "get_task", "cancel"} <= names,
+            f"fell back to the static core tool set (got {sorted(names)})",
+        )
+        print(
+            "  ✓ cache from a different repld version discarded, static fallback used"
+        )
+
+        # Leave a live, correctly-versioned kernel behind for later helpers.
+        _exec(b, "SENTINEL2 = 1", timeout=40)
+        _wait_lock(tmp)
+    finally:
+        b.close()
+
+
 def _bridge_tool_bypass_error(tmp: Path) -> None:
     """A client on the socket directly gets a named error, not 'unknown tool'.
 
@@ -218,11 +319,23 @@ def _inflight_never_stranded(tmp: Path) -> None:
     b = _B(tmp / "nonexistent.sock")
     sent: list[dict] = []
     b._to_client = sent.append  # pyright: ignore[reportAttributeAccessIssue]
+    b._try_attach_existing = lambda: False  # pyright: ignore[reportAttributeAccessIssue]
     b._ensure_kernel = lambda: True  # pyright: ignore[reportAttributeAccessIssue]
     b._sock = None  # ...but it vanished right after the probe
 
+    # A real tools/call, not a discovery method: those are answered from cache
+    # without ever reaching _ensure_kernel, which would sidestep the race this
+    # test exists to cover.
     b._handle_client_line(
-        json.dumps({"jsonrpc": "2.0", "id": 7, "method": "tools/list"}) + "\n"
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "exec", "arguments": {"code": "1"}},
+            }
+        )
+        + "\n"
     )
     assert_eq(len(sent), 1, f"the request got an answer (got {sent})")
     assert_eq(sent[0]["id"], 7, "answer carries the client's id")
@@ -423,6 +536,8 @@ def phase_15_headless(_kernel: Kernel) -> None:
     try:
         _autospawn_and_heal(tmp)
         _bridge_served_tools(tmp)
+        _lazy_discovery_from_cache(tmp)
+        _version_mismatch_cache_discarded(tmp)
         _bridge_tool_bypass_error(tmp)
         _inflight_never_stranded(tmp)
         _targeted_push(tmp)

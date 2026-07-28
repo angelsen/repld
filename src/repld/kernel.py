@@ -90,6 +90,25 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
     atomic_write_json(lock_for(socket_path), info, chmod=0o600)
 
 
+def _write_cache(socket_path: Path) -> None:
+    """Persist the computed instructions/tools/resources for the bridge.
+
+    Unlike `kernel.lock`, this file is deliberately never cleaned up on exit:
+    it is what lets the *next* bridge answer MCP discovery before a kernel
+    exists. Superseded by the next kernel's boot, not by this one's shutdown.
+    """
+    from .protocol import build_discovery_cache
+
+    try:
+        cache = build_discovery_cache()
+    except Exception as e:
+        # Discovery must never take boot down — a missing cache just means
+        # the next bridge falls back to its static tool set.
+        print(f"repld: failed to build discovery cache: {e}", file=sys.stderr)
+        return
+    atomic_write_json(paths.cache_for(socket_path), cache, chmod=0o600)
+
+
 _active_lock_path: Path | None = None
 # flock fd for the one-kernel-per-project mutex. Module-level because it must
 # stay open for the process's whole life — closing it releases the lock.
@@ -970,6 +989,7 @@ def run_kernel(
         _boot_runtime(sock_path, display)
         _inject_builtins(loop)
         dashboard_port = _start_services(loop, sock_path, display)
+        _write_cache(sock_path)
         stop = _start_watchdog(loop, sock_path, dashboard_port)
 
         # 7. Optionally run init file.

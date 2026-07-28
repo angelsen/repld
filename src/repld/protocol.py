@@ -10,6 +10,7 @@ import inspect
 import json
 
 from .browser_dispatch import BrowserDispatchMixin
+from .core_schemas import CORE_TOOLS, DOC_RESOURCES
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
 from .tasks import spill_marker, spill_text as _spill_text
@@ -19,47 +20,7 @@ PROTOCOL_VERSION = "2024-11-05"
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
 TOOLS = [
-    {
-        "name": "exec",
-        "description": (
-            "Run Python in shared __main__. Returns inline within timeout; "
-            "otherwise {task_id, done:false} with channel push on completion. "
-            "Use defer() for background work that should outlive the response."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "timeout": {"type": "number", "default": 2.0},
-            },
-            "required": ["code"],
-        },
-    },
-    {
-        "name": "get_task",
-        "description": (
-            "Fetch current status and a head+tail preview of a task's output. "
-            "Use Read on the returned `spill_path` for full content."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "cancel",
-        "description": (
-            "Attempt to cancel a running task. Returns whether cancellation "
-            "was accepted. Cannot preempt tight sync loops (`while True: pass`) "
-            "— only await-yielding code is cancellable."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
+    *CORE_TOOLS,
     {
         "name": "browser_watch",
         "description": (
@@ -459,32 +420,7 @@ TOOLS = [
     },
 ]
 
-_DOC_RESOURCES = [
-    {
-        "uri": "repld://docs/guide",
-        "name": "repld-guide",
-        "description": "Working guide: execution model, gist patterns, conventions. Read before writing gists.",
-        "mimeType": "text/plain",
-    },
-    {
-        "uri": "repld://docs/browser",
-        "name": "repld-browser",
-        "description": "Browser API reference, internals (capture, settle, selectors, session recovery), and workflow patterns.",
-        "mimeType": "text/plain",
-    },
-    {
-        "uri": "repld://docs/playbook",
-        "name": "repld-playbook",
-        "description": "Workflow methodology: prototype interactive → extract gists → wire triggers → production. Read before designing automation.",
-        "mimeType": "text/plain",
-    },
-    {
-        "uri": "repld://docs/production",
-        "name": "repld-production",
-        "description": "Graduation guide: move gists to FastMCP or FastAPI with the two-layer pattern, .env secrets, and concrete wiring examples.",
-        "mimeType": "text/plain",
-    },
-]
+_DOC_RESOURCES = DOC_RESOURCES
 
 _BROWSER_RESOURCES = [
     {
@@ -577,20 +513,7 @@ class Dispatcher(BrowserDispatchMixin):
         )
 
     def _tools_list(self, rid) -> dict:
-        from . import bridge_tools, gists
-
-        has_browser = _has_browser()
-        tools = [
-            t for t in TOOLS if has_browser or not t["name"].startswith("browser_")
-        ]
-        # bridge_tools.SCHEMAS is advertised from here rather than injected into
-        # this response by the bridge: the bridge relays raw lines untouched in
-        # both directions, and parsing + re-serializing every tools/list reply
-        # to append a couple of entries would cost it that property. The bridge
-        # intercepts the matching tools/call on the way in instead.
-        return _response(
-            rid, {"tools": tools + bridge_tools.SCHEMAS + gists.scan_tools()}
-        )
+        return _response(rid, {"tools": _compute_tools()})
 
     def _tools_call(self, rid, params: dict, session=None) -> dict:
         name = params.get("name")
@@ -718,29 +641,7 @@ class Dispatcher(BrowserDispatchMixin):
     # ------------------------------------------------------------------
 
     def _resources_list(self, rid) -> dict:
-        from . import gists
-
-        resources = list(_DOC_RESOURCES) + (
-            list(_BROWSER_RESOURCES) if _has_browser() else []
-        )
-        resources.append(
-            {
-                "uri": "repld://gists/_registry",
-                "name": "gist-registry",
-                "description": "Every gist seen across projects; link one in with `repld gist add`.",
-                "mimeType": "text/plain",
-            }
-        )
-        for name, doc in gists.scan():
-            resources.append(
-                {
-                    "uri": f"repld://gists/{name}",
-                    "name": name,
-                    "description": doc,
-                    "mimeType": "text/plain",
-                }
-            )
-        return _response(rid, {"resources": resources})
+        return _response(rid, {"resources": _compute_resources()})
 
     # Static docs: URI → help.py attribute name (imported lazily at read time)
     _DOC_ATTR_MAP = {
@@ -849,6 +750,63 @@ def _bridge_tool_names() -> frozenset[str]:
     from . import bridge_tools
 
     return frozenset(bridge_tools.BRIDGE_TOOLS)
+
+
+def _compute_tools() -> list[dict]:
+    from . import bridge_tools, gists
+
+    has_browser = _has_browser()
+    tools = [t for t in TOOLS if has_browser or not t["name"].startswith("browser_")]
+    # bridge_tools.SCHEMAS is advertised from here rather than injected into
+    # this response by the bridge: the bridge relays raw lines untouched in
+    # both directions, and parsing + re-serializing every tools/list reply to
+    # append a couple of entries would cost it that property. The bridge
+    # intercepts the matching tools/call on the way in instead.
+    return tools + bridge_tools.SCHEMAS + gists.scan_tools()
+
+
+def _compute_resources() -> list[dict]:
+    from . import gists
+
+    resources = list(_DOC_RESOURCES) + (
+        list(_BROWSER_RESOURCES) if _has_browser() else []
+    )
+    resources.append(
+        {
+            "uri": "repld://gists/_registry",
+            "name": "gist-registry",
+            "description": "Every gist seen across projects; link one in with `repld gist add`.",
+            "mimeType": "text/plain",
+        }
+    )
+    for name, doc in gists.scan():
+        resources.append(
+            {
+                "uri": f"repld://gists/{name}",
+                "name": name,
+                "description": doc,
+                "mimeType": "text/plain",
+            }
+        )
+    return resources
+
+
+def build_discovery_cache() -> dict:
+    """Compute the full initialize/tools/resources triple for `kernel.cache`.
+
+    Same composition `_initialize`/`_tools_list`/`_resources_list` produce —
+    called once at boot so the bridge can answer MCP discovery methods without
+    a live kernel (see `kernel._write_cache`).
+    """
+    from . import __version__
+
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "version": __version__,
+        "instructions": _build_instructions(),
+        "tools": _compute_tools(),
+        "resources": _compute_resources(),
+    }
 
 
 def _response(rid, result: dict) -> dict:

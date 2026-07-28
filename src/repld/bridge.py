@@ -1,9 +1,18 @@
 """Slim loader: stdio MCP ↔ unix-socket proxy that owns the kernel's existence.
 
-Claude Code spawns one of these per session. It guarantees a kernel is running
-for the cwd — spawning a headless one if there isn't — and then outlives every
-kernel generation, so a kernel that dies mid-session is invisible to the client
-beyond one error response.
+Claude Code spawns one of these per session. If a kernel for this project is
+already running, it attaches to it immediately at no extra cost — that is the
+common case (a second window, a kernel a prior session left up) and it works
+exactly as it always has. Only when *no* kernel exists at all does it defer:
+MCP discovery (`initialize`, `tools/list`, `resources/list`, static docs) is
+answered from the previous kernel's cache (`kernel.cache`, written at boot —
+see `kernel._write_cache` / `protocol.build_discovery_cache`) or a minimal
+static fallback if none exists yet, so a session that never calls a repld tool
+in a cold project never spawns a kernel at all (`_try_bridge_intercept`). The
+first message that actually needs live state — a real `tools/call`, a
+gist/browser `resources/read` — spawns one on demand. Once a kernel is
+attached it outlives every generation, so a kernel that dies mid-session is
+invisible to the client beyond one error response.
 
 It is deliberately *not* a dumb byte-pipe any more. Three things forced that:
 
@@ -31,7 +40,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import bridge_tools, ipc, paths, spawn, state
+from . import __version__, bridge_tools, core_schemas, ipc, paths, spawn, state
 
 # 5s spawn window, polled at 100ms — long enough for a cold kernel with gists
 # to bind its socket, short enough that a broken spawn fails a tool call
@@ -46,6 +55,39 @@ KERNEL_GONE = -31001
 # String id, so it can never collide with a client's integer ids.
 BRIDGE_INIT_ID = "repld-bridge-init"
 
+# Kept in sync with protocol.PROTOCOL_VERSION by hand — importing protocol.py
+# here would pull in the kernel's whole dependency chain (browser_dispatch,
+# help, kernel_context, tasks) just to read one constant. Only used before any
+# kernel has ever booted in this project (no kernel.cache to read it from).
+_FALLBACK_PROTOCOL_VERSION = "2024-11-05"
+
+_static_docs_cache: dict[str, str] | None = None
+
+
+def _static_docs() -> dict[str, str]:
+    """The four doc resources — pure constants, lazily imported from help.py.
+
+    Loaded on first `resources/read` of one of these URIs rather than at
+    module import time, so a bridge that never serves docs never pays for it.
+    """
+    global _static_docs_cache
+    if _static_docs_cache is None:
+        from . import help as _help
+
+        _static_docs_cache = {
+            "repld://docs/guide": _help.GUIDE,
+            "repld://docs/browser": _help.BROWSER_GUIDE,
+            "repld://docs/playbook": _help.PLAYBOOK,
+            "repld://docs/production": _help.PRODUCTION,
+        }
+    return _static_docs_cache
+
+
+def _minimal_instructions() -> str:
+    from .help import _EXEC_MODEL
+
+    return _EXEC_MODEL
+
 
 def _err(msg: str) -> None:
     print(f"repld bridge: {msg}", file=sys.stderr, flush=True)
@@ -59,9 +101,12 @@ class Bridge:
         self._kernel_pid: int | None = None
         self._generation = 0
         self._client_init: dict | None = None
+        self._client_initialized = False
         self._inflight: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
+        self._cache: dict | None = None
+        self._cache_loaded = False
 
     # -- client I/O ---------------------------------------------------------
 
@@ -81,7 +126,143 @@ class Bridge:
             except (BrokenPipeError, OSError, ValueError):
                 pass
 
+    # -- lazy-kernel discovery -----------------------------------------------
+
+    def _load_cache(self) -> dict | None:
+        """The last kernel's computed instructions/tools/resources, if any.
+
+        Read once and memoized — a fresh kernel spawn always supersedes it via
+        `list_changed`, so there is no need to re-read mid-session. Discarded
+        if it came from a different repld version (schemas may have changed)
+        or the file is missing/corrupt.
+        """
+        if self._cache_loaded:
+            return self._cache
+        self._cache_loaded = True
+        try:
+            data = json.loads(paths.cache_for(self.socket_path).read_text())
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict) and data.get("version") == __version__:
+            self._cache = data
+        return self._cache
+
+    def _try_bridge_intercept(self, msg: dict, rid) -> bool:
+        """Answer MCP discovery methods without spawning a kernel.
+
+        Only consulted while `self._sock is None` (see `_handle_client_line`).
+        Falls back to a static minimal response when there's no cache yet —
+        the very first time a bridge ever runs in this project. Returns True
+        if a response was sent, False to fall through to the normal
+        ensure-kernel-and-forward path (which is how gist tools, gist
+        resources, and browser state — none of which are static — end up
+        spawning a kernel on first real use).
+        """
+        method = msg.get("method")
+
+        if method == "initialize":
+            self._client_init = msg
+            cache = self._load_cache()
+            self._to_client(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "protocolVersion": cache["protocolVersion"]
+                        if cache
+                        else _FALLBACK_PROTOCOL_VERSION,
+                        "capabilities": {
+                            "tools": {"listChanged": True},
+                            "resources": {"listChanged": True},
+                            "experimental": {
+                                "claude/channel": {},
+                                "claude/channel/permission": {},
+                            },
+                        },
+                        "serverInfo": {
+                            "name": "repld",
+                            "version": cache["version"] if cache else __version__,
+                        },
+                        "instructions": cache["instructions"]
+                        if cache
+                        else _minimal_instructions(),
+                    },
+                }
+            )
+            return True
+
+        if method == "notifications/initialized":
+            # No kernel yet to flush queued channel pushes at. Remembered so
+            # _replay_handshake knows the client genuinely completed its
+            # handshake before the first spawn — it must not fabricate this
+            # notification for a kernel the client hasn't actually initialized.
+            self._client_initialized = True
+            return True
+
+        if method == "tools/list":
+            cache = self._load_cache()
+            tools = (
+                cache["tools"]
+                if cache
+                else core_schemas.CORE_TOOLS + bridge_tools.SCHEMAS
+            )
+            self._to_client({"jsonrpc": "2.0", "id": rid, "result": {"tools": tools}})
+            return True
+
+        if method == "resources/list":
+            cache = self._load_cache()
+            resources = (
+                cache["resources"] if cache else list(core_schemas.DOC_RESOURCES)
+            )
+            self._to_client(
+                {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}
+            )
+            return True
+
+        if method == "resources/templates/list":
+            self._to_client(
+                {"jsonrpc": "2.0", "id": rid, "result": {"resourceTemplates": []}}
+            )
+            return True
+
+        if method == "resources/read":
+            uri = (msg.get("params") or {}).get("uri", "")
+            text = _static_docs().get(uri)
+            if text is None:
+                return False  # gist/browser resource — needs a live kernel
+            self._to_client(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "contents": [
+                            {"uri": uri, "mimeType": "text/plain", "text": text}
+                        ]
+                    },
+                }
+            )
+            return True
+
+        return False
+
     # -- kernel liveness ----------------------------------------------------
+
+    def _try_attach_existing(self) -> bool:
+        """Cheap, no-spawn attach: is a kernel for this project already up?
+
+        Tried before falling back to cache-based discovery. The common case
+        is not a cold project — it's a second Claude Code window, or a kernel
+        a previous session already spawned — and that case deserves live,
+        accurate `initialize`/`tools/list`/`resources/list` answers, not a
+        possibly-stale cache. Only when this fails (no kernel at all) does
+        discovery defer to the cache, and a real tool call eventually to
+        `_ensure_kernel`'s actual spawn-and-wait.
+        """
+        result = ipc.connect_to_kernel(self.lock_path)
+        if isinstance(result, str):
+            return False
+        self._attach(*result)
+        return True
 
     def _spawn_kernel(self) -> None:
         if spawn.spawn_headless(self.socket_path):
@@ -189,17 +370,23 @@ class Bridge:
             self._to_client({"jsonrpc": "2.0", "id": rid, "result": result})
 
     def _replay_handshake(self) -> None:
-        """Re-run the client's one-and-only initialize against a new kernel.
+        """Re-run the client's initialize (and initialized, if seen) on a new kernel.
 
-        Its response is swallowed by the reader (matched on BRIDGE_INIT_ID) —
-        the client already completed its handshake with a previous generation
-        and must not see a second one.
+        The initialize response is swallowed by the reader (matched on
+        BRIDGE_INIT_ID) — the client already completed its handshake, either
+        with a previous generation or via the discovery intercept, and must
+        not see a second response. `notifications/initialized` is replayed
+        only if `_client_initialized` — on the very first kernel spawn (lazy
+        mode), a tool call could in principle arrive before the client's real
+        `notifications/initialized` does; forging it early would let a
+        channel push escape the kernel's pre-init queue ahead of schedule.
         """
         assert self._client_init is not None
         replay = dict(self._client_init)
         replay["id"] = BRIDGE_INIT_ID
         self._to_kernel(replay)
-        self._to_kernel({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        if self._client_initialized:
+            self._to_kernel({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def _on_kernel_gone(self) -> None:
         with self._state_lock:
@@ -286,6 +473,20 @@ class Bridge:
                 )
                 return
 
+        # No kernel attached yet: attach for free if one is already running
+        # (the common case), so discovery gets live data below exactly as it
+        # always has. Only when that fails — no kernel at all for this
+        # project — does discovery fall back to the last kernel's cache
+        # instead of spawning one just to ask it. A gist tool call, a
+        # gist/browser resource read, or anything else that actually needs
+        # live state falls through and reaches _ensure_kernel below — that's
+        # what triggers the lazy spawn.
+        if self._sock is None:
+            self._try_attach_existing()
+        if self._sock is None and isinstance(msg, dict):
+            if self._try_bridge_intercept(msg, rid):
+                return
+
         if not self._ensure_kernel():
             if rid is not None:
                 self._to_client(
@@ -308,6 +509,11 @@ class Bridge:
         # answered. Only a kernel attached from here on is a *fresh* one.
         if isinstance(msg, dict) and msg.get("method") == "initialize":
             self._client_init = msg
+        # Reaching here (rather than the discovery intercept) means a kernel
+        # was already attached, so this is a plain forward — record it the
+        # same way, for whatever *next* reconnect's _replay_handshake needs.
+        if isinstance(msg, dict) and msg.get("method") == "notifications/initialized":
+            self._client_initialized = True
 
         # Registered before the write, so a send that fails mid-flight is
         # answered by _on_kernel_gone rather than hanging the client.
@@ -337,7 +543,10 @@ class Bridge:
             time.sleep(0.05)
 
     def run(self) -> int:
-        self._ensure_kernel()
+        # No proactive spawn: MCP discovery is answered from cache (see
+        # _try_bridge_intercept), and the first message that actually needs a
+        # kernel — a real tools/call, a gist/browser resources/read — reaches
+        # _ensure_kernel() in _handle_client_line and spawns one then.
         try:
             for line in sys.stdin:
                 if not line.endswith("\n"):
