@@ -45,18 +45,28 @@ def _systemd_spawn_argv(tmp: Path) -> None:
     from repld import paths, spawn
 
     a, b = tmp / "alpha", tmp / "beta"
+    a_sock, b_sock = paths.socket_path(a), paths.socket_path(b)
     assert_true(
-        spawn._systemd_unit_name(a) != spawn._systemd_unit_name(b),
+        spawn._systemd_unit_name(a_sock) != spawn._systemd_unit_name(b_sock),
         "different projects get different unit names",
     )
     assert_eq(
-        spawn._systemd_unit_name(a),
-        spawn._systemd_unit_name(a),
-        "and the same project is stable across calls",
+        spawn._systemd_unit_name(a_sock),
+        spawn._systemd_unit_name(a_sock),
+        "and the same socket is stable across calls",
     )
     assert_true(
-        paths.project_slug(a) in spawn._systemd_unit_name(a),
-        "unit name reuses the project slug rather than a second scheme",
+        paths.project_slug(a) in spawn._systemd_unit_name(a_sock),
+        "unit name reuses the project slug for the default per-cwd socket",
+    )
+    # The bug this keys off the socket rather than cwd to fix: two --socket
+    # overrides sharing a cwd must not collapse onto one unit, or the second
+    # spawn reads the first kernel's unit as its own incumbent and never
+    # actually starts.
+    assert_true(
+        spawn._systemd_unit_name(a / "one.sock")
+        != spawn._systemd_unit_name(a / "two.sock"),
+        "same cwd, different --socket overrides still get different units",
     )
 
     env = {
@@ -65,8 +75,12 @@ def _systemd_spawn_argv(tmp: Path) -> None:
         "INVOCATION_ID": "leaked",
         "LISTEN_FDS": "3",
     }
-    argv = spawn._systemd_run_argv(["python", "-m", "repld"], a, env)
+    argv = spawn._systemd_run_argv(["python", "-m", "repld"], a_sock, a, env)
     setenv = [x for x in argv if x.startswith("--setenv=")]
+    assert_true(
+        f"--unit={spawn._systemd_unit_name(a_sock)}" in argv,
+        f"unit comes from the socket, not cwd ({argv})",
+    )
     assert_true(f"--working-directory={a}" in argv, f"cwd is the project ({argv})")
     assert_true("--collect" in argv, "failed units don't squat the name")
     assert_true("--setenv=PATH=/usr/bin" in setenv, "ordinary vars pass through")
@@ -87,6 +101,7 @@ def _systemd_spawn_argv(tmp: Path) -> None:
     )
     tuned = spawn._systemd_run_argv(
         ["python"],
+        a_sock,
         a,
         {**env, "REPLD_MEMORY_HIGH": "4G", "REPLD_OOM_SCORE_ADJUST": "100"},
     )
@@ -115,8 +130,8 @@ def _systemd_spawn_live(tmp: Path) -> None:
 
     proj = tmp / "unitproj"
     proj.mkdir()
-    unit = spawn._systemd_unit_name(proj)
     sock = proj / "k.sock"
+    unit = spawn._systemd_unit_name(sock)
     orig_cwd = os.getcwd()
     try:
         os.chdir(proj)
@@ -143,7 +158,7 @@ def _systemd_spawn_live(tmp: Path) -> None:
         # already loaded or has a fragment file", so the obvious string match
         # on "already exists" never fires and would silently double-spawn. ---
         assert_eq(
-            spawn._spawn_via_systemd(spawn._kernel_argv(sock), proj),
+            spawn._spawn_via_systemd(spawn._kernel_argv(sock), sock, proj),
             spawn.INCUMBENT,
             "a taken unit name reads as a racing boot",
         )

@@ -40,6 +40,7 @@ Everywhere else, and on any systemd failure, the plain `Popen` path still
 applies. Spawning must not become less reliable than it was.
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -56,16 +57,32 @@ _ENV_DENYLIST = frozenset(
 _ENV_DENY_PREFIXES = ("LISTEN_",)
 
 
-def _systemd_unit_name(cwd: Path | None = None) -> str:
-    """`repld-<slug>.service`, reusing paths.project_slug's readable+hash id.
+def _systemd_unit_name(sock_path: Path) -> str:
+    """`repld-<slug>-<hash>.service`, keyed off the *socket* path.
 
-    One naming scheme for the project, not two: the slug is already what the
-    runtime directory is named, so a unit is greppable against its state.
+    Not cwd: every other piece of per-project state (lock_for, flock_for,
+    hint_for, eventlog_for) hangs off the socket path specifically so an
+    explicit --socket/REPLD_SOCKET override "moves the whole set coherently"
+    (paths.py). Naming the unit from cwd instead would let two kernels that
+    share a cwd but were given different --socket overrides collide on one
+    unit name — the second spawn would read the first kernel's unit as its
+    own incumbent and never actually start.
+
+    The digest is over the resolved socket path itself, so two overrides
+    that happen to share a parent directory basename still get distinct
+    units; the basename is kept only so the unit stays greppable — for the
+    common, un-overridden socket (under paths.project_dir) that basename is
+    already `paths.project_slug`.
     """
-    return f"repld-{paths.project_slug(cwd)}.service"
+    resolved = sock_path.resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    base = resolved.parent.name or "repld"
+    return f"repld-{base}-{digest}.service"
 
 
-def _systemd_run_argv(cmd: list[str], cwd: Path, env: dict[str, str]) -> list[str]:
+def _systemd_run_argv(
+    cmd: list[str], sock_path: Path, cwd: Path, env: dict[str, str]
+) -> list[str]:
     """Build the `systemd-run` invocation. Pure, so it can be asserted on.
 
     `--collect` so a kernel that dies badly doesn't leave a `failed` unit
@@ -77,7 +94,7 @@ def _systemd_run_argv(cmd: list[str], cwd: Path, env: dict[str, str]) -> list[st
         "--user",
         "--quiet",
         "--collect",
-        f"--unit={_systemd_unit_name(cwd)}",
+        f"--unit={_systemd_unit_name(sock_path)}",
         f"--working-directory={cwd}",
     ]
     # Both opt-in, and for the same reason: they override deliberate policy.
@@ -129,11 +146,11 @@ def _systemd_available() -> bool:
     return bool(shutil.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR"))
 
 
-def _unit_running(cwd: Path) -> bool:
-    """Whether this project's unit is already up (or on its way up)."""
+def _unit_running(sock_path: Path) -> bool:
+    """Whether this socket's unit is already up (or on its way up)."""
     try:
         r = subprocess.run(
-            ["systemctl", "--user", "is-active", _systemd_unit_name(cwd)],
+            ["systemctl", "--user", "is-active", _systemd_unit_name(sock_path)],
             capture_output=True,
             text=True,
             timeout=10,
@@ -145,14 +162,14 @@ def _unit_running(cwd: Path) -> bool:
     return r.stdout.strip() in ("active", "activating")
 
 
-def _spawn_via_systemd(cmd: list[str], cwd: Path) -> str:
+def _spawn_via_systemd(cmd: list[str], sock_path: Path, cwd: Path) -> str:
     """Hand the kernel to the user manager.
 
     STARTED, INCUMBENT (a racing boot got there first) or FAILED — three
     outcomes the caller must tell apart, since only FAILED should fall through
     to a bare process.
     """
-    argv = _systemd_run_argv(cmd, cwd, dict(os.environ))
+    argv = _systemd_run_argv(cmd, sock_path, cwd, dict(os.environ))
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
@@ -164,7 +181,7 @@ def _spawn_via_systemd(cmd: list[str], cwd: Path) -> str:
     # taken unit name as "was already loaded or has a fragment file" — not
     # "already exists" — and the wording is both version-specific and
     # translatable, so matching on it is dead code waiting to happen.
-    if _unit_running(cwd):
+    if _unit_running(sock_path):
         return INCUMBENT
     detail = (r.stderr or r.stdout).strip().splitlines()
     print(
@@ -202,7 +219,7 @@ def spawn_headless(sock_path: Path) -> bool:
     cwd = Path(os.getcwd())
     cmd = _kernel_argv(sock_path)
     if _systemd_available():
-        outcome = _spawn_via_systemd(cmd, cwd)
+        outcome = _spawn_via_systemd(cmd, sock_path, cwd)
         if outcome == STARTED:
             return True
         if outcome == INCUMBENT:
