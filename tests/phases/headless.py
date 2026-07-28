@@ -201,6 +201,36 @@ def _bridge_tool_bypass_error(tmp: Path) -> None:
     print("  ✓ bridge tool reaching the kernel directly gets a named error")
 
 
+def _inflight_never_stranded(tmp: Path) -> None:
+    """A kernel dying mid-dispatch answers the request instead of stranding it.
+
+    `_handle_client_line` registers the id *before* writing, so a send that
+    fails is answered by `_on_kernel_gone`. But the socket can also go to None
+    between the liveness probe and the write — the reader thread hitting EOF
+    concurrently — and that path used to `return` with the id already in
+    `_inflight`: nothing would ever answer it, so the client hung and
+    `_drain_inflight` burned its whole timeout at shutdown.
+
+    Driven in-process; the race isn't reproducible against a live subprocess.
+    """
+    from repld.bridge import Bridge as _B
+
+    b = _B(tmp / "nonexistent.sock")
+    sent: list[dict] = []
+    b._to_client = sent.append  # pyright: ignore[reportAttributeAccessIssue]
+    b._ensure_kernel = lambda: True  # pyright: ignore[reportAttributeAccessIssue]
+    b._sock = None  # ...but it vanished right after the probe
+
+    b._handle_client_line(
+        json.dumps({"jsonrpc": "2.0", "id": 7, "method": "tools/list"}) + "\n"
+    )
+    assert_eq(len(sent), 1, f"the request got an answer (got {sent})")
+    assert_eq(sent[0]["id"], 7, "answer carries the client's id")
+    assert_eq(sent[0]["error"]["code"], -31001, "answered as a lost request")
+    assert_eq(b._inflight, set(), "and the id isn't stranded in _inflight")
+    print("  ✓ request registered just as the kernel died is answered, not stranded")
+
+
 def _targeted_push(tmp: Path) -> None:
     """A task's completion notifies the session that started it, and only it."""
     a = Bridge(tmp)
@@ -394,6 +424,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _autospawn_and_heal(tmp)
         _bridge_served_tools(tmp)
         _bridge_tool_bypass_error(tmp)
+        _inflight_never_stranded(tmp)
         _targeted_push(tmp)
         _no_display_skips_queue(tmp)
         _event_log(tmp)

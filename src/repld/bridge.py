@@ -316,6 +316,12 @@ class Bridge:
                 self._inflight.add(rid)
         sock = self._sock
         if sock is None:
+            # The kernel died between _ensure_kernel() and here — the reader
+            # thread got EOF and ran _on_kernel_gone() after we registered.
+            # Returning would strand the id we just added: nothing will ever
+            # answer it, so the client hangs and _drain_inflight burns its full
+            # timeout at shutdown. Go through the same path a failed send does.
+            self._on_kernel_gone()
             return
         try:
             sock.sendall(line.encode("utf-8"))
