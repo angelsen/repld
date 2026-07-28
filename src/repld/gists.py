@@ -303,6 +303,12 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         return None
 
 
+# Venvs this kernel has already declined to adopt, so the check isn't redone
+# on every failed import. Sound to cache: the only reason to decline is a
+# Python version mismatch, and this process's version cannot change.
+_unusable_venvs: set[Path] = set()
+
+
 def _recover_missing_import(exc: ModuleNotFoundError, original, args):
     """Last chance for a failed import: adopt a late project venv, then retry.
 
@@ -314,21 +320,28 @@ def _recover_missing_import(exc: ModuleNotFoundError, original, args):
     a package installed into the bound venv since this kernel started (Python
     caches the failed lookup, so it stays missing until the caches are
     invalidated), and a ``.venv`` that only appeared after boot.
+
+    The retry is unconditional on purpose. Remembering "module X is missing"
+    would be faster but wrong: a `uv add` mid-session has to be picked up, and
+    a memo would keep reporting the package missing after it was installed.
+    The venv check is memoized instead, which is safe — see `_unusable_venvs`.
+    Guarded imports (`try: import x / except ImportError`) pay for that retry
+    too; there is no way to see the caller's `try` from inside `__import__`,
+    and the alternative is missing the case the recovery exists for.
     """
     import importlib
 
     from . import bind
 
     venv = bind.project_venv()
-    if venv is not None and not bind.is_bound(venv):
+    if venv is not None and venv not in _unusable_venvs and not bind.is_bound(venv):
         added = bind.adopt(venv)
-        if added is not None:
+        if added is None:
+            _unusable_venvs.add(venv)
+        else:
             from .channel import push_kind
 
-            push_kind(
-                "venv",
-                f"bound {venv} — its packages are now importable",
-            )
+            push_kind("venv", f"bound {venv} — its packages are now importable")
     importlib.invalidate_caches()
     try:
         return original(*args)

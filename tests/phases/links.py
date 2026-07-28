@@ -209,6 +209,54 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         ]
         assert_eq(aliased, [], f"dist-vs-import names reconciled (got {aliased})")
 
+        # --- gist lint: a try/except ImportError import is a soft dependency by
+        # construction; demanding a __repld_deps__ entry for it defeats the
+        # point. The fallback import in the handler is *not* guarded. ---
+        (src / "optional.py").write_text(
+            '"""Optional deps."""\n'
+            "try:\n"
+            "    import repld_phantom_soft_xyz\n"
+            "except ImportError:\n"
+            "    repld_phantom_soft_xyz = None\n"
+            "try:\n"
+            "    from repld_phantom_tuple_xyz import thing\n"
+            "except (ValueError, ModuleNotFoundError):\n"
+            "    thing = None\n"
+            "try:\n"
+            "    import repld_phantom_broad_xyz\n"
+            "except Exception:\n"
+            "    repld_phantom_broad_xyz = None\n"
+        )
+        soft = [f for f in gist_lint.lint_file(src / "optional.py") if f.rule == "deps"]
+        assert_eq(soft, [], f"guarded imports aren't undeclared deps (got {soft})")
+
+        (src / "fallback.py").write_text(
+            '"""Fallback import in the handler is a hard dep."""\n'
+            "try:\n"
+            "    import json\n"
+            "except ImportError:\n"
+            "    import repld_phantom_fallback_xyz\n"
+        )
+        fb = [f for f in gist_lint.lint_file(src / "fallback.py") if f.rule == "deps"]
+        assert_eq(len(fb), 1, f"handler-body import is still flagged (got {fb})")
+        assert_true(
+            "repld_phantom_fallback_xyz" in fb[0].message,
+            "...and it names the fallback package",
+        )
+
+        (src / "unguarded.py").write_text(
+            '"""Try block that catches something unrelated."""\n'
+            "try:\n"
+            "    import repld_phantom_unguarded_xyz\n"
+            "except ValueError:\n"
+            "    pass\n"
+        )
+        ug = [f for f in gist_lint.lint_file(src / "unguarded.py") if f.rule == "deps"]
+        assert_eq(
+            len(ug), 1, f"try that can't catch ImportError still flags (got {ug})"
+        )
+        print("  ✓ gist lint: guarded optional imports aren't undeclared deps")
+
         # --- gist lint: the '.' self-dep resolves to the project's own package
         # instead of being skipped. Its own tmpdir — dropping a pyproject.toml
         # into `other` would change what the rest of this phase sees. ---

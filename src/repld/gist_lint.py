@@ -12,10 +12,12 @@ Checks:
              `->` (the convention in repld://docs/guide is `-> {key, ...}`
              or `-> [{key, ...}]`, but the check only requires the arrow --
              prose like `-> the new record's id` is fine).
-  deps       Every top-level import of a non-stdlib, non-sibling-gist
-             package should be declared in __repld_deps__ so
-             gist_deps.install_deps() can offer to install it for a
-             linked project that doesn't already have it.
+  deps       Every import of a non-stdlib, non-sibling-gist package should
+             be declared in __repld_deps__ so gist_deps.install_deps() can
+             offer to install it for a linked project that doesn't already
+             have it. Imports inside a try/except that catches ImportError
+             are skipped -- that's how a soft dependency is written, and
+             requiring a declaration would defeat the point.
   legacy     The pre-0.1.0 tool convention, both halves: the
              __repld_tools__ declaration list and the _tool_x(args: dict)
              handler signature. repld 0.3 removes them. gists.py only
@@ -283,14 +285,57 @@ def _sibling_gist_names(path: Path) -> set[str]:
     return {p.stem for p in path.parent.glob("*.py")}
 
 
+# Anything in here catches an ImportError, so an import wrapped in it is a
+# soft dependency by construction. Exception/BaseException are included
+# because they genuinely do catch it -- the rule is "would this import raise
+# out of the module", not "did the author name the tidiest exception".
+_IMPORT_GUARDS = frozenset(
+    {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+)
+
+
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True  # bare `except:` -- sloppy, but it does guard
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(isinstance(t, ast.Name) and t.id in _IMPORT_GUARDS for t in types)
+
+
+def _guarded_imports(tree: ast.Module) -> set[ast.stmt]:
+    """Imports the author deliberately made optional.
+
+    ``try: import x / except ImportError: x = None`` is the standard way to
+    write a soft dependency, and the deps rule flagging it told people to
+    declare something they had gone out of their way not to require.
+
+    Only the ``try`` body counts. An import in a handler is the *fallback* and
+    is unguarded; one in ``else``/``finally`` isn't covered by the handlers
+    either.
+    """
+    guarded: set[ast.stmt] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        if not any(_catches_import_error(h) for h in node.handlers):
+            continue
+        for stmt in node.body:
+            for child in ast.walk(stmt):
+                if isinstance(child, (ast.Import, ast.ImportFrom)):
+                    guarded.add(child)
+    return guarded
+
+
 def _check_deps(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
     declared = _declared_deps(tree, path)
     siblings = _sibling_gist_names(path)
+    guarded = _guarded_imports(tree)
     seen: set[str] = set()
     findings: list[Finding] = []
     for node in ast.walk(tree):
+        if node in guarded:
+            continue
         if isinstance(node, ast.Import):
             names = [(alias.name, node.lineno) for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
