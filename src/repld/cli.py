@@ -36,6 +36,12 @@ _SUBCOMMANDS = {
 }
 
 
+# Subcommands that end up running a kernel process, and so need to be under
+# the project's interpreter. A bare `repld` (no subcommand, or kernel flags)
+# counts too and is handled separately in main().
+BINDING_COMMANDS = frozenset({"bridge", "restart"})
+
+
 def _subcommands_text() -> str:
     lines = ["subcommands:"]
     width = max(len(n) for n in _SUBCOMMANDS)
@@ -52,11 +58,12 @@ def main() -> None:
         print(f"repld-tool {version('repld-tool')}")
         return
 
-    # Commands that run or create a kernel want the project's interpreter, so
-    # they may re-exec under it here and never return. The read-only ones
-    # (status, log, stop, gist, help) don't need it, and routing them through
-    # `uv run` would tax every invocation for nothing.
-    if not argv or argv[0].startswith("-") or argv[0] in ("bridge", "exec", "restart"):
+    # Commands that *become* a kernel, or spawn one, may re-exec under the
+    # project's interpreter here and never return. Everything else is left
+    # alone: routing it through `uv run` costs ~250ms per invocation and buys
+    # nothing. Notably absent is `exec`, which only resolves a lock path and
+    # talks IPC — the code runs in the kernel, which is already bound.
+    if not argv or argv[0].startswith("-") or argv[0] in BINDING_COMMANDS:
         from . import bind
 
         bind.rebind_exec(argv)

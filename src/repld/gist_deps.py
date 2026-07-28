@@ -4,16 +4,28 @@ Gists declare external dependencies via `__repld_deps__ = ["httpx>=0.27"]`
 (or "." for the gist's own project as an editable install, or
 "path:some/dir" to prepend a local directory to sys.path — for vendored,
 non-pip-installable code). scan_deps() AST-scans gist files at boot;
-install_deps() prompts on the real tty and installs into the current venv
-(or a --target dir when repld runs as a uv tool) via `uv pip install`. Path
-deps skip install_deps() entirely — resolved and added to sys.path directly
-by scan_deps() since there's nothing to install.
+install_deps() prompts on the real tty and installs via `uv pip install
+--target`. Path deps skip install_deps() entirely — resolved and added to
+sys.path directly by scan_deps() since there's nothing to install.
 
-The --target dir (_TOOL_DEPS_DIR) is a flat, cross-project shared directory,
-so each install must be resolved against everything ever installed there —
-not just the newly-missing packages — or independent installs can leave
-mutually-incompatible transitive pins on disk. `_read_manifest()` /
-`_write_manifest()` track the accumulated requirement set for that purpose.
+Installs go to a shared directory under ~/.local/share/repld/deps, never into
+whatever venv happens to be active. Two reasons. A project venv is the wrong
+home — `uv sync` prunes anything not in the project's own lockfile, so the
+boot prompt would come back after every sync. And once the kernel binds itself
+to a project (see bind.py), the active prefix is an ephemeral `uv run` overlay
+that is a *different* temp directory on every invocation, so an install there
+is gone before the next boot.
+
+The directory is keyed by interpreter version (deps/py3.12, deps/py3.13):
+wheels with compiled extensions are built for one minor version, so a single
+shared directory could not be put on the path of a kernel bound to a project
+pinning a different Python.
+
+Being shared across projects, each install must be resolved against everything
+ever installed there — not just the newly-missing packages — or independent
+installs can leave mutually-incompatible transitive pins on disk.
+`_read_manifest()` / `_write_manifest()` track the accumulated requirement set
+for that purpose.
 
 Shares the parse cache and file iterator with gists.py; the two modules
 import each other and access attributes at call time (never
@@ -102,8 +114,21 @@ class _DepInfo:
     editable: bool = False
 
 
-_TOOL_DEPS_DIR = Path.home() / ".local" / "share" / "repld" / "deps"
-_MANIFEST_PATH = _TOOL_DEPS_DIR / ".repld-manifest.txt"
+_DEPS_ROOT = Path.home() / ".local" / "share" / "repld" / "deps"
+
+
+def _deps_dir() -> Path:
+    """Shared install target for this interpreter, e.g. …/deps/py3.12.
+
+    Computed rather than a constant so it follows a re-exec into a different
+    Python, and so tests can point _DEPS_ROOT elsewhere.
+    """
+    return _DEPS_ROOT / f"py{sys.version_info[0]}.{sys.version_info[1]}"
+
+
+def _manifest_path() -> Path:
+    return _deps_dir() / ".repld-manifest.txt"
+
 
 # Resolved 'path:' dep directories (as strings, matching what's inserted
 # into sys.path). gists.py's _GistFinder checks membership here to extend
@@ -111,22 +136,19 @@ _MANIFEST_PATH = _TOOL_DEPS_DIR / ".repld-manifest.txt"
 _path_dep_dirs: set[str] = set()
 
 
-def _is_tool_venv() -> bool:
-    return "uv/tools/" in sys.prefix
-
-
 def _read_manifest() -> dict[str, str]:
-    """Read the accumulated tool-venv requirements manifest.
+    """Read this interpreter's accumulated requirements manifest.
 
     Returns {pkg_name: requirement_string} for regular deps, keyed by
     normalized package name so a repeat install of the same package
     replaces its old specifier instead of duplicating. Editable deps are
     keyed by their full "-e <path>" entry. Empty dict if no manifest yet.
     """
-    if not _MANIFEST_PATH.is_file():
+    path = _manifest_path()
+    if not path.is_file():
         return {}
     entries: dict[str, str] = {}
-    for line in _MANIFEST_PATH.read_text("utf-8").splitlines():
+    for line in path.read_text("utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -138,29 +160,32 @@ def _read_manifest() -> dict[str, str]:
 
 
 def _write_manifest(entries: dict[str, str]) -> None:
-    """Persist the tool-venv requirements manifest. Call only after a
-    successful install — an install failure must not desync the manifest
-    from what's actually on disk in _TOOL_DEPS_DIR.
+    """Persist the requirements manifest. Call only after a successful
+    install — an install failure must not desync the manifest from what's
+    actually on disk in the deps dir.
     """
-    _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
-    _MANIFEST_PATH.write_text(
+    _deps_dir().mkdir(parents=True, exist_ok=True)
+    _manifest_path().write_text(
         "\n".join(sorted(entries.values())) + "\n", encoding="utf-8"
     )
 
 
 def ensure_deps_on_path() -> None:
-    """Prepend the tool-mode deps dir to sys.path if not already there.
+    """Put this interpreter's shared gist-deps dir on sys.path.
 
-    Only in the tool venv (matching install_deps's gating) — in a project
-    venv deps install into the venv itself, and this dir may hold extension
-    modules built for the tool venv's (different) interpreter.
+    Ungated: the directory is keyed by interpreter version, so its contents
+    are always loadable here. It used to be added only inside the uv tool
+    venv, which silently hid every installed gist dep from a kernel bound to
+    a project (bind.py re-execs into a `uv run` overlay, where the old
+    `"uv/tools/" in sys.prefix` test is false).
+
+    Appended, not prepended: the project's own packages must win. A gist
+    declaring `httpx>=0.27` should not shadow the version the project
+    resolved — these fill gaps, they don't override.
     """
-    if (
-        _is_tool_venv()
-        and _TOOL_DEPS_DIR.is_dir()
-        and str(_TOOL_DEPS_DIR) not in sys.path
-    ):
-        sys.path.insert(0, str(_TOOL_DEPS_DIR))
+    d = _deps_dir()
+    if d.is_dir() and str(d) not in sys.path:
+        sys.path.append(str(d))
 
 
 def _read_project_name(pyproject: Path) -> str | None:
@@ -354,64 +379,60 @@ def install_deps(missing: list[_DepInfo]) -> bool:
         return False
 
     uv = shutil.which("uv")
-    req_args: list[str] = []
+    target = _deps_dir()
+    target.mkdir(parents=True, exist_ok=True)
+
+    # The deps dir is shared across every project's gists. Passing only the
+    # newly-selected deps would let the resolver work in isolation from what's
+    # already installed there, silently skewing shared transitive pins (e.g.
+    # pydantic-core) between unrelated installs. Merge into the accumulated
+    # manifest and re-resolve the whole set every time instead.
+    manifest = _read_manifest()
     for d in selected:
         if d.editable:
-            req_args.extend(["-e", d.requirement])
+            key = f"-e {d.requirement}"
+            manifest[key] = key
         else:
-            req_args.append(d.requirement)
+            manifest[_parse_pkg_name(d.requirement)] = d.requirement
 
-    manifest: dict[str, str] | None = None
+    full_req_args: list[str] = []
+    for entry in sorted(manifest.values()):
+        if entry.startswith("-e "):
+            full_req_args.extend(["-e", entry[3:]])
+        else:
+            full_req_args.append(entry)
 
     if uv:
-        if _is_tool_venv():
-            _TOOL_DEPS_DIR.mkdir(parents=True, exist_ok=True)
-            # _TOOL_DEPS_DIR is shared across every project's gists. Passing
-            # only the newly-selected deps would let uv resolve them in
-            # isolation from what's already installed there, silently
-            # skewing shared transitive pins (e.g. pydantic-core) between
-            # unrelated installs. Merge into the accumulated manifest and
-            # re-resolve the whole set every time instead.
-            manifest = _read_manifest()
-            for d in selected:
-                if d.editable:
-                    key = f"-e {d.requirement}"
-                    manifest[key] = key
-                else:
-                    manifest[_parse_pkg_name(d.requirement)] = d.requirement
-
-            full_req_args: list[str] = []
-            for entry in sorted(manifest.values()):
-                if entry.startswith("-e "):
-                    full_req_args.extend(["-e", entry[3:]])
-                else:
-                    full_req_args.append(entry)
-
-            # --python pins resolution to the interpreter actually running this
-            # kernel. Without it, uv resolves against its own default/preferred
-            # Python, which can silently differ from sys.executable — a binary
-            # wheel (cffi, cryptography, numpy, ...) built for the wrong ABI
-            # lands in _TOOL_DEPS_DIR and fails with a bare ModuleNotFoundError
-            # for its compiled extension, not an obviously-version-related error.
-            cmd = [
-                uv,
-                "pip",
-                "install",
-                "--target",
-                str(_TOOL_DEPS_DIR),
-                "--python",
-                sys.executable,
-                *full_req_args,
-            ]
-        else:
-            cmd = [uv, "pip", "install", "--python", sys.executable, *req_args]
+        # --python pins resolution to the interpreter actually running this
+        # kernel. Without it, uv resolves against its own default/preferred
+        # Python, which can silently differ from sys.executable — a binary
+        # wheel (cffi, cryptography, numpy, ...) built for the wrong ABI lands
+        # in the deps dir and fails with a bare ModuleNotFoundError for its
+        # compiled extension, not an obviously-version-related error.
+        cmd = [
+            uv,
+            "pip",
+            "install",
+            "--target",
+            str(target),
+            "--python",
+            sys.executable,
+            *full_req_args,
+        ]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", *req_args]
+        cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(target),
+            *full_req_args,
+        ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        if manifest is not None:
-            _write_manifest(manifest)
+        _write_manifest(manifest)
         ensure_deps_on_path()
         importlib.invalidate_caches()
         global _dist_to_import

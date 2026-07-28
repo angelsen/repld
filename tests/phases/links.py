@@ -98,6 +98,55 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             gist_deps._dist_to_import = None
         print("  ✓ _is_importable falls back to the distribution's real import name")
 
+        # --- the shared gist-deps dir is keyed by interpreter version and goes
+        # on sys.path under *any* prefix. It used to be added only inside the
+        # uv tool venv, which hid every installed gist dep from a kernel that
+        # bind.py had re-execed into a `uv run` overlay. ---
+        orig_deps_root = gist_deps._DEPS_ROOT
+        try:
+            gist_deps._DEPS_ROOT = other / "shared-deps"
+            expected = f"py{sys.version_info[0]}.{sys.version_info[1]}"
+            assert_eq(gist_deps._deps_dir().name, expected, "deps dir is version-keyed")
+            assert_eq(
+                gist_deps._manifest_path().parent,
+                gist_deps._deps_dir(),
+                "manifest lives inside the versioned dir",
+            )
+
+            d = str(gist_deps._deps_dir())
+            gist_deps.ensure_deps_on_path()
+            assert_true(d not in sys.path, "absent dir isn't added to sys.path")
+
+            gist_deps._deps_dir().mkdir(parents=True)
+            marker = "/repld-fake-project-site-packages"
+            sys.path.insert(0, marker)
+            gist_deps.ensure_deps_on_path()
+            assert_true(
+                d in sys.path, "existing deps dir is added regardless of prefix"
+            )
+            assert_true(
+                sys.path.index(d) > sys.path.index(marker),
+                "appended, not prepended — the project's own packages win",
+            )
+            gist_deps.ensure_deps_on_path()
+            assert_eq(sys.path.count(d), 1, "idempotent across repeat calls")
+            sys.path.remove(d)
+            sys.path.remove(marker)
+            print("  ✓ gist-deps dir: version-keyed, ungated, appended, idempotent")
+        finally:
+            gist_deps._DEPS_ROOT = orig_deps_root
+
+        # --- `repld exec` must not pay for a bind: it resolves a lock path and
+        # talks IPC, and the code runs in the kernel, which is already bound ---
+        from repld import cli
+
+        assert_true(
+            "exec" not in cli.BINDING_COMMANDS,
+            f"exec doesn't re-exec through uv (got {sorted(cli.BINDING_COMMANDS)})",
+        )
+        assert_true("bridge" in cli.BINDING_COMMANDS, "...but bridge still does")
+        print("  ✓ only kernel-running commands bind to the project interpreter")
+
         # --- path: dep resolves relative to project root, lands on sys.path ---
         vendor = other / "vendor" / "mylib"
         vendor.mkdir(parents=True)
