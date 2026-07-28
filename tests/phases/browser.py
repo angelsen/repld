@@ -224,7 +224,9 @@ def phase_6(kernel: Kernel) -> None:
         b.call("initialize", {"protocolVersion": "2024-11-05"})
         b.send("notifications/initialized", {}, notif=True)
 
-        # Verify browser tools are in the list
+        # Verify browser tools are in the list — exact match, not a subset
+        # check, so an added or removed tool actually fails this instead of
+        # silently drifting out of sync with protocol.py's TOOLS.
         resp = b.call("tools/list")
         tool_names = [t["name"] for t in resp["result"]["tools"]]
         browser_tools = {
@@ -234,6 +236,7 @@ def phase_6(kernel: Kernel) -> None:
             "browser_pages",
             "browser_js",
             "browser_network",
+            "browser_request",
             "browser_body",
             "browser_click",
             "browser_type",
@@ -241,17 +244,21 @@ def phase_6(kernel: Kernel) -> None:
             "browser_screenshot",
             "browser_cdp",
             "browser_clear",
+            "browser_controls",
+            "browser_invoke",
             "browser_navigate",
             "browser_key",
             "browser_open",
             "browser_tree",
             "browser_fetch",
         }
-        assert_true(
-            browser_tools.issubset(set(tool_names)),
-            f"tools/list contains all 18 browser tools (got {tool_names!r})",
+        got_browser_tools = {n for n in tool_names if n.startswith("browser_")}
+        assert_eq(
+            got_browser_tools,
+            browser_tools,
+            f"tools/list contains exactly the {len(browser_tools)} browser tools",
         )
-        print("  ✓ all 18 browser tools in tools/list")
+        print(f"  ✓ all {len(browser_tools)} browser tools in tools/list")
 
         # Attach any open tab
         resp = b.call(
