@@ -13,14 +13,17 @@ import re
 from pathlib import Path
 
 
-def _mcp_entry(cwd: Path) -> dict:
-    if (cwd / "uv.lock").exists():
-        return {
-            "type": "stdio",
-            "command": "uv",
-            "args": ["run", "repld", "bridge"],
-            "env": {},
-        }
+def _mcp_entry(_cwd: Path) -> dict:
+    """Always the plain console script — `repld bridge` binds itself.
+
+    This used to emit `uv run repld bridge` whenever a uv.lock existed, which
+    helped in exactly one case and hurt in the common one: `uv run repld` only
+    reaches the project's interpreter if repld-tool is a project dependency,
+    and repld's own docs tell you not to add it. Without it, uv falls through
+    to the console script on PATH — the same tool-venv interpreter, after a
+    pointless per-session `uv sync`. `bind.rebind_exec` now does the binding
+    from inside, so the simple form is also the correct one.
+    """
     return {
         "type": "stdio",
         "command": "repld",

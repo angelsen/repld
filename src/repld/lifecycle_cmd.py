@@ -16,7 +16,12 @@ import urllib.request
 from pathlib import Path
 
 from . import paths, sessions, spawn, state
-from .render import DIM as _DIM, GREEN as _GREEN, RESET as _RESET
+from .render import (
+    DIM as _DIM,
+    GREEN as _GREEN,
+    RESET as _RESET,
+    YELLOW as _YELLOW,
+)
 
 _STOP_USAGE = """\
 repld stop — stop this project's kernel
@@ -180,6 +185,29 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
     return body.get("result") if isinstance(body, dict) else None
 
 
+def _print_python(lock: dict) -> None:
+    """The kernel's interpreter, flagged when it can't import the project.
+
+    Silent for kernels written before this field existed, and for the common
+    case where there's no project venv to disagree with.
+    """
+    running = lock.get("python")
+    if not running:
+        return
+    from . import bind
+
+    venv = bind.project_venv(Path(lock.get("cwd") or "."))
+    want = bind.venv_python_version(venv) if venv is not None else None
+    if want is None or f"{want[0]}.{want[1]}" == ".".join(running.split(".")[:2]):
+        print(f"  python:    {running}")
+        return
+    print(
+        f"  python:    {running}  {_YELLOW}⚠ project venv is "
+        f"{want[0]}.{want[1]} — project packages are not importable; "
+        f"`repld restart` to rebind{_RESET}"
+    )
+
+
 def run_status(argv: list[str]) -> int:
     if any(a in ("-h", "--help") for a in argv):
         print(_STATUS_USAGE)
@@ -218,6 +246,7 @@ def run_status(argv: list[str]) -> int:
         )
         print(f"  socket:    {here.get('socket_path')}")
         print(f"  cwd:       {here.get('cwd')}")
+        _print_python(here)
         if here.get("dashboard_port"):
             print(f"  dashboard: http://127.0.0.1:{here['dashboard_port']}/")
         if here.get("tasks_active") is not None:

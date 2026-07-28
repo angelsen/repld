@@ -303,6 +303,76 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         return None
 
 
+def _recover_missing_import(exc: ModuleNotFoundError, original, args):
+    """Last chance for a failed import: adopt a late project venv, then retry.
+
+    Retries **the import**, never the caller's cell. Re-running a cell would
+    break the rule that ``exec`` runs arbitrary code exactly once — a cell that
+    POSTs and then hits a bad import would POST twice. An import is idempotent.
+
+    Two things get fixed here, both of which look identical to user code:
+    a package installed into the bound venv since this kernel started (Python
+    caches the failed lookup, so it stays missing until the caches are
+    invalidated), and a ``.venv`` that only appeared after boot.
+    """
+    import importlib
+
+    from . import bind
+
+    venv = bind.project_venv()
+    if venv is not None and not bind.is_bound(venv):
+        added = bind.adopt(venv)
+        if added is not None:
+            from .channel import push_kind
+
+            push_kind(
+                "venv",
+                f"bound {venv} — its packages are now importable",
+            )
+    importlib.invalidate_caches()
+    try:
+        return original(*args)
+    except ModuleNotFoundError as retried:
+        raise _explain_missing(retried, venv) from None
+
+
+def _explain_missing(
+    exc: ModuleNotFoundError, venv: Path | None
+) -> ModuleNotFoundError:
+    """Name the interpreter mismatch when that's why an import failed.
+
+    A bare ``No module named 'partbridge'`` is true but unhelpful when the
+    package is sitting right there in a venv this interpreter can't use.
+    """
+    from . import bind
+
+    missing = (exc.name or "").split(".")[0]
+    if not missing or venv is None or bind.version_matches(venv):
+        return exc
+    sp = bind.site_packages(venv)
+    if sp is None:
+        return exc
+    present = (
+        (sp / missing).is_dir()
+        or (sp / f"{missing}.py").is_file()
+        or any(sp.glob(f"{missing}-*.dist-info"))
+        or any(sp.glob(f"{missing.replace('_', '-')}-*.dist-info"))
+    )
+    if not present:
+        return exc
+    want = bind.venv_python_version(venv)
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    target = f"{want[0]}.{want[1]}" if want else "?"
+    return ModuleNotFoundError(
+        f"{exc} — but '{missing}' is installed in {venv} (Python {target}), "
+        f"and this kernel is Python {running}. Its compiled packages can't be "
+        f"loaded across versions; call the repld_restart tool (or `repld "
+        f"restart`) to rebind the kernel to the project.",
+        name=exc.name,
+        path=exc.path,
+    )
+
+
 class _GistImportHook:
     """Wraps builtins.__import__ to check for stale gist modules before import."""
 
@@ -328,7 +398,12 @@ class _GistImportHook:
         for candidate in {base, top}:
             _check_reload(candidate)
 
-        result = self._original(name, globals, locals, fromlist, level)
+        try:
+            result = self._original(name, globals, locals, fromlist, level)
+        except ModuleNotFoundError as exc:
+            result = _recover_missing_import(
+                exc, self._original, (name, globals, locals, fromlist, level)
+            )
 
         # Auto-inject API summary on gist import + register in central registry.
         # Skipped for path: dep modules — they're vendored third-party code,

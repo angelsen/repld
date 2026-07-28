@@ -73,6 +73,15 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
         "socket_path": str(socket_path),
         "cwd": os.getcwd(),
         "started_at": time.time(),
+        # Which interpreter this kernel actually got, so `repld status` can
+        # flag one that cannot import the project. No launch command is stored
+        # alongside it: every path that spawns a kernel now re-execs through
+        # `bind.rebind_exec` first, so `sys.executable` is already the bound
+        # interpreter at spawn time and a fresh `uv run` overlay is built on
+        # demand — replaying a recorded argv would only pin a cache directory
+        # that `uv cache prune` is free to delete.
+        "python": f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}",
+        "executable": sys.executable,
     }
     if dashboard_port is not None:
         info["dashboard_port"] = dashboard_port
@@ -722,6 +731,24 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
 
     # 2b. Load .env from project root (same dir as socket/lockfile/gists).
     _load_dotenv()
+
+    # 2b-ii. Adopt the project venv, if we're not already running under it.
+    # The usual path is that `bind.rebind_exec` re-execed us into it before we
+    # got here, making this a no-op; it earns its keep when that couldn't
+    # happen (no uv on PATH, or a kernel started by hand). A version mismatch
+    # returns None and is left alone — splicing a venv built for a different
+    # Python onto sys.path half-works, which is worse than not trying.
+    from . import bind as _bind
+
+    _project_venv = _bind.project_venv()
+    if _project_venv is not None and not _bind.is_bound(_project_venv):
+        if _bind.adopt(_project_venv) is None:
+            print(
+                f"repld: {_bind.describe(_project_venv)} — its packages are "
+                "not importable here; `repld restart` under the project's "
+                "interpreter to fix",
+                file=sys.stderr,
+            )
 
     # 2c. Set up gist directories on sys.path with auto-reload.
     from . import gists as _gists

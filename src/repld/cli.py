@@ -52,6 +52,15 @@ def main() -> None:
         print(f"repld-tool {version('repld-tool')}")
         return
 
+    # Commands that run or create a kernel want the project's interpreter, so
+    # they may re-exec under it here and never return. The read-only ones
+    # (status, log, stop, gist, help) don't need it, and routing them through
+    # `uv run` would tax every invocation for nothing.
+    if not argv or argv[0].startswith("-") or argv[0] in ("bridge", "exec", "restart"):
+        from . import bind
+
+        bind.rebind_exec(argv)
+
     sub = _SUBCOMMANDS.get(argv[0]) if argv else None
     if sub:
         mod, func, _ = sub

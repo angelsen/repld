@@ -43,6 +43,7 @@ from phases.lockfile import (
 from phases.resources import phase_8_gist_resources
 from phases.sessions import phase_13_sessions
 from phases.shutdown import phase_11_shutdown
+from phases.venv import phase_16_venv_binding
 
 PHASES = {
     3: phase_3,
@@ -70,13 +71,14 @@ PHASES = {
     13: phase_13_sessions,
     14: phase_14_dashboard,
     15: phase_15_headless,
+    16: phase_16_venv_binding,
 }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", type=int, default=3, help="highest phase to run (ceiling: 15)"
+        "--phase", type=int, default=3, help="highest phase to run (ceiling: 16)"
     )
     args = ap.parse_args()
 
