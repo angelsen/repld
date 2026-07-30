@@ -10,7 +10,7 @@ import inspect
 import json
 
 from .browser_dispatch import BrowserDispatchMixin
-from .core_schemas import CORE_TOOLS, DOC_RESOURCES
+from .core_schemas import CORE_TOOLS, DOC_HELP_ATTRS, DOC_RESOURCES, wire as _wire
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
 from .tasks import spill_marker, spill_text as _spill_text
@@ -420,8 +420,6 @@ TOOLS = [
     },
 ]
 
-_DOC_RESOURCES = DOC_RESOURCES
-
 _BROWSER_RESOURCES = [
     {
         "uri": "repld://browser/tabs",
@@ -454,7 +452,7 @@ _BROWSER_RESOURCES = [
 # console dumps); everything above it falls back to the spill preview.
 _RESOURCE_MAX_BYTES = 64 * 1024
 _RESOURCE_MIMETYPES = {
-    r["uri"]: r["mimeType"] for r in _DOC_RESOURCES + _BROWSER_RESOURCES
+    r["uri"]: r["mimeType"] for r in DOC_RESOURCES + _BROWSER_RESOURCES
 }
 
 
@@ -643,22 +641,18 @@ class Dispatcher(BrowserDispatchMixin):
     def _resources_list(self, rid) -> dict:
         return _response(rid, {"resources": _compute_resources()})
 
-    # Static docs: URI → help.py attribute name (imported lazily at read time)
-    _DOC_ATTR_MAP = {
-        "repld://docs/guide": "GUIDE",
-        "repld://docs/browser": "BROWSER_GUIDE",
-        "repld://docs/playbook": "PLAYBOOK",
-        "repld://docs/production": "PRODUCTION",
-    }
-
     def _read_resource(self, rid, params: dict) -> dict:
         uri = params.get("uri", "")
         try:
+            # Static docs first: `core_schemas.DOC_HELP_ATTRS` is the one map,
+            # shared with the bridge's cache-less fallback. help.py is imported
+            # here rather than at module scope so it stays a read-time cost.
+            attr = DOC_HELP_ATTRS.get(uri)
             reader = self._RESOURCE_DISPATCH.get(uri)
-            if uri in self._DOC_ATTR_MAP:
+            if attr is not None:
                 from . import help as _help
 
-                text = getattr(_help, self._DOC_ATTR_MAP[uri])
+                text = getattr(_help, attr)
             elif reader is not None:
                 text = reader(self)
             elif uri.startswith("repld://gists/"):
@@ -759,16 +753,16 @@ def _compute_tools() -> list[dict]:
     tools = [t for t in TOOLS if has_browser or not t["name"].startswith("browser_")]
     # bridge_tools.SCHEMAS is advertised from here rather than injected into
     # this response by the bridge: the bridge relays raw lines untouched in
-    # both directions, and parsing + re-serializing every tools/list reply to
-    # append a couple of entries would cost it that property. The bridge
-    # intercepts the matching tools/call on the way in instead.
+    # both directions, and parsing + re-serializing every tools/list reply
+    # just to append them would cost it that property. The bridge intercepts
+    # the matching tools/call on the way in instead.
     return tools + bridge_tools.SCHEMAS + gists.scan_tools()
 
 
 def _compute_resources() -> list[dict]:
     from . import gists
 
-    resources = list(_DOC_RESOURCES) + (
+    resources = _wire(DOC_RESOURCES) + (
         list(_BROWSER_RESOURCES) if _has_browser() else []
     )
     resources.append(

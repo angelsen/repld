@@ -65,20 +65,21 @@ _static_docs_cache: dict[str, str] | None = None
 
 
 def _static_docs() -> dict[str, str]:
-    """The four doc resources — pure constants, lazily imported from help.py.
+    """The doc resources — pure constants, lazily imported from help.py.
 
-    Loaded on first `resources/read` of one of these URIs rather than at
-    module import time, so a bridge that never serves docs never pays for it.
+    Which URIs these are, and which `help.py` constant backs each, comes from
+    `core_schemas.DOC_HELP_ATTRS` — the same map the kernel reads, so adding a
+    doc is one edit rather than three. Resolved on first `resources/read` of
+    one of these URIs rather than at module import time, so a bridge that never
+    serves docs never pays to parse help.py.
     """
     global _static_docs_cache
     if _static_docs_cache is None:
         from . import help as _help
 
         _static_docs_cache = {
-            "repld://docs/guide": _help.GUIDE,
-            "repld://docs/browser": _help.BROWSER_GUIDE,
-            "repld://docs/playbook": _help.PLAYBOOK,
-            "repld://docs/production": _help.PRODUCTION,
+            uri: getattr(_help, attr)
+            for uri, attr in core_schemas.DOC_HELP_ATTRS.items()
         }
     return _static_docs_cache
 
@@ -212,7 +213,9 @@ class Bridge:
         if method == "resources/list":
             cache = self._load_cache()
             resources = (
-                cache["resources"] if cache else list(core_schemas.DOC_RESOURCES)
+                cache["resources"]
+                if cache
+                else core_schemas.wire(core_schemas.DOC_RESOURCES)
             )
             self._to_client(
                 {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}

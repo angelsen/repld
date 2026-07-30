@@ -19,8 +19,8 @@ Wiring, in two halves that must not drift:
     (``protocol.Dispatcher._tools_list``), so these appear alongside the
     built-in and gist tools with no response rewriting. The bridge forwards raw
     lines in both directions and stays byte-preserving on the happy path;
-    parsing and re-serializing every ``tools/list`` reply just to append two
-    entries would throw that away.
+    parsing and re-serializing every ``tools/list`` reply just to append them
+    would throw that away.
   * ``BRIDGE_TOOLS`` is consulted by ``bridge.Bridge._handle_client_line`` on
     the *request* side, which already parses each message. A registered name is
     answered locally and never forwarded.

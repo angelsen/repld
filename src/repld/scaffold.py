@@ -123,17 +123,26 @@ Next:
 """
 
 
+_USAGE = """\
+repld init — scaffold .mcp.json + CLAUDE.md block
+
+  repld init [--force]
+
+  --force   overwrite an existing repld block in CLAUDE.md
+
+Run with no arguments. Idempotent.
+"""
+
+
 def run_init(argv: list[str]) -> int:
-    if argv and argv[0] in ("-h", "--help"):
-        print("repld init — scaffold .mcp.json + CLAUDE.md block")
-        print()
-        print("Run with no arguments. Idempotent.")
-        print("  --force    Overwrite existing repld block in CLAUDE.md")
+    if any(a in ("-h", "--help") for a in argv):
+        print(_USAGE)
         return 0
     force = "--force" in argv
     rest = [a for a in argv if a != "--force"]
     if rest:
-        print(f"unknown argument: {rest[0]}")
+        print(f"repld init: unknown argument {rest[0]!r}\n")
+        print(_USAGE)
         return 2
     cwd = Path.cwd()
     print(_write_mcp_json(cwd))
