@@ -50,7 +50,11 @@ def unregister() -> None:
 
 
 def list_sessions() -> list[dict]:
-    """Read all session files, pruning stale (dead PID or corrupt) entries."""
+    """Live sessions, pruning stale (dead PID or corrupt) entries.
+
+    Every returned entry is a dict with a parseable `pid`; callers may index
+    that key directly.
+    """
     if not SESSIONS_DIR.is_dir():
         return []
     result = []
@@ -60,7 +64,14 @@ def list_sessions() -> list[dict]:
             info = json.loads(f.read_text())
             pid = int(info["pid"])
         except (OSError, KeyError, ValueError, TypeError):
-            # Corrupt or mid-write — judge liveness by the filename pid.
+            # Corrupt, unreadable, or not the shape we write. Judge liveness by
+            # the filename pid so a live kernel's file isn't deleted out from
+            # under it — but drop the payload rather than returning it. Every
+            # consumer indexes `pid` unguarded (`repld status`, `repld stop
+            # --all`, the dashboard sidebar), and an entry reaches here
+            # *because* its pid didn't parse, so handing it back turns one bad
+            # file into a crashed command.
+            info = None
             try:
                 pid = int(f.stem)
             except ValueError:

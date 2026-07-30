@@ -55,12 +55,6 @@ KERNEL_GONE = -31001
 # String id, so it can never collide with a client's integer ids.
 BRIDGE_INIT_ID = "repld-bridge-init"
 
-# Kept in sync with protocol.PROTOCOL_VERSION by hand — importing protocol.py
-# here would pull in the kernel's whole dependency chain (browser_dispatch,
-# help, kernel_context, tasks) just to read one constant. Only used before any
-# kernel has ever booted in this project (no kernel.cache to read it from).
-_FALLBACK_PROTOCOL_VERSION = "2024-11-05"
-
 _static_docs_cache: dict[str, str] | None = None
 
 
@@ -169,9 +163,13 @@ class Bridge:
                     "jsonrpc": "2.0",
                     "id": rid,
                     "result": {
+                        # What the last kernel actually advertised, when we
+                        # have it. Same value in practice — _load_cache drops a
+                        # cache from another repld version — but the recorded
+                        # answer beats a re-derived one if that gate ever loosens.
                         "protocolVersion": cache["protocolVersion"]
                         if cache
-                        else _FALLBACK_PROTOCOL_VERSION,
+                        else core_schemas.PROTOCOL_VERSION,
                         "capabilities": core_schemas.CAPABILITIES,
                         "serverInfo": {
                             "name": "repld",

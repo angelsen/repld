@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from . import __version__
+from .core_schemas import PROTOCOL_VERSION
 from .ipc import connect_to_kernel
 from .paths import resolve_lock_path
 from .tasks import spill_marker
@@ -118,7 +119,7 @@ def _connect(lock_path: Path) -> tuple[socket.socket, IO[str], IO[str], dict] | 
         wfile,
         "initialize",
         {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "repld-exec", "version": __version__},
         },

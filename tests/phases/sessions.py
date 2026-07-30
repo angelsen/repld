@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from harness import Bridge, Kernel, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true
 
 
 def _sessions_dir() -> Path:
@@ -62,10 +62,76 @@ def phase_13_sessions(kernel: Kernel) -> None:
             f"list_sessions() includes running kernel pid (got {content!r})",
         )
         print("  ✓ list_sessions() includes this kernel")
+
+        _test_unusable_entry_skipped(b, kernel.cwd)
     finally:
         b.close()
 
     _test_unregister_on_shutdown()
+
+
+# A session file whose payload survives json.loads but carries no usable pid.
+# list_sessions() falls back to the *filename* pid to decide liveness, and used
+# to hand the parsed payload back anyway — so every consumer that indexes
+# `s["pid"]` (repld status, repld stop --all, the dashboard sidebar) died on it.
+_UNUSABLE = [
+    ('{"cwd": "/nowhere"}', "no pid key"),
+    ('{"pid": null, "cwd": "/nowhere"}', "null pid"),
+    ("5", "not an object"),
+]
+
+
+def _test_unusable_entry_skipped(b: Bridge, cwd: Path) -> None:
+    """A corrupt session file is skipped, not returned half-parsed.
+
+    Planted under a pid that is alive but is not a kernel (this test runner),
+    which is the case that reaches the fallback *and* keeps the file: a dead
+    pid's file gets unlinked, so it could never be handed to a caller anyway.
+    """
+    planted = _sessions_dir() / f"{os.getpid()}.json"
+    try:
+        for body, label in _UNUSABLE:
+            planted.write_text(body)
+
+            resp = b.call(
+                "tools/call",
+                {
+                    "name": "exec",
+                    "arguments": {
+                        "code": (
+                            "from repld import sessions as _s\n"
+                            "print([type(x).__name__ + ':' + str(x.get('pid'))\n"
+                            "       if isinstance(x, dict) else type(x).__name__\n"
+                            "       for x in _s.list_sessions()])"
+                        )
+                    },
+                },
+            )
+            got = resp["result"]["content"][0]["text"].strip()
+            assert_true(
+                "None" not in got and "int" not in got,
+                f"list_sessions() skipped the {label} entry (got {got!r})",
+            )
+            assert_true(
+                planted.exists(),
+                f"{label}: live pid's file kept, not unlinked (only the payload is dropped)",
+            )
+
+            # The real crash surface: status indexes s["pid"] over every sibling.
+            out = subprocess.run(
+                ["uv", "run", "--project", str(REPO), "repld", "status", "--json"],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert_eq(
+                out.returncode, 0, f"repld status survives a {label} session file"
+            )
+            json.loads(out.stdout)  # and still emits well-formed JSON
+    finally:
+        planted.unlink(missing_ok=True)
+    print("  ✓ unusable session entries skipped; status/stop don't choke")
 
 
 def _test_unregister_on_shutdown() -> None:

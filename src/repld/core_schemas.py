@@ -13,6 +13,16 @@ URI→constant map, so adding a fifth meant three edits in three modules. The
 attribute name is stripped before the dict goes on the wire (`wire()`).
 """
 
+# The MCP revision every repld process advertises. Here rather than in
+# `protocol.py` because three of them answer `initialize` and only one can
+# import it: the kernel (`protocol._initialize`), the bridge when no kernel has
+# ever run in this project (`bridge._try_bridge_intercept`), and `repld exec`,
+# which handshakes over the socket itself. Importing `protocol.py` from the
+# other two would drag in browser_dispatch/help/kernel_context/tasks for one
+# string, so they used to carry hand-synced copies — a drift no test can see,
+# since each side would still be internally consistent.
+PROTOCOL_VERSION = "2024-11-05"
+
 # What `initialize` negotiates, from either side of the socket. Shared for the
 # same reason the tool schemas are: the bridge answers `initialize` itself when
 # no kernel has ever run here, so a capability declared only in `protocol.py`

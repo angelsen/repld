@@ -15,13 +15,12 @@ from .core_schemas import (
     CORE_TOOLS,
     DOC_HELP_ATTRS,
     DOC_RESOURCES,
+    PROTOCOL_VERSION,
     wire as _wire,
 )
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
 from .tasks import spill_marker, spill_text as _spill_text
-
-PROTOCOL_VERSION = "2024-11-05"
 
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
