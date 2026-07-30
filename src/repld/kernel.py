@@ -286,6 +286,11 @@ def _loop_watchdog(
     non-internal asyncio task.
     """
     while not stop.is_set():
+        # Piggy-backed on the one thread that ticks whether or not the kernel
+        # is doing anything: finished tasks' spill entries are otherwise only
+        # reclaimed by running *more* cells (tasks.finalize), which an idle
+        # kernel never does.
+        tasks.maybe_prune()
         # Probe first so `threshold` is the actual hang-detection time
         # (not threshold + interval).
         future = _probe_future(loop)

@@ -39,8 +39,10 @@ _tasks_lock = threading.Lock()
 _CLOSED = object()  # sentinel: spill file was open, now closed by pruning
 _PRUNE_AGE = 300.0  # seconds after done_event before closing spill handle
 _EVICT_AGE = 3600.0  # seconds after done_event before dropping the entry entirely
-_PRUNE_EVERY = 50  # run pruning every N finalize() calls
+_PRUNE_EVERY = 50  # finalize() calls between prune sweeps
+_PRUNE_INTERVAL = 600.0  # seconds between prune sweeps, regardless of call count
 _finalize_count = 0
+_last_prune = 0.0
 
 
 def _open_spill(task: dict, task_id: str) -> io.TextIOWrapper:
@@ -314,6 +316,24 @@ def finalize(task_id: str) -> None:
         _prune_spill_files()
 
 
+def maybe_prune() -> None:
+    """Time-triggered prune sweep, for callers outside the finalize() path.
+
+    `finalize`'s every-_PRUNE_EVERY-calls trigger only fires while cells are
+    running, so a kernel that executes a handful of cells and then idles for a
+    week never reaches it — the entries and their spill files sit there for the
+    life of the process, and `_EVICT_AGE` stops describing anything real. The
+    kernel's watchdog thread ticks regardless of load, so it calls this; the
+    interval check keeps that cheap.
+    """
+    global _last_prune
+    now = time.monotonic()
+    if now - _last_prune < _PRUNE_INTERVAL:
+        return
+    _last_prune = now
+    _prune_spill_files()
+
+
 def _close_spill(task: dict) -> None:
     """Close the task's spill handle if it is still open. Idempotent."""
     fp = task.get("spill_file")
@@ -340,8 +360,11 @@ def _prune_spill_files() -> None:
     unreclaimable until the kernel exits.
 
     _EVICT_AGE is therefore also the retention window on a spill path handed
-    to an agent: after an hour, `[full output: …]` from an old response stops
-    resolving. Anything still wanted by then belongs somewhere durable.
+    to an agent: roughly an hour on, `[full output: …]` from an old response
+    stops resolving. Anything still wanted by then belongs somewhere durable.
+    Roughly, because eviction happens on the next sweep past the deadline, not
+    at it — whichever of `finalize`'s call counter or `maybe_prune`'s interval
+    comes first.
     """
     now = time.monotonic()
     evict: list[tuple[str, str | None]] = []
