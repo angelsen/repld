@@ -800,7 +800,8 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
         ]
     )
 
-    # 2d. Check gist dependencies before IPC starts (interactive prompt).
+    # 2d. Check gist dependencies before IPC starts. Prompts when this kernel
+    # has a terminal; headless it reports what's missing and installs nothing.
     from . import gist_deps as _gist_deps
 
     missing = _gist_deps.scan_deps()

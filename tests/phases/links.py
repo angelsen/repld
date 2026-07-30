@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -66,6 +67,51 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         )
         g.remove_link("needy", gd)  # drop it so the boot kernel doesn't prompt
         print("  ✓ scan_deps(paths=) surfaces linked gist deps")
+
+        # --- installing is gated on a real tty. Every auto-spawned kernel runs
+        # headless with stdin on /dev/null, where readline() returns "" — which
+        # a [Y/n] prompt would otherwise read as consent, so a linked gist's
+        # __repld_deps__ would get resolved and installed with nobody watching.
+        needy = [gist_deps._DepInfo("repld_phantom_pkg_xyz", ["needy"])]
+        orig_stdin = sys.__stdin__
+        orig_run = subprocess.run
+        calls: list[list[str]] = []
+
+        def _spy(cmd, *a, **kw):
+            calls.append(cmd)
+            raise AssertionError("install_deps shelled out without consent")
+
+        class _FakeStdin:
+            def __init__(self, tty: bool) -> None:
+                self._tty = tty
+
+            def isatty(self) -> bool:
+                return self._tty
+
+            def readline(self) -> str:
+                return ""  # what /dev/null gives you, and what a bare Enter gives
+
+        try:
+            subprocess.run = _spy
+            sys.__stdin__ = _FakeStdin(tty=False)  # pyright: ignore[reportAttributeAccessIssue]
+            assert_true(not gist_deps._can_prompt(), "no tty → cannot prompt")
+            assert_eq(gist_deps._prompt_dep_selection(needy), [], "no tty → declines")
+            assert_eq(gist_deps.install_deps(needy), False, "no tty → installs nothing")
+            assert_eq(calls, [], "no tty → never reached the installer")
+
+            # The guard must be a tty check, not a blanket refusal: at a real
+            # terminal a bare Enter still means yes.
+            sys.__stdin__ = _FakeStdin(tty=True)  # pyright: ignore[reportAttributeAccessIssue]
+            assert_true(gist_deps._can_prompt(), "tty → can prompt")
+            assert_eq(
+                gist_deps._prompt_dep_selection(needy),
+                needy,
+                "tty + bare Enter → consent preserved",
+            )
+        finally:
+            subprocess.run = orig_run
+            sys.__stdin__ = orig_stdin  # pyright: ignore[reportAttributeAccessIssue]
+        print("  ✓ headless kernel declines gist-dep install; a tty still consents")
 
         # --- _parse_pkg_name splits at the earliest specifier ---
         pkg = gist_deps._parse_pkg_name

@@ -8,6 +8,10 @@ install_deps() prompts on the real tty and installs via `uv pip install
 --target`. Path deps skip install_deps() entirely — resolved and added to
 sys.path directly by scan_deps() since there's nothing to install.
 
+Installing is gated on there actually being a terminal to ask at. A headless
+kernel — which is how every auto-spawned one runs — reports what's missing and
+declines, rather than reading its /dev/null stdin as a yes.
+
 Installs go to a shared directory under ~/.local/share/repld/deps, never into
 whatever venv happens to be active. Two reasons. A project venv is the wrong
 home — `uv sync` prunes anything not in the project's own lockfile, so the
@@ -46,6 +50,9 @@ from . import gists
 from .gates import tty_prompt
 
 _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
+
+# Wall-clock ceiling on one `uv pip install` / `pip install`. See install_deps.
+_INSTALL_TIMEOUT = 600.0
 
 
 def _parse_pkg_name(req: str) -> str:
@@ -324,9 +331,24 @@ def _tty_write(msg: str) -> None:
         w.flush()
 
 
-def _tty_input(prompt: str) -> str:
-    """Prompt on real stderr, read from real stdin."""
-    return tty_prompt(prompt) or ""
+def _can_prompt() -> bool:
+    """Whether there is a real terminal to put a question on."""
+    stdin = sys.__stdin__
+    if stdin is None:
+        return False
+    try:
+        return stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
+def _tty_input(prompt: str) -> str | None:
+    """Prompt on real stderr, read from real stdin. None if there's no tty.
+
+    None and "" must stay distinct here: "" is a human pressing Enter at a
+    `[Y/n]` prompt, i.e. consent, while None means nobody was asked at all.
+    """
+    return tty_prompt(prompt)
 
 
 def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
@@ -338,7 +360,7 @@ def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
     choice = _tty_input(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
     if choice in ("", "y", "yes", "all"):
         return missing
-    if choice in ("n", "no", "none"):
+    if choice is None or choice in ("n", "no", "none"):
         return []
     indices = []
     for part in choice.replace(",", " ").split():
@@ -369,6 +391,25 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     _tty_write("\033[36m[repld]\033[0m missing gist deps:\n")
     for i, dep in enumerate(missing, 1):
         _tty_write(f"  {i}) {dep.requirement:<24} ({', '.join(dep.gists)})\n")
+
+    # Installing is a human decision, so a kernel with nobody at its stdin
+    # reports and declines. Every auto-spawned kernel is in exactly that
+    # position — `repld gist add` links gists from other projects by absolute
+    # path, so an unattended boot would otherwise resolve and install whatever
+    # a linked gist's `__repld_deps__` happens to name.
+    if not _can_prompt():
+        # The prompt would have to be answered at *this process's* stdin, so
+        # `repld exec` is no help — it's a separate process talking IPC, and
+        # the install runs here. The two things that actually work are running
+        # a kernel with a terminal, or installing into the shared dir by hand.
+        _tty_write(
+            "  \033[33m⚠\033[0m no terminal to ask on — skipped.\n"
+            "  run `repld` in a pane to be prompted, or install them yourself:\n"
+            f"    uv pip install --target {_deps_dir()} --python {sys.executable} "
+            + " ".join(d.requirement for d in missing)
+            + "\n"
+        )
+        return False
 
     try:
         selected = _prompt_dep_selection(missing)
@@ -430,7 +471,21 @@ def install_deps(missing: list[_DepInfo]) -> bool:
             *full_req_args,
         ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Bounded, unlike a shell install a human could Ctrl-C. Two of the three
+    # call sites run from the gist import hook — i.e. on the kernel's asyncio
+    # thread, mid-`exec` — so a resolver that wedges on a network stall takes
+    # the whole kernel with it. Generous, because a cold cache building a
+    # sdist (numpy, cryptography) legitimately takes minutes.
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_INSTALL_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        _tty_write(
+            f"  \033[31m✗\033[0m install timed out after {_INSTALL_TIMEOUT:.0f}s — "
+            "run it by hand:\n    " + " ".join(cmd) + "\n"
+        )
+        return False
     if result.returncode == 0:
         _write_manifest(manifest)
         ensure_deps_on_path()

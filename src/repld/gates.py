@@ -138,13 +138,24 @@ def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
     """Write `prompt` to the real terminal (bypassing any stdout/stderr tee)
     and read one stripped, lowercased line of response.
 
-    Defaults to sys.__stderr__ / sys.__stdin__. Returns None if the real
-    terminal streams aren't available (e.g. no controlling tty) rather than
-    raising, so callers can treat "can't ask" the same as "declined".
+    Defaults to sys.__stderr__ / sys.__stdin__. Returns None if there is
+    nobody to ask rather than raising, so callers can treat "can't ask" as
+    distinct from any answer a human could actually give.
+
+    **stdin must be a tty, not merely open.** Every auto-spawned kernel runs
+    headless with stdin on /dev/null — as a systemd unit (`StandardInput=null`)
+    or a detached child (`Popen(stdin=DEVNULL)`) — where `readline()` returns
+    "" immediately. Callers that read a bare Enter as consent (`[Y/n]`) would
+    otherwise see unattended agreement from a process no human is watching.
     """
     out = stream if stream is not None else sys.__stderr__
     stdin = sys.__stdin__
     if out is None or stdin is None:
+        return None
+    try:
+        if not stdin.isatty():
+            return None
+    except (OSError, ValueError):
         return None
     out.write(prompt)
     out.flush()
