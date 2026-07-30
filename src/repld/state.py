@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import IO, Any, Literal, overload
 
@@ -162,6 +163,44 @@ def sweep_dead_pid_files(directory: Path) -> int:
             continue
         try:
             if not entry.is_file() or pid_alive(int(m.group(1))):
+                continue
+            entry.unlink()
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
+def sweep_own_stale_files(
+    directory: Path, *, max_age: float, keep: "set[str] | frozenset[str]" = frozenset()
+) -> int:
+    """Unlink *this* process's `{pid}-*` files untouched for `max_age` seconds.
+
+    The companion to `sweep_dead_pid_files`, for the half it cannot reach. That
+    one reclaims what a *dead* pid left behind, which is the only rule that can
+    apply at boot — but a kernel is meant to run for weeks, and everything it
+    writes here is untouchable by it for exactly that long. Task spills are
+    reclaimed by their registry entry (`tasks._prune_spill_files`); resource
+    spills and browser screenshots have no registry, so without this they
+    accumulate for the life of the process. Under a real `$XDG_RUNTIME_DIR`
+    that is RAM.
+
+    Age is last-modification, not creation: a file still being appended to
+    stays young. `keep` names paths that must survive regardless — the caller's
+    live registry entries, which age out on their own schedule.
+    """
+    now = time.time()
+    removed = 0
+    prefix = f"{os.getpid()}-"
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(prefix) or str(entry) in keep:
+            continue
+        try:
+            if not entry.is_file() or now - entry.stat().st_mtime < max_age:
                 continue
             entry.unlink()
         except OSError:

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true, lock_path_for
 
+from repld import core_schemas
+
 
 def _handshake(b: Bridge) -> dict:
     resp = b.call("initialize", {"protocolVersion": "2024-11-05"}, timeout=30)
@@ -194,9 +196,19 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
 
     b = Bridge(tmp)
     try:
-        _handshake(b)
+        init = _handshake(b)
         assert_true(
             not lock_path_for(tmp).exists(), "handshake alone did not spawn a kernel"
+        )
+        # The other half of the drift guard in phase 3. This `initialize` is
+        # answered by the bridge with no kernel in existence, and it is the one
+        # the client actually negotiates against for the whole session — a
+        # capability the kernel declares but this path forgets would be
+        # unusable in every cold-started session.
+        assert_eq(
+            init["result"]["capabilities"],
+            core_schemas.CAPABILITIES,
+            "kernel-less initialize negotiates the same capabilities",
         )
 
         listed = b.call("tools/list", {}, timeout=10)["result"]["tools"]

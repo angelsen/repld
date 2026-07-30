@@ -25,7 +25,11 @@ browser screenshots belong to the process rather than to any project, so they
 sit directly in RUNTIME_DIR. They all share a ``{pid}-…`` prefix, which is what
 lets a booting kernel sweep everything a dead pid left behind in one pass
 (``state.sweep_dead_pid_files``) — nothing runs on the way out of a SIGKILL,
-and under the /tmp fallback the leftovers would otherwise be permanent.
+and under the /tmp fallback the leftovers would otherwise be permanent. The
+same prefix lets a *live* kernel age out its own (``state.sweep_own_stale_files``,
+driven by ``tasks._sweep_orphans``), which is the half boot-time sweeping can
+never cover for a process that stays up for weeks. Keep the prefix on anything
+new written here or neither rule will find it.
 
 Without ``XDG_RUNTIME_DIR`` (macOS, most containers, any env-scrubbed spawn)
 the tree falls back to ``/tmp/repld-{uid}``. The uid suffix is load-bearing:

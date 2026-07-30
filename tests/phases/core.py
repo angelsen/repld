@@ -6,6 +6,7 @@ from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true
 
+from repld import core_schemas
 from repld.ipc import Session
 
 
@@ -19,6 +20,14 @@ def phase_3(kernel: Kernel) -> None:
         assert_true(
             "claude/channel" in result["capabilities"]["experimental"],
             "initialize.capabilities advertises claude/channel",
+        )
+        # Drift guard, paired with the kernel-less assertion in phase 15: both
+        # sides of the socket answer `initialize`, and a capability declared in
+        # only one of them is silently absent from half the sessions.
+        assert_eq(
+            result["capabilities"],
+            core_schemas.CAPABILITIES,
+            "live kernel negotiates exactly core_schemas.CAPABILITIES",
         )
         print("  ✓ initialize")
 

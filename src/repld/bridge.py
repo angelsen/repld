@@ -172,14 +172,7 @@ class Bridge:
                         "protocolVersion": cache["protocolVersion"]
                         if cache
                         else _FALLBACK_PROTOCOL_VERSION,
-                        "capabilities": {
-                            "tools": {"listChanged": True},
-                            "resources": {"listChanged": True},
-                            "experimental": {
-                                "claude/channel": {},
-                                "claude/channel/permission": {},
-                            },
-                        },
+                        "capabilities": core_schemas.CAPABILITIES,
                         "serverInfo": {
                             "name": "repld",
                             "version": cache["version"] if cache else __version__,

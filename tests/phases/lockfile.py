@@ -41,6 +41,16 @@ def phase_5_permissions(kernel: Kernel) -> None:
 
     print(f"  ✓ runtime state private: dir 0700, session + {len(spills)} spill(s) 0600")
 
+    # The socket is the one node created by bind() rather than by open_private
+    # / atomic_write_json, so it takes a umask to get the same mode with no
+    # window — chmod-ing after the bind leaves it connectable in between.
+    sock = paths.socket_path(kernel.cwd)
+    assert_true(sock.is_socket(), f"kernel socket exists ({sock})")
+    assert_eq(_mode(sock), "0o600", "IPC socket is 0600")
+    assert_eq(_mode(kernel.lock_path), "0o600", "kernel.lock is 0600")
+    assert_eq(_mode(paths.cache_for(sock)), "0o600", "kernel.cache is 0600")
+    print("  ✓ socket + lock + cache all 0600, no post-create chmod window")
+
 
 def _a_dead_pid() -> int:
     """A pid that is definitely not running, for the sweep sentinel."""
@@ -113,6 +123,49 @@ def phase_5_evict(_kernel: Kernel) -> None:
     assert_true(not spill.exists(), "evicted task's spill file unlinked")
 
     print(f"  ✓ spill eviction: entry + file reclaimed after {tasks._EVICT_AGE:.0f}s")
+
+
+def phase_5_orphans(_kernel: Kernel) -> None:
+    """The same bound applies to runtime files that never get a task entry.
+
+    `spill_text` (oversized resource reads, big browser tool responses) and
+    `Tab.screenshot` both write `{pid}-…` into RUNTIME_DIR without going through
+    the task registry, so `_prune_spill_files`'s loop cannot see them and the
+    boot sweep only collects *dead* pids. They used to live as long as the
+    kernel did.
+    """
+    import os
+    import time
+
+    from repld import paths, tasks
+
+    paths.ensure_runtime_dir()
+    mine = os.getpid()
+    stale = paths.RUNTIME_DIR / f"{mine}-network-deadbeef.out"
+    fresh = paths.RUNTIME_DIR / f"{mine}-screenshot-9222-abc-1700000000.png"
+    stale.write_text("an old resource spill")
+    fresh.write_bytes(b"a screenshot taken just now")
+    old = time.time() - tasks._EVICT_AGE - 60
+    os.utime(stale, (old, old))
+
+    # A live task whose spill file is old on disk but whose entry is young: the
+    # registry owns its lifetime, and the sweep must not race it.
+    task_id, task = tasks.new_task()
+    tasks._open_spill(task, task_id).write("still owned")
+    owned = Path(task["spill_path"])
+    os.utime(owned, (old, old))
+
+    try:
+        tasks._prune_spill_files()
+        assert_true(not stale.exists(), "orphaned resource spill reclaimed")
+        assert_true(fresh.exists(), "a young orphan is left alone")
+        assert_true(owned.is_file(), "a live task's spill survives on age alone")
+    finally:
+        for p in (stale, fresh, owned):
+            p.unlink(missing_ok=True)
+        tasks._tasks.pop(task_id, None)
+
+    print(f"  ✓ orphan sweep: untracked {mine}-* files reclaimed at _EVICT_AGE")
 
 
 def phase_5_sweep(kernel: Kernel) -> None:

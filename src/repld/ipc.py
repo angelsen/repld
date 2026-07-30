@@ -155,8 +155,17 @@ class Server:
         if self.socket_path.exists():
             self.socket_path.unlink()
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.bind(str(self.socket_path))
-        os.chmod(self.socket_path, 0o600)
+        # umask around the bind rather than a chmod after it: `bind()` creates
+        # the node with the process umask applied, so chmod-ing afterwards
+        # leaves a window in which the socket is connectable by anyone. The
+        # 0700 project directory is the real barrier — this is the same
+        # defence in depth every other runtime file gets (`state.open_private`,
+        # `atomic_write_json(chmod=…)`), and the one place that used to skip it.
+        old_umask = os.umask(0o177)
+        try:
+            self.sock.bind(str(self.socket_path))
+        finally:
+            os.umask(old_umask)
         self.sock.listen(8)
         self.accept_thread = threading.Thread(
             target=self._accept_loop, daemon=True, name="repld-ipc-accept"

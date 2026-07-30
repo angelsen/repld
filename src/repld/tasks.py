@@ -8,7 +8,9 @@ spill path for anything beyond the preview.
 
 A spill lives for _EVICT_AGE after its cell completes, then `_prune_spill_files`
 drops the task entry and unlinks the file. That bound is what keeps a kernel
-running for weeks from filling tmpfs with one file per cell.
+running for weeks from filling tmpfs with one file per cell. `_sweep_orphans`
+applies the same bound to the runtime files that have no task entry to hang
+off — resource spills and browser screenshots.
 """
 
 import contextvars
@@ -20,6 +22,7 @@ import time
 import uuid
 from typing import Literal
 
+from . import state
 from .events import StdoutChunk, StderrChunk, emit
 from .paths import RUNTIME_DIR, ensure_runtime_dir
 from .state import open_private
@@ -365,6 +368,9 @@ def _prune_spill_files() -> None:
     Roughly, because eviction happens on the next sweep past the deadline, not
     at it — whichever of `finalize`'s call counter or `maybe_prune`'s interval
     comes first.
+
+    The registry can only account for what it knows about, so `_sweep_orphans`
+    finishes the job for the runtime files that never get a task entry.
     """
     now = time.monotonic()
     evict: list[tuple[str, str | None]] = []
@@ -379,15 +385,39 @@ def _prune_spill_files() -> None:
         if now - done_at < _PRUNE_AGE:
             continue
         _close_spill(task)
-    if not evict:
-        return
-    with _tasks_lock:
-        for task_id, _ in evict:
-            _tasks.pop(task_id, None)
-    for _, path in evict:
-        if path is None:
-            continue
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    if evict:
+        with _tasks_lock:
+            for task_id, _ in evict:
+                _tasks.pop(task_id, None)
+        for _, path in evict:
+            if path is None:
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    _sweep_orphans()
+
+
+def _sweep_orphans() -> None:
+    """Reclaim this kernel's own runtime files that no task entry owns.
+
+    Three producers write `{pid}-…` into RUNTIME_DIR without going through the
+    task registry: `spill_text` (oversized `resources/read` responses, and any
+    browser tool response past the preview budget — `browser_tree` and
+    `browser_network` routinely are), and `Tab.screenshot`. Nothing above
+    reaches them: `_prune_spill_files` walks `_tasks`, and
+    `state.sweep_dead_pid_files` only reclaims what a *dead* pid left, so for a
+    kernel running the weeks it is designed to run these were permanent.
+
+    Same `_EVICT_AGE` as a task spill, deliberately: both hand the agent a path
+    in a tool response, so both should stay resolvable for the same hour. Live
+    tasks' spill paths are excluded — they age out by `done_at` above, and a
+    long-idle task holding an open handle would otherwise have the file pulled
+    out from under it.
+    """
+    live = {t["spill_path"] for _tid, t in items() if t["spill_path"] is not None}
+    try:
+        state.sweep_own_stale_files(RUNTIME_DIR, max_age=_EVICT_AGE, keep=live)
+    except Exception:
+        pass  # reclamation is housekeeping; never let it break a running cell

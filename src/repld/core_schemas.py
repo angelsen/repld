@@ -13,6 +13,24 @@ URI→constant map, so adding a fifth meant three edits in three modules. The
 attribute name is stripped before the dict goes on the wire (`wire()`).
 """
 
+# What `initialize` negotiates, from either side of the socket. Shared for the
+# same reason the tool schemas are: the bridge answers `initialize` itself when
+# no kernel has ever run here, so a capability declared only in `protocol.py`
+# would be silently missing from exactly the sessions that start cold — and
+# `build_discovery_cache()` does not carry capabilities, so not even a warm
+# `kernel.cache` could correct for it. Both parties may only use what was
+# negotiated, so a drifted copy disables the feature rather than degrading it:
+# `listChanged` is what lets the bridge invalidate the client's tool list after
+# respawning a kernel.
+CAPABILITIES = {
+    "tools": {"listChanged": True},
+    "resources": {"listChanged": True},
+    "experimental": {
+        "claude/channel": {},
+        "claude/channel/permission": {},
+    },
+}
+
 CORE_TOOLS = [
     {
         "name": "exec",

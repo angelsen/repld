@@ -342,22 +342,18 @@ def _can_prompt() -> bool:
         return False
 
 
-def _tty_input(prompt: str) -> str | None:
-    """Prompt on real stderr, read from real stdin. None if there's no tty.
-
-    None and "" must stay distinct here: "" is a human pressing Enter at a
-    `[Y/n]` prompt, i.e. consent, while None means nobody was asked at all.
-    """
-    return tty_prompt(prompt)
-
-
 def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
-    """Prompt which deps to install. Empty list means install nothing."""
+    """Prompt which deps to install. Empty list means install nothing.
+
+    `tty_prompt` returns None and "" distinctly, and the difference matters
+    here: "" is a human pressing Enter at a `[Y/n]` prompt, i.e. consent, while
+    None means there was nobody to ask.
+    """
     n = len(missing)
     if n == 1:
-        choice = _tty_input("\nInstall? [\033[1mY\033[0m/n]: ")
+        choice = tty_prompt("\nInstall? [\033[1mY\033[0m/n]: ")
         return missing if choice in ("", "y", "yes") else []
-    choice = _tty_input(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
+    choice = tty_prompt(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
     if choice in ("", "y", "yes", "all"):
         return missing
     if choice is None or choice in ("n", "no", "none"):

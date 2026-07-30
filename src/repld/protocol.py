@@ -10,7 +10,13 @@ import inspect
 import json
 
 from .browser_dispatch import BrowserDispatchMixin
-from .core_schemas import CORE_TOOLS, DOC_HELP_ATTRS, DOC_RESOURCES, wire as _wire
+from .core_schemas import (
+    CAPABILITIES,
+    CORE_TOOLS,
+    DOC_HELP_ATTRS,
+    DOC_RESOURCES,
+    wire as _wire,
+)
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
 from .tasks import spill_marker, spill_text as _spill_text
@@ -490,18 +496,7 @@ class Dispatcher(BrowserDispatchMixin):
             rid,
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {
-                    # listChanged is load-bearing, not decorative: the bridge
-                    # emits notifications/tools/list_changed after it respawns
-                    # a dead kernel, and both parties may only use capabilities
-                    # that were negotiated at initialize time.
-                    "tools": {"listChanged": True},
-                    "resources": {"listChanged": True},
-                    "experimental": {
-                        "claude/channel": {},
-                        "claude/channel/permission": {},
-                    },
-                },
+                "capabilities": CAPABILITIES,
                 "serverInfo": {
                     "name": "repld",
                     "version": self.server_version,

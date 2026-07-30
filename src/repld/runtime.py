@@ -178,7 +178,15 @@ async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
         sys.stderr.write(_format_user_traceback(exc))
         raise
     finally:
-        gc.collect()  # flush unawaited-coroutine warnings to this cell's output
+        # Gen-0 only. The point is to flush "coroutine was never awaited"
+        # warnings into *this* cell's output, and an abandoned coroutine is by
+        # definition young — the non-cyclic case never needed a collection at
+        # all (refcount drops at cell exit and __del__ fires), and the cyclic
+        # one is a traceback holding the frame that made it, allocated moments
+        # ago. A full collect() walks the whole heap for the same result: 164ms
+        # on an 800k-object heap, per cell, in a kernel whose entire premise is
+        # holding large state for weeks. Gen-0 is ~0.005ms.
+        gc.collect(0)
 
 
 def _format_user_traceback(exc: BaseException) -> str:
