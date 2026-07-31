@@ -843,10 +843,24 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     doc = inspect.getdoc(func)
     description = _first_line(doc) or tool_name
 
+    # Resolved hints, not the raw signature: under `from __future__ import
+    # annotations` (PEP 563) every annotation is a *string*, so `int` stops
+    # mapping to "integer" and an `Annotated[...]` wrapper is invisible — a gist
+    # with that import silently got every param typed "string" with an
+    # unmapped-type warning, and no parameter descriptions at all.
+    # `include_extras=True` is what keeps Annotated intact rather than
+    # stripping it to the bare type.
+    try:
+        hints = typing.get_type_hints(func, include_extras=True)
+    except Exception:
+        # Unresolvable forward reference, or a name the module no longer has.
+        # Degrade to the raw annotations rather than dropping the whole tool.
+        hints = {}
+
     properties: dict[str, dict] = {}
     required: list[str] = []
     for pname, param in sig.parameters.items():
-        annotation, param_doc = _annotation_parts(param.annotation)
+        annotation, param_doc = _annotation_parts(hints.get(pname, param.annotation))
         json_type = _resolve_json_type(annotation)
         if json_type is None:
             if annotation is not inspect.Parameter.empty:

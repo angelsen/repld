@@ -92,6 +92,42 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         annotated_file.unlink()
         print("  ✓ Annotated param descriptions inferred, dispatched, and scoped")
 
+        # Same again under `from __future__ import annotations`, where every
+        # annotation reaches inspect.signature as a *string*. Without resolving
+        # them, `int` stops mapping to "integer" and the Annotated wrapper is
+        # invisible — the schema silently degrades to all-strings, no
+        # descriptions. Real gists use this import, so it is not hypothetical.
+        pep563_file = gists_dir / "smoke_pep563.py"
+        pep563_file.write_text(
+            '"""Smoketest gist with postponed annotations."""\n\n'
+            "from __future__ import annotations\n\n"
+            "from typing import Annotated\n\n"
+            "async def _tool_smoke_pep563(\n"
+            '    name: Annotated[str, "Who to greet"],\n'
+            '    count: Annotated[int, "How many times"] = 2,\n'
+            "    plain: float = 1.5,\n"
+            ") -> str:\n"
+            '    """Postponed-annotation tool."""\n'
+            '    return f"{name}|{count}|{plain}"\n'
+        )
+        resp = b.call("tools/list")
+        props = {t["name"]: t for t in resp["result"]["tools"]}["smoke_pep563"][
+            "inputSchema"
+        ]["properties"]
+        assert_eq(props["name"]["description"], "Who to greet", "PEP 563 description")
+        assert_eq(props["count"]["description"], "How many times", "PEP 563 + default")
+        assert_eq(props["count"]["type"], "integer", "PEP 563 int stays an integer")
+        assert_eq(props["plain"]["type"], "number", "PEP 563 float stays a number")
+        resp = b.call(
+            "tools/call",
+            {"name": "smoke_pep563", "arguments": {"name": "x", "count": 3}},
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"], "x|3|1.5", "PEP 563 tool dispatches"
+        )
+        pep563_file.unlink()
+        print("  ✓ postponed annotations resolved — types and descriptions survive")
+
         # Call the gist tool — new-style dispatch (handler(**args))
         resp = b.call(
             "tools/call",
