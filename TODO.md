@@ -71,14 +71,17 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Gist deps tooling
 
-- [ ] **The pre-versioning shared deps dir is orphaned, not migrated.** `_deps_dir()` is
-  `~/.local/share/repld/deps/py3.X` now; the flat `~/.local/share/repld/deps/` it replaced is
-  still on disk with everything ever installed there (598 MB and 257 entries on this
-  machine, including two `-e` installs and the old `.repld-manifest.txt` with 18 entries).
-  Nothing reads it and nothing says so, so the first symptom is a re-download of the whole
-  set into the versioned dir. Either migrate the manifest forward on first versioned install
-  or say something once and let the user delete it. Note the flat dir is *also* where the
-  packages live, not a sibling — so anything that cleans it must not walk `py3.*`.
+- [ ] **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**
+  `_deps_dir()` is `~/.local/share/repld/deps/py3.X` now; the flat
+  `~/.local/share/repld/deps/` it replaced keeps everything ever installed there and nothing
+  reads it. The `[Unreleased]` note does tell users it's unused and deletable by hand, which
+  is why this is small — but nothing at runtime mentions it, so the only symptom is a re-
+  install prompt for deps that look like they're already there. Options: migrate the old
+  `.repld-manifest.txt` forward on the first versioned install, or warn once when the flat
+  dir is non-empty. Anything that cleans it must skip `py3.*` — the versioned dirs are
+  children of it, not siblings. Cleared on this machine 2026-07-31 (518 MB, 259 entries;
+  the two `-e` installs there were `mym-shopify` and `partbridge`, both of which will
+  re-prompt on their next boot with a terminal).
 - [ ] `repld doctor`-style check for shared-gist-deps binary-ABI mismatches
   (the dir is `gist_deps._deps_dir()` now — `~/.local/share/repld/deps/py3.X`, keyed by
   interpreter version, which is itself the fix for most of this class) — came up
