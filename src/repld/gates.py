@@ -115,7 +115,8 @@ def parse_response(kind: str, text: str, options: list[str] | None = None):
         if text in options:
             return text
         # The prompt renders options as `1=alpha, 2=beta`, so an index is the
-        # obvious thing to type — and used to resolve to the literal "1".
+        # obvious thing to type, so it must resolve to the option rather than
+        # to the literal "1".
         if text.isdigit() and 1 <= int(text) <= len(options):
             return options[int(text) - 1]
         listed = ", ".join(options)

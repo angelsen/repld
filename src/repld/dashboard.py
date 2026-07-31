@@ -468,9 +468,9 @@ def start_dashboard(
     )
     port = future.result(timeout=5.0)
     # The port and token exist now; publish them before anything can ask.
-    # Previously only browser code ever wrote this file, so a kernel that never
-    # touched the browser left `repld status` unable to authenticate and lost
-    # its dashboard port on every restart.
+    # Not left to the browser code that also writes this file: a kernel that
+    # never touches the browser would then leave `repld status` unable to
+    # authenticate, and lose its dashboard port on every restart.
     save_hint()
     return port
 

@@ -18,8 +18,8 @@ from typing import Any
 #   ("exec_eval", head, tail, names)      — exec head, then eval+display tail
 #   ("exec", code, names)                 — pure exec, no display
 # `names` is the set of top-level simple-assignment targets (`x = ...`,
-# `x: T = ...`, chained `x = y = ...`) — used to unwrap any `_NoDisplay`
-# a callee assigned directly, since assignment doesn't go through the
+# `x: T = ...`, chained `x = y = ...`), which is what lets a `_NoDisplay` a
+# callee assigned directly be unwrapped: assignment doesn't go through the
 # display path where unwrapping normally happens.
 
 

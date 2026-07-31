@@ -201,9 +201,9 @@ def _check_reload(fullname: str) -> None:
     """If the gist file changed, evict from sys.modules so next import reloads it.
 
     Also re-checks __repld_deps__ for just this file and prompts for anything
-    newly declared — otherwise a dependency added after kernel boot would sit
-    silently unchecked until someone thought to restart the whole process
-    (scan_deps() only ever ran once, at boot, before this).
+    newly declared — `scan_deps()` runs once at boot, so without this a
+    dependency added mid-session would sit unchecked until someone thought to
+    restart the whole process.
     """
     src = _managed.get(fullname)
     if src is None or not src.is_file():

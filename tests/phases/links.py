@@ -368,10 +368,11 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(prose, [], f"prose '->' note satisfies the shape rule (got {prose})")
         print("  ✓ gist lint: shape rule accepts any '->' note, as its message says")
 
-        # --- gist lint: the legacy rule outlived the runtime support it warned
-        # about. 0.2 removed __repld_tools__ outright, so a file still carrying
-        # one is silently ignored rather than warned about at tool-call time —
-        # this is now the only thing that says so. ---
+        # --- gist lint: nothing reads __repld_tools__ and nothing warns about
+        # one at tool-call time, so the rule is the only thing that reports a
+        # file still carrying one. Asserted on what the message *tells you to
+        # do*, not on its wording — pinning a phrase makes the test fail on a
+        # rewording rather than on a behaviour change. ---
         (src / "oldtools.py").write_text(
             '"""Stale declaration."""\n'
             '__repld_tools__ = [{"name": "a", "description": "d"}]\n'
@@ -383,10 +384,13 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             f for f in gist_lint.lint_file(src / "oldtools.py") if f.rule == "legacy"
         ]
         assert_eq(len(old), 1, "legacy rule flags a stale __repld_tools__")
-        assert_true("removed in repld 0.2" in old[0].message, "message says removed")
+        assert_true(
+            "__repld_tools__" in old[0].message and "_tool_" in old[0].message,
+            f"finding names the dunder and the replacement (got {old[0].message!r})",
+        )
 
-        # The companion check on the handler signature is gone: with the legacy
-        # convention removed, one dict parameter is an ordinary object argument.
+        # The handler signature is deliberately not flagged: one dict parameter
+        # is an ordinary object argument.
         (src / "dictparam.py").write_text(
             '"""One object argument."""\n'
             "def _tool_b(payload: dict):\n"

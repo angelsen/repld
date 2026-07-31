@@ -8,9 +8,9 @@ one holds mutable state (foreground task, per-cell byte cap, rich panels) and
 writes incrementally, the other maps one JSON record to one line — so what is
 shared here is only the formatting: pure functions, no state, no I/O.
 
-They had already drifted three ways before this module existed (a differently
-worded gate response, a dropped tab title, a colour left switched on), which
-is the whole argument for keeping the strings in one place.
+Two surfaces rendering the same event drift in ways nothing catches — a
+differently worded gate response, a dropped tab title, a colour left switched
+on — which is the whole argument for keeping the strings in one place.
 
 `display.py` still owns `VIEWER_MAX_BYTES`: that is a viewer policy, not a
 format.

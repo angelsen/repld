@@ -317,8 +317,8 @@ class Browser:
         )
         if failures:
             # Surface the reason directly — logger.debug alone is invisible
-            # by default (no logging configured), so a failed attach used to
-            # look identical to "nothing matched the pattern".
+            # by default (no logging configured), which would make a failed
+            # attach look identical to "nothing matched the pattern".
             detail = "; ".join(f"{tid[:6]}: {reason}" for tid, reason in failures)
             msg += f" {len(failures)} attach attempt(s) failed: {detail}"
         return msg

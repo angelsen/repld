@@ -192,7 +192,7 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
 def _print_python(lock: dict) -> None:
     """The kernel's interpreter, flagged when it can't import the project.
 
-    Silent for kernels written before this field existed, and for the common
+    Silent when the lockfile carries no `python` field, and for the common
     case where there's no project venv to disagree with.
     """
     running = lock.get("python")

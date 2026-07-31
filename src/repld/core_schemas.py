@@ -8,9 +8,9 @@ here is what lets both sides agree on the schema without the bridge
 importing `protocol.py` and pulling in the kernel's dependency chain.
 
 `DOC_RESOURCES` entries carry a `_help_attr` alongside the wire fields: both
-sides serve the same four docs out of `help.py` and each used to keep its own
-URI→constant map, so adding a fifth meant three edits in three modules. The
-attribute name is stripped before the dict goes on the wire (`wire()`).
+sides serve the same four docs out of `help.py`, so riding the attribute name
+on the entry keeps adding a fifth doc to one edit instead of three across three
+modules. It is stripped before the dict goes on the wire (`wire()`).
 """
 
 # The MCP revision every repld process advertises. Here rather than in
@@ -19,8 +19,8 @@ attribute name is stripped before the dict goes on the wire (`wire()`).
 # ever run in this project (`bridge._try_bridge_intercept`), and `repld exec`,
 # which handshakes over the socket itself. Importing `protocol.py` from the
 # other two would drag in browser_dispatch/help/kernel_context/tasks for one
-# string, so they used to carry hand-synced copies — a drift no test can see,
-# since each side would still be internally consistent.
+# string, so the alternative is a hand-synced copy in each — a drift no test
+# can see, since every side would still be internally consistent.
 PROTOCOL_VERSION = "2024-11-05"
 
 # What `initialize` negotiates, from either side of the socket. Shared for the

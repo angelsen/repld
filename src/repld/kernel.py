@@ -35,8 +35,8 @@ from .state import atomic_write_json
 from .protocol import Dispatcher
 from .tasks import install_tee
 
-# Re-exported: `push_channel` lived here before it moved to channel.py, and
-# `from repld.kernel import push_channel` is a plausible line in a gist.
+# Re-exported: `from repld.kernel import push_channel` is a plausible line in
+# a gist, so the name stays importable here though it lives in channel.py.
 __all__ = ["push_channel", "run_kernel"]
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ def _banner(
             f"  dashboard: \033[0m\033[4mhttp://localhost:{dashboard_port}\033[0m\033[90m"
         )
     lines += [
-        "  register:  claude mcp add -s project repld -- repld bridge",
+        "  register:  claude mcp add repld -- repld bridge",
         "  launch:    claude --dangerously-load-development-channels server:repld",
         "  human:     repld exec   # interactive REPL (state shared with agent)",
         "  observe:   repld log -f · repld status · repld dashboard\033[0m",
@@ -618,8 +618,8 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
 
     Never raises: a bootstrap that fails leaves a *live* kernel carrying the
     traceback on channel, which is the state you want to fix it from. Killing
-    boot instead would take away the thing that can run the fix. That covers
-    the read as well as the execution — an unreadable file used to escape into
+    boot instead would take away the thing that can run the fix. The read is
+    inside the `try` for that reason too: an unreadable file must not reach
     `_report_boot_failure` and end the process.
     """
     n = next(_exec_count)
@@ -869,13 +869,12 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         _lazy_browser = LazyBrowser()
         setattr(__main__, "browser", _lazy_browser)
         setattr(_repld_mod, "browser", _lazy_browser)
-        # No atexit disconnect hook. There used to be one, guarded on
-        # `loop.is_running()` because `_shutdown` stops the loop first and the
-        # coroutine would otherwise never be driven — which made the guard fire
-        # on every path that reached it, so the hook did nothing at all. Tabs
-        # clean themselves up regardless: the pill's own staleness check removes
-        # it (and the beforeunload guard) once Python stops heartbeating, which
-        # is exactly what a stopped loop looks like from the page.
+        # No atexit disconnect hook, and adding one cannot work: `_shutdown`
+        # stops the loop before atexit runs, so a coroutine scheduled there is
+        # never driven and the wait just burns its timeout. Tabs clean
+        # themselves up anyway — the pill's staleness check removes it, and the
+        # beforeunload guard with it, once Python stops heartbeating, which is
+        # exactly what a stopped loop looks like from the page.
     except ImportError:
         pass  # repld[browser] not installed — no browser builtin
 

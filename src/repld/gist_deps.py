@@ -180,11 +180,10 @@ def _write_manifest(entries: dict[str, str]) -> None:
 def ensure_deps_on_path() -> None:
     """Put this interpreter's shared gist-deps dir on sys.path.
 
-    Ungated: the directory is keyed by interpreter version, so its contents
-    are always loadable here. It used to be added only inside the uv tool
-    venv, which silently hid every installed gist dep from a kernel bound to
-    a project (bind.py re-execs into a `uv run` overlay, where the old
-    `"uv/tools/" in sys.prefix` test is false).
+    Ungated on purpose: the directory is keyed by interpreter version, so its
+    contents are always loadable here. Gating on a prefix test would hide every
+    installed gist dep from a kernel bound to a project, since `bind.py`
+    re-execs into a `uv run` overlay whose `sys.prefix` is a cache directory.
 
     Appended, not prepended: the project's own packages must win. A gist
     declaring `httpx>=0.27` should not shadow the version the project
@@ -377,14 +376,10 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     if not missing:
         return False
 
-    # No system-Python gate. There used to be one here — refusing to install
-    # when `sys.prefix == sys.base_prefix` and pointing at `uv tool install
-    # --with` — from when deps went into the active venv. They go to
-    # `_deps_dir()` via `--target` + `--python sys.executable` now, which
-    # resolves with or without a venv, and `ensure_deps_on_path` dropped its
-    # twin gate when that changed. This one was missed, so a `pip install
-    # --user repld-tool` could never install a gist dep through the prompt,
-    # and the advice it printed named the tool venv the shared dir replaced.
+    # No system-Python gate: deps go to `_deps_dir()` via `--target` +
+    # `--python sys.executable`, which resolves with or without a venv. Refusing
+    # when `sys.prefix == sys.base_prefix` would block a `pip install --user`
+    # install from ever accepting the prompt, for no gain.
 
     _tty_write("\033[36m[repld]\033[0m missing gist deps:\n")
     for i, dep in enumerate(missing, 1):

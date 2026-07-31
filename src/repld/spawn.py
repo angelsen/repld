@@ -16,9 +16,9 @@ than the six lines it saved.
 **Where the kernel lands matters as much as that it starts.** `start_new_session`
 alone is not independence: `setsid()` detaches from the controlling terminal, so
 closing the window won't SIGHUP the kernel, but it neither reparents the process
-nor moves it out of the spawner's cgroup. A kernel spawned by a bridge therefore
-stayed a child of that bridge and shared the terminal window's cgroup, so
-multi-gigabyte state (model weights, a browser) was accounted to the window.
+nor moves it out of the spawner's cgroup. A kernel spawned by a bridge would
+therefore stay a child of that bridge and share the terminal window's cgroup,
+accounting its multi-gigabyte state (model weights, a browser) to that window.
 
 Note what this does *not* buy: kill priority. `oom_score_adj` comes out the same
 either way — the user manager's `DefaultOOMScoreAdjust` is 200 on a stock Arch
@@ -217,8 +217,8 @@ def spawn_headless(sock_path: Path) -> str:
     Returns STARTED, INCUMBENT, or FAILED. Three states rather than a bool
     because only FAILED means "no kernel is coming": INCUMBENT is a racing boot
     that already owns the unit, and the caller should poll and adopt it exactly
-    as it would its own spawn. Collapsing the two made `repld restart` report
-    failure — silently, returning 1 — while a perfectly good kernel came up.
+    as it would its own spawn. Collapsed into one boolean, a racing boot reads
+    as a failure and `repld restart` gives up while a healthy kernel comes up.
 
     STARTED means the *process* started, not that the kernel is up; poll either
     way.

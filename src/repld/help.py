@@ -271,9 +271,8 @@ replaced by the target framework's decorator.
         except RuntimeError:
             return await lookup(company_id)
 
-  Schema is inferred from the type hints and the docstring's first line —
-  the removed __repld_tools__ list is not involved. Per-parameter
-  descriptions go in Annotated[T, "..."].
+  Schema is inferred from the type hints and the docstring's first line.
+  Per-parameter descriptions go in Annotated[T, "..."].
 
 == Secrets and .env ==
 
@@ -1229,9 +1228,9 @@ Tool registration:
         \"""Search foo for term.\"""
         return {"result": ...}
 
-  A _tool_* function is the only way to register a tool. The old
-  __repld_tools__ list was removed in 0.2 and is now ignored entirely —
-  `repld gist lint` flags one still lying around.
+  A _tool_* function is the only way to register a tool; a __repld_tools__
+  list is ignored entirely, and `repld gist lint` flags one still lying
+  around.
 
 Dependencies:
   __repld_deps__ = ["httpx>=0.27", "beautifulsoup4"]
@@ -1249,8 +1248,8 @@ Linting:
   Rules: firstline (module docstring's first line must stand alone),
   shape (dict/list-returning public methods need -> {shape} in their
   docstring's first line), deps (non-stdlib imports need __repld_deps__),
-  legacy (a __repld_tools__ list, removed in 0.2 and now silently
-  ignored -- nothing else reports one).
+  legacy (a __repld_tools__ list, which is silently ignored -- nothing
+  else reports one).
   Suppress one: # gistlint: ignore=<rule> on the flagged line.
 
 Cross-project links:
@@ -1592,8 +1591,8 @@ Lint before calling it done. `repld gist lint [name...]` checks: the module
 docstring's first line stands alone (it's what gets truncated into tool
 listings and instructions); public methods returning dict/list document the
 shape on the docstring's first line (`-> {key, ...}`); every non-stdlib
-import is covered by `__repld_deps__`; no lingering `__repld_tools__` (the
-removed tool-registration list, now ignored). Suppress a specific finding with
+import is covered by `__repld_deps__`; no lingering `__repld_tools__` (an
+ignored tool-registration list). Suppress a specific finding with
 `# gistlint: ignore=<rule>` on the flagged line (or the line above).
 
 === Writing portable gists ===

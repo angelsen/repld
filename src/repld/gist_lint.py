@@ -18,11 +18,11 @@ Checks:
              have it. Imports inside a try/except that catches ImportError
              are skipped -- that's how a soft dependency is written, and
              requiring a declaration would defeat the point.
-  legacy     The __repld_tools__ declaration list, removed in repld 0.2.
-             Nothing warns about it any more -- it is simply ignored, so a
+  legacy     A __repld_tools__ declaration list, which nothing reads.
+             Nothing warns about it either -- it is simply ignored, so a
              file still carrying one silently loses its tools (or exposes
-             them with a bogus single `args` parameter inferred from the
-             old handler signature). This is the only thing that says so.
+             them with a bogus single `args` parameter inferred from a
+             stale handler signature). This is the only thing that says so.
 
 Suppress a finding with a `# gistlint: ignore=<rule>[,<rule>]` comment on
 the flagged line or the line above it. For `firstline` (a whole-file check)
@@ -367,18 +367,17 @@ def _check_deps(
 def _check_legacy_tools(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
-    """``__repld_tools__``, which 0.2 removed and which now does nothing.
+    """A ``__repld_tools__`` declaration, which nothing reads.
 
-    The rule outlived the runtime support on purpose: a file still carrying the
-    declaration is no longer *warned* about at tool-call time, it is silently
-    ignored, so its tools either vanish from ``tools/list`` or — if it also has
-    the matching ``_tool_x(args: dict)`` handler — reappear with a single
-    ``args`` object parameter inferred from that signature. Both are quiet
-    wrong answers, and this is the only thing that names them.
+    Nothing warns at tool-call time either — it is simply ignored — so a file
+    still carrying one either loses its tools from ``tools/list``, or, if the
+    matching ``_tool_x(args: dict)`` handler is still there, exposes them with
+    a bogus single ``args`` object parameter inferred from that signature. Both
+    are quiet wrong answers, and this is the only thing that names them.
 
-    The old companion check on the handler signature is gone: with the legacy
-    convention removed, ``_tool_x(payload: dict)`` is an ordinary tool taking
-    one object argument, so flagging it would fire on correct code.
+    The handler signature itself is deliberately not flagged:
+    ``_tool_x(payload: dict)`` is an ordinary tool taking one object argument,
+    so a check on it would fire on correct code.
     """
     node = gists._dunder_value(tree, "__repld_tools__")
     if node is None or _is_ignored(node.lineno, "legacy", ignores):
@@ -388,8 +387,8 @@ def _check_legacy_tools(
             path,
             node.lineno,
             "legacy",
-            "__repld_tools__ was removed in repld 0.2 and is now ignored -- "
-            "declare tools as _tool_ functions with type hints and let the "
-            'schema be inferred (Annotated[T, "..."] for a param description)',
+            "__repld_tools__ is ignored -- declare tools as _tool_ functions "
+            "with type hints and let the schema be inferred "
+            '(Annotated[T, "..."] for a param description)',
         )
     ]

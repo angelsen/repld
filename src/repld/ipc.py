@@ -160,7 +160,7 @@ class Server:
         # leaves a window in which the socket is connectable by anyone. The
         # 0700 project directory is the real barrier — this is the same
         # defence in depth every other runtime file gets (`state.open_private`,
-        # `atomic_write_json(chmod=…)`), and the one place that used to skip it.
+        # `atomic_write_json(chmod=…)`).
         old_umask = os.umask(0o177)
         try:
             self.sock.bind(str(self.socket_path))
