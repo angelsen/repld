@@ -82,7 +82,7 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 - [x] `install_deps()` (`gist_deps.py:277-297`) resolved each install independently —
   `uv pip install --target <_TOOL_DEPS_DIR> <newly-missing-only>` per call, never
   re-solved against what's already sitting in the shared target dir. Hit this live
-  (termtap2 prototyping, session 020): `pydantic 2.13.4` + `pydantic-core 2.46.4`
+  (termtap2 prototyping, 2026-07-20): `pydantic 2.13.4` + `pydantic-core 2.46.4`
   (mutually compatible) were installed by one gist's deps; a later `fastmcp` install
   resolved its own requirement graph in isolation and pulled `pydantic-core 2.47.0`
   (satisfying fastmcp's constraint) while leaving the already-present `pydantic 2.13.4`
@@ -163,7 +163,7 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 - [ ] **`browser/` has no direct coverage.** Phase 6 exercises the tools end to end, but
   `har.py`'s SQL, `capture.py`'s Fetch interception, and `cdp.py`'s reconnect/reattach paths
-  are only touched incidentally. Both browser bugs found in session 021 were in that area,
+  are only touched incidentally. Both browser bugs found on 2026-07-31 were in that area,
   and both surfaced from *using* the code rather than from three separate reading passes that
   had all explicitly scoped it out.
 - [ ] Phase 6 still needs a live Chrome on `:9222`. It is deterministic now — it opens its own
