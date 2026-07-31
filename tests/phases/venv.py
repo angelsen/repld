@@ -8,6 +8,7 @@ packages import anywhere. Splicing it anyway *half*-works, which is worse to
 debug than a clean refusal — so the refusal assertion is the important one here.
 """
 
+import importlib.metadata
 import json
 import os
 import shutil
@@ -288,6 +289,46 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
         assert_eq(cmd[1:3], ["run", "--with-editable"], f"uses uv run (got {cmd})")
         assert_eq(cmd[-2:], ["repld", "bridge"], "re-runs the same subcommand")
         print("  ✓ uv_run_argv targets a local checkout, preserving argv")
+
+        # `rebind_exec` documents that failures degrade to an unbound kernel,
+        # and it runs before `repld bridge` does anything — so malformed
+        # direct_url.json metadata must return None here, not take the MCP
+        # server down at startup.
+        from repld import relaunch
+
+        class _FakeDist:
+            def __init__(self, raw):
+                self._raw = raw
+
+            def read_text(self, _name):
+                if isinstance(self._raw, Exception):
+                    raise self._raw
+                return self._raw
+
+        orig_dist = importlib.metadata.distribution
+        try:
+            for label, raw in [
+                ("corrupt json", "{not json"),
+                ("not an object", "[1, 2, 3]"),
+                ("dir_info missing", '{"url": "file:///x"}'),
+                ("dir_info wrong type", '{"dir_info": "yes", "url": "file:///x"}'),
+                ("url missing", '{"dir_info": {"editable": true}}'),
+                ("url not a string", '{"dir_info": {"editable": true}, "url": 7}'),
+                ("unreadable", OSError("boom")),
+                ("empty", ""),
+            ]:
+                importlib.metadata.distribution = lambda _n, r=raw: _FakeDist(r)
+                assert_eq(relaunch._editable_path(), None, f"_editable_path: {label}")
+            # ...and a valid one still resolves, so this isn't None-always.
+            importlib.metadata.distribution = lambda _n: _FakeDist(
+                '{"dir_info": {"editable": true}, "url": "file:///home/x/repld"}'
+            )
+            assert_eq(
+                relaunch._editable_path(), "/home/x/repld", "_editable_path: valid"
+            )
+        finally:
+            importlib.metadata.distribution = orig_dist
+        print("  ✓ _editable_path degrades on bad metadata instead of raising")
 
         _systemd_spawn_argv(tmp)
         _systemd_spawn_live(tmp)

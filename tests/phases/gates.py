@@ -142,5 +142,45 @@ def phase_17_gates(kernel: Kernel) -> None:
             "the unknown-gate error names the id",
         )
         print("  ✓ unknown gate id reported, not silently swallowed")
+
+        _pane_reshows_the_question()
     finally:
         b.close()
+
+
+def _pane_reshows_the_question() -> None:
+    """With two gates open, answering one must re-ask the *other* by name.
+
+    The pane is headless in this suite, so drive its renderers directly. This
+    is the surface `repld gate` made reachable: an out-of-band answer for an
+    older gate leaves the newer one on screen, and re-showing it with a
+    placeholder would leave the human looking at `? still waiting [y/n]`.
+    """
+    from repld import display
+    from repld.events import HumanPromptOpen, HumanPromptResponse
+
+    written: list[str] = []
+    real_out, display._out = display._out, written.append
+    real_gates = dict(display._open_gates)
+    try:
+        display._open_gates.clear()
+        display._render_prompt_open(HumanPromptOpen("aaa", "confirm", "Deploy?", None))
+        display._render_prompt_open(
+            HumanPromptOpen("bbb", "choose", "Which region?", ["eu", "us"])
+        )
+        written.clear()
+        # `repld gate answer aaa y` — the *older* one, answered elsewhere.
+        display._render_prompt_response(HumanPromptResponse("aaa", True))
+        out = "".join(written)
+        assert_true(
+            "Which region?" in out,
+            f"the surviving gate is re-asked by name (got {out!r})",
+        )
+        assert_true("still waiting" not in out, f"no placeholder prompt (got {out!r})")
+        assert_true("1=eu, 2=us" in out, f"and with its own options (got {out!r})")
+        assert_eq(list(display._open_gates), ["bbb"], "only the answered gate dropped")
+    finally:
+        display._out = real_out
+        display._open_gates.clear()
+        display._open_gates.update(real_gates)
+    print("  ✓ pane re-asks the surviving gate's own question, not a placeholder")

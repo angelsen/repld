@@ -428,6 +428,27 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             "  ✓ gist lint: legacy rule names __repld_tools__ as removed, not stale sigs"
         )
 
+        # A file lint cannot even read must not abort the run. The default
+        # scope spans global + local + linked, so the offending file may sit in
+        # a project you never opened — a traceback there is unactionable.
+        (src / "binary.py").write_bytes(b'"""Doc."""\nX = "\xff\xfe not utf-8"\n')
+        undecodable = gist_lint.lint_file(src / "binary.py")
+        assert_eq(len(undecodable), 1, f"undecodable file -> one finding {undecodable}")
+        assert_eq(undecodable[0].rule, "syntax", "reported under the syntax rule")
+        assert_true(
+            "cannot read" in undecodable[0].message,
+            f"and says so (got {undecodable[0].message!r})",
+        )
+        mixed = gist_lint.lint_paths(
+            [src / "typedtools.py", src / "binary.py", src / "dictparam.py"]
+        )
+        assert_true(
+            any(f.rule == "syntax" for f in mixed),
+            "lint_paths reports it rather than raising mid-list",
+        )
+        (src / "binary.py").unlink()
+        print("  ✓ gist lint: an unreadable file is a finding, not a traceback")
+
         # --- path: dep modules get gist-style mtime auto-reload, without the
         # gist-registry/API-summary side effects a real gist import triggers ---
         finder = gists._GistFinder([])  # empty gist dirs — only the path-dep tier fires

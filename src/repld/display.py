@@ -71,14 +71,16 @@ def _out(text: str) -> None:
 # task_id of the "foreground" cell (last started, not yet done).
 # Output from other tasks is prefixed.
 _foreground_task_id: str | None = None
-# Gates still awaiting an answer, oldest first: gate_id → (kind, options).
+# Gates still awaiting an answer, oldest first: gate_id → (kind, prompt, options).
+# The prompt is kept because re-showing a gate has to re-ask the question — it
+# is the only thing on screen telling the human what is still pending.
 # A dict rather than a single slot because `gates` has always supported any
 # number at once, and since `repld gate` an answer can arrive out-of-band for
 # any of them — the pane has to drop the one that was answered, not whichever
 # it happened to be showing. Insertion-ordered, so stdin routes to the newest
 # open gate (the one whose prompt is on screen) and falls back to the previous
 # one when that is answered elsewhere.
-_open_gates: "dict[str, tuple[str, list[str] | None]]" = {}
+_open_gates: "dict[str, tuple[str, str, list[str] | None]]" = {}
 
 # Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
 # edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
@@ -249,7 +251,7 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
-    _open_gates[ev.gate_id] = (ev.kind, ev.options)
+    _open_gates[ev.gate_id] = (ev.kind, ev.prompt, ev.options)
     # No newline — the cursor stays on this line for the stdin reader.
     _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
 
@@ -264,8 +266,10 @@ def _render_prompt_response(ev: HumanPromptResponse) -> None:
     # Something else is still waiting: re-show it, since its prompt has now
     # scrolled above the response line and the cursor is no longer parked on it.
     if _open_gates:
-        gate_id, (kind, options) = next(reversed(_open_gates.items()))
-        _out(render.prompt_open(kind, "still waiting", options, gate_id))
+        # Its own question, not a placeholder: this is the only thing on screen
+        # telling the human what they are still being asked.
+        gate_id, (kind, prompt, options) = next(reversed(_open_gates.items()))
+        _out(render.prompt_open(kind, prompt, options, gate_id))
 
 
 def _render_browser_attached(ev: BrowserTabAttached) -> None:
@@ -321,7 +325,7 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
         # Newest open gate — the one whose prompt the cursor is parked on.
         if not _open_gates:
             continue
-        gate_id, (kind, options) = next(reversed(_open_gates.items()))
+        gate_id, (kind, _prompt, options) = next(reversed(_open_gates.items()))
         try:
             value = parse_response(kind, line, options)
         except ValueError as exc:

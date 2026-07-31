@@ -68,7 +68,13 @@ def lint_paths(paths: list[Path]) -> list[Finding]:
 
 
 def lint_file(path: Path) -> list[Finding]:
-    source = path.read_text("utf-8")
+    try:
+        source = path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        # Same shape as the SyntaxError below: one file we cannot check must
+        # not take down a run that spans global + local + linked gists, where
+        # the offending file may belong to a project you never opened.
+        return [Finding(path, 1, "syntax", f"cannot read: {e}")]
     try:
         tree = ast.parse(source)
     except SyntaxError as e:

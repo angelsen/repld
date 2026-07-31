@@ -26,13 +26,30 @@ def _editable_path() -> str | None:
         dist = metadata.distribution("repld-tool")
     except metadata.PackageNotFoundError:
         return None
-    raw = dist.read_text("direct_url.json")
+    # Everything below is best-effort. `bind.rebind_exec` calls this before
+    # `repld bridge` and `repld restart` do anything at all, and documents that
+    # failures degrade to an unbound kernel — so a `direct_url.json` that is
+    # missing, unreadable, corrupt, or simply shaped differently by some future
+    # installer must return None here rather than take the MCP server down at
+    # startup.
+    try:
+        raw = dist.read_text("direct_url.json")
+    except OSError:
+        return None
     if not raw:
         return None
-    info = json.loads(raw)
-    if not info.get("dir_info", {}).get("editable"):
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError:
         return None
-    return info["url"].removeprefix("file://")
+    if not isinstance(info, dict):
+        return None
+    if not isinstance(info.get("dir_info"), dict):
+        return None
+    if not info["dir_info"].get("editable"):
+        return None
+    url = info.get("url")
+    return url.removeprefix("file://") if isinstance(url, str) else None
 
 
 def run_browser(argv: list[str]) -> int:
