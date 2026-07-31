@@ -26,6 +26,7 @@ _SUBCOMMANDS = {
         "run_dashboard",
         "open the kernel's web control panel",
     ),
+    "gate": ("gate_cmd", "run_gate", "list / answer pending human gates"),
     "help": ("help", "run_help", "agent/human docs"),
     "gist": ("gist_cmd", "run_gist", "new / add / rm / list gists"),
     "browser": (

@@ -486,9 +486,49 @@ class Dispatcher(BrowserDispatchMixin):
             return _response(rid, {"resourceTemplates": []})
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
+        # Human gates. Deliberately JSON-RPC methods and *not* MCP tools: they
+        # exist so a human can unblock a cell, and an agent that could answer
+        # its own `confirm()` would defeat the primitive. `repld gate` is the
+        # only caller; no MCP client is ever told these exist.
+        if method == "gates/list":
+            from . import gates
+
+            return _response(rid, {"gates": gates.open_gates()})
+        if method == "gates/resolve":
+            return self._gates_resolve(rid, req.get("params", {}))
         if rid is None:
             return None
         return _error(rid, -32601, f"method not found: {method}")
+
+    def _gates_resolve(self, rid, params: dict) -> dict:
+        """Answer one pending gate, coercing the value the way its kind needs.
+
+        Coercion happens here rather than in the CLI so the kernel stays the
+        authority on what a gate accepts — the caller only knows the string a
+        human typed, and `open_gates` is what says whether it's a confirm.
+        """
+        from . import gates
+
+        gate_id = params.get("gate_id")
+        if not gate_id:
+            return _error(rid, -32602, "missing gate_id")
+        pending = {g["gate_id"]: g for g in gates.open_gates()}
+        gate = pending.get(gate_id)
+        if gate is None:
+            return _error(rid, -32602, f"no gate awaiting an answer: {gate_id}")
+        if "value" not in params:
+            return _error(rid, -32602, "missing value")
+        try:
+            value = gates.parse_response(
+                gate["kind"], str(params["value"]), gate["options"]
+            )
+        except ValueError as exc:
+            return _error(rid, -32602, str(exc))
+        if not gates.resolve_gate(gate_id, value):
+            # Raced: a pane or a browser pill answered between the lookup and
+            # here. The cell is unblocked either way, which is what was wanted.
+            return _error(rid, -32602, f"gate {gate_id} was already answered")
+        return _response(rid, {"gate_id": gate_id, "value": value})
 
     def _initialize(self, rid) -> dict:
         return _response(

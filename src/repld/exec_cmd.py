@@ -96,16 +96,22 @@ def _call(
             _handle_notification(data, json_mode)
 
 
-def _connect(lock_path: Path) -> tuple[socket.socket, IO[str], IO[str], dict] | None:
+def _connect(
+    lock_path: Path, *, label: str = "repld exec"
+) -> tuple[socket.socket, IO[str], IO[str], dict] | None:
     """Read lockfile, connect to kernel, perform MCP handshake.
 
-    Returns (sock, rfile, wfile, lock_info) or None on failure.
+    Returns (sock, rfile, wfile, lock_info) or None on failure. `label` names
+    the calling command in errors — `repld gate` shares this handshake rather
+    than keeping a second copy of it.
     """
     result = connect_to_kernel(lock_path)
     if isinstance(result, str):
-        _err(
-            f"{result}\n  start one with `repld`, or open `claude` — the MCP "
-            "bridge starts a headless kernel on connect"
+        print(
+            f"{label}: {result}\n  start one with `repld`, or open `claude` — "
+            "the MCP bridge starts a headless kernel on connect",
+            file=sys.stderr,
+            flush=True,
         )
         return None
     sock, lock = result
@@ -125,7 +131,7 @@ def _connect(lock_path: Path) -> tuple[socket.socket, IO[str], IO[str], dict] | 
         },
     )
     if resp is None:
-        _err("kernel disconnected during handshake")
+        print(f"{label}: kernel disconnected during handshake", file=sys.stderr)
         sock.close()
         return None
     _send(wfile, "notifications/initialized", notif=True)

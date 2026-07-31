@@ -29,6 +29,7 @@ from phases.core import phase_3
 from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
+from phases.gates import phase_17_gates
 from phases.gist_tools import phase_9_gist_tools
 from phases.headless import phase_15_headless
 from phases.links import phase_12_gist_links
@@ -76,13 +77,14 @@ PHASES = {
     14: phase_14_dashboard,
     15: phase_15_headless,
     16: phase_16_venv_binding,
+    17: phase_17_gates,
 }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", type=int, default=3, help="highest phase to run (ceiling: 16)"
+        "--phase", type=int, default=3, help="highest phase to run (ceiling: 17)"
     )
     args = ap.parse_args()
 

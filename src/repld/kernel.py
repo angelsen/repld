@@ -758,6 +758,11 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     else:
         events.disable_queue()
 
+    # Whether a pane's stdin reader will exist to answer `ask`/`confirm`/
+    # `choose`. Headless there is none, so gates say so in their channel push
+    # and point at `repld gate` instead of blocking mutely forever.
+    gates.set_terminal(display)
+
     # 2a. Reclaim what dead kernels left in RUNTIME_DIR. Boot is the only
     # sensible moment: nothing runs on the way out of a SIGKILL, and a kernel
     # can't tidy up after files it hasn't written yet. Best-effort — a failed

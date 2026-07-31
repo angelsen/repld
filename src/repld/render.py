@@ -92,15 +92,24 @@ def channel_block(content: str, meta: dict, *, t: float | None = None) -> str:
     return "\n".join(lines)
 
 
-def prompt_open(kind: str, prompt: str, options: list[str] | None) -> str:
+def prompt_open(
+    kind: str, prompt: str, options: list[str] | None, gate_id: str = ""
+) -> str:
     """The human-gate question. No trailing newline: the TUI leaves the cursor
-    on this line waiting for stdin, so the `: ` is part of the string."""
+    on this line waiting for stdin, so the `: ` is part of the string.
+
+    The id is carried because `repld log -f` is where someone watching a
+    headless kernel sees the gate open, and it is what `repld gate answer`
+    takes. Harmless in the pane, where you just type the answer.
+    """
     out = f"{BOLD}{CYAN}? {prompt}{RESET}"
     if kind == "confirm":
         out += f" {DIM}[y/n]{RESET}"
     elif kind == "choose" and options:
         opts = ", ".join(f"{i + 1}={o}" for i, o in enumerate(options))
         out += f" {DIM}[{opts}]{RESET}"
+    if gate_id:
+        out += f" {DIM}#{gate_id}{RESET}"
     return out + ": "
 
 

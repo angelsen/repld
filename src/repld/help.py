@@ -45,7 +45,9 @@ _EXEC_MODEL = (
     "pushes channel on completion. "
     "every(seconds)(fn) schedules fn to run periodically; "
     "fn.cancel() stops it. every.list() shows active tickers. "
-    "ask()/confirm()/choose() block on human input in the kernel pane. "
+    "ask()/confirm()/choose() block the cell on human input; the answer comes "
+    "from the kernel's pane, a pinned tab's pill, or `repld gate answer <id>` "
+    "when the kernel is headless (the usual case — the push tells you which). "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
     "The kernel persists; one-shot work can become background automation."
@@ -1006,6 +1008,8 @@ Commands:
   repld stop [--all]       Stop this project's kernel (or every one)
   repld restart            Stop, then start a fresh headless kernel
   repld dashboard          Open the kernel's web control panel
+  repld gate               List gates waiting on a human answer
+  repld gate answer ID VAL Answer one (the route for a headless kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld init               Scaffold .mcp.json + CLAUDE.md block in cwd
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
@@ -1256,12 +1260,18 @@ await ask(prompt, *, tab=None, default=None, timeout=None)             → str
 await confirm(prompt, *, tab=None, default=None, timeout=None)         → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 
-Blocks cell on human input in kernel pane.
-Pass tab= to also surface the gate in that tab's pin pill (requires
-tab.pin()); terminal and browser resolve the same gate — first wins.
-ask() accepts tab= for symmetry, but the pill has no text input — the
-response is always typed in the terminal.
-TimeoutError if no default and timeout expires.
+Blocks the cell until a human answers. Three surfaces can answer, and
+they race — first one wins:
+  kernel pane      only if the kernel was started as `repld` in a terminal
+  pin pill         pass tab= (requires tab.pin()); confirm/choose only
+  repld gate       any kernel, from the project dir — the headless answer
+An auto-spawned kernel (Claude Code's bridge, `repld restart`) has no pane,
+so `repld gate` is the usual route; the awaiting_human push says so and
+carries the gate id. `repld gate` lists what's pending, `repld gate answer
+<id> <value>` resolves it, and `repld log -f` shows gates as they open.
+ask() accepts tab= for symmetry, but the pill has no text input.
+TimeoutError if no default and timeout expires — pass timeout= for any gate
+that must not park a cell indefinitely.
 Emits awaiting_human channel while blocked.
 
 notify(content, **meta)
@@ -1424,9 +1434,13 @@ Injected into __main__:
   no_display(value)            return value from a cell without auto-display
                                 re-printing it (still binds _/_N)
   ask(prompt) / confirm(prompt) / choose(prompt, options)
-                               block on human input in the kernel terminal;
-                               confirm/choose accept tab= to also surface
-                               the gate in that tab's pin pill
+                               block the cell on human input. Answered from
+                               the kernel's pane, from a pinned tab's pill
+                               (confirm/choose, via tab=), or with
+                               `repld gate answer <id> <value>` — the last
+                               is the only one a headless kernel has, and
+                               headless is the usual case. Pass timeout=
+                               for a gate that must not park a cell forever.
 
 == Browser ==
 

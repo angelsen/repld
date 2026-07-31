@@ -2,9 +2,21 @@
 
 Gates are async coroutines — `await ask("name?")` yields to the asyncio loop
 while waiting on the human, so uvicorn / watchdog / other bg tasks keep
-running. The display thread's stdin reader calls `resolve_gate(gate_id, ...)`
-when the human types a response; that resolves the underlying future and
-the awaiting cell resumes.
+running. Something calls `resolve_gate(gate_id, ...)` when the human answers;
+that resolves the underlying future and the awaiting cell resumes.
+
+**Three surfaces can answer, and which exist depends on how the kernel was
+started.** A kernel run as `repld` in a pane has the display thread's stdin
+reader. A pinned browser tab has the pill UI. A kernel spawned *for* the user —
+Claude Code's bridge, `repld restart`, a systemd unit — has neither: it runs
+`--no-display` with stdin on /dev/null, and that is now the common case. So the
+registry below is introspectable (`open_gates`) and resolvable out-of-band, and
+`repld gate` drives both over IPC. Without that a `confirm()` on an auto-spawned
+kernel blocks forever with nothing able to answer it.
+
+`parse_response` is shared by every surface on purpose: "y", "2", and an option
+name have to mean the same thing whether they were typed into the pane or into
+`repld gate answer`.
 
 `tty_prompt` is the synchronous sibling at the bottom of this file: same job
 (ask the human), different mechanism. It runs during boot — installing gist
@@ -17,14 +29,96 @@ import asyncio
 import concurrent.futures
 import sys
 import threading
+import time
 import uuid
+from dataclasses import dataclass
 from typing import IO, Literal
 
 from .channel import push_channel
 from .events import HumanPromptOpen, HumanPromptResponse, emit
 
-_gates: dict[str, concurrent.futures.Future] = {}
+
+@dataclass
+class _Gate:
+    """A pending gate. The prompt is kept so `open_gates` can describe it —
+    a surface that never saw the original channel push has nothing else to
+    render, and `repld gate` is exactly that surface."""
+
+    future: "concurrent.futures.Future"
+    kind: str
+    prompt: str
+    options: list[str] | None
+    opened_at: float
+
+
+_gates: dict[str, _Gate] = {}
 _gates_lock = threading.Lock()
+
+# Whether this kernel has a pane whose stdin reader can answer a gate. Set once
+# at boot by `kernel._boot_runtime`; False for every `--no-display` kernel,
+# which is what lets `_gate` tell the agent that nobody is listening.
+_has_terminal = False
+
+_YES = frozenset({"y", "yes", "1", "true"})
+_NO = frozenset({"n", "no", "0", "false"})
+
+
+def set_terminal(value: bool) -> None:
+    """Record whether a display thread will be reading stdin for gate answers."""
+    global _has_terminal
+    _has_terminal = value
+
+
+def open_gates() -> list[dict]:
+    """Every gate currently waiting on a human, oldest first.
+
+    Serialisable by construction — it crosses the IPC socket to `repld gate`
+    and is read in-process by the dashboard.
+    """
+    now = time.monotonic()
+    with _gates_lock:
+        pending = [(gid, g) for gid, g in _gates.items() if not g.future.done()]
+    pending.sort(key=lambda item: item[1].opened_at)
+    return [
+        {
+            "gate_id": gid,
+            "kind": g.kind,
+            "prompt": g.prompt,
+            "options": list(g.options or []),
+            "waiting_s": round(now - g.opened_at, 1),
+        }
+        for gid, g in pending
+    ]
+
+
+def parse_response(kind: str, text: str, options: list[str] | None = None):
+    """Coerce a typed line into the value a gate of `kind` resolves to.
+
+    Shared by the pane's stdin reader and `repld gate answer` so the two can't
+    disagree about what "y" or "2" means. Raises ValueError with a
+    human-readable reason for anything the kind doesn't accept; callers decide
+    whether to re-prompt (the pane) or exit non-zero (the CLI).
+    """
+    text = text.strip()
+    if kind == "confirm":
+        low = text.lower()
+        if low in _YES:
+            return True
+        if low in _NO:
+            return False
+        raise ValueError("type y or n")
+    if kind == "choose":
+        if not options:
+            return text
+        if text in options:
+            return text
+        # The prompt renders options as `1=alpha, 2=beta`, so an index is the
+        # obvious thing to type — and used to resolve to the literal "1".
+        if text.isdigit() and 1 <= int(text) <= len(options):
+            return options[int(text) - 1]
+        listed = ", ".join(options)
+        raise ValueError(f"choose one of: {listed} (or 1-{len(options)})")
+    return text
 
 
 async def ask(
@@ -79,7 +173,9 @@ async def _gate(
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
-        _gates[gate_id] = fut
+        _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic())
+
+    use_pill = tab is not None and getattr(tab, "_pinned", False)
 
     # Channel push first, then prompt — so the panel renders on a fresh
     # line in the viewer before the prompt text (which ends with `: ` and
@@ -87,11 +183,21 @@ async def _gate(
     meta = {"kind": "awaiting_human", "gate_id": gate_id, "prompt_kind": kind}
     if options:
         meta["options"] = ",".join(options)
-    push_channel(f"awaiting human: {prompt}", meta)
+    content = f"awaiting human: {prompt}"
+    if not _has_terminal and not use_pill:
+        # Nothing attached to this kernel can answer, and without timeout= the
+        # cell blocks indefinitely. The agent is the one who sees this push, so
+        # give it the literal command to hand the human rather than leaving both
+        # of them waiting on a pane that doesn't exist.
+        content += (
+            f"\nno terminal attached — answer from the project dir with: "
+            f"repld gate answer {gate_id} <value>"
+        )
+    push_channel(content, meta)
     emit(HumanPromptOpen(gate_id, kind, prompt, options))
 
     # Route to pill UI if tab is pinned
-    if tab is not None and getattr(tab, "_pinned", False):
+    if use_pill and tab is not None:
         asyncio.create_task(
             tab._show_gate(gate_id, kind, prompt, options),
             name=f"repld-gate-show-{gate_id}",
@@ -111,22 +217,24 @@ async def _gate(
             _gates.pop(gate_id, None)
 
 
-def resolve_gate(gate_id: str, value) -> None:
-    """Called by the stdin reader when the human responds to a gate.
+def resolve_gate(gate_id: str, value) -> bool:
+    """Answer a pending gate. Returns whether this call is the one that did.
 
-    Terminal and browser-pill callers can race to resolve the same gate —
-    first one wins by design; set_result on an already-done future raises
-    InvalidStateError, which we swallow rather than crash the caller.
+    The pane's stdin reader, a browser pill, and `repld gate answer` can all
+    race to resolve the same gate — first one wins by design; set_result on an
+    already-done future raises InvalidStateError, which we swallow rather than
+    crash the caller.
     """
     with _gates_lock:
-        fut = _gates.get(gate_id)
-    if fut is None:
-        return
+        gate = _gates.get(gate_id)
+    if gate is None:
+        return False
     try:
-        fut.set_result(value)
+        gate.future.set_result(value)
     except concurrent.futures.InvalidStateError:
-        return
+        return False
     emit(HumanPromptResponse(gate_id, value))
+    return True
 
 
 # ---------------------------------------------------------------------------

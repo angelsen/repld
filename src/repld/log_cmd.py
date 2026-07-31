@@ -63,7 +63,10 @@ def _render(rec: dict) -> str | None:
         # rstrip the trailing "': '" — it exists to park a live cursor, and a
         # replay is printing a finished line.
         return render.prompt_open(
-            str(rec.get("kind", "")), rec.get("prompt", ""), rec.get("options")
+            str(rec.get("kind", "")),
+            rec.get("prompt", ""),
+            rec.get("options"),
+            str(rec.get("gate_id", "")),
         ).rstrip()
     if kind == "HumanPromptResponse":
         return render.prompt_response(rec.get("value"))

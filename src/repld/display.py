@@ -26,7 +26,7 @@ from .events import (
     StdoutChunk,
     get_queue,
 )
-from .gates import resolve_gate
+from .gates import parse_response, resolve_gate
 
 # ---------------------------------------------------------------------------
 # Optional rich
@@ -74,6 +74,7 @@ _foreground_task_id: str | None = None
 # gate_id currently awaiting a stdin response (or None).
 _awaiting_gate: str | None = None
 _awaiting_gate_kind: str | None = None
+_awaiting_gate_options: list[str] | None = None
 
 # Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
 # edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
@@ -244,17 +245,19 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
-    global _awaiting_gate, _awaiting_gate_kind
+    global _awaiting_gate, _awaiting_gate_kind, _awaiting_gate_options
     _awaiting_gate = ev.gate_id
     _awaiting_gate_kind = ev.kind
+    _awaiting_gate_options = ev.options
     # No newline — the cursor stays on this line for the stdin reader.
-    _out(render.prompt_open(ev.kind, ev.prompt, ev.options))
+    _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:
-    global _awaiting_gate, _awaiting_gate_kind
+    global _awaiting_gate, _awaiting_gate_kind, _awaiting_gate_options
     _awaiting_gate = None
     _awaiting_gate_kind = None
+    _awaiting_gate_options = None
     # Leading newline closes the line the prompt left the cursor on.
     _out("\n" + render.prompt_response(ev.value) + "\n")
 
@@ -294,7 +297,13 @@ def _render(ev: Event) -> None:
 
 
 def _stdin_reader_loop(stop: threading.Event) -> None:
-    """Read lines from stdin and route them to the active gate."""
+    """Read lines from stdin and route them to the active gate.
+
+    Coercion lives in `gates.parse_response`, shared with `repld gate answer`
+    so a pane and the CLI can't disagree about what "y" or "2" means. On a
+    rejected line we re-prompt and leave the gate open — the human is right
+    here and can try again.
+    """
     while not stop.is_set():
         try:
             line = _STDIN.readline()
@@ -307,19 +316,12 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
         kind = _awaiting_gate_kind
         if gate_id is None:
             continue
-        # Parse based on gate kind
-        if kind == "confirm":
-            if line.lower() in ("y", "yes", "1", "true"):
-                resolve_gate(gate_id, True)
-            elif line.lower() in ("n", "no", "0", "false"):
-                resolve_gate(gate_id, False)
-            else:
-                _out(f"{_DIM}Type y or n: {_RESET}")
-        elif kind == "choose":
-            resolve_gate(gate_id, line.strip())
-        else:
-            # ask
-            resolve_gate(gate_id, line)
+        try:
+            value = parse_response(kind or "ask", line, _awaiting_gate_options)
+        except ValueError as exc:
+            _out(f"{_DIM}{exc}: {_RESET}")
+            continue
+        resolve_gate(gate_id, value)
 
 
 # ---------------------------------------------------------------------------
