@@ -611,8 +611,16 @@ async def post_observe(
     # target_id in pre.*_snapshots just means "everything is new" — see
     # network_delta/console_delta's pre_ids.get(..., 0) default).
     all_tabs_post = [tab] + fresh_iframes
-    net_entries = network_delta(all_tabs_post, pre.har_snapshots)
-    console_lines = console_delta(all_tabs_post, pre.console_snapshots)
+    # Off the loop. Unlike the pre-snapshot, these genuinely need the views —
+    # they return rows, not a high-water mark — so `har_summary WHERE id > ?`
+    # re-evaluates the CTE chain at 39–56 ms per tab, once more per iframe,
+    # after every observed mutation. `CDPSession.query` takes a fresh cursor
+    # precisely so it can be called from another thread while the loop keeps
+    # writing through the main connection.
+    net_entries, console_lines = await asyncio.gather(
+        asyncio.to_thread(network_delta, all_tabs_post, pre.har_snapshots),
+        asyncio.to_thread(console_delta, all_tabs_post, pre.console_snapshots),
+    )
 
     obs = Observation(
         url=tab.url,
