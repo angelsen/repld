@@ -71,7 +71,9 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Gist deps tooling
 
-- [ ] `repld doctor`-style check for `_TOOL_DEPS_DIR` binary-ABI mismatches — came up
+- [ ] `repld doctor`-style check for shared-gist-deps binary-ABI mismatches
+  (the dir is `gist_deps._deps_dir()` now — `~/.local/share/repld/deps/py3.X`, keyed by
+  interpreter version, which is itself the fix for most of this class) — came up
   organically in session 018 debugging a `_cffi_backend` `ModuleNotFoundError` three causes
   deep (tool-venv deps installed against the wrong Python ABI after a missing `--python`
   pin, since fixed in `b6b2758e`). A static scan of installed `.so` files' `cpython-NNN`
@@ -121,32 +123,67 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Deprecations
 
-- [ ] **Drop the legacy gist tool API in 0.3** — `__repld_tools__` + old-style
-  `_tool_*(args: dict)` handlers, deprecated in 0.1.0 (2026-07-14) in favour of typed
-  `_tool_*` functions. Kept through 0.2 deliberately: it is published on PyPI and only
-  eleven days old at the 0.2 cut, so it gets a release cycle to age out.
+- [x] **Legacy gist tool API removed — in 0.2, not 0.3.** `__repld_tools__` and old-style
+  `_tool_*(args: dict)` handlers are gone. The plan was to hold them one more release; they
+  came out early because the three affected files were migrated first and a re-scan of all
+  70 registered gists found no other users, so the release cycle they were being given had
+  nothing left to protect.
 
-  Migration is **lint-driven, not a blocking sweep**: `repld gist lint`'s `legacy` rule
-  now flags both halves (it previously only knew about `__repld_tools__` — an old-style
-  handler in a typed-declaring file was invisible until someone called the tool). Fix
-  each gist opportunistically while working in its project; run `repld gist lint` there
-  to confirm. Conversion is mechanical — drop the `__repld_tools__` block, give each
-  argument its own typed parameter, let the schema be inferred.
+  Migration done: `playbook/gists/fiken.py` (4 tools), `playbook/gists/kontoplan.py` (2),
+  `learn-freecad/gists/freecad.py` (3). Inferred schemas verified equal to the hand-written
+  ones — parameter types and `required` sets matched on all 9 — and per-parameter
+  descriptions were carried over into `Annotated[T, "..."]`.
 
-  Full-disk scan on 2026-07-25 (55 gist files across 39 `gists/` dirs — the filesystem,
-  not just the 51 in the registry) found exactly **3 affected files, 12 findings**:
-  `private/playbook/gists/fiken.py` (4 tools), `private/playbook/gists/kontoplan.py`
-  (2), `private/learn-freecad/gists/freecad.py` (3). Re-run the scan before removing —
-  new gists may have copied the old pattern from these.
+  Two behaviours improved as a side effect, both of which the legacy path had been
+  suppressing: a tool taking a single `dict` argument now works (it was indistinguishable
+  from the old `handler(args)` shape and was silently skipped), and a file carrying both
+  conventions no longer has its typed functions hidden by the precedence rule.
 
-  Removing the API deletes ~120 lines: `gists._warn_deprecated` /
-  `_extract_tools_from_tree` / `_is_old_style` and the legacy branches in
-  `_declared_tools` / `scan_tools` / `resolve_tool`, `protocol.py`'s `old_style`
-  dispatch, the `gist_lint` rule itself, the `help.py` mentions, and the phase-9 legacy
-  test case.
-- [ ] ~~`__repld_tools__` dict shorthand~~ — obsolete. Superseded by typed `_tool_*`
-  functions in 0.1.0; do not build new features on the declaration list that is on its
-  way out.
+  `gist_lint`'s `legacy` rule stayed, reworded. It outlives the runtime support on purpose:
+  a stale declaration is no longer *warned* about at call time, it is simply ignored, so the
+  file quietly loses its tools — lint is now the only thing that says so. Its companion check
+  on the handler signature was dropped, because `_tool_x(payload: dict)` is ordinary correct
+  code now.
+
+
+## 0.2 release
+
+- [ ] **Cut 0.2.** Breaking, and the migration notes live in `CHANGELOG.md`'s `[Unreleased]`,
+  which `uv version --bump minor` promotes verbatim — so they are what users actually read.
+  Three things they must do, none of which repld can do for them: `claude mcp add repld --
+  repld bridge` per project (no more `.mcp.json`), `mv repl.py repld_init.py` (no more
+  `--init`), and migrate any gist still on `__repld_tools__` (none known, but re-scan).
+- [ ] `httpx` is in repld's own `.venv` but not in `pyproject.toml`, and five gists in
+  `./gists` import it — so `basedpyright` goes from 0 errors to 5 the moment anyone runs
+  `uv sync`, which prunes it. Either add it to the `dev` group or exclude `gists/` from
+  basedpyright. Found by pruning it accidentally while testing whether the self-referential
+  `repld-tool[pretty,browser]` dev dep was load-bearing (it is — removing it is 15 errors).
+
+## Testing gaps
+
+- [ ] **`browser/` has no direct coverage.** Phase 6 exercises the tools end to end, but
+  `har.py`'s SQL, `capture.py`'s Fetch interception, and `cdp.py`'s reconnect/reattach paths
+  are only touched incidentally. Both browser bugs found in session 021 were in that area,
+  and both surfaced from *using* the code rather than from three separate reading passes that
+  had all explicitly scoped it out.
+- [ ] Phase 6 still needs a live Chrome on `:9222`. It is deterministic now — it opens its own
+  `data:` tab, asserts against that alone, and cleans up in `finally` — but it skips silently
+  without a browser, so CI would report green having run none of it.
+- [ ] `cdp._async_prune` runs its `DELETE` on the loop. Measured at 4.5 ms for 5k of 50k rows,
+  which is why it was left alone; the docstring's claim that running as a task "avoids
+  blocking recv" is still wrong in kind (a task on the same loop defers *when* it blocks, not
+  *whether*). Revisit only if the cap or the row count changes.
+
+## Deferred by design
+
+- [ ] **Dashboard gate surface.** `gates/list` and `gates/resolve` are kernel JSON-RPC methods
+  and `gates.open_gates()` returns a JSON-ready shape specifically so a second surface is
+  cheap — but only `repld gate` calls them. The dashboard already has the token, the RPC
+  dispatch table, and a UI; wiring a pending-gates card is maybe 40 lines. Deliberately not
+  MCP tools: an agent able to answer its own `confirm()` defeats the primitive.
+- [ ] **Per-parameter descriptions beyond a bare string.** `Annotated[T, "..."]` carries a
+  description and nothing else. Enum/min/max would need a dict metadata item; no demand yet,
+  and `repld` staying dependency-free rules out borrowing pydantic's `Field`.
 
 ## Screenshot / vision
 
@@ -261,7 +298,10 @@ rather than an architectural one — the exact pattern already exists twice in t
 
 ## Infra
 
-- [ ] CI + lint pass
+- [ ] CI + lint pass — `ruff` and `basedpyright` are trivial to wire; the smoketest is the
+  question, since phases 6 and 16 need a live Chrome and a usable systemd user manager
+  respectively and both skip silently without them. A CI run that reports green having
+  skipped them is worse than no CI.
 - [x] Docs/marketing site (Astro/Starlight) — landing + playbook + Starlight scaffold in `site/`
 - [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
