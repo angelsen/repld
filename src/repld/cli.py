@@ -7,7 +7,6 @@ from importlib import import_module
 # keeping `repld bridge` (spawned every session) a dict lookup + one import.
 _SUBCOMMANDS = {
     "bridge": ("bridge", "run_bridge", "stdio MCP bridge (Claude Code spawns this)"),
-    "init": ("scaffold", "run_init", "scaffold .mcp.json + CLAUDE.md block in cwd"),
     "exec": ("exec_cmd", "run_exec", "one-shot code or interactive REPL"),
     "log": ("log_cmd", "run_log", "recent kernel activity (-f to follow)"),
     "status": ("lifecycle_cmd", "run_status", "kernel pid/uptime + live siblings"),
@@ -85,9 +84,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="repld",
         description="Persistent Python runtime with MCP channel push. "
-        "Run `repld help` for the substrate-level overview, "
-        "`repld init` to scaffold a project. A `repld_init.py` in the cwd is "
-        "executed into __main__ at boot, for every kernel in this project.",
+        "Run `repld help` for the substrate-level overview. Register with "
+        "`claude mcp add repld -- repld bridge`. A `repld_init.py` in the cwd "
+        "is executed into __main__ at boot, for every kernel in this project.",
         epilog=_subcommands_text(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

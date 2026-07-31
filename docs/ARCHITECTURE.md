@@ -14,15 +14,15 @@ Two things happened at once:
 
 ## Two modes
 
-**Dev shell for existing projects.** Drop `.mcp.json` into an existing FastAPI/Django/Flask app, add a `repld_init.py` that pre-loads the app + DB session, and the agent has a live handle on your running service's memory. Faster than `pytest -k` for ad-hoc verification; faster than DBeaver for ad-hoc queries. Zero changes to your app.
+**Dev shell for existing projects.** Register repld in an existing FastAPI/Django/Flask app with `claude mcp add repld -- repld bridge`, add a `repld_init.py` that pre-loads the app + DB session, and the agent has a live handle on your running service's memory. Faster than `pytest -k` for ad-hoc verification; faster than DBeaver for ad-hoc queries. Zero changes to your app.
 
 **Autonomous agent runtime.** Set up watchers (`@every`, `@watch`, `@webhook`), give the agent the clients it needs (captured via CDP from your logged-in browser tabs), and the agent processes inbound events on its own between turns. The kernel is the cron + systemd + webhook receiver; the agent is the action layer.
 
 ## System architecture
 
 ```
-Project cwd
- └─ .mcp.json                   → tells Claude Code to spawn `repld bridge`
+Project cwd                     → no repld config; `claude mcp add` registers it
+ └─ repld_init.py               → optional bootstrap, run at every kernel start
 
 $XDG_RUNTIME_DIR/repld/        → 0700; /tmp/repld-{uid} if XDG is unset
  └─ projects/<slug>/            → per-project runtime state, 0700
@@ -52,14 +52,13 @@ Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 Eleven CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel for the cwd, with the live display. Takes a flock mutex; if a kernel already owns the project it prints a note and exits 0 rather than competing.
-- `repld bridge` — stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd; attaches to a kernel that's already running, or, if none exists, answers MCP discovery from `kernel.cache` and spawns a headless one lazily on the first real tool call. Proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.
+- `repld bridge` — stdio MCP subprocess Claude Code spawns for a registered repld server. Inherits cwd; attaches to a kernel that's already running, or, if none exists, answers MCP discovery from `kernel.cache` and spawns a headless one lazily on the first real tool call. Proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.
 - `repld exec [CODE]` — execute Python in a running kernel via IPC. With no args, drops into a minimal interactive REPL (readline history at `~/.repld/history`). With a string arg, runs one-shot and prints the result.
 - `repld log [-n N] [-f] [--json]` — replay (or follow) the kernel's event log: the same cells, output, and channel pushes the TUI renders, for a kernel with no pane.
 - `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned ones don't accumulate unseen.
 - `repld stop [--all]` — SIGTERM this project's kernel and wait for it to clear; `--all` stops every live kernel in the session registry.
 - `repld restart` — stop, then spawn a fresh headless kernel.
 - `repld dashboard [--print]` — resolve the dashboard port and open it, printing the URL when a browser can't be opened.
-- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and the CLAUDE.md block. No `.gitignore` changes — nothing repld writes lands in the project directory.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field.
 - `repld gist <verb>` — `new` / `add` / `rm` / `list` / `lint` for tool gists in `./gists/`.
 
@@ -87,7 +86,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 
 - [x] Stdlib REPL with top-level await, `_` / `__` / `___` / `_N` history, AST-split last-expression display
 - [x] Stdio MCP bridge + unix-socket IPC
-- [x] `repld`, `repld bridge`, `repld init`, `repld help` CLI subcommands
+- [x] `repld`, `repld bridge`, `repld help` CLI subcommands
 - [x] MCP tools: `exec`, `get_task`, `cancel` (await-yielding cancellation)
 - [x] Always-spill to disk for all cell output + head/tail inline preview
 - [x] Human gates (`ask`, `confirm`, `choose`, async) and `notify`

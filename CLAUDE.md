@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), human gates, channel infrastructure, and scaffolding commands are live. When implementing, treat `docs/ARCHITECTURE.md` as the design spec (architecture, status checklist, design principles) and this file for subsystem details and invariants. README.md is user-facing only. Don't drift from the shape described here without discussion.
+Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), human gates, channel infrastructure, and the gist commands are live. When implementing, treat `docs/ARCHITECTURE.md` as the design spec (architecture, status checklist, design principles) and this file for subsystem details and invariants. README.md is user-facing only. Don't drift from the shape described here without discussion.
 
 ## Build & run
 
@@ -88,13 +88,12 @@ All source lives under `src/repld/`. Individual files are self-describing; what 
 
 ## Architecture (target shape)
 
-Twelve CLI subcommands, all dispatched from `repld:main`:
+Eleven CLI subcommands, all dispatched from `repld:main`:
 
 - `repld` — long-running Python kernel for the cwd, with the live TUI display. Takes the project's flock mutex (`kernel.flock`) and writes `kernel.lock` with `{pid, socket_path, cwd, started_at, dashboard_port}`; listens on a unix-domain socket. Losing the flock is not an error — it prints a note and exits 0 so the incumbent is adopted, never raced. No flags select a project bootstrap: a `repld_init.py` in the cwd is auto-detected (see the invariant below).
-- `repld bridge` — stdio MCP subprocess spawned by Claude Code via `.mcp.json`. Inherits cwd, attaches to a kernel that's already running or lazily spawns one on first real use, proxies stdio MCP ↔ the kernel's IPC socket, and relays channel notifications (`notifications/claude/channel`) back to the client. See the slim-loader invariants below.
+- `repld bridge` — stdio MCP subprocess Claude Code spawns for a registered repld server. Inherits cwd, attaches to a kernel that's already running or lazily spawns one on first real use, proxies stdio MCP ↔ the kernel's IPC socket, and relays channel notifications (`notifications/claude/channel`) back to the client. See the slim-loader invariants below.
 - `repld log` / `status` / `stop` / `restart` / `dashboard` — observe and control a kernel this terminal never started (`log_cmd.py`, `lifecycle_cmd.py`, `dashboard_cmd.py`).
 - `repld gate` — list pending human gates, `repld gate answer <id> <value>` resolves one (`gate_cmd.py`). The headless kernel's answering surface; see the gate invariant below. Shares `exec_cmd`'s `_connect`/`_call` rather than keeping a second copy of the IPC handshake.
-- `repld init` — idempotent project scaffold: writes `.mcp.json` (adding a `repld` entry if one isn't present) and the CLAUDE.md block. No `.gitignore` writes: nothing repld creates at runtime lands in the project directory.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field (composed by `src/repld/help.py:build_instructions()`). Never let the two drift.
 - `repld exec [CODE]` — human-facing CLI. With no args, interactive REPL over IPC (shared namespace). With a string arg, one-shot execution. Same kernel, same state as the agent.
 - `repld gist` — command group: `new <name>` (scaffold `./gists/<name>.py`), `add <name>` (link a registered gist from another project), `rm <name>` / `rm --stale` (unlink), `list` (local + linked + linkable-from-registry), `lint [--local] [name...]` (AST checks — docstring first line, return-shape docs, undeclared `__repld_deps__`, legacy tool API; `gist_lint.py`, suppress with `# gistlint: ignore=<rule>`). Lint's default scope is everything a kernel here would import — global + local + linked, and unlike the rest of the gist commands that includes private (`_`-prefixed) files, which are importable and so can carry real dep/shape problems even though they're never exposed as gists. `--local` narrows to `./gists` so the exit code is usable as a gate for one project. Unknown verbs error (no verb-less scaffold alias). Top-level CLI dispatch is a single `_SUBCOMMANDS` table in `cli.py` driving both dispatch and `--help`.

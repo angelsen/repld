@@ -23,7 +23,6 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
                                                gist → FastMCP/FastAPI with wiring examples
 """
 
-import json
 from pathlib import Path
 
 from .state import read_lock
@@ -985,6 +984,11 @@ def build_instructions() -> str:
 OVERVIEW = """\
 repld — persistent Python kernel exposed to LLM agents over MCP.
 
+Setup (once per project, per machine):
+  uv tool install repld-tool
+  claude mcp add repld -- repld bridge
+  Local scope, so nothing repld-shaped lands in the project directory.
+
 Architecture:
   Editor pane:   `claude` (or equivalent) — the bridge starts a headless
                  kernel for the cwd if one isn't running, and heals it if
@@ -1014,7 +1018,6 @@ Commands:
   repld gate               List gates waiting on a human answer
   repld gate answer ID VAL Answer one (the route for a headless kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
-  repld init               Scaffold .mcp.json + CLAUDE.md block in cwd
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
@@ -1674,28 +1677,21 @@ def _check_state(cwd: Path) -> dict:
     state: dict = {
         "lock_exists": lock_path.exists(),
         "lock_alive": False,
-        "mcp_configured": False,
     }
     if state["lock_exists"]:
         state["lock_alive"] = isinstance(read_lock(lock_path), dict)
-    mcp = cwd / ".mcp.json"
-    if mcp.exists():
-        try:
-            cfg = json.loads(mcp.read_text())
-            servers = cfg.get("mcpServers", {})
-            state["mcp_configured"] = "repld" in servers
-        except (OSError, json.JSONDecodeError):
-            pass
     return state
 
 
 def _suggestion(cwd: Path) -> str:
+    """What to do next here, from what can actually be observed.
+
+    Registration is deliberately not probed: `claude mcp add` records at local
+    scope in the client's own config, not in a project file, and reaching into
+    client internals to guess would be worse than saying nothing. A live kernel
+    is observable, and it implies registration anyway.
+    """
     s = _check_state(cwd)
-    if not s["mcp_configured"]:
-        return (
-            "Suggested next step:\n"
-            "  repld init   # scaffold .mcp.json + CLAUDE.md block in cwd\n"
-        )
     if s["lock_alive"]:
         return (
             "Kernel running for this project. Open Claude Code: `claude`\n"
@@ -1711,6 +1707,9 @@ def _suggestion(cwd: Path) -> str:
         "No kernel running. Either is fine:\n"
         "  claude   # the bridge starts a headless kernel for you\n"
         "  repld    # start one yourself, with the live display\n"
+        "\n"
+        "If `claude` doesn't see repld here, it isn't registered yet:\n"
+        "  claude mcp add repld -- repld bridge\n"
     )
 
 

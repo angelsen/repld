@@ -20,8 +20,8 @@ uv tool install repld-tool
 uv tool install repld-tool        # global install (recommended)
 
 cd your-project
-repld init                         # writes .mcp.json + a CLAUDE.md block
-claude                             # the bridge starts a kernel for you
+claude mcp add repld -- repld bridge   # register it with the client
+claude                                 # the bridge starts a kernel for you
 ```
 
 You don't have to start the kernel yourself: `repld bridge` spawns a headless
@@ -31,19 +31,7 @@ tails it, `repld status` shows what's running, and `repld stop` shuts it down.
 Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
 project directory and there's nothing to `.gitignore`.
 
-Project-local alternative: `uv add --dev repld-tool`, then point `.mcp.json` at `uv run repld bridge`.
-
 For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `duckdb`/`websockets` extra for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
-
-`repld init` produces:
-
-```json
-{
-  "mcpServers": {
-    "repld": { "type": "stdio", "command": "repld", "args": ["bridge"] }
-  }
-}
-```
 
 ## Quick example
 
