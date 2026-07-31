@@ -43,7 +43,7 @@ prior release). Verify with the simple index (fast) — the JSON API lags:
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 16). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`).
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 17). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`).
 
 Phases:
 - **2–3:** Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task polling.

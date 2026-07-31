@@ -92,6 +92,21 @@ def channel_block(content: str, meta: dict, *, t: float | None = None) -> str:
     return "\n".join(lines)
 
 
+def gate_hint(kind: str, options: list[str] | None) -> str:
+    """What a gate of *kind* accepts, unstyled — `[y/n]` or `[1=alpha, 2=beta]`.
+
+    Empty for an `ask`, which takes free text. Shared with `repld gate`'s
+    listing: that is a human deciding what to type, so it has to agree with the
+    pane and with `repld log -f` about which numbers are on offer — the same
+    reason every other event format lives in this module.
+    """
+    if kind == "confirm":
+        return "[y/n]"
+    if kind == "choose" and options:
+        return "[" + ", ".join(f"{i + 1}={o}" for i, o in enumerate(options)) + "]"
+    return ""
+
+
 def prompt_open(
     kind: str, prompt: str, options: list[str] | None, gate_id: str = ""
 ) -> str:
@@ -103,11 +118,9 @@ def prompt_open(
     takes. Harmless in the pane, where you just type the answer.
     """
     out = f"{BOLD}{CYAN}? {prompt}{RESET}"
-    if kind == "confirm":
-        out += f" {DIM}[y/n]{RESET}"
-    elif kind == "choose" and options:
-        opts = ", ".join(f"{i + 1}={o}" for i, o in enumerate(options))
-        out += f" {DIM}[{opts}]{RESET}"
+    hint = gate_hint(kind, options)
+    if hint:
+        out += f" {DIM}{hint}{RESET}"
     if gate_id:
         out += f" {DIM}#{gate_id}{RESET}"
     return out + ": "

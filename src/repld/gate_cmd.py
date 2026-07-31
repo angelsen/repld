@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import paths
 from .exec_cmd import _call, _connect
-from .render import BOLD, DIM, RESET
+from .render import BOLD, DIM, RESET, gate_hint
 
 _USAGE = """\
 repld gate — human gates this project's kernel is waiting on
@@ -63,15 +63,10 @@ def _report_error(err: dict) -> int:
 
 def _fmt(gate: dict) -> str:
     kind = gate.get("kind", "?")
-    hint = ""
-    if kind == "confirm":
-        hint = " [y/n]"
-    elif kind == "choose" and gate.get("options"):
-        hint = (
-            " ["
-            + ", ".join(f"{i + 1}={o}" for i, o in enumerate(gate["options"]))
-            + "]"
-        )
+    # Via render.py, not rebuilt here: this is a human reading what to type,
+    # and it has to name the same options as the pane and `repld log -f`.
+    hint = gate_hint(kind, gate.get("options"))
+    hint = f" {hint}" if hint else ""
     waited = gate.get("waiting_s", 0)
     return (
         f"{BOLD}{gate.get('gate_id', '?')}{RESET}  {gate.get('prompt', '')}"

@@ -311,7 +311,7 @@ class _GistFinder(importlib.abc.MetaPathFinder):
 _unusable_venvs: set[Path] = set()
 
 
-def _recover_missing_import(exc: ModuleNotFoundError, original, args):
+def _recover_missing_import(original, args):
     """Last chance for a failed import: adopt a late project venv, then retry.
 
     Retries **the import**, never the caller's cell. Re-running a cell would
@@ -415,9 +415,12 @@ class _GistImportHook:
 
         try:
             result = self._original(name, globals, locals, fromlist, level)
-        except ModuleNotFoundError as exc:
+        except ModuleNotFoundError:
+            # The original exception is deliberately dropped: the recovery
+            # re-raises off its own retry, so the message reflects the state
+            # *after* a late venv was adopted rather than before.
             result = _recover_missing_import(
-                exc, self._original, (name, globals, locals, fromlist, level)
+                self._original, (name, globals, locals, fromlist, level)
             )
 
         # Auto-inject API summary on gist import + register in central registry.

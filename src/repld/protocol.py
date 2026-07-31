@@ -699,7 +699,11 @@ class Dispatcher(BrowserDispatchMixin):
             else:
                 sp = _spill_text(text, label=uri.split("/")[-1])
                 # Preview + [full output: …] marker isn't valid JSON anymore.
-                content, mime = _format_spill(sp, text), "text/plain"
+                # The fallback is a marker, not `text`: it only fires if the
+                # spill came back with neither preview nor truncation flag,
+                # and emitting the whole >64KB payload there would be the one
+                # thing _RESOURCE_MAX_BYTES exists to prevent.
+                content, mime = _format_spill(sp, "(empty resource)"), "text/plain"
             return _response(
                 rid,
                 {"contents": [{"uri": uri, "mimeType": mime, "text": content}]},

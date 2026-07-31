@@ -102,26 +102,36 @@ def atomic_write_json(
     """Write JSON via tmp + os.replace so concurrent readers never see a torn file.
 
     indent=N also appends a trailing newline (pretty files are committed or
-    hand-read). chmod is applied to the tmp file before the rename, so the
-    final file never exists with wrong permissions. The tmp name carries the
-    pid so concurrent writers (e.g. two kernels booting) can't clobber each
-    other's tmp — last rename wins cleanly.
+    hand-read). The tmp name carries the pid so concurrent writers (e.g. two
+    kernels booting) can't clobber each other's tmp — last rename wins cleanly.
+
+    When `chmod` is given the *tmp* is created at that mode, not chmod-ed into
+    it afterwards. It holds byte-for-byte what the final file will (a
+    dashboard API token, a session's list of project paths), so creating it at
+    the umask default and fixing it up one line later left exactly the window
+    this function is supposed to be the way to avoid.
     """
     text = json.dumps(obj, indent=indent)
     if indent is not None:
         text += "\n"
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, "utf-8")
-    if chmod is not None:
-        tmp.chmod(chmod)
+    if chmod is None:
+        tmp.write_text(text, "utf-8")
+    else:
+        with open_private(tmp, perm=chmod) as fp:
+            fp.write(text)
     os.replace(tmp, path)
 
 
 @overload
-def open_private(path: Path, mode: Literal["w"] = "w") -> io.TextIOWrapper: ...
+def open_private(
+    path: Path, mode: Literal["w"] = "w", *, perm: int = 0o600
+) -> io.TextIOWrapper: ...
 @overload
-def open_private(path: Path, mode: Literal["wb"]) -> io.BufferedWriter: ...
-def open_private(path: Path, mode: str = "w") -> IO[Any]:
+def open_private(
+    path: Path, mode: Literal["wb"], *, perm: int = 0o600
+) -> io.BufferedWriter: ...
+def open_private(path: Path, mode: str = "w", *, perm: int = 0o600) -> IO[Any]:
     """Open a runtime file for writing at 0600, with no window at 0644.
 
     `open(path, "w")` creates at 0644, so chmod-ing afterwards leaves a race in
@@ -129,13 +139,17 @@ def open_private(path: Path, mode: str = "w") -> IO[Any]:
     output (tokens, API responses, query results) and page screenshots, so it
     is created at the right mode instead.
 
+    `perm` exists for `atomic_write_json`, which needs the same guarantee for a
+    caller-chosen mode; it is not an invitation to widen one. The mode is still
+    subject to umask, which can only ever make it stricter.
+
     Text mode is utf-8 rather than the locale default: cell output is arbitrary
     text, and an ASCII locale would raise UnicodeEncodeError on the first
     non-ASCII byte. Pass "wb" for binary.
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     encoding = None if "b" in mode else "utf-8"
-    return os.fdopen(os.open(path, flags, 0o600), mode, encoding=encoding)
+    return os.fdopen(os.open(path, flags, perm), mode, encoding=encoding)
 
 
 def sweep_dead_pid_files(directory: Path) -> int:

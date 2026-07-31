@@ -72,8 +72,10 @@ def set_terminal(value: bool) -> None:
 def open_gates() -> list[dict]:
     """Every gate currently waiting on a human, oldest first.
 
-    Serialisable by construction — it crosses the IPC socket to `repld gate`
-    and is read in-process by the dashboard.
+    Serialisable by construction: it crosses the IPC socket to `repld gate`,
+    via the kernel's `gates/list` method. That is the only caller today; the
+    shape is JSON-ready so a second surface (the dashboard) wouldn't need a
+    different accessor.
     """
     now = time.monotonic()
     with _gates_lock:
