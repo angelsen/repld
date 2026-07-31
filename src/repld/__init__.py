@@ -12,7 +12,10 @@ if TYPE_CHECKING:
 
     def notify(content: Any, **meta: Any) -> None: ...
     def defer(coro: Coroutine, label: str | None = None) -> str: ...
-    def every(seconds: float, *, label: str | None = None) -> Callable: ...
+    def every(
+        seconds: float, *, label: str | None = None, delay: float = 0.0
+    ) -> Callable: ...
+    def load_dotenv() -> None: ...
     async def ask(
         prompt: str,
         *,
@@ -42,4 +45,23 @@ if TYPE_CHECKING:
     browser: _LazyBrowser
 
 
-__all__ = ["main"]
+__all__ = ["main", "load_dotenv"]
+
+
+def __getattr__(name: str):
+    """Resolve `load_dotenv` without importing the kernel at package import.
+
+    `repld/__init__.py` is imported by every `repld bridge`, which is spawned
+    once per Claude Code session and deliberately stays cheap — pulling in
+    `kernel` would drag protocol/tasks/gists along for a function only kernel-
+    side code calls. Inside a kernel the module is already imported, so this
+    costs nothing there.
+
+    PEP 562 only fires for names not found normally, so the builtins that
+    `_inject_builtins` setattr's onto this module still take precedence.
+    """
+    if name == "load_dotenv":
+        from .kernel import load_dotenv
+
+        return load_dotenv
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -182,5 +182,57 @@ def phase_10_every(kernel: Kernel) -> None:
         )
         print("  ✓ every: cancel_all() clears registry")
 
+        # delay= holds the first tick back. The default (tick now) health-checks
+        # a resource at its most fragile moment when the ticker is registered
+        # right after starting it — a false negative there can send a re-raise
+        # loop after something that was about to be fine.
+        b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "DELAYED = []\n"
+                        "@every(0.2, delay=1.5, label='delayed')\n"
+                        "def _d():\n"
+                        "    DELAYED.append(1)\n"
+                    )
+                },
+            },
+            timeout=5.0,
+        )
+        resp = b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "print(len(DELAYED))"}},
+            timeout=5.0,
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"].strip(),
+            "0",
+            "delay= suppresses the immediate first tick",
+        )
+        # ...and it does eventually tick, so delay isn't just "never run".
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": "import asyncio\nawait asyncio.sleep(2.0)\nprint(len(DELAYED) > 0)",
+                    "timeout": 6,
+                },
+            },
+            timeout=15.0,
+        )
+        assert_true(
+            "True" in resp["result"]["content"][0]["text"],
+            "the delayed ticker does fire once the delay elapses",
+        )
+        b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "every.cancel_all()"}},
+            timeout=5.0,
+        )
+        print("  ✓ every: delay= defers the first tick, then ticks normally")
+
     finally:
         b.close()

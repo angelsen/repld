@@ -42,7 +42,9 @@ _EXEC_MODEL = (
     "for functions that already print their own output. "
     "defer(coro, label) schedules a background task, returns task_id immediately, "
     "pushes channel on completion. "
-    "every(seconds)(fn) schedules fn to run periodically; "
+    "every(seconds, delay=0)(fn) schedules fn to run periodically; the first "
+    "tick is immediate unless delay= holds it back — use that when watching "
+    "something you just started, or the health check races its warmup. "
     "fn.cancel() stops it. every.list() shows active tickers. "
     "ask()/confirm()/choose() block the cell on human input; the answer comes "
     "from the kernel's pane, a pinned tab's pill, or `repld gate answer <id>` "
@@ -285,8 +287,21 @@ Where the env var comes from depends on context:
   - Production (FastAPI/FastMCP): .env at project root, loaded by framework
   - CI/deploy: platform secrets (Fly.io, Railway, etc.)
 
-repld loads .env from the project directory (same place as the socket and
-gists/) at kernel boot. Existing env vars are never overwritten.
+repld loads .env from the project directory (same place as gists/) at kernel
+boot. Existing env vars are never overwritten.
+
+Boot is the *only* time it is read — unlike gists/, which reload on mtime. A
+value written to .env afterwards stays invisible until something asks:
+
+  from repld import load_dotenv
+  load_dotenv()
+
+And because existing vars win, a name captured while it was empty stays empty.
+Clear it first when correcting one:
+
+  import os
+  os.environ.pop("API_TOKEN", None)
+  load_dotenv()
 
 For browser-auth APIs — no token at all. The browser session IS the
 credential. Use the fetch= callable pattern above.
@@ -1055,7 +1070,8 @@ no_display(value) → value
 defer(coro, label=None) → task_id
   Fire-and-forget. Channel push on done. Visible to get_task/cancel.
 
-every(seconds, label=)(fn)  → fn    periodic ticker; fn.cancel() stops
+every(seconds, label=, delay=0)(fn) → fn   periodic ticker; fn.cancel() stops
+  delay= defers the first tick (default: tick now)
 every.list()                → list  active EveryHandles
 every.cancel_all()          → None  stop all tickers
 
@@ -1453,7 +1469,10 @@ Injected into __main__:
 
   notify(content, **meta)      push a channel notification to the agent
   defer(coro, label=)          fire-and-forget; channel push on completion
-  every(seconds)(fn)           periodic ticker; fn.cancel() stops it
+  every(seconds, delay=0)(fn)  periodic ticker; fn.cancel() stops it.
+                               delay= defers the first tick — a watchdog
+                               registered as a resource comes up would
+                               otherwise check it at its most fragile
   no_display(value)            return value from a cell without auto-display
                                 re-printing it (still binds _/_N)
   ask(prompt) / confirm(prompt) / choose(prompt, options)

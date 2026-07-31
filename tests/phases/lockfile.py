@@ -405,5 +405,68 @@ def phase_5_init(_kernel: Kernel) -> None:
             f"argparse names the removed flag (got {rc.stderr!r})",
         )
         print("  ✓ --init removed: rejected by argparse rather than ignored")
+
+        # 6. The first exec must not race the bootstrap. The socket binds
+        #    before repld_init.py runs, so a caller that connects the instant
+        #    the lockfile appears used to reach a bare __main__ and get a
+        #    NameError for anything the bootstrap defines.
+        (tmp / "repld_init.py").write_text(
+            "import time\ntime.sleep(2)\nSLOW = 'bootstrap finished'\n"
+        )
+        k = _boot_in(tmp)
+        try:
+            out = _exec(tmp, "print(SLOW)")
+            assert_true(
+                "bootstrap finished" in out,
+                f"first exec waits for a slow bootstrap (got {out!r})",
+            )
+            print("  ✓ exec waits for the bootstrap instead of racing it")
+        finally:
+            k.stop()
+
+        # 7. A bootstrap that raises must still release exec — a kernel nobody
+        #    can run code in is a kernel nobody can repair.
+        (tmp / "repld_init.py").write_text("raise RuntimeError('boom')\n")
+        k = _boot_in(tmp)
+        try:
+            assert_true(
+                "alive" in _exec(tmp, "print('alive')"),
+                "exec is released even when the bootstrap raised",
+            )
+            print("  ✓ a failed bootstrap still releases exec")
+        finally:
+            k.stop()
+
+        # 8. `.env` is read once at boot; load_dotenv() is how a value written
+        #    afterwards gets picked up.
+        (tmp / "repld_init.py").unlink()
+        (tmp / ".env").write_text("PHASE5_LATE=\n")
+        k = _boot_in(tmp)
+        try:
+            assert_eq(
+                _exec(tmp, "import os; print(repr(os.environ['PHASE5_LATE']))"),
+                "''",
+                "empty value captured at boot",
+            )
+            (tmp / ".env").write_text("PHASE5_LATE=real\n")
+            # No-override means the empty capture wins until it is cleared —
+            # the trap the docstring calls out.
+            out = _exec(
+                tmp,
+                "from repld import load_dotenv\n"
+                "import os\n"
+                "load_dotenv()\n"
+                "print('still:', repr(os.environ['PHASE5_LATE']))\n"
+                "os.environ.pop('PHASE5_LATE', None)\n"
+                "load_dotenv()\n"
+                "print('now:', repr(os.environ['PHASE5_LATE']))",
+            )
+            assert_true(
+                "still: ''" in out, f"load_dotenv does not override (got {out!r})"
+            )
+            assert_true("now: 'real'" in out, f"cleared then reloaded (got {out!r})")
+            print("  ✓ load_dotenv() re-reads .env; no-override rule holds")
+        finally:
+            k.stop()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

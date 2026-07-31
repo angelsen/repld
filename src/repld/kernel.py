@@ -109,6 +109,11 @@ def _write_cache(socket_path: Path) -> None:
     atomic_write_json(paths.cache_for(socket_path), cache, chmod=0o600)
 
 
+# Set once the project bootstrap has run (or immediately, when there is none).
+# `_run_cell` waits on it; see its docstring for why the wait lives there and
+# not in the socket bind.
+_init_done = asyncio.Event()
+
 _active_lock_path: Path | None = None
 # flock fd for the one-kernel-per-project mutex. Module-level because it must
 # stay open for the process's whole life — closing it releases the lock.
@@ -120,11 +125,18 @@ _project_lock_fd: int | None = None
 # ---------------------------------------------------------------------------
 
 
-def _load_dotenv() -> None:
+def load_dotenv() -> None:
     """Load KEY=VALUE pairs from ./.env into os.environ (stdlib only).
 
     Skips comments, blank lines, and export prefixes. Strips surrounding
-    quotes. Does NOT override existing env vars.
+    quotes. Does NOT override existing env vars — so a var already set, by an
+    earlier call or by the shell, wins.
+
+    Public because the kernel reads `./.env` exactly once, at boot, while
+    `./gists` reload themselves on mtime. A value written to `.env` afterwards
+    is invisible until something asks: `from repld import load_dotenv`. The
+    no-override rule means a var captured while empty stays empty — clear it
+    first (`os.environ.pop("KEY", None)`) if you are correcting one.
     """
     p = Path.cwd() / ".env"
     if not p.is_file():
@@ -396,9 +408,25 @@ async def _task_scope(task_id: str):
         _finalize_cell(task_id, task, t_start)
 
 
-async def _run_cell(task_id: str, src: str, n: int) -> None:
-    """Coroutine that runs on the bg asyncio loop."""
+async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) -> None:
+    """Coroutine that runs on the bg asyncio loop.
+
+    Waits for the project bootstrap first. The socket binds before
+    `repld_init.py` runs — deliberately, since the bridge only allows a spawn
+    5s to become connectable and a bootstrap that raises a tunnel takes longer
+    — so without this the first `exec` after a lazy spawn races it and sees a
+    bare `__main__`. Waiting here rather than delaying the bind keeps lazy
+    spawn working and costs nothing once the bootstrap is done: the cell still
+    gets its task_id immediately, and a wait past `exec`'s timeout degrades
+    into the ordinary `{task_id, done:false}` plus a completion push.
+
+    `wait_ready=False` for the bootstrap itself, which runs through here and
+    would otherwise wait on its own completion.
+    """
     from . import runtime
+
+    if wait_ready:
+        await _init_done.wait()
 
     async with _task_scope(task_id) as task:
         try:
@@ -497,12 +525,12 @@ def every_snapshot() -> list[EveryHandle]:
         return list(_every_registry)
 
 
-async def _start_ticker(fn, seconds: float, label: str) -> None:
+async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> None:
     """Coroutine that runs on the shared asyncio loop.
 
-    Runs the first tick immediately, then sleeps `seconds` between ticks.
-    Catches exceptions so one bad tick doesn't stop the schedule.
-    Sets fn._handle and fn.cancel once the task is live.
+    Runs the first tick after `delay` seconds (immediately by default), then
+    sleeps `seconds` between ticks. Catches exceptions so one bad tick doesn't
+    stop the schedule. Sets fn._handle and fn.cancel once the task is live.
     """
     task = asyncio.current_task()
     assert task is not None
@@ -511,6 +539,14 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
         _every_registry.add(handle)
     fn._handle = handle
     fn.cancel = handle.cancel
+
+    if delay > 0:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            with _every_lock:
+                _every_registry.discard(handle)
+            raise
 
     while True:
         try:
@@ -537,8 +573,15 @@ async def _start_ticker(fn, seconds: float, label: str) -> None:
 def _make_every(loop: asyncio.AbstractEventLoop):
     """Return an every(seconds, *, label=None)(fn) decorator bound to the kernel's loop."""
 
-    def every(seconds: float, *, label: str | None = None):
+    def every(seconds: float, *, label: str | None = None, delay: float = 0.0):
         """Schedule fn to run immediately, then every `seconds` on the kernel loop.
+
+        `delay` holds the *first* tick back that many seconds. The default of 0
+        (tick now) is right for polling something that already exists, and wrong
+        for watching something you just started: a health check registered the
+        moment a resource comes up runs against it at its most fragile point,
+        and a false negative there can send a re-raise loop after a resource
+        that was about to be fine. `every(60, delay=60)` waits one interval.
 
         Returns fn unchanged so @every is a pure decorator. Attaches
         fn._handle (EveryHandle) and fn.cancel() shortcut after the first
@@ -547,7 +590,9 @@ def _make_every(loop: asyncio.AbstractEventLoop):
 
         def decorator(fn):
             name = label or fn.__name__
-            asyncio.run_coroutine_threadsafe(_start_ticker(fn, seconds, name), loop)
+            asyncio.run_coroutine_threadsafe(
+                _start_ticker(fn, seconds, name, delay), loop
+            )
             return fn
 
         return decorator
@@ -609,7 +654,7 @@ class _Context:
 # one nobody started by hand — the bridge spawns it lazily, and `repld
 # restart` respawns it — and none of those paths could carry an argument.
 # The project directory is the source of truth, exactly as it already is for
-# `./.env` (`_load_dotenv`) and `./gists` (`gists.install`).
+# `./.env` (`load_dotenv`) and `./gists` (`gists.install`).
 INIT_FILENAME = "repld_init.py"
 
 
@@ -630,7 +675,9 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
         __main__.__file__ = str(path.resolve())
         task_id, _ = tasks.new_task()
         events.emit(CellStart(task_id, src, time.time()))
-        future = asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            _run_cell(task_id, src, n, wait_ready=False), loop
+        )
         # Block until the bootstrap completes (including any run_until_complete
         # semantics — background tasks it spawned stay alive on the loop).
         future.result(timeout=30)
@@ -798,7 +845,7 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     install_tee()
 
     # 2b. Load .env from project root (same dir as socket/lockfile/gists).
-    _load_dotenv()
+    load_dotenv()
 
     # 2b-ii. Adopt the project venv, if we're not already running under it.
     # The usual path is that `bind.rebind_exec` re-execed us into it before we
@@ -1016,6 +1063,11 @@ def run_kernel(
         init_path = Path.cwd() / INIT_FILENAME
         if init_path.is_file():
             _run_init_file(init_path, loop)
+        # Release the cells that queued behind the bootstrap. Unconditional and
+        # in a `finally`-shaped position: `_run_init_file` never raises, but a
+        # bootstrap that fails, times out, or doesn't exist must still let exec
+        # through — a kernel nobody can run code in cannot be repaired.
+        loop.call_soon_threadsafe(_init_done.set)
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.
