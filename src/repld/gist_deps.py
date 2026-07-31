@@ -188,10 +188,20 @@ def ensure_deps_on_path() -> None:
     Appended, not prepended: the project's own packages must win. A gist
     declaring `httpx>=0.27` should not shadow the version the project
     resolved — these fill gaps, they don't override.
+
+    `site.addsitedir` rather than `sys.path.append`, because an editable dep
+    installs as nothing but a `.pth`. `__repld_deps__ = ["."]` becomes
+    `uv pip install --target … -e <project>`, which writes `<pkg>.pth` and a
+    dist-info into the target and no package directory at all — a plain
+    append leaves it unimportable. So the one dep form that exists purely for
+    the *unbound* case was the form that didn't work there. addsitedir still
+    appends, so the shadowing rule above is unaffected.
     """
     d = _deps_dir()
     if d.is_dir() and str(d) not in sys.path:
-        sys.path.append(str(d))
+        import site
+
+        site.addsitedir(str(d))
 
 
 def _read_project_name(pyproject: Path) -> str | None:

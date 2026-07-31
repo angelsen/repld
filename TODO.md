@@ -71,6 +71,14 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Gist deps tooling
 
+- [ ] **The pre-versioning shared deps dir is orphaned, not migrated.** `_deps_dir()` is
+  `~/.local/share/repld/deps/py3.X` now; the flat `~/.local/share/repld/deps/` it replaced is
+  still on disk with everything ever installed there (598 MB and 257 entries on this
+  machine, including two `-e` installs and the old `.repld-manifest.txt` with 18 entries).
+  Nothing reads it and nothing says so, so the first symptom is a re-download of the whole
+  set into the versioned dir. Either migrate the manifest forward on first versioned install
+  or say something once and let the user delete it. Note the flat dir is *also* where the
+  packages live, not a sibling — so anything that cleans it must not walk `py3.*`.
 - [ ] `repld doctor`-style check for shared-gist-deps binary-ABI mismatches
   (the dir is `gist_deps._deps_dir()` now — `~/.local/share/repld/deps/py3.X`, keyed by
   interpreter version, which is itself the fix for most of this class) — came up
@@ -153,11 +161,13 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   Three things they must do, none of which repld can do for them: `claude mcp add repld --
   repld bridge` per project (no more `.mcp.json`), `mv repl.py repld_init.py` (no more
   `--init`), and migrate any gist still on `__repld_tools__` (none known, but re-scan).
-- [ ] `httpx` is in repld's own `.venv` but not in `pyproject.toml`, and five gists in
-  `./gists` import it — so `basedpyright` goes from 0 errors to 5 the moment anyone runs
-  `uv sync`, which prunes it. Either add it to the `dev` group or exclude `gists/` from
-  basedpyright. Found by pruning it accidentally while testing whether the self-referential
-  `repld-tool[pretty,browser]` dev dep was load-bearing (it is — removing it is 15 errors).
+- [x] `httpx` was in repld's own `.venv` but not in `pyproject.toml`, and five gists in
+  `./gists` import it — so `basedpyright` went from 0 errors to 5 the moment anyone ran
+  `uv sync`, which prunes it. Added to the `dev` group rather than excluding `gists/` from
+  basedpyright, which would stop checking the code most likely to rot. Verified: `uv sync`
+  then `basedpyright` is 0 errors. Found by pruning it accidentally while testing whether the
+  self-referential `repld-tool[pretty,browser]` dev dep was load-bearing (it is — removing it
+  is 15 errors).
 
 ## Testing gaps
 

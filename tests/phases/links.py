@@ -179,6 +179,22 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             sys.path.remove(d)
             sys.path.remove(marker)
             print("  ✓ gist-deps dir: version-keyed, ungated, appended, idempotent")
+
+            # --- an editable dep (`__repld_deps__ = ["."]`) installs as a bare
+            # `.pth` and no package directory, so the dir has to go on the path
+            # via addsitedir. A plain sys.path.append left exactly the one dep
+            # form that exists for the unbound case unimportable. ---
+            src_tree = other / "editable-src"
+            src_tree.mkdir()
+            (gist_deps._deps_dir() / "probe.pth").write_text(f"{src_tree}\n")
+            gist_deps.ensure_deps_on_path()
+            assert_true(
+                str(src_tree) in sys.path,
+                ".pth in the deps dir is processed, not just listed",
+            )
+            sys.path.remove(str(src_tree))
+            sys.path.remove(d)
+            print("  ✓ editable gist deps resolve — .pth files are processed")
         finally:
             gist_deps._DEPS_ROOT = orig_deps_root
 
