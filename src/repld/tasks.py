@@ -142,7 +142,7 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
         "label": None,
         # ipc.Session that asked for this work, or None for ambient tasks
-        # (--init file, @every bodies). Drives targeted vs. broadcast push.
+        # (repld_init.py, @every bodies). Drives targeted vs. broadcast push.
         "origin": origin,
     }
     with _tasks_lock:

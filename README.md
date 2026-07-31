@@ -71,7 +71,7 @@ The kernel runs the watcher; the agent reacts to each channel notification.
 
 ## With an existing app
 
-`repld` inherits your project's environment. A `repl.py` at the project root:
+`repld` inherits your project's environment. A `repld_init.py` at the project root is executed into `__main__` when a kernel boots — by every kernel for that project, including the headless one the bridge starts for you:
 
 ```python
 from myapp.main import app
@@ -86,11 +86,7 @@ session = async_session_maker()
 print("FastAPI on :8000, db session ready")
 ```
 
-```bash
-repld --init repl.py
-```
-
-The agent now has a live handle on your running app: inspect routes, query the ORM, call handlers directly.
+Nothing to pass — open `claude` (or run `repld` for the live display) and the agent has a live handle on your running app: inspect routes, query the ORM, call handlers directly.
 
 ## Tools
 

@@ -988,8 +988,11 @@ Architecture:
   Editor pane:   `claude` (or equivalent) — the bridge starts a headless
                  kernel for the cwd if one isn't running, and heals it if
                  it dies. Nothing to start by hand.
-  Terminal pane: `repld --init repl.py`   kernel + live display, when you
-                 want to watch it; `repld log -f` works either way.
+  Terminal pane: `repld`   kernel + live display, when you want to watch
+                 it; `repld log -f` works either way.
+
+A `repld_init.py` in the project root is executed into __main__ at boot —
+by every kernel for that project, however it was started.
 
 Runtime state lives in $XDG_RUNTIME_DIR/repld/projects/<slug>/, never in
 the project directory.
@@ -1000,7 +1003,6 @@ when work completes, files change, webhooks fire, or human gates resolve.
 
 Commands:
   repld                    Start a kernel in cwd (with the live display)
-  repld --init FILE        Start a kernel, exec FILE first (project bootstrap)
   repld exec CODE          One-shot: run code in kernel, print result, exit
   repld exec               Interactive REPL (state persists in kernel)
   repld log [-f]           Recent kernel activity; -f streams it live
@@ -1065,7 +1067,8 @@ Channel kinds:
   bg_task_error         uncaught exception in background task
   loop_blocked          asyncio loop blocked > 5s
   loop_kill             watchdog cancelled a stuck task
-  init_error            --init file failed
+  init_loaded           repld_init.py ran at boot (__main__ pre-populated)
+  init_error            repld_init.py raised
   browser_connect       dashboard connected to Chrome (port in meta)
   browser_watch         dashboard watched a pattern (pattern in meta)
   browser_unwatch       dashboard unwatched a pattern
@@ -1382,18 +1385,28 @@ cannot see project dependencies.
 No API layer, no HTTP, no serialization — you're in the process. Faster
 than any external tool for ad-hoc queries, data inspection, and debugging.
 
-== Live introspection with --init ==
+== Live introspection with repld_init.py ==
 
-repld --init repl.py runs a Python file at kernel startup, then keeps the
-kernel alive. If repl.py starts a server, worker, or any long-running
-process, that process lives inside __main__ — and exec can reach into it
-at any time without restarting.
+A repld_init.py in the project root runs at kernel startup, then the kernel
+stays alive. If it starts a server, worker, or any long-running process,
+that process lives inside __main__ — and exec can reach into it at any time
+without restarting.
+
+It is a file rather than a flag because the kernel that matters is usually
+one nobody started by hand: the bridge spawns it when Claude Code first
+calls a repld tool, and `repld restart` respawns it. Every one of those runs
+repld_init.py, so the namespace is populated no matter who booted it.
+
+It runs *after* the socket binds, so a slow bootstrap (a tunnel, a server
+waiting on a port) doesn't stall the connection. Watch for the init_loaded
+channel message before assuming __main__ is furnished; a bootstrap that
+raises pushes init_error and leaves the kernel up so you can fix it.
 
 This is a dev-time decision, not a production architecture. Your service
 doesn't depend on repld — it just runs inside it during development so
 you can inspect it live.
 
-  # repl.py — boot your service inside the kernel
+  # repld_init.py — boot your service inside the kernel
   from myapp.server import create_app
   import asyncio
 
@@ -1661,7 +1674,6 @@ def _check_state(cwd: Path) -> dict:
         "lock_exists": lock_path.exists(),
         "lock_alive": False,
         "mcp_configured": False,
-        "repl_py_exists": (cwd / "repl.py").exists(),
     }
     if state["lock_exists"]:
         state["lock_alive"] = isinstance(read_lock(lock_path), dict)
@@ -1691,11 +1703,13 @@ def _suggestion(cwd: Path) -> str:
         )
     # A stale lockfile is no longer something to clean up by hand: the flock
     # mutex settles ownership, and the next bridge overwrites it on spawn.
-    cmd = "repld --init repl.py" if s["repl_py_exists"] else "repld"
+    # Both commands are equivalent as far as the project bootstrap goes —
+    # repld_init.py runs either way, which is the point of it being a file
+    # rather than an argument.
     return (
         "No kernel running. Either is fine:\n"
-        "  claude         # the bridge starts a headless kernel for you\n"
-        f"  {cmd}   # start one yourself, with the live display\n"
+        "  claude   # the bridge starts a headless kernel for you\n"
+        "  repld    # start one yourself, with the live display\n"
     )
 
 

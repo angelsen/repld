@@ -1,4 +1,4 @@
-"""Phase 5: single-kernel flock mutex, --init file execution, state file modes."""
+"""Phase 5: single-kernel flock mutex, repld_init.py bootstrap, state file modes."""
 
 import json
 import os
@@ -279,61 +279,131 @@ def phase_5_boot_failure(_kernel: Kernel) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _repld(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["uv", "run", "--project", str(REPO), "repld", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _boot_in(tmp: Path) -> Kernel:
+    """A headless kernel in *tmp*, started with no flags at all."""
+    k = Kernel.__new__(Kernel)
+    k.cwd = tmp
+    k.stderr_log = tmp / "kernel.stderr"
+    k.proc = subprocess.Popen(
+        ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
+        cwd=str(tmp),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=open(k.stderr_log, "w"),
+        env=os.environ.copy(),
+    )
+    k._wait_lockfile()
+    return k
+
+
+def _exec(tmp: Path, code: str) -> str:
+    return _repld(tmp, "exec", code).stdout.strip()
+
+
 def phase_5_init(_kernel: Kernel) -> None:
-    """Spawn a dedicated kernel with --init to verify init-file execution."""
+    """repld_init.py is auto-detected — by *every* kernel for the project.
+
+    The flag it replaced only ever fired for a hand-started kernel that won
+    the flock, which since lazy spawn is the rare case: the kernel Claude Code
+    talks to is spawned by the bridge, and `repld restart` respawns it. Neither
+    could carry an argument, so a project's bootstrap silently vanished.
+    """
     import tempfile as _tmp
 
     tmp = Path(_tmp.mkdtemp(prefix="repld-init-"))
     try:
-        init_path = tmp / "repl.py"
-        init_path.write_text(
+        (tmp / "repld_init.py").write_text(
             "import asyncio\n"
             "X = 42\n"
             "async def _bg():\n"
             "    await asyncio.sleep(0.05)\n"
             "bg = asyncio.create_task(_bg())\n"
-            "print('init loaded, X=', X)\n"
+            "print('bootstrap loaded, X=', X)\n"
         )
-        k = Kernel.__new__(Kernel)
-        k.cwd = tmp
-        k.stderr_log = tmp / "kernel.stderr"
-        env = os.environ.copy()
-        k.proc = subprocess.Popen(
-            [
-                "uv",
-                "run",
-                "--project",
-                str(REPO),
-                "repld",
-                "--no-display",
-                "--init",
-                str(init_path),
-            ],
-            cwd=str(tmp),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=open(k.stderr_log, "w"),
-            env=env,
-        )
+
+        # 1. Hand-started kernel, no flags — the file is found by convention.
+        k = _boot_in(tmp)
         try:
-            k._wait_lockfile()
             b = Bridge(tmp)
             try:
                 b.call("initialize", {"protocolVersion": "2024-11-05"})
                 b.send("notifications/initialized", {}, notif=True)
                 resp = b.call(
-                    "tools/call",
-                    {"name": "exec", "arguments": {"code": "print(X)"}},
+                    "tools/call", {"name": "exec", "arguments": {"code": "print(X)"}}
                 )
                 content = resp["result"]["content"][0]["text"]
                 assert_true(
                     "42" in content,
-                    f"--init file's X=42 visible in __main__ (got {content!r})",
+                    f"repld_init.py's X=42 visible in __main__ (got {content!r})",
                 )
-                print("  ✓ --init file executed and X=42 visible in namespace")
             finally:
                 b.close()
+            print("  ✓ repld_init.py auto-detected on a hand-started kernel")
+
+            # 2. The regression guard: `repld restart` goes through
+            #    spawn.spawn_headless, which is the path that used to lose the
+            #    bootstrap entirely (its argv carries --no-display and nothing
+            #    else). Same path the bridge's lazy spawn takes.
+            rc = _repld(tmp, "restart")
+            assert_eq(rc.returncode, 0, f"repld restart exits 0 (stderr: {rc.stderr})")
+            assert_true(
+                "42" in _exec(tmp, "print(X)"),
+                "bootstrap re-ran on the respawned kernel",
+            )
+            print("  ✓ repld_init.py re-ran on a kernel spawned by `repld restart`")
+        finally:
+            _repld(tmp, "stop")
+            k.stop()
+
+        # 3. A bootstrap that raises must leave a *live* kernel — that is the
+        #    state you fix it from. Killing boot would remove the thing that
+        #    can run the fix.
+        (tmp / "repld_init.py").write_text(
+            "X = 1\nraise RuntimeError('intentional bootstrap boom')\n"
+        )
+        k = _boot_in(tmp)
+        try:
+            assert_true(
+                "alive" in _exec(tmp, "print('alive')"),
+                "kernel still answers after a raising bootstrap",
+            )
+            log = _repld(tmp, "log", "-n", "200").stdout
+            assert_true(
+                "intentional bootstrap boom" in log,
+                "the bootstrap traceback reached the event log",
+            )
+            # Bindings made before the raise survive — it's a normal cell.
+            assert_true("1" in _exec(tmp, "print(X)"), "pre-raise bindings kept")
+            print("  ✓ a raising repld_init.py leaves the kernel up, error on channel")
         finally:
             k.stop()
+
+        # 4. No file at all — nothing to detect, boot unaffected.
+        (tmp / "repld_init.py").unlink()
+        k = _boot_in(tmp)
+        try:
+            assert_true("ok" in _exec(tmp, "print('ok')"), "kernel boots with no file")
+            print("  ✓ no repld_init.py → clean boot")
+        finally:
+            k.stop()
+
+        # 5. The flag is gone, not silently ignored.
+        rc = _repld(tmp, "--init", "repld_init.py")
+        assert_true(rc.returncode != 0, "--init is rejected, not accepted as a no-op")
+        assert_true(
+            "--init" in rc.stderr,
+            f"argparse names the removed flag (got {rc.stderr!r})",
+        )
+        print("  ✓ --init removed: rejected by argparse rather than ignored")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

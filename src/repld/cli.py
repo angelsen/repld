@@ -86,7 +86,8 @@ def main() -> None:
         prog="repld",
         description="Persistent Python runtime with MCP channel push. "
         "Run `repld help` for the substrate-level overview, "
-        "`repld init` to scaffold a project.",
+        "`repld init` to scaffold a project. A `repld_init.py` in the cwd is "
+        "executed into __main__ at boot, for every kernel in this project.",
         epilog=_subcommands_text(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -100,20 +101,8 @@ def main() -> None:
         action="store_true",
         help="Skip the display thread (headless/CI mode; kernel still runs IPC).",
     )
-    parser.add_argument(
-        "--init",
-        default=None,
-        metavar="FILE",
-        help="Python file to execute into __main__ before accepting connections.",
-    )
     args = parser.parse_args(argv)
 
     from .kernel import run_kernel
 
-    raise SystemExit(
-        run_kernel(
-            socket_path=args.socket,
-            display=not args.no_display,
-            init_file=args.init,
-        )
-    )
+    raise SystemExit(run_kernel(socket_path=args.socket, display=not args.no_display))

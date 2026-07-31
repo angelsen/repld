@@ -110,15 +110,15 @@ def _next_steps(cwd: Path) -> str:
         run = "repld"
     return f"""\
 Next:
-  1. (Optional) Write repl.py to pre-load project state (clients, sessions,
-     app handles).
+  1. (Optional) Write repld_init.py to pre-load project state (clients,
+     sessions, app handles). Every kernel for this project runs it at boot,
+     including the one the bridge starts for you.
   2. Open Claude Code in this directory:
        claude
      The MCP bridge connects automatically via .mcp.json, and starts a
      headless kernel if one isn't already running.
   3. (Optional) Start the kernel yourself to get the live TUI:
-       {run}                       # bare kernel
-       {run} --init repl.py        # with project bootstrap
+       {run}
      Otherwise: `repld log -f` to watch it, `repld stop` to stop it.
 """
 

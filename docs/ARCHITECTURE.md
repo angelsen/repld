@@ -14,7 +14,7 @@ Two things happened at once:
 
 ## Two modes
 
-**Dev shell for existing projects.** Drop `.mcp.json` into an existing FastAPI/Django/Flask app, `repld --init repl.py` to pre-load the app + DB session, and the agent has a live handle on your running service's memory. Faster than `pytest -k` for ad-hoc verification; faster than DBeaver for ad-hoc queries. Zero changes to your app.
+**Dev shell for existing projects.** Drop `.mcp.json` into an existing FastAPI/Django/Flask app, add a `repld_init.py` that pre-loads the app + DB session, and the agent has a live handle on your running service's memory. Faster than `pytest -k` for ad-hoc verification; faster than DBeaver for ad-hoc queries. Zero changes to your app.
 
 **Autonomous agent runtime.** Set up watchers (`@every`, `@watch`, `@webhook`), give the agent the clients it needs (captured via CDP from your logged-in browser tabs), and the agent processes inbound events on its own between turns. The kernel is the cron + systemd + webhook receiver; the agent is the action layer.
 

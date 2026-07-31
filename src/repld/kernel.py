@@ -446,7 +446,7 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
             )
         # Inherit the calling cell's originating session so a background task
         # reports back to whoever asked for it. defer() from an @every body or
-        # the --init file has no current task, so it stays ambient.
+        # the project bootstrap has no current task, so it stays ambient.
         parent = tasks.get(tasks.current_task_id() or "")
         task_id, task = tasks.new_task(origin=parent.get("origin") if parent else None)
         task["nudged"] = True
@@ -601,40 +601,52 @@ class _Context:
 
 
 # ---------------------------------------------------------------------------
-# Init file
+# Project bootstrap
 # ---------------------------------------------------------------------------
+
+# Auto-executed into `__main__` at boot when it exists in the kernel's cwd.
+# A convention rather than a flag because the kernel that matters is usually
+# one nobody started by hand — the bridge spawns it lazily, and `repld
+# restart` respawns it — and none of those paths could carry an argument.
+# The project directory is the source of truth, exactly as it already is for
+# `./.env` (`_load_dotenv`) and `./gists` (`gists.install`).
+INIT_FILENAME = "repld_init.py"
 
 
 def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
-    if not path.exists():
-        sys.stderr.write(f"\033[31m[repld] --init file not found: {path}\033[0m\n")
-        _push(
-            f"[repld] --init file not found: {path}",
-            "init_error",
-            file=str(path),
-            reason="not_found",
-        )
-        return
+    """Execute the project bootstrap into `__main__`, blocking up to 30s.
+
+    Never raises: a bootstrap that fails leaves a *live* kernel carrying the
+    traceback on channel, which is the state you want to fix it from. Killing
+    boot instead would take away the thing that can run the fix. That covers
+    the read as well as the execution — an unreadable file used to escape into
+    `_report_boot_failure` and end the process.
+    """
     n = next(_exec_count)
-    src = path.read_text()
-    # Set __main__.__file__ so the init file's Path(__file__) works the way
-    # `python path/to/script.py` would.
-    __main__.__file__ = str(path.resolve())
-    task_id, _ = tasks.new_task()
-    events.emit(CellStart(task_id, src, time.time()))
-    future = asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), loop)
-    # Block until the init file completes (including any run_until_complete
-    # semantics — background tasks it spawned stay alive on the loop).
     try:
+        src = path.read_text()
+        # Set __main__.__file__ so the bootstrap's Path(__file__) works the way
+        # `python path/to/script.py` would.
+        __main__.__file__ = str(path.resolve())
+        task_id, _ = tasks.new_task()
+        events.emit(CellStart(task_id, src, time.time()))
+        future = asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), loop)
+        # Block until the bootstrap completes (including any run_until_complete
+        # semantics — background tasks it spawned stay alive on the loop).
         future.result(timeout=30)
     except Exception:
         tb = traceback.format_exc()
-        sys.stderr.write(f"\033[31m[repld] --init {path.name} raised:\n{tb}\033[0m\n")
+        sys.stderr.write(f"\033[31m[repld] {path.name} raised:\n{tb}\033[0m\n")
         _push(
-            f"[repld] --init {path.name} raised: {tb.rstrip()}",
+            f"[repld] {path.name} raised: {tb.rstrip()}",
             "init_error",
             file=str(path),
         )
+        return
+    # Only ever emitted when a bootstrap actually ran. On a bridge-spawned
+    # kernel this is the only sign that `__main__` arrived pre-populated —
+    # nobody watched it boot.
+    _push(f"[repld] {path.name} loaded", "init_loaded", file=str(path))
 
 
 # ---------------------------------------------------------------------------
@@ -984,7 +996,6 @@ def run_kernel(
     socket_path: str | None = None,
     *,
     display: bool = True,
-    init_file: str | None = None,
 ) -> int:
     global _project_lock_fd
     sock_path = Path(socket_path) if socket_path else default_socket_path()
@@ -998,9 +1009,14 @@ def run_kernel(
         _write_cache(sock_path)
         stop = _start_watchdog(loop, sock_path, dashboard_port)
 
-        # 7. Optionally run init file.
-        if init_file:
-            _run_init_file(Path(init_file), loop)
+        # 7. Project bootstrap, if this project has one. Deliberately *after*
+        #    `_start_services` bound the socket: the bridge gives a spawn 5s to
+        #    become connectable, and a bootstrap that raises a tunnel or waits
+        #    on a server takes longer than that. Booting it first would make
+        #    lazy spawn time out on exactly the projects that have one.
+        init_path = Path.cwd() / INIT_FILENAME
+        if init_path.is_file():
+            _run_init_file(init_path, loop)
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.
