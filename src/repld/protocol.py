@@ -652,14 +652,13 @@ class Dispatcher(BrowserDispatchMixin):
         from . import gists
 
         try:
-            resolved = gists.resolve_tool(name)
+            handler = gists.resolve_tool(name)
         except AttributeError as exc:
             return _error(rid, -32602, str(exc))
-        if resolved is None:
+        if handler is None:
             return _error(rid, -32602, f"unknown tool: {name}")
-        handler, old_style = resolved
         try:
-            result = handler(args) if old_style else handler(**args)
+            result = handler(**args)
             if inspect.iscoroutine(result):
                 result = self._run_async(result)
             if not isinstance(result, str):

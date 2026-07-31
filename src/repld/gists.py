@@ -50,8 +50,8 @@ _installed_dirs: list[Path] = []  # set by install()
 # third-party code.
 _path_dep_modules: set[str] = set()
 
-# Dedup warnings (malformed __repld_tools__ / __repld_deps__, deprecation
-# notices, ...) so boot warns once but subsequent tools/list scans stay quiet.
+# Dedup warnings (malformed __repld_deps__, un-inspectable tool signatures,
+# failed imports) so boot warns once but subsequent tools/list scans stay quiet.
 _malformed_warned: set[str] = set()
 
 # Python type → JSON Schema type, for inferring tool input schemas from
@@ -735,25 +735,6 @@ def signature_for_path(path: Path) -> str:
     return ""
 
 
-def _extract_tools_from_tree(tree: ast.Module, path: Path) -> list[dict]:
-    """Extract __repld_tools__ list from a pre-parsed AST."""
-    node = _dunder_value(tree, "__repld_tools__")
-    if node is None:
-        return []
-    try:
-        value = ast.literal_eval(node)
-    except Exception:
-        value = None
-    if isinstance(value, list):
-        return value
-    _warn_once(
-        f"{path}:__repld_tools__",
-        f"repld: {path.name}: malformed __repld_tools__ "
-        f"(expected a list of tool dicts) — skipped",
-    )
-    return []
-
-
 def is_public_gist_file(p: Path) -> bool:
     """A gist file is public unless its name starts with an underscore."""
     return not p.name.startswith("_")
@@ -792,69 +773,22 @@ def _iter_gist_files(*, include_private: bool = False):
         yield p
 
 
-def _warn_deprecated(path: Path) -> None:
-    """Warn once per gist file that __repld_tools__ is a legacy override."""
-    _warn_once(
-        f"{path}:deprecated",
-        f"repld: {path.name}: __repld_tools__ is deprecated "
-        f"— use _tool_ functions with type hints instead",
-    )
+def _declared_tools(p: Path) -> list[str] | None:
+    """AST-only (no import) list of tool names declared by gist *p*.
 
-
-def _tool_names_from_tree(tree: ast.Module) -> list[str]:
-    """Return ``_tool_*`` function names from a pre-parsed AST (prefix stripped)."""
-    names = []
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name.startswith("_tool_"):
-                names.append(node.name[len("_tool_") :])
-    return names
-
-
-def _tool_decls(p: Path) -> tuple[list[dict], list[str]] | None:
-    """Parse a gist file's tool declarations, or None if it doesn't parse.
-
-    Returns ``(legacy, typed_names)`` — the legacy ``__repld_tools__`` list
-    and the ``_tool_*`` function names.
+    Names come from ``_tool_*`` function definitions with the prefix stripped;
+    None if the file doesn't parse. Kept AST-only so ``tools/list`` can be
+    answered without importing every gist in the project.
     """
     tree = _parse(p)
     if tree is None:
         return None
-    return _extract_tools_from_tree(tree, p), _tool_names_from_tree(tree)
-
-
-def _declared_tools(p: Path) -> list[tuple[str, bool, dict | None]] | None:
-    """AST-only (no import) list of ``(name, is_legacy, legacy_schema)`` for gist *p*.
-
-    A file with any ``__repld_tools__`` entries exposes only those — its
-    typed ``_tool_*`` functions are suppressed, since a gist picks one
-    convention, not both. This is the single place that precedence rule is
-    decided, so ``scan_tools`` and ``resolve_tool`` classify gists
-    identically. ``legacy_schema`` is the full dict for legacy entries (no
-    import needed to build a schema); ``None`` for typed entries, whose
-    schema requires importing the module and inspecting the function.
-    """
-    decls = _tool_decls(p)
-    if decls is None:
-        return None
-    legacy, tool_names = decls
-    if legacy:
-        return [
-            (tool["name"], True, tool)
-            for tool in legacy
-            if isinstance(tool, dict) and tool.get("name")
-        ]
-    return [(tname, False, None) for tname in tool_names]
-
-
-def _is_old_style(func) -> bool:
-    """True if *func* uses the legacy single ``args: dict`` handler signature."""
-    sig = inspect.signature(func)
-    params = list(sig.parameters.values())
-    if len(params) != 1:
-        return False
-    p = params[0]
-    return p.annotation in (dict, inspect.Parameter.empty)
+    return [
+        node.name[len("_tool_") :]
+        for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("_tool_")
+    ]
 
 
 def _annotation_parts(annotation) -> tuple[object, str | None]:
@@ -965,15 +899,12 @@ def _try_import_gist(p: Path):
 
 
 def scan_tools() -> list[dict]:
-    """Scan gist files for MCP tool declarations. Returns tool schemas.
+    """Scan gist files for ``_tool_*`` functions. Returns inferred tool schemas.
 
-    Two paths, checked per gist file:
-      1. Legacy ``__repld_tools__`` list — used as-is, warns once (deprecated).
-      2. Typed ``_tool_*`` functions — schema inferred from ``inspect.signature``.
-
-    A gist that fails to import or whose signature can't be inspected is
-    skipped with a warning rather than crashing the scan (and with it,
-    ``tools/list`` / ``initialize``).
+    Schemas come from ``inspect.signature`` plus the docstring's first line, so
+    the owning gist has to be imported. A gist that fails to import or whose
+    signature can't be inspected is skipped with a warning rather than crashing
+    the scan (and with it, ``tools/list`` / ``initialize``).
     """
     results: list[dict] = []
     seen: set[str] = set()
@@ -981,27 +912,14 @@ def scan_tools() -> list[dict]:
         declared = _declared_tools(p)
         if not declared:
             continue
-        if declared[0][1]:  # is_legacy — homogeneous per file
-            _warn_deprecated(p)
-            for name, _, schema in declared:
-                assert schema is not None  # legacy entries always carry their dict
-                if name not in seen:
-                    seen.add(name)
-                    results.append(schema)
-            continue
-
         mod = _try_import_gist(p)
         if mod is None:
             continue
-        for tname, _, _ in declared:
+        for tname in declared:
             if tname in seen:
                 continue
             func = getattr(mod, f"_tool_{tname}", None)
             if func is None:
-                continue
-            if _is_old_style(func):
-                # Old-style handler with no __repld_tools__ override — no way
-                # to infer a schema, so it can't be exposed as an MCP tool.
                 continue
             try:
                 schema = _schema_from_signature(func, tname)
@@ -1015,23 +933,17 @@ def scan_tools() -> list[dict]:
     return results
 
 
-def resolve_tool(name: str) -> tuple[Callable, bool] | None:
+def resolve_tool(name: str) -> Callable | None:
     """Import the gist that declares *name* and return its ``_tool_*`` handler.
 
-    Returns ``(handler, old_style)`` where *old_style* tells the caller to
-    dispatch with ``handler(args)`` (legacy dict) vs ``handler(**args)``
-    (typed kwargs). Returns ``None`` if no gist claims the tool.  Raises
-    ``AttributeError`` if a gist declares the tool but has no matching
-    handler function.
+    Called with keyword arguments matching the inferred schema. Returns
+    ``None`` if no gist claims the tool. Raises ``AttributeError`` if a gist
+    declares the tool but has no matching handler function.
     """
     for p in _iter_gist_files():
         declared = _declared_tools(p)
-        if not declared:
+        if declared is None or name not in declared:
             continue
-        match = next((d for d in declared if d[0] == name), None)
-        if match is None:
-            continue
-        _, is_legacy, _ = match
         mod = _try_import_gist(p)
         if mod is None:
             continue
@@ -1041,7 +953,7 @@ def resolve_tool(name: str) -> tuple[Callable, bool] | None:
                 f"gist '{p.stem}' declares tool '{name}' "
                 f"but has no _tool_{name}() handler"
             )
-        return handler, True if is_legacy else _is_old_style(handler)
+        return handler
     return None
 
 

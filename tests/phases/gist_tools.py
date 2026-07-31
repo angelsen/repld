@@ -125,41 +125,77 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         assert_eq(result["greeting"], "hey world!", "gist tool auto-reload")
         print(f"  ✓ gist tool auto-reload: {content!r}")
 
-        # Legacy path: __repld_tools__ + _tool_*(args: dict) still dispatches
-        # (old-style handler receives the raw args dict).
+        # __repld_tools__ was removed in 0.2. A declaration is now inert: only
+        # the _tool_* functions in the file are exposed, and the names the list
+        # invented never appear.
         legacy_file = gists_dir / "smoke_legacy_tools.py"
         legacy_file.write_text(
-            '"""Smoketest gist — legacy tool registration."""\n\n'
+            '"""Smoketest gist — a stale __repld_tools__ declaration."""\n\n'
             "__repld_tools__ = [\n"
             "    {\n"
-            '        "name": "smoke_legacy_greet",\n'
-            '        "description": "Return a greeting (legacy)",\n'
-            '        "inputSchema": {\n'
-            '            "type": "object",\n'
-            '            "properties": {"name": {"type": "string"}},\n'
-            '            "required": ["name"],\n'
-            "        },\n"
+            '        "name": "smoke_declared_only",\n'
+            '        "description": "Never had a handler.",\n'
+            '        "inputSchema": {"type": "object", "properties": {}},\n'
             "    },\n"
             "]\n\n\n"
-            "async def _tool_smoke_legacy_greet(args: dict) -> str:\n"
-            "    import json\n"
-            '    return json.dumps({"greeting": f"legacy hello {args[\'name\']}"})\n'
+            "async def _tool_smoke_still_typed(name: str) -> str:\n"
+            '    """Typed sibling of a stale declaration."""\n'
+            '    return f"typed {name}"\n'
         )
 
         resp = b.call("tools/list")
         tool_names = [t["name"] for t in resp["result"]["tools"]]
         assert_true(
-            "smoke_legacy_greet" in tool_names,
-            f"legacy gist tool in tools/list (got {tool_names!r})",
+            "smoke_declared_only" not in tool_names,
+            f"__repld_tools__ name is ignored (got {tool_names!r})",
+        )
+        # And it no longer suppresses the file's typed functions, which is what
+        # the old precedence rule did when both conventions appeared together.
+        assert_true(
+            "smoke_still_typed" in tool_names,
+            f"typed tool alongside a stale list still registers (got {tool_names!r})",
         )
         resp = b.call(
             "tools/call",
-            {"name": "smoke_legacy_greet", "arguments": {"name": "world"}},
+            {"name": "smoke_still_typed", "arguments": {"name": "world"}},
         )
-        content = resp["result"]["content"][0]["text"]
-        result = json.loads(content)
-        assert_eq(result["greeting"], "legacy hello world", "legacy gist tool response")
-        print(f"  ✓ legacy gist tool call (old-style dispatch): {content!r}")
+        assert_eq(
+            resp["result"]["content"][0]["text"], "typed world", "typed sibling runs"
+        )
+        print("  ✓ __repld_tools__ inert: name ignored, typed sibling unaffected")
+
+        # A single dict parameter is now an ordinary tool taking one object —
+        # it used to be indistinguishable from the legacy handler shape and was
+        # skipped entirely.
+        dict_file = gists_dir / "smoke_dict_param.py"
+        dict_file.write_text(
+            '"""Smoketest gist — single dict parameter."""\n\n'
+            "async def _tool_smoke_payload(payload: dict) -> str:\n"
+            '    """Take one object argument."""\n'
+            "    return str(sorted(payload.items()))\n"
+        )
+        resp = b.call("tools/list")
+        by_name = {t["name"]: t for t in resp["result"]["tools"]}
+        assert_true(
+            "smoke_payload" in by_name,
+            f"single-dict-param tool now registers (got {list(by_name)!r})",
+        )
+        assert_eq(
+            by_name["smoke_payload"]["inputSchema"]["properties"]["payload"]["type"],
+            "object",
+            "dict param maps to object",
+        )
+        resp = b.call(
+            "tools/call",
+            {"name": "smoke_payload", "arguments": {"payload": {"b": 2, "a": 1}}},
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"],
+            "[('a', 1), ('b', 2)]",
+            "single-dict-param tool dispatches",
+        )
+        dict_file.unlink()
+        print("  ✓ single dict param is a real tool now, not a legacy handler")
 
         # Error case: handler that raises
         time.sleep(0.01)

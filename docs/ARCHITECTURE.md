@@ -98,7 +98,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] `defer(coro, label=None)` — fire-and-forget with channel push on completion
 - [x] `@every(seconds)` — periodic ticker on the shared loop
 - [x] Gists layer — `./gists/` + `~/.repld/gists/` on sys.path, auto-reload import hook, `scan()` discovery, `introspect()` AST parsing, `repld://gists/{name}` resource templates
-- [x] Gist tools — `__repld_tools__` declaration + `_tool_*` handlers, auto-discovery in `tools/list`, `repld gist` scaffolding
+- [x] Gist tools — typed `_tool_*` handlers with inferred schemas, auto-discovery in `tools/list`, `repld gist` scaffolding
 - [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard
 - [x] Ready signal — `browser.get(ready=selector)`, session recovery on HMR, navigate/reload wait

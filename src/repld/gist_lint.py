@@ -18,12 +18,11 @@ Checks:
              have it. Imports inside a try/except that catches ImportError
              are skipped -- that's how a soft dependency is written, and
              requiring a declaration would defeat the point.
-  legacy     The pre-0.1.0 tool convention, both halves: the
-             __repld_tools__ declaration list and the _tool_x(args: dict)
-             handler signature. repld 0.3 removes them. gists.py only
-             warns about the first, reactively (at tool-call time, via
-             _warn_deprecated()), and about the second not at all -- so
-             this is the only way to find them without invoking the tool.
+  legacy     The __repld_tools__ declaration list, removed in repld 0.2.
+             Nothing warns about it any more -- it is simply ignored, so a
+             file still carrying one silently loses its tools (or exposes
+             them with a bogus single `args` parameter inferred from the
+             old handler signature). This is the only thing that says so.
 
 Suppress a finding with a `# gistlint: ignore=<rule>[,<rule>]` comment on
 the flagged line or the line above it. For `firstline` (a whole-file check)
@@ -365,60 +364,32 @@ def _check_deps(
     return findings
 
 
-def _is_old_style_def(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """AST twin of ``gists._is_old_style``: one parameter, ``dict`` or bare.
-
-    That module decides by ``inspect.signature`` on the imported function; this
-    has to reach the same verdict without importing anything, so the two must
-    be changed together.
-    """
-    args = node.args
-    if args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg:
-        return False
-    if len(args.args) != 1:
-        return False
-    ann = args.args[0].annotation
-    return ann is None or (isinstance(ann, ast.Name) and ann.id == "dict")
-
-
 def _check_legacy_tools(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
-    """Both halves of the pre-0.1.0 tool convention, which 0.3 removes.
+    """``__repld_tools__``, which 0.2 removed and which now does nothing.
 
-    A gist can be caught by either independently: the ``__repld_tools__``
-    declaration list, and the ``_tool_x(args: dict)`` handler signature it used
-    to pair with. Typed-declaring files with an old-style handler are the easy
-    ones to miss — nothing warns about those until the tool is actually called.
+    The rule outlived the runtime support on purpose: a file still carrying the
+    declaration is no longer *warned* about at tool-call time, it is silently
+    ignored, so its tools either vanish from ``tools/list`` or — if it also has
+    the matching ``_tool_x(args: dict)`` handler — reappear with a single
+    ``args`` object parameter inferred from that signature. Both are quiet
+    wrong answers, and this is the only thing that names them.
+
+    The old companion check on the handler signature is gone: with the legacy
+    convention removed, ``_tool_x(payload: dict)`` is an ordinary tool taking
+    one object argument, so flagging it would fire on correct code.
     """
-    findings: list[Finding] = []
     node = gists._dunder_value(tree, "__repld_tools__")
-    if node is not None and not _is_ignored(node.lineno, "legacy", ignores):
-        findings.append(
-            Finding(
-                path,
-                node.lineno,
-                "legacy",
-                "__repld_tools__ is deprecated -- declare tools as _tool_ "
-                "functions with type hints and let the schema be inferred "
-                "(removed in repld 0.3)",
-            )
+    if node is None or _is_ignored(node.lineno, "legacy", ignores):
+        return []
+    return [
+        Finding(
+            path,
+            node.lineno,
+            "legacy",
+            "__repld_tools__ was removed in repld 0.2 and is now ignored -- "
+            "declare tools as _tool_ functions with type hints and let the "
+            'schema be inferred (Annotated[T, "..."] for a param description)',
         )
-    for fn in ast.iter_child_nodes(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if not fn.name.startswith("_tool_") or not _is_old_style_def(fn):
-            continue
-        if _is_ignored(fn.lineno, "legacy", ignores):
-            continue
-        findings.append(
-            Finding(
-                path,
-                fn.lineno,
-                "legacy",
-                f"{fn.name}({fn.args.args[0].arg}: dict) uses the legacy "
-                "single-dict handler signature -- give each argument its own "
-                "typed parameter instead (removed in repld 0.3)",
-            )
-        )
-    return findings
+    ]

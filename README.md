@@ -184,7 +184,7 @@ app = await MyApp.connect()
 await app.accounts()
 ```
 
-Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (`__repld_tools__`), and link across projects (`repld gist add <name>`). See `repld help gists` for details.
+Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (typed `_tool_*` functions), and link across projects (`repld gist add <name>`). See `repld help gists` for details.
 
 ## Scope
 

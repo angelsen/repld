@@ -368,32 +368,35 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(prose, [], f"prose '->' note satisfies the shape rule (got {prose})")
         print("  ✓ gist lint: shape rule accepts any '->' note, as its message says")
 
-        # --- gist lint: the legacy rule catches BOTH halves of the pre-0.1.0
-        # tool convention. The handler signature is the one nothing else finds:
-        # gists._warn_deprecated only fires on __repld_tools__, so a file that
-        # declares tools the modern way but still takes a single dict stays
-        # silent until someone actually calls the tool. ---
+        # --- gist lint: the legacy rule outlived the runtime support it warned
+        # about. 0.2 removed __repld_tools__ outright, so a file still carrying
+        # one is silently ignored rather than warned about at tool-call time —
+        # this is now the only thing that says so. ---
         (src / "oldtools.py").write_text(
-            '"""Legacy declaration + legacy handler."""\n'
+            '"""Stale declaration."""\n'
             '__repld_tools__ = [{"name": "a", "description": "d"}]\n'
-            "def _tool_a(args: dict):\n"
+            "def _tool_a(query: str):\n"
             '    """Do a."""\n'
             "    return {}\n"
         )
-        rules = [f.rule for f in gist_lint.lint_file(src / "oldtools.py")]
-        assert_eq(rules.count("legacy"), 2, "legacy rule flags both dunder + handler")
+        old = [
+            f for f in gist_lint.lint_file(src / "oldtools.py") if f.rule == "legacy"
+        ]
+        assert_eq(len(old), 1, "legacy rule flags a stale __repld_tools__")
+        assert_true("removed in repld 0.2" in old[0].message, "message says removed")
 
-        (src / "halfold.py").write_text(
-            '"""Modern declaration, legacy handler."""\n'
-            "def _tool_b(args: dict):\n"
-            '    """Do b."""\n'
+        # The companion check on the handler signature is gone: with the legacy
+        # convention removed, one dict parameter is an ordinary object argument.
+        (src / "dictparam.py").write_text(
+            '"""One object argument."""\n'
+            "def _tool_b(payload: dict):\n"
+            '    """Do b. -> {ok}"""\n'
             "    return {}\n"
         )
-        half = [
-            f for f in gist_lint.lint_file(src / "halfold.py") if f.rule == "legacy"
+        dictp = [
+            f for f in gist_lint.lint_file(src / "dictparam.py") if f.rule == "legacy"
         ]
-        assert_eq(len(half), 1, "legacy rule flags an old-style handler on its own")
-        assert_true("_tool_b" in half[0].message, "finding names the offending handler")
+        assert_eq(dictp, [], f"a single dict param is not flagged (got {dictp})")
 
         (src / "typedtools.py").write_text(
             '"""Typed tools."""\n'
@@ -407,8 +410,9 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         assert_eq(typed, [], f"typed handler is not flagged (got {typed})")
 
         (src / "ignored.py").write_text(
-            '"""Suppressed legacy handler."""\n'
-            "def _tool_d(args: dict):  # gistlint: ignore=legacy\n"
+            '"""Suppressed stale declaration."""\n'
+            "__repld_tools__ = []  # gistlint: ignore=legacy\n"
+            "def _tool_d(query: str):\n"
             '    """Do d."""\n'
             "    return {}\n"
         )
@@ -416,7 +420,9 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             f for f in gist_lint.lint_file(src / "ignored.py") if f.rule == "legacy"
         ]
         assert_eq(supp, [], f"gistlint: ignore=legacy suppresses it (got {supp})")
-        print("  ✓ gist lint: legacy rule covers __repld_tools__ + old handler sigs")
+        print(
+            "  ✓ gist lint: legacy rule names __repld_tools__ as removed, not stale sigs"
+        )
 
         # --- path: dep modules get gist-style mtime auto-reload, without the
         # gist-registry/API-summary side effects a real gist import triggers ---
