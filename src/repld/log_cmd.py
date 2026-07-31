@@ -147,7 +147,13 @@ def run_log(argv: list[str]) -> int:
         print(f"repld log: {lock}", file=sys.stderr)
         return 1
     if isinstance(lock, str):
-        print(f"{_DIM}(no kernel running — showing the last one's log){_RESET}")
+        # stderr, not stdout: `--json` promises an NDJSON stream, and a `repld
+        # log --json | jq` pipeline would break on this line — precisely when
+        # the kernel is down, which is when you are most likely reading the log.
+        print(
+            f"{_DIM}(no kernel running — showing the last one's log){_RESET}",
+            file=sys.stderr,
+        )
 
     for rec in eventlog.read_records(log_path, tail=tail):
         _emit(rec, as_json)

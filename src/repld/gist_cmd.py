@@ -221,6 +221,15 @@ def _gist_list(argv: list[str]) -> int:
     from . import gist_links
     from . import gists as _gists
 
+    usage = "repld gist list — local + linked gists, and what's linkable"
+    if _wants_help(argv):
+        print(usage)
+        return 0
+    if argv:
+        print(f"repld gist list: unknown argument {argv[0]!r}\n")
+        print(usage)
+        return 2
+
     gists_dir = Path.cwd() / "gists"
 
     # Local gists (./gists), excluding privates.

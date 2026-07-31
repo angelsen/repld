@@ -139,6 +139,24 @@ def write(ev: "events.Event") -> None:
         pass
 
 
+def _parse_record(line: str) -> dict | None:
+    """One NDJSON line as a record, or None to skip it.
+
+    Blank lines and a torn final write are both normal: the log is appended to
+    by a live kernel and read concurrently, so the last line can be half-there.
+    Shared by `read_records` and `follow` so a replay and a tail can't disagree
+    about what counts as a record.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
 def read_records(path: Path, *, tail: int | None = None) -> list[dict]:
     """Parse the log. Unparseable lines (a torn final write) are skipped."""
     try:
@@ -147,14 +165,8 @@ def read_records(path: Path, *, tail: int | None = None) -> list[dict]:
         return []
     out: list[dict] = []
     for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(rec, dict):
+        rec = _parse_record(line)
+        if rec is not None:
             out.append(rec)
     return out[-tail:] if tail else out
 
@@ -184,12 +196,6 @@ def follow(path: Path, *, stop: threading.Event | None = None) -> Iterator[dict]
             pos = f.tell()
         while "\n" in buf:
             line, buf = buf.split("\n", 1)
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict):
+            rec = _parse_record(line)
+            if rec is not None:
                 yield rec
