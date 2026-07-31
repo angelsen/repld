@@ -195,6 +195,8 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             sys.path.remove(str(src_tree))
             sys.path.remove(d)
             print("  ✓ editable gist deps resolve — .pth files are processed")
+
+            _fetch_checks()
         finally:
             gist_deps._DEPS_ROOT = orig_deps_root
 
@@ -730,3 +732,106 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         g._linked.clear()
         shutil.rmtree(other, ignore_errors=True)
         shutil.rmtree(proj, ignore_errors=True)
+
+
+def _fetch_checks() -> None:
+    """`repld gist fetch` — ref parsing, and the write/collision rules.
+
+    The network call is stubbed. What can break here is which id a URL resolves
+    to and where the file is allowed to land; hitting GitHub would test neither
+    and would skip silently without a network, reporting green. Runs in its own
+    project and its own fake HOME so it cannot disturb the linked-gist state the
+    rest of the phase is still using.
+    """
+    parse = gist_cmd._parse_gist_ref
+    gid = "bad64ef5b7e413c5c9abcc8ac0a59ca8"
+    for ref in (
+        gid,
+        f"https://gist.github.com/{gid}",
+        f"https://gist.github.com/angelsen/{gid}",
+        f"https://gist.githubusercontent.com/angelsen/{gid}/raw/abc/hybel.py",
+    ):
+        assert_eq(parse(ref), gid, f"gist ref resolves: {ref[:46]}")
+    for bad in ("https://example.com/evil.py", "https://github.com/a/b", "nope", ""):
+        try:
+            parse(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted a non-gist ref: {bad!r}")
+    print("  ✓ gist fetch: gist ids parse, anything else is refused")
+
+    root = Path(tempfile.mkdtemp(prefix="repld-fetch-"))
+    proj, home = root / "proj", root / "home"
+    (home / ".repld" / "gists").mkdir(parents=True)
+    proj.mkdir()
+    stub = ("Fixture gist", {"probe_fetched.py": '"""A probe -> dict."""\nX = 1\n'})
+    orig_fetch, orig_home, cwd = gist_cmd._fetch_gist, Path.home, os.getcwd()
+    try:
+        gist_cmd._fetch_gist = lambda _id, timeout=20.0: stub  # pyright: ignore[reportAttributeAccessIssue]
+        Path.home = staticmethod(lambda: home)  # pyright: ignore[reportAttributeAccessIssue]
+        os.chdir(proj)
+        fetch = lambda *a: _quiet(gist_cmd._gist_fetch, list(a))  # noqa: E731
+
+        assert_eq(fetch(gid), 0, "fetch writes into ./gists")
+        body = (proj / "gists" / "probe_fetched.py").read_text()
+        assert_true(
+            body.startswith(f"# source: https://gist.github.com/{gid}\n"),
+            "header names the source",
+        )
+        assert_true(
+            body.endswith('"""A probe -> dict."""\nX = 1\n'),
+            "content follows the header verbatim",
+        )
+
+        assert_eq(fetch(gid), 1, "a second fetch refuses rather than clobbering")
+        assert_eq(fetch(gid, "--force"), 0, "--force overwrites")
+        assert_eq(
+            (proj / "gists" / "probe_fetched.py").read_text().count("# source:"),
+            1,
+            "--force doesn't stack headers",
+        )
+
+        # All three ways a name can already resolve for a kernel booted here.
+        assert_eq(fetch(gid, "--global"), 1, "--global refuses a locally-present name")
+        assert_eq(
+            fetch(gid, "--global", "--name", "probe_global"),
+            0,
+            "--global writes to ~/.repld/gists",
+        )
+        assert_true(
+            (home / ".repld" / "gists" / "probe_global.py").is_file(),
+            "the global file landed in the global dir",
+        )
+        assert_eq(
+            fetch(gid, "--name", "probe_global"),
+            1,
+            "local fetch refuses a globally-present name",
+        )
+        g.write_links(proj / "gists", {"probe_linked": str(root / "probe_linked.py")})
+        assert_eq(
+            fetch(gid, "--name", "probe_linked"),
+            1,
+            "fetch refuses a name that is already linked",
+        )
+
+        assert_eq(fetch(gid, "--name", "not-an-identifier"), 2, "--name must import")
+        assert_eq(fetch(gid, "--name"), 2, "--name without a value is an error")
+        assert_eq(fetch(gid, "--nope"), 2, "unknown flag is an error")
+        assert_eq(fetch(), 2, "no ref is an error")
+
+        gist_cmd._fetch_gist = lambda _id, timeout=20.0: ("", {})  # pyright: ignore[reportAttributeAccessIssue]
+        assert_eq(
+            fetch(gid, "--name", "probe_empty"), 1, "a gist with no .py files errors"
+        )
+        print("  ✓ gist fetch: header, --force, --name, and all three collision scopes")
+    finally:
+        gist_cmd._fetch_gist = orig_fetch  # pyright: ignore[reportAttributeAccessIssue]
+        Path.home = orig_home  # pyright: ignore[reportAttributeAccessIssue]
+        os.chdir(cwd)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _quiet(fn, argv: list[str]) -> int:
+    """Run a gist subcommand with its stdout swallowed — usage blocks are noise."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn(argv)

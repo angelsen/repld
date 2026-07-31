@@ -1033,6 +1033,7 @@ Commands:
   repld gate answer ID VAL Answer one (the route for a headless kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
+  repld gist fetch URL     Download a GitHub gist into ./gists (--global)
   repld gist add NAME      Link a gist registered in another project
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
   repld gist list          Show local + linked gists
@@ -1267,6 +1268,15 @@ Linting:
   legacy (a __repld_tools__ list, which is silently ignored -- nothing
   else reports one).
   Suppress one: # gistlint: ignore=<rule> on the flagged line.
+
+Getting a gist you didn't write:
+  repld gist fetch <gist-url> [--global] [--name NAME] [--force]
+  Downloads a GitHub gist's .py files into ./gists (or ~/.repld/gists with
+  --global) with a `# source:` header. A snapshot, not a link — nothing
+  tracks the gist afterwards, and the file is yours to edit. Sibling of
+  `new`, not of `add`: `rm` unlinks, so delete a fetched file directly.
+  Declared deps are reported but not installed — read the code first; the
+  next kernel boot prompts for them wherever there is a terminal.
 
 Cross-project links:
   repld gist list             local + linked gists in this project

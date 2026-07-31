@@ -90,6 +90,200 @@ def _gist_new(argv: list[str]) -> int:
     return 0
 
 
+_GIST_HOSTS = ("gist.github.com", "gist.githubusercontent.com")
+
+_FETCH_HEADER = (
+    "# source: {url}\n"
+    "# fetched: {date} by `repld gist fetch` — a snapshot, not a link.\n"
+    "# Edits here are yours; re-fetch with --force to take the gist's version back.\n"
+)
+
+
+def _parse_gist_ref(ref: str) -> str:
+    """The gist id from a gist.github.com URL, a raw URL, or a bare id.
+
+    Deliberately narrow: only GitHub gists, never an arbitrary URL to a `.py`.
+    The file lands somewhere a kernel imports at boot, so the set of places it
+    can come from should be one a reader recognises.
+    """
+    import re
+    from urllib.parse import urlparse
+
+    if "/" not in ref and ":" not in ref:
+        candidate = ref
+    else:
+        u = urlparse(ref)
+        if u.scheme not in ("http", "https") or u.hostname not in _GIST_HOSTS:
+            raise ValueError(
+                f"not a GitHub gist URL: {ref}\n"
+                "       expected https://gist.github.com/<user>/<id>, or a bare gist id"
+            )
+        # /<user>/<id>, /<id>, and raw URLs (/<user>/<id>/raw/<rev>/<file>)
+        parts = [p for p in u.path.split("/") if p]
+        if not parts:
+            raise ValueError(f"no gist id in {ref}")
+        candidate = parts[1] if len(parts) > 1 else parts[0]
+    if not re.fullmatch(r"[0-9a-f]{8,}", candidate):
+        raise ValueError(f"'{candidate}' is not a gist id")
+    return candidate
+
+
+def _fetch_gist(gist_id: str, timeout: float = 20.0) -> tuple[str, dict[str, str]]:
+    """``(description, {filename: source})`` for a gist, `.py` files only.
+
+    A secret gist is readable by id without a token, which is the common case
+    for one you made yourself; anything needing auth is reported as such rather
+    than half-attempted.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    api = f"https://api.github.com/gists/{gist_id}"
+    req = urllib.request.Request(
+        api,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "repld"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            meta = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise LookupError(
+                f"gist {gist_id} not found — deleted, or private to another "
+                "account (repld does not send credentials)"
+            ) from e
+        raise LookupError(f"GitHub returned HTTP {e.code} for {api}") from e
+    except urllib.error.URLError as e:
+        raise LookupError(f"could not reach GitHub: {e.reason}") from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise LookupError(f"unreadable response from {api}: {e}") from e
+
+    files: dict[str, str] = {}
+    for fname, entry in (meta.get("files") or {}).items():
+        if not fname.endswith(".py"):
+            continue
+        content = entry.get("content")
+        if content is None or entry.get("truncated"):
+            # Files over ~1 MB come back truncated with the body at raw_url.
+            try:
+                with urllib.request.urlopen(entry["raw_url"], timeout=timeout) as r:
+                    content = r.read().decode("utf-8")
+            except (urllib.error.URLError, KeyError, UnicodeDecodeError) as e:
+                raise LookupError(f"could not read {fname}: {e}") from e
+        files[fname] = content
+    return meta.get("description") or "", files
+
+
+def _gist_fetch(argv: list[str]) -> int:
+    import datetime
+
+    from . import gist_deps, gist_links
+
+    usage = (
+        "repld gist fetch <gist-url> [--global] [--name NAME] [--force] — "
+        "download a GitHub gist into ./gists (like `new`, but seeded from "
+        "someone's working code; --global installs to ~/.repld/gists instead)"
+    )
+    if _wants_help(argv):
+        print(usage)
+        return 0
+    to_global = "--global" in argv
+    force = "--force" in argv
+    rest = [a for a in argv if a not in ("--global", "--force")]
+    rename: str | None = None
+    if "--name" in rest:
+        i = rest.index("--name")
+        if i + 1 >= len(rest):
+            print("error: --name needs a value")
+            return 2
+        rename = rest[i + 1]
+        del rest[i : i + 2]
+    unknown = [a for a in rest if a.startswith("-")]
+    if unknown:
+        print(f"error: unknown flag '{unknown[0]}'\n\n{usage}")
+        return 2
+    if len(rest) != 1:
+        print(usage)
+        return 2
+
+    try:
+        gist_id = _parse_gist_ref(rest[0])
+        description, files = _fetch_gist(gist_id)
+    except (ValueError, LookupError) as e:
+        print(f"error: {e}")
+        return 1
+    if not files:
+        print(f"error: gist {gist_id} contains no .py files")
+        return 1
+    if rename is not None:
+        if len(files) > 1:
+            print(
+                f"error: --name needs a single-file gist; this one has "
+                f"{len(files)}: {', '.join(sorted(files))}"
+            )
+            return 1
+        if not rename.isidentifier():
+            print(f"error: '{rename}' is not a valid Python identifier")
+            return 2
+        files = {f"{rename}.py": next(iter(files.values()))}
+
+    local_dir = Path.cwd() / "gists"
+    global_dir = Path.home() / ".repld" / "gists"
+    dest_dir = global_dir if to_global else local_dir
+    # Same collision rules add_link enforces, for the same reason: a name that
+    # resolves in two places silently shadows one of them at import time.
+    links = gist_links.read_links(local_dir)
+    for fname in sorted(files):
+        stem = fname[: -len(".py")]
+        if not stem.isidentifier():
+            print(f"error: '{fname}' is not importable as a module name")
+            return 1
+        target = dest_dir / fname
+        if target.exists() and not force:
+            print(f"error: {target} already exists (use --force to overwrite)")
+            return 1
+        other = (local_dir if to_global else global_dir) / fname
+        if other.is_file():
+            scope = "locally" if other.parent == local_dir else "globally"
+            print(f"error: '{stem}' already exists {scope}: {other}")
+            return 1
+        if stem in links:
+            print(f"error: '{stem}' is already linked from {links[stem]}")
+            return 1
+
+    url = f"https://gist.github.com/{gist_id}"
+    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for fname, content in sorted(files.items()):
+        target = dest_dir / fname
+        target.write_text(header + content, encoding="utf-8")
+        written.append(target)
+
+    if description:
+        print(f"{description}\n")
+    for target in written:
+        print(f"fetched: {target}  ({target.stat().st_size:,} bytes)")
+
+    # Deliberately *not* installed here, unlike `gist add`. That links code you
+    # wrote in another project; this is code from a URL, and its dependency
+    # list should not drive an install before you have read the file. The next
+    # kernel boot prompts for them anyway, wherever there is a terminal.
+    declared = gist_deps.scan_deps(paths=written)
+    if declared:
+        names = sorted({d.requirement for d in declared})
+        print(f"\ndeclares dependencies not installed here: {', '.join(names)}")
+
+    print()
+    print("Next steps:")
+    print(f"  1. Read {written[0]} — it runs in your kernel on the next boot")
+    print(f"  2. repld gist lint {written[0].stem} — check it over")
+    deps_note = " (and to be prompted for its deps)" if declared else ""
+    print(f"  3. Restart the kernel to load it{deps_note}")
+    return 0
+
+
 def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
@@ -293,6 +487,11 @@ def _gist_list(argv: list[str]) -> int:
 # dispatch and the usage listing, so they can't drift.
 _GIST_COMMANDS = {
     "new": (_gist_new, "new <name>", "scaffold ./gists/<name>.py"),
+    "fetch": (
+        _gist_fetch,
+        "fetch <gist-url>",
+        "download a GitHub gist into ./gists (--global for ~/.repld/gists)",
+    ),
     "add": (_gist_add, "add <name>", "link a gist registered in another project"),
     "rm": (_gist_rm, "rm <name>", "unlink (use --stale to drop all dead links)"),
     "list": (_gist_list, "list", "show local + linked + linkable gists"),
