@@ -26,7 +26,7 @@ from typing import Any
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
 from .cdp import CDPSession
-from .session import WORKER_TYPES
+from .session import WORKER_TYPES, BrowserSession
 from .row import Rows
 from .tab import Tab
 
@@ -95,8 +95,6 @@ class Browser:
         self,
         port: int | None = None,
     ) -> None:
-        from .session import BrowserSession
-
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         self._session: BrowserSession = BrowserSession(self.port)
         self._connected: bool = False
@@ -290,7 +288,6 @@ class Browser:
         self._session.add_pattern(pattern)
 
         # Attach any targets that match the pattern and aren't already attached
-        newly_attached: list[str] = []
         targets = await self._session.list_targets()
         to_attach: list[tuple[str, dict]] = []
         for t in targets:
@@ -621,8 +618,6 @@ class BrowserPool:
 
     def resolve_tab(self, target_id: str) -> "Tab":
         """Find an attached Tab by its raw Chrome targetId, across all ports."""
-        from .tab import Tab
-
         for port, b in self._browsers.items():
             if not b._connected:
                 continue
@@ -840,8 +835,10 @@ class BrowserPool:
 class LazyBrowser:
     """Lazy descriptor injected into __main__.
 
-    On first attribute access, bootstraps a BrowserPool and connects
-    to the default Chrome port.
+    First attribute access constructs an empty BrowserPool; nothing reaches
+    Chrome until an operation needs a browser, at which point `_ensure_any`
+    connects to the default port. That split is the point — importing repld,
+    or merely touching `browser`, must not open a WebSocket.
     """
 
     def __init__(self) -> None:

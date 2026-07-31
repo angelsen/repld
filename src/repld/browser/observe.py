@@ -207,41 +207,58 @@ Array.from(document.querySelectorAll(
 
 
 async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[str]:
-    """Check page-type targets for visible dialogs when observing an iframe."""
-    if tab._session.target_info.get("type") != "iframe":
+    """Report a visible modal on the page that *owns* this iframe.
+
+    Only that page. Scanning every attached page-type target instead was wrong
+    twice over: a modal in some unrelated tab got reported as this iframe's
+    parent dialog, and the sweep cost one `Runtime.evaluate` round trip per
+    attached page on every iframe observation — which scales with how many tabs
+    happen to be attached, not with anything about the page being observed.
+
+    `parentFrameId` names the real parent, and is the same field
+    `_discover_iframe_children` matches on in the other direction.
+    """
+    info = tab._session.target_info
+    if info.get("type") != "iframe":
+        return []
+    parent_frame = info.get("parentFrameId")
+    if not parent_frame:
+        return []
+
+    parent_cdp = next(
+        (
+            s
+            for s in session._sessions.values()
+            if s.target_info.get("targetId") == parent_frame
+            and s.target_info.get("type") == "page"
+        ),
+        None,
+    )
+    if parent_cdp is None:
         return []
 
     from . import make_target
 
+    parent_tab = Tab(parent_cdp, parent_frame, tab._port)
+    try:
+        result = await parent_tab.js(_DIALOG_DETECT_JS)
+    except Exception:
+        return []
+    if not isinstance(result, list):
+        return []
+
+    parent_tid = make_target(tab._port, parent_frame)
     warnings: list[str] = []
-    for cdp_session in session._sessions.values():
-        info = cdp_session.target_info
-        if info.get("type") != "page":
+    for dialog in result:
+        if not isinstance(dialog, dict):
             continue
-        target_id = info.get("targetId", "")
-        if not target_id:
-            continue
-
-        parent_tab = Tab(cdp_session, target_id, tab._port)
-        try:
-            result = await parent_tab.js(_DIALOG_DETECT_JS)
-        except Exception:
-            continue
-        if not isinstance(result, list):
-            continue
-
-        parent_tid = make_target(tab._port, target_id)
-        for dialog in result:
-            if not isinstance(dialog, dict):
-                continue
-            title = dialog.get("title") or "untitled"
-            buttons = dialog.get("buttons", [])
-            btn_str = " / ".join(f"[{b}]" for b in buttons) if buttons else ""
-            line = f"warning: parent dialog ({parent_tid}): {title}"
-            if btn_str:
-                line += f" -- {btn_str}"
-            warnings.append(line)
-
+        title = dialog.get("title") or "untitled"
+        buttons = dialog.get("buttons", [])
+        btn_str = " / ".join(f"[{b}]" for b in buttons) if buttons else ""
+        line = f"warning: parent dialog ({parent_tid}): {title}"
+        if btn_str:
+            line += f" -- {btn_str}"
+        warnings.append(line)
     return warnings
 
 
@@ -380,11 +397,29 @@ class PreObservation:
     console_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
 
 
-def _snapshot_max_ids(tabs: list["Tab"], table: str) -> dict[str, int]:
-    """Record MAX(id) from `table` for each tab's DuckDB, keyed by target_id."""
+def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
+    """Record each tab's event-log high-water mark, keyed by target_id.
+
+    Read from `events` rather than from `har_entries` / `console_entries`,
+    which is both cheaper and sufficient. Cheaper because those are views over
+    a CTE chain — `MAX(id)` on them evaluates the whole thing (measured 22 ms
+    at 2k events, 82 ms at 40k) where `MAX(rowid)` on the base table is a
+    counter read (~1.5 ms flat). This runs synchronously on the kernel loop,
+    once per tab *and* once per iframe child, before every observed mutation,
+    so a page with three iframes was stalling the loop for a fifth of a second
+    before the click even fired.
+
+    Sufficient because both views derive their `id` from `events.rowid`
+    (`har_entries` as `rh.rowid` / `ws.first_rowid`, `console_entries` as
+    `rowid`), and rowids are monotonic — the FIFO prune deletes the oldest
+    rows and DuckDB does not reuse their ids. So an events-level cutoff sits
+    at or above either view's own max, and `WHERE id > cutoff` selects exactly
+    the rows added after the snapshot: no pre-existing row can be above it,
+    and no new row can be below it. One query now covers both deltas.
+    """
     result: dict[str, int] = {}
     for tab in tabs:
-        rows = tab._session.query(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
+        rows = tab._session.query("SELECT COALESCE(MAX(rowid), 0) FROM events")
         result[tab.target_id] = rows[0][0]
     return result
 
@@ -393,12 +428,12 @@ async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
     """Capture state before a mutation. Fast — no blocking."""
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
-    har_snaps = _snapshot_max_ids(all_tabs, "har_entries")
-    console_snaps = _snapshot_max_ids(all_tabs, "console_entries")
+    # One cutoff serves both deltas — see _snapshot_max_ids.
+    snaps = _snapshot_max_ids(all_tabs)
     return PreObservation(
         iframe_children=iframe_children,
-        har_snapshots=har_snaps,
-        console_snapshots=console_snaps,
+        har_snapshots=snaps,
+        console_snapshots=dict(snaps),
     )
 
 

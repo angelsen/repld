@@ -131,8 +131,21 @@ class BrowserSession:
             self._ws = None
 
     async def disconnect(self) -> None:
-        """Close the WebSocket and cancel recv task."""
+        """Close the WebSocket, drop every CDPSession, fail pending calls.
+
+        The session map has to go with the socket. Every other teardown path
+        (`detach`, a failed `_reconnect`, `Target.targetDestroyed`) calls
+        `cdp.cleanup()`; leaving it out here stranded each session's in-memory
+        DuckDB store, and `BrowserPool.connect` replaces the whole Browser on
+        reconnect, so nothing ever came back to close them. It also left this
+        object able to re-`_ensure_connected()` onto a fresh WebSocket while
+        still holding sessionIds that can never work again.
+        """
         await self._teardown_ws()
+
+        for cdp in list(self._sessions.values()):
+            cdp.cleanup()
+        self._sessions.clear()
 
         # Fail all pending futures
         for fut in self._pending.values():
