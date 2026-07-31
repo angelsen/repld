@@ -135,7 +135,11 @@ def _systemd_spawn_live(tmp: Path) -> None:
     orig_cwd = os.getcwd()
     try:
         os.chdir(proj)
-        assert_true(spawn.spawn_headless(sock), "kernel spawned via systemd-run")
+        assert_eq(
+            spawn.spawn_headless(sock),
+            spawn.STARTED,
+            "kernel spawned via systemd-run",
+        )
         pid = 0
         for _ in range(150):
             try:
@@ -162,9 +166,13 @@ def _systemd_spawn_live(tmp: Path) -> None:
             spawn.INCUMBENT,
             "a taken unit name reads as a racing boot",
         )
-        assert_true(
-            not spawn.spawn_headless(sock),
-            "spawn_headless doesn't start a second kernel behind systemd's back",
+        # INCUMBENT, not FAILED: no second kernel is started behind systemd's
+        # back, but one *is* coming, and the caller must poll rather than treat
+        # this as fatal. `repld restart` used to return 1 here, silently.
+        assert_eq(
+            spawn.spawn_headless(sock),
+            spawn.INCUMBENT,
+            "a racing boot reads as an incumbent to adopt, not a failure",
         )
         assert_eq(
             int(json.loads((proj / "k.lock").read_text())["pid"]),

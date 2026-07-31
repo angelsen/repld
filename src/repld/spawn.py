@@ -207,25 +207,29 @@ def _spawn_directly(cmd: list[str], cwd: Path) -> bool:
     return True
 
 
-def spawn_headless(sock_path: Path) -> bool:
+def spawn_headless(sock_path: Path) -> str:
     """Start a headless kernel for the current cwd, outliving its spawner.
 
     As a transient systemd user service where that's available, so the kernel
     gets its own cgroup and lifetime; otherwise a detached child. If two callers
     race, the kernel's flock mutex settles it and the loser exits 0.
 
-    True means the process started, not that the kernel is up — poll for that.
+    Returns STARTED, INCUMBENT, or FAILED. Three states rather than a bool
+    because only FAILED means "no kernel is coming": INCUMBENT is a racing boot
+    that already owns the unit, and the caller should poll and adopt it exactly
+    as it would its own spawn. Collapsing the two made `repld restart` report
+    failure — silently, returning 1 — while a perfectly good kernel came up.
+
+    STARTED means the *process* started, not that the kernel is up; poll either
+    way.
     """
     cwd = Path(os.getcwd())
     cmd = _kernel_argv(sock_path)
     if _systemd_available():
         outcome = _spawn_via_systemd(cmd, sock_path, cwd)
-        if outcome == STARTED:
-            return True
-        if outcome == INCUMBENT:
-            # A kernel already exists for this project; the caller polls and
-            # adopts it. Starting a second one behind systemd's back would only
-            # give the flock mutex something to reject.
-            return False
+        if outcome in (STARTED, INCUMBENT):
+            # Starting a second one behind systemd's back would only give the
+            # flock mutex something to reject.
+            return outcome
         print("repld: spawning a detached child instead", file=sys.stderr)
-    return _spawn_directly(cmd, cwd)
+    return STARTED if _spawn_directly(cmd, cwd) else FAILED

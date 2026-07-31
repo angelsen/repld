@@ -259,8 +259,15 @@ class Bridge:
         return True
 
     def _spawn_kernel(self) -> None:
-        if spawn.spawn_headless(self.socket_path):
+        # Both non-failures are followed by the same poll in _reconnect; they
+        # differ only in what happened, which is worth saying accurately —
+        # claiming to have spawned a kernel that a racing boot actually started
+        # would send anyone reading stderr after the wrong process.
+        outcome = spawn.spawn_headless(self.socket_path)
+        if outcome == spawn.STARTED:
             _err("no kernel running for this project — spawned a headless one")
+        elif outcome == spawn.INCUMBENT:
+            _err("another boot won the race — waiting for its kernel")
 
     def _ensure_kernel(self) -> bool:
         """Cheapest-first liveness ladder, run before every forward.

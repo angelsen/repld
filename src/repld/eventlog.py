@@ -116,8 +116,7 @@ def write(ev: "events.Event") -> None:
             if _written + len(line) > MAX_BYTES:
                 _fp.seek(0)
                 _fp.truncate()
-                _written = 0
-                _fp.write(
+                notice = (
                     json.dumps(
                         {
                             "t": time.time(),
@@ -128,6 +127,11 @@ def write(ev: "events.Event") -> None:
                     )
                     + "\n"
                 )
+                _fp.write(notice)
+                # Counted, not zeroed: the notice is bytes in the file like any
+                # other record, and skipping it let the cap drift upward by its
+                # length on every rotation.
+                _written = len(notice)
             _fp.write(line)
             _fp.flush()
             _written += len(line)

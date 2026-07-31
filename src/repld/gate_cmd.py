@@ -85,8 +85,10 @@ def run_gate(argv: list[str]) -> int:
 
     if rest and rest[0] == "answer":
         if len(rest) < 3:
-            _err("answer needs a gate id and a value\n")
-            print(_USAGE, file=sys.stderr)
+            # stdout, matching every other subcommand's usage-on-error. `_err`
+            # is for runtime failures, where stderr is right.
+            print(f"{_LABEL}: answer needs a gate id and a value\n")
+            print(_USAGE)
             return 2
         gate_id = rest[1]
         # Everything after the id, so an unquoted multi-word `ask` answer works.
@@ -94,8 +96,8 @@ def run_gate(argv: list[str]) -> int:
         return _answer(lock_path, gate_id, value, as_json)
 
     if rest:
-        _err(f"unknown argument {rest[0]!r}\n")
-        print(_USAGE, file=sys.stderr)
+        print(f"{_LABEL}: unknown argument {rest[0]!r}\n")
+        print(_USAGE)
         return 2
     return _list(lock_path, as_json)
 

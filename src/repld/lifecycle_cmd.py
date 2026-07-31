@@ -121,7 +121,11 @@ def run_stop(argv: list[str]) -> int:
 
 
 def _spawn_headless(sock_path: Path) -> int:
-    if not spawn.spawn_headless(sock_path):
+    # Only FAILED means nothing is coming. INCUMBENT is a racing boot that
+    # already owns the unit — poll for it exactly as for our own spawn, rather
+    # than reporting a failure while a healthy kernel comes up.
+    if spawn.spawn_headless(sock_path) == spawn.FAILED:
+        print("repld restart: could not start a kernel", file=sys.stderr)
         return 1
     # 10s, unlike the bridge's 5s: there's a human waiting at a terminal here,
     # not a tool call that would rather fail than hang.
