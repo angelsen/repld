@@ -857,15 +857,39 @@ def _is_old_style(func) -> bool:
     return p.annotation in (dict, inspect.Parameter.empty)
 
 
+def _annotation_parts(annotation) -> tuple[object, str | None]:
+    """Split ``Annotated[T, "description"]`` into ``(T, description)``.
+
+    Bare-string metadata rather than a ``Field``-style object: repld is stdlib
+    only, so a plain ``str`` is the analogue of what FastMCP and pydantic spell
+    ``Annotated[str, Field(description=...)]``. Metadata that isn't a string is
+    ignored rather than rejected, so an annotation carrying something else for
+    another consumer still resolves its type here.
+
+    This is the only way a gist can describe a *parameter*: the docstring's
+    first line becomes the tool description and there is nowhere else to say
+    what a date format or an id refers to.
+    """
+    if typing.get_origin(annotation) is not typing.Annotated:
+        return annotation, None
+    base, *meta = typing.get_args(annotation)
+    return base, next((m for m in meta if isinstance(m, str)), None)
+
+
 def _resolve_json_type(annotation) -> str | None:
     """Map a parameter annotation to a JSON Schema type, unwrapping
-    ``X | None`` / ``Optional[X]`` to the non-None arm and parameterized
-    generics (``list[str]``, ``dict[str, int]``) to their base type.
-    None if unmapped."""
+    ``Annotated[X, ...]``, ``X | None`` / ``Optional[X]`` to the non-None arm,
+    and parameterized generics (``list[str]``, ``dict[str, int]``) to their
+    base type. None if unmapped."""
     mapped = _TYPE_MAP.get(annotation)
     if mapped is not None:
         return mapped
     origin = typing.get_origin(annotation)
+    # Also handled by `_annotation_parts` before this is called; repeated here
+    # so a nested form like `Optional[Annotated[str, "..."]]` still resolves
+    # its type instead of falling through to the unmapped-type warning.
+    if origin is typing.Annotated:
+        return _resolve_json_type(typing.get_args(annotation)[0])
     if origin is typing.Union or origin is types.UnionType:
         args = [a for a in typing.get_args(annotation) if a is not type(None)]
         if len(args) == 1:
@@ -885,16 +909,19 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     properties: dict[str, dict] = {}
     required: list[str] = []
     for pname, param in sig.parameters.items():
-        json_type = _resolve_json_type(param.annotation)
+        annotation, param_doc = _annotation_parts(param.annotation)
+        json_type = _resolve_json_type(annotation)
         if json_type is None:
-            if param.annotation is not inspect.Parameter.empty:
+            if annotation is not inspect.Parameter.empty:
                 _warn_once(
                     f"{tool_name}:{pname}:type",
                     f"repld: tool '{tool_name}' param '{pname}' has unmapped "
-                    f"type {param.annotation!r} — treating as string",
+                    f"type {annotation!r} — treating as string",
                 )
             json_type = "string"
         prop: dict = {"type": json_type}
+        if param_doc:
+            prop["description"] = param_doc
         if param.default is not inspect.Parameter.empty:
             prop["default"] = param.default
         else:

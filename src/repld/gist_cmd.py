@@ -10,6 +10,8 @@ from pathlib import Path
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
+from typing import Annotated
+
 # __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
 
 # --- core logic (portable — keeps on graduation) ---
@@ -24,7 +26,9 @@ async def example(id: int) -> dict:
 # --- repld wiring (shed on graduation — replace with @mcp.tool or @router.get) ---
 
 
-async def _tool_{name}_example(id: int) -> dict:
+async def _tool_{name}_example(
+    id: Annotated[int, "TODO: what this id refers to"],
+) -> dict:
     """TODO: what this tool does."""
     return await example(id)
 '''

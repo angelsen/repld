@@ -42,6 +42,56 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         assert_eq(schema["inputSchema"]["required"], ["name"], "inferred required")
         print("  ✓ gist tool 'smoke_greet' in tools/list with inferred schema")
 
+        # Annotated[T, "..."] is the only way to describe a *parameter* — the
+        # docstring's first line is spent on the tool description.
+        annotated_file = gists_dir / "smoke_annotated.py"
+        annotated_file.write_text(
+            '"""Smoketest gist with annotated params."""\n\n'
+            "from typing import Annotated\n\n"
+            "async def _tool_smoke_annotated(\n"
+            "    query: Annotated[str, \"Search term (e.g. 'strom')\"],\n"
+            '    fra: Annotated[str | None, "From date YYYY-MM-DD"] = None,\n'
+            "    plain: int = 7,\n"
+            "    tagged: Annotated[int, 42] = 1,\n"
+            ") -> str:\n"
+            '    """Annotated tool."""\n'
+            '    return f"{query}|{fra}|{plain}|{tagged}"\n'
+        )
+        resp = b.call("tools/list")
+        props = {t["name"]: t for t in resp["result"]["tools"]}["smoke_annotated"][
+            "inputSchema"
+        ]["properties"]
+        assert_eq(
+            props["query"]["description"],
+            "Search term (e.g. 'strom')",
+            "Annotated description reaches the schema",
+        )
+        # Composes with `| None`: description kept, type still unwrapped.
+        assert_eq(props["fra"]["description"], "From date YYYY-MM-DD", "optional desc")
+        assert_eq(props["fra"]["type"], "string", "optional type still unwrapped")
+        assert_eq(props["fra"]["default"], None, "optional default still advertised")
+        # A bare annotation is unchanged, and non-str metadata is ignored
+        # rather than rejected — it may belong to some other consumer.
+        assert_true("description" not in props["plain"], "un-annotated param has none")
+        assert_eq(props["plain"]["type"], "integer", "un-annotated type unaffected")
+        assert_true("description" not in props["tagged"], "non-str metadata ignored")
+        assert_eq(props["tagged"]["type"], "integer", "non-str metadata keeps type")
+
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "smoke_annotated",
+                "arguments": {"query": "q", "fra": "2026-01-01"},
+            },
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"],
+            "q|2026-01-01|7|1",
+            "annotated tool dispatches on real kwargs",
+        )
+        annotated_file.unlink()
+        print("  ✓ Annotated param descriptions inferred, dispatched, and scoped")
+
         # Call the gist tool — new-style dispatch (handler(**args))
         resp = b.call(
             "tools/call",

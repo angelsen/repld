@@ -273,8 +273,9 @@ replaced by the target framework's decorator.
             return await lookup(company_id)
 
   Schema is inferred from the type hints and the docstring's first line —
-  no separate __repld_tools__ list needed. (That list still works as a
-  legacy override for custom schemas, but prints a deprecation warning.)
+  no separate __repld_tools__ list needed. Per-parameter descriptions go in
+  Annotated[T, "..."]. (That list still works as a legacy override, but
+  prints a deprecation warning.)
 
 == Secrets and .env ==
 
@@ -1208,10 +1209,17 @@ Tool registration:
   round-trip needed.
   Type map: str→string, int→integer, float→number, bool→boolean,
   list→array, dict→object. No annotation → string. No default → required.
+  Describe a *parameter* with Annotated[T, "..."] — the docstring's first
+  line is spent on the tool description, so this is the only place to say
+  what a date format or an id refers to. Composes with `| None`.
   Scaffold: repld gist new <name>
 
   Example:
-    async def _tool_foo_query(term: str, limit: int = 10) -> dict:
+    async def _tool_foo_query(
+        term: Annotated[str, "Search term, matched against name + tags"],
+        since: Annotated[str | None, "From date YYYY-MM-DD"] = None,
+        limit: int = 10,
+    ) -> dict:
         \"""Search foo for term.\"""
         return {"result": ...}
 
