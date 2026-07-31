@@ -20,6 +20,7 @@ from fnmatch import fnmatch
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,10 @@ class TabNotFoundError(RuntimeError):
 
 _TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$", re.IGNORECASE)
 _ATTACH_POLL_INTERVAL_S = 0.3  # retry cadence while waiting for a tab to appear/attach
+# Ceiling on `open()` waiting out a concurrent auto-attach for the tab it just
+# created. Generous: it only elapses if that attach never completes, which is a
+# real failure worth reporting rather than waiting on further.
+_ATTACH_TIMEOUT_S = 5.0
 # Empty state of format_tabs_nested. A constant because BrowserPool compares
 # against it to drop the empty per-port renders before joining: reworded in one
 # place only, the pool would emit one of these lines per connected browser.
@@ -327,18 +332,30 @@ class Browser:
         """Create a new tab and attach to it.
 
         Target.createTarget → attach → enable Fetch → return Tab.
+
+        The attach is retried because we may lose a race with ourselves: if a
+        watch pattern matches *this* URL, `Target.targetCreated` fires an
+        `_auto_attach` task that claims the target first, and `session.attach`
+        then returns None for our call because one is already in flight. Failing
+        there made `open()` unusable on any URL the caller had also watched —
+        `watch("*myapp.com*")` then `open("https://myapp.com/x")`. Once the
+        auto-attach lands, `attach()` returns its session, so polling resolves
+        it; `_get_by_id` waits on the same race for the same reason.
         """
         await self._ensure_connected()
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
-        # Use the session attach() returns directly (same as get()). The previous code
-        # re-looked-up the tab via the sync _resolve_attached(), which raced the attach:
-        # the new session isn't always registered with its targetId yet, so the lookup
-        # would fail with "No attached tab". attach()'s return value is authoritative.
-        tab = await self._attach_and_wrap(tid)
-        if tab is None:
-            raise RuntimeError(f"Failed to attach to new tab '{tid}'")
-        return tab
+        deadline = time.monotonic() + _ATTACH_TIMEOUT_S
+        while True:
+            # Use the session attach() returns directly (same as get()): the new
+            # session isn't always registered under its targetId yet, so a sync
+            # lookup would race it. attach()'s return value is authoritative.
+            tab = await self._attach_and_wrap(tid)
+            if tab is not None:
+                return tab
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Failed to attach to new tab '{tid}'")
+            await asyncio.sleep(_ATTACH_POLL_INTERVAL_S)
 
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs by pattern; detach all if pattern is None."""

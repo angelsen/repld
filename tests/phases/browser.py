@@ -1,10 +1,64 @@
-"""Phase 6: Tool registration, gist auto-reload, browser integration."""
+"""Phase 6: Tool registration, gist auto-reload, browser integration.
+
+The browser checks run against the developer's own Chrome, so they are careful
+to touch only tabs they created themselves. Every one carries `_MARKER` in its
+URL, which is both how the watch pattern finds it and how `_close_marked_tabs`
+cleans up — including on the failure path, so a broken run can't leave tabs
+behind for the next one to trip over.
+"""
 
 import io
 import json
 import time
+import urllib.request
 
 from harness import Bridge, Kernel, assert_eq, assert_true
+
+_CDP = "http://localhost:9222"
+
+# Distinctive enough that a watch pattern built from it can't match anything of
+# the developer's. A bare word on purpose: Chrome may hand the URL back
+# percent-encoded (`%3Ctitle%3E…`), which would defeat matching on markup.
+_MARKER = "repld-smoketest"
+_TEST_URL = f"data:text/html,<title>{_MARKER}</title><p>{_MARKER}</p>"
+
+
+def _chrome_ready(label: str) -> bool:
+    """Whether the browser stack can run here at all. Prints why if not."""
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        print(f"  - {label}: websockets not installed (uv sync --extra browser), skip")
+        return False
+    try:
+        with urllib.request.urlopen(f"{_CDP}/json/version", timeout=2) as r:
+            r.read()
+    except Exception:
+        print(f"  - {label}: Chrome not available on port 9222, skipping")
+        return False
+    return True
+
+
+def _close_marked_tabs() -> None:
+    """Close every tab this phase opened. Best-effort; never raises.
+
+    Matches on the URL rather than a target id: repld's short `9222:abc123`
+    form keeps only 6 hex characters of Chrome's 32-char target id, so it
+    cannot be expanded back into something `/json/close` accepts.
+    """
+    try:
+        with urllib.request.urlopen(f"{_CDP}/json/list", timeout=2) as r:
+            targets = json.load(r)
+    except Exception:
+        return
+    for t in targets:
+        if _MARKER not in t.get("url", ""):
+            continue
+        try:
+            with urllib.request.urlopen(f"{_CDP}/json/close/{t['id']}", timeout=2) as r:
+                r.read()
+        except Exception:
+            pass
 
 
 def phase_6_png_resize(_kernel: Kernel) -> None:
@@ -113,19 +167,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
 
     Requires Chrome with --remote-debugging-port=9222; skips gracefully.
     """
-    try:
-        import websockets  # noqa: F401
-    except ImportError:
-        print("  - phase 6 label/reattach: websockets not installed, skipping")
-        return
-
-    import urllib.request as _urlreq
-
-    try:
-        with _urlreq.urlopen("http://localhost:9222/json/version", timeout=2) as r:
-            r.read()
-    except Exception:
-        print("  - phase 6 label/reattach: Chrome not available, skipping")
+    if not _chrome_ready("phase 6 label/reattach"):
         return
 
     b = Bridge(kernel.cwd)
@@ -145,7 +187,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # the same target (state lives on CDPSession, Tabs are ephemeral).
         out = _exec(
             "import asyncio\n"
-            "_t1 = await browser.open('data:text/html,<p>label-test</p>')\n"
+            f"_t1 = await browser.open('data:text/html,<p>{_MARKER}-label</p>')\n"
             "_t1.label = 'phase6'\n"
             "await asyncio.sleep(0.5)\n"
             "_t2 = await browser.get(_t1.target_id)\n"
@@ -168,11 +210,11 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # poll is waiting for an element only the *next* document has. The
         # old DOM.getDocument root went stale here and never matched.
         out = _exec(
-            "_t3 = await browser.open('data:text/html,<p>one</p>')\n"
+            f"_t3 = await browser.open('data:text/html,<p>{_MARKER}-one</p>')\n"
             "async def _nav():\n"
             "    await asyncio.sleep(0.5)\n"
             "    await _t3.cdp('Page.navigate',"
-            " url='data:text/html,<div id=\"late-el\">two</div>')\n"
+            f" url='data:text/html,<div id=\"late-el\">{_MARKER}-two</div>')\n"
             "_nt = asyncio.create_task(_nav())\n"
             "await _t3._await_ready_signal('#late-el', timeout=8)\n"
             "await _nt\n"
@@ -184,39 +226,26 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         )
         print("  ✓ ready-selector poll survives mid-wait navigation")
 
-        # Close the tabs we opened, then detach everything.
-        _exec(
-            "for _t in (_t1, _t3):\n"
-            "    try:\n"
-            "        await _t.cdp('Page.close')\n"
-            "    except Exception:\n"
-            "        pass"
-        )
         b.call("tools/call", {"name": "browser_detach", "arguments": {}}, timeout=5.0)
     finally:
+        # In `finally`, not after the assertions: a failure above used to leave
+        # both tabs open, and repeated failing runs pile them up.
+        _close_marked_tabs()
         b.close()
 
 
 def phase_6(kernel: Kernel) -> None:
     """Browser integration — requires Chrome with --remote-debugging-port=9222.
 
+    Every assertion runs against a tab this phase opened itself. Watching `*`
+    and asserting against whichever tab sorted first made the result depend on
+    the developer's browser rather than on repld: the runtime scaled with their
+    tab count, and a backgrounded or busy page failed `browser_js` on a 10s
+    timeout while a fresh one passed.
+
     Skips gracefully if Chrome is not reachable.
     """
-    try:
-        import websockets  # noqa: F401
-    except ImportError:
-        print(
-            "  - phase 6: websockets not installed (uv sync --extra browser), skipping"
-        )
-        return
-
-    import urllib.request as _urlreq
-
-    try:
-        with _urlreq.urlopen("http://localhost:9222/json/version", timeout=2) as r:
-            r.read()
-    except Exception:
-        print("  - phase 6: Chrome not available on port 9222, skipping")
+    if not _chrome_ready("phase 6"):
         return
 
     b = Bridge(kernel.cwd)
@@ -260,10 +289,21 @@ def phase_6(kernel: Kernel) -> None:
         )
         print(f"  ✓ all {len(browser_tools)} browser tools in tools/list")
 
-        # Attach any open tab
+        def _tabs() -> list[str]:
+            resp = b.call(
+                "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
+            )
+            text = resp["result"]["content"][0]["text"]
+            text = text.split("\n[full output:")[0].strip()
+            if text == "(no attached tabs)":
+                return []
+            return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+        # Register the pattern before the tab exists: this is the auto-attach
+        # path for *future* matching tabs, which is what browser_open trips.
         resp = b.call(
             "tools/call",
-            {"name": "browser_watch", "arguments": {"pattern": "*"}},
+            {"name": "browser_watch", "arguments": {"pattern": f"*{_MARKER}*"}},
             timeout=10.0,
         )
         result_text = resp["result"]["content"][0]["text"]
@@ -273,25 +313,32 @@ def phase_6(kernel: Kernel) -> None:
         )
         print(f"  ✓ browser_watch: {result_text[:80]!r}")
 
-        # List attached tabs (plain text, nested format)
+        # Our own tab — Target.createTarget, so its identity is ours to assert.
         resp = b.call(
-            "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
+            "tools/call",
+            {"name": "browser_open", "arguments": {"url": _TEST_URL}},
+            timeout=20.0,
         )
-        tabs_text = resp["result"]["content"][0]["text"]
-        tabs_text = tabs_text.split("\n[full output:")[0].strip()
-        if not tabs_text or tabs_text == "(no attached tabs)":
-            print(
-                "  - browser_tabs: no tabs attached (Chrome may have no open tabs), skipping js/network"
-            )
-            return
-        tab_lines = [line for line in tabs_text.splitlines() if line.strip()]
-        # First non-indented line: "9222:abc123  page  https://..."
-        first_line = tab_lines[0].strip()
-        tab_target = first_line.split()[0]  # e.g. "9222:abc123"
-        tab_url = first_line.split()[-1]  # last token is URL
-        print(
-            f"  ✓ browser_tabs: {len(tab_lines)} tab(s), first target={tab_target!r} url={tab_url!r}"
+        open_text = resp["result"]["content"][0]["text"]
+        target_line = next(
+            (ln for ln in open_text.splitlines() if ln.startswith("target: ")), None
         )
+        assert_true(
+            target_line is not None,
+            f"browser_open reports the new tab's target (got {open_text[:120]!r})",
+        )
+        assert target_line is not None
+        tab_target = target_line.split("target: ", 1)[1].strip()
+
+        # Exactly one, and it is ours: deterministic because nothing else in
+        # the browser can match the marker pattern.
+        tab_lines = _tabs()
+        assert_eq(len(tab_lines), 1, f"exactly our tab attached (got {tab_lines!r})")
+        assert_true(
+            tab_lines[0].startswith(tab_target),
+            f"the attached tab is the one we opened (got {tab_lines[0]!r})",
+        )
+        print(f"  ✓ browser_open + auto-attach: 1 tab, target={tab_target!r}")
 
         # browser_js: evaluate 1+1
         resp = b.call(
@@ -368,16 +415,25 @@ def phase_6(kernel: Kernel) -> None:
         detach_text = resp["result"]["content"][0]["text"]
         print(f"  ✓ browser_detach: {detach_text[:80]!r}")
 
-        # Verify tabs now empty
-        resp = b.call(
-            "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
-        )
-        tabs_after_text = (
-            resp["result"]["content"][0]["text"].split("\n[full output:")[0].strip()
-        )
-        assert_eq(
-            tabs_after_text, "(no attached tabs)", "browser_tabs after detach is empty"
-        )
+        assert_eq(_tabs(), [], "browser_tabs after detach is empty")
         print("  ✓ browser_tabs empty after detach")
+
+        # The other half of watch: our tab is still open, so re-registering the
+        # pattern must attach it *now* rather than waiting for a new one.
+        resp = b.call(
+            "tools/call",
+            {"name": "browser_watch", "arguments": {"pattern": f"*{_MARKER}*"}},
+            timeout=10.0,
+        )
+        again = _tabs()
+        assert_eq(len(again), 1, f"watch re-attaches the open tab (got {again!r})")
+        assert_true(
+            again[0].startswith(tab_target),
+            f"and it is the same tab (got {again[0]!r})",
+        )
+        print("  ✓ browser_watch attaches an already-open matching tab")
+
+        b.call("tools/call", {"name": "browser_detach", "arguments": {}}, timeout=5.0)
     finally:
+        _close_marked_tabs()
         b.close()
