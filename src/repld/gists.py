@@ -247,6 +247,39 @@ class _GistFinder(importlib.abc.MetaPathFinder):
     def __init__(self, dirs: list[Path]) -> None:
         self._dirs = dirs
 
+    @staticmethod
+    def _track(
+        fullname: str, p: Path, search_root: Path | None
+    ) -> importlib.machinery.ModuleSpec | None:
+        """Record a hit for auto-reload and build its spec.
+
+        The mtime bookkeeping is the whole point of this finder, so it lives in
+        one place rather than once per search root — the three scans below
+        differ only in *where* they look and what they do afterwards.
+        """
+        if fullname not in _managed:
+            _scan_new_deps(p)
+        _managed[fullname] = p
+        _mtimes[fullname] = p.stat().st_mtime
+        return importlib.util.spec_from_file_location(
+            fullname,
+            p,
+            submodule_search_locations=(
+                [str(search_root)] if search_root and p.name == "__init__.py" else None
+            ),
+        )
+
+    @staticmethod
+    def _find_in(dirs, parts: list[str]) -> "tuple[Path, Path] | None":
+        """First (file, package-root) match for a dotted name under *dirs*."""
+        for d in dirs:
+            candidate = Path(d).joinpath(*parts)
+            # Check package (dir/__init__.py) or module (.py)
+            for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
+                if p.is_file():
+                    return p, candidate
+        return None
+
     def find_spec(
         self,
         fullname: str,
@@ -254,52 +287,21 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         target: object = None,
     ) -> importlib.machinery.ModuleSpec | None:
         parts = fullname.split(".")
-        for d in self._dirs:
-            candidate = d.joinpath(*parts)
-            # Check package (dir/__init__.py) or module (.py)
-            for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
-                if p.is_file():
-                    if fullname not in _managed:
-                        _scan_new_deps(p)
-                    mtime = p.stat().st_mtime
-                    _managed[fullname] = p
-                    _mtimes[fullname] = mtime
-                    return importlib.util.spec_from_file_location(
-                        fullname,
-                        p,
-                        submodule_search_locations=(
-                            [str(candidate)] if p.name == "__init__.py" else None
-                        ),
-                    )
+        hit = self._find_in(self._dirs, parts)
+        if hit is not None:
+            return self._track(fullname, hit[0], hit[1])
         # Cross-project linked gist (exact name only — local dirs win above;
         # same precedence rule as _find_gist and _iter_gist_files).
         linked = gist_links.linked_path(fullname)
         if linked is not None:
-            if fullname not in _managed:
-                _scan_new_deps(linked)
-            _managed[fullname] = linked
-            _mtimes[fullname] = linked.stat().st_mtime
-            return importlib.util.spec_from_file_location(fullname, linked)
+            return self._track(fullname, linked, None)
         # 'path:' dep directories (vendored code prepended to sys.path) —
         # same mtime tracking as above, flagged in _path_dep_modules so the
         # import hook skips the gist-authoring side effects for it.
-        for s in gist_deps._path_dep_dirs:
-            d = Path(s)
-            candidate = d.joinpath(*parts)
-            for p in [candidate / "__init__.py", candidate.with_suffix(".py")]:
-                if p.is_file():
-                    if fullname not in _managed:
-                        _scan_new_deps(p)
-                    _managed[fullname] = p
-                    _mtimes[fullname] = p.stat().st_mtime
-                    _path_dep_modules.add(fullname)
-                    return importlib.util.spec_from_file_location(
-                        fullname,
-                        p,
-                        submodule_search_locations=(
-                            [str(candidate)] if p.name == "__init__.py" else None
-                        ),
-                    )
+        hit = self._find_in(gist_deps._path_dep_dirs, parts)
+        if hit is not None:
+            _path_dep_modules.add(fullname)
+            return self._track(fullname, hit[0], hit[1])
         return None
 
 

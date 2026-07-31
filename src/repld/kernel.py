@@ -317,8 +317,14 @@ def _loop_watchdog(
                 if victim is not None:
                     victim_name = victim.get_name()
                     loop.call_soon_threadsafe(victim.cancel)
+                    # "requested", not "killed": the cancellation is a callback
+                    # on the loop we just declared wedged, so it cannot run
+                    # until the loop moves again. Reporting a completed kill
+                    # would tell the agent a task is gone while it may keep
+                    # running for minutes.
                     _push(
-                        f"[repld] killed blocked task: {victim_name}",
+                        f"[repld] cancellation requested for blocked task: "
+                        f"{victim_name} (takes effect when the loop unblocks)",
                         "loop_kill",
                         task=victim_name,
                     )
@@ -851,24 +857,13 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         _lazy_browser = LazyBrowser()
         setattr(__main__, "browser", _lazy_browser)
         setattr(_repld_mod, "browser", _lazy_browser)
-
-        def _browser_cleanup() -> None:
-            # _shutdown() always stops the loop before atexit runs, so
-            # run_coroutine_threadsafe's future would never resolve — without
-            # this guard, every browser-attached shutdown blocked a full 5s
-            # waiting on a coroutine nothing was left to drive forward.
-            if not loop.is_running():
-                return
-            b = getattr(__main__, "browser", None)
-            real = getattr(b, "_real", b)
-            if real is not None and hasattr(real, "disconnect"):
-                try:
-                    fut = asyncio.run_coroutine_threadsafe(real.disconnect(), loop)
-                    fut.result(timeout=5)
-                except Exception:
-                    pass
-
-        atexit.register(_browser_cleanup)
+        # No atexit disconnect hook. There used to be one, guarded on
+        # `loop.is_running()` because `_shutdown` stops the loop first and the
+        # coroutine would otherwise never be driven — which made the guard fire
+        # on every path that reached it, so the hook did nothing at all. Tabs
+        # clean themselves up regardless: the pill's own staleness check removes
+        # it (and the beforeunload guard) once Python stops heartbeating, which
+        # is exactly what a stopped loop looks like from the page.
     except ImportError:
         pass  # repld[browser] not installed — no browser builtin
 
