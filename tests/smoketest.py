@@ -24,7 +24,7 @@ from phases.browser import (
     phase_6_png_resize,
     phase_6_tools_and_gists,
 )
-from phases.channels import phase_4, phase_4b_pregate
+from phases.channels import phase_4, phase_4_push_kind_args, phase_4b_pregate
 from phases.core import phase_3
 from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
@@ -50,7 +50,7 @@ from phases.venv import phase_16_venv_binding
 
 PHASES = {
     3: phase_3,
-    4: lambda k: (phase_4(k), phase_4b_pregate(k)),
+    4: lambda k: (phase_4(k), phase_4b_pregate(k), phase_4_push_kind_args(k)),
     5: lambda k: (
         phase_5(k),
         phase_5_init(k),

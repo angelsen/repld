@@ -200,7 +200,10 @@ def _print_python(lock: dict) -> None:
         return
     from . import bind
 
-    venv = bind.project_venv(Path(lock.get("cwd") or "."))
+    # ambient=False: this asks about the *kernel's* project, which may not be
+    # the directory `repld status` was run from. Letting $VIRTUAL_ENV answer
+    # would warn about the venv active in this shell — unrelated to that kernel.
+    venv = bind.project_venv(Path(lock.get("cwd") or "."), ambient=False)
     want = bind.venv_python_version(venv) if venv is not None else None
     if want is None or f"{want[0]}.{want[1]}" == ".".join(running.split(".")[:2]):
         print(f"  python:    {running}")

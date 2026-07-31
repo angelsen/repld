@@ -343,7 +343,7 @@ def _recover_missing_import(original, args):
         else:
             from .channel import push_kind
 
-            push_kind("venv", f"bound {venv} — its packages are now importable")
+            push_kind(f"[repld] bound {venv} — its packages are now importable", "venv")
     importlib.invalidate_caches()
     try:
         return original(*args)

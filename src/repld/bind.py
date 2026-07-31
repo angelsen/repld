@@ -38,7 +38,7 @@ from pathlib import Path
 SENTINEL = "REPLD_BOUND"
 
 
-def project_venv(cwd: Path | None = None) -> Path | None:
+def project_venv(cwd: Path | None = None, *, ambient: bool = True) -> Path | None:
     """The project virtualenv: ``./.venv``, falling back to ``$VIRTUAL_ENV``.
 
     cwd wins over the ambient environment deliberately. Everything else in
@@ -48,13 +48,20 @@ def project_venv(cwd: Path | None = None) -> Path | None:
     kernel to the first project's packages. ``$VIRTUAL_ENV`` is still honoured
     for projects whose venv doesn't sit at ``./.venv``.
 
+    ``ambient=False`` drops that fallback, for callers asking about a *different*
+    process's project rather than deciding their own binding. `$VIRTUAL_ENV`
+    describes the shell that ran the command, so `repld status` inspecting a
+    kernel elsewhere would otherwise compare that kernel's Python against a venv
+    belonging to neither of them — the exact confusion cwd-precedence exists to
+    prevent, arriving through the back door.
+
     A directory only counts with a ``pyvenv.cfg`` in it — otherwise a stray
     ``.venv/`` left behind by a failed create would look bindable.
     """
     local = (cwd or Path.cwd()) / ".venv"
     if (local / "pyvenv.cfg").is_file():
         return local
-    env = os.environ.get("VIRTUAL_ENV")
+    env = os.environ.get("VIRTUAL_ENV") if ambient else None
     if env:
         p = Path(env)
         if (p / "pyvenv.cfg").is_file():

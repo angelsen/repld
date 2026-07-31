@@ -71,10 +71,14 @@ def _out(text: str) -> None:
 # task_id of the "foreground" cell (last started, not yet done).
 # Output from other tasks is prefixed.
 _foreground_task_id: str | None = None
-# gate_id currently awaiting a stdin response (or None).
-_awaiting_gate: str | None = None
-_awaiting_gate_kind: str | None = None
-_awaiting_gate_options: list[str] | None = None
+# Gates still awaiting an answer, oldest first: gate_id → (kind, options).
+# A dict rather than a single slot because `gates` has always supported any
+# number at once, and since `repld gate` an answer can arrive out-of-band for
+# any of them — the pane has to drop the one that was answered, not whichever
+# it happened to be showing. Insertion-ordered, so stdin routes to the newest
+# open gate (the one whose prompt is on screen) and falls back to the previous
+# one when that is answered elsewhere.
+_open_gates: "dict[str, tuple[str, list[str] | None]]" = {}
 
 # Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
 # edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
@@ -245,21 +249,23 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
-    global _awaiting_gate, _awaiting_gate_kind, _awaiting_gate_options
-    _awaiting_gate = ev.gate_id
-    _awaiting_gate_kind = ev.kind
-    _awaiting_gate_options = ev.options
+    _open_gates[ev.gate_id] = (ev.kind, ev.options)
     # No newline — the cursor stays on this line for the stdin reader.
     _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:
-    global _awaiting_gate, _awaiting_gate_kind, _awaiting_gate_options
-    _awaiting_gate = None
-    _awaiting_gate_kind = None
-    _awaiting_gate_options = None
+    # Drop the gate that was actually answered — the answer may have come from
+    # `repld gate` or a browser pill for an *older* gate, in which case the one
+    # on screen is still open and must stay answerable from stdin.
+    _open_gates.pop(ev.gate_id, None)
     # Leading newline closes the line the prompt left the cursor on.
     _out("\n" + render.prompt_response(ev.value) + "\n")
+    # Something else is still waiting: re-show it, since its prompt has now
+    # scrolled above the response line and the cursor is no longer parked on it.
+    if _open_gates:
+        gate_id, (kind, options) = next(reversed(_open_gates.items()))
+        _out(render.prompt_open(kind, "still waiting", options, gate_id))
 
 
 def _render_browser_attached(ev: BrowserTabAttached) -> None:
@@ -312,12 +318,12 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
         if not line:
             break
         line = line.rstrip("\n")
-        gate_id = _awaiting_gate
-        kind = _awaiting_gate_kind
-        if gate_id is None:
+        # Newest open gate — the one whose prompt the cursor is parked on.
+        if not _open_gates:
             continue
+        gate_id, (kind, options) = next(reversed(_open_gates.items()))
         try:
-            value = parse_response(kind or "ask", line, _awaiting_gate_options)
+            value = parse_response(kind, line, options)
         except ValueError as exc:
             _out(f"{_DIM}{exc}: {_RESET}")
             continue

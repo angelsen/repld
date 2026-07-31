@@ -1,9 +1,50 @@
 """Phase 4: Channel notifications — task_done push, notify() from user code, pre-gate queuing."""
 
+import ast
+import re
 import time
 from queue import Empty
 
-from harness import Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+
+
+def phase_4_push_kind_args(_kernel: Kernel) -> None:
+    """Every `push_kind(content, kind)` call site passes them in that order.
+
+    Both parameters are `str`, so swapping them type-checks, lints, and runs —
+    it just sends the agent a push whose content is the word "venv" and whose
+    `kind` is a sentence with a filesystem path in it. That shipped in
+    `gists._recover_missing_import` and nothing caught it, because the only
+    path that reaches it needs a venv appearing mid-session.
+
+    An AST sweep costs nothing and covers every call site, including ones
+    written later, which a runtime test of one code path cannot.
+    """
+    bad: list[str] = []
+    checked = 0
+    for f in sorted((REPO / "src" / "repld").rglob("*.py")):
+        for node in ast.walk(ast.parse(f.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "push_kind" or len(node.args) < 2:
+                continue
+            checked += 1
+            kind = node.args[1]
+            rel = f.relative_to(REPO)
+            # A kind must be a plain snake_case literal. Requiring a literal is
+            # the half that matters: the way this goes wrong is the *content*
+            # landing in the kind slot, and content is an f-string — so a check
+            # that skipped non-constants would skip exactly the bug it exists
+            # for. Every kind in the codebase is a literal, so nothing legitimate
+            # is caught by insisting on one.
+            if not isinstance(kind, ast.Constant) or not isinstance(kind.value, str):
+                bad.append(f"{rel}:{node.lineno} kind is not a literal")
+            elif not re.fullmatch(r"[a-z][a-z0-9_]*", kind.value):
+                bad.append(f"{rel}:{node.lineno} kind={kind.value!r}")
+    assert_eq(bad, [], "push_kind(content, kind) — second arg must be a kind")
+    assert_true(checked > 0, "the sweep actually found push_kind call sites")
+    print(f"  ✓ push_kind arg order: {checked} call site(s) pass a real kind")
 
 
 def phase_4(kernel: Kernel) -> None:

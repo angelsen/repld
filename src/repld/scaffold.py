@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 
-def _mcp_entry(_cwd: Path) -> dict:
+def _mcp_entry() -> dict:
     """Always the plain console script — `repld bridge` binds itself.
 
     This used to emit `uv run repld bridge` whenever a uv.lock existed, which
@@ -47,7 +47,7 @@ _REPLD_BLOCK_RE = re.compile(r"<!-- repld:start -->.*?<!-- repld:end -->", re.DO
 
 
 def _write_mcp_json(cwd: Path) -> str:
-    entry = _mcp_entry(cwd)
+    entry = _mcp_entry()
     path = cwd / ".mcp.json"
     if path.exists():
         try:
@@ -103,12 +103,13 @@ def _update_claude_md(cwd: Path, *, force: bool = False) -> str:
     return f"updated: {path.name} (repld block overwritten)"
 
 
-def _next_steps(cwd: Path) -> str:
-    if (cwd / "uv.lock").exists():
-        run = "uv run repld"
-    else:
-        run = "repld"
-    return f"""\
+def _next_steps() -> str:
+    # Plain `repld`, uv.lock or not — for the reason `_mcp_entry` spells out:
+    # `uv run repld` only reaches the project's interpreter if repld-tool is a
+    # project dependency, which repld's own docs tell you not to add, so it
+    # lands on the same PATH script after a pointless `uv sync`. A bare `repld`
+    # binds itself through `bind.rebind_exec`.
+    return """\
 Next:
   1. (Optional) Write repld_init.py to pre-load project state (clients,
      sessions, app handles). Every kernel for this project runs it at boot,
@@ -118,7 +119,7 @@ Next:
      The MCP bridge connects automatically via .mcp.json, and starts a
      headless kernel if one isn't already running.
   3. (Optional) Start the kernel yourself to get the live TUI:
-       {run}
+       repld
      Otherwise: `repld log -f` to watch it, `repld stop` to stop it.
 """
 
@@ -148,5 +149,5 @@ def run_init(argv: list[str]) -> int:
     print(_write_mcp_json(cwd))
     print(_update_claude_md(cwd, force=force))
     print()
-    print(_next_steps(cwd))
+    print(_next_steps())
     return 0

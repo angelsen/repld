@@ -968,7 +968,8 @@ def build_instructions() -> str:
     else:
         parts.append(
             'Dependencies: gists can declare __repld_deps__ = ["pkg"] '
-            "for boot-time install into the tool venv. "
+            "for boot-time install into a shared, interpreter-versioned dir "
+            "(never the project venv, which uv sync would prune). "
             "Stdlib and pre-installed packages are always available."
         )
 
