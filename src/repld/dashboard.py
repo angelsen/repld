@@ -264,7 +264,7 @@ def _sessions_with_tokens() -> list[dict]:
     the caller it couldn't already read — but only *because* the caller is
     already holding this kernel's token, which is the point of the gate.
     """
-    from . import paths, sessions
+    from . import paths, sessions, state
 
     out = []
     for info in sessions.list_sessions():
@@ -273,11 +273,9 @@ def _sessions_with_tokens() -> list[dict]:
         if entry.get("pid") == os.getpid():
             entry["dashboard_token"] = _token
         elif isinstance(socket_path, str) and socket_path:
-            try:
-                hint = json.loads(paths.hint_for(Path(socket_path)).read_text())
-                entry["dashboard_token"] = hint.get("token") or ""
-            except (OSError, json.JSONDecodeError, ValueError):
-                entry["dashboard_token"] = ""
+            entry["dashboard_token"] = state.dashboard_token(
+                paths.hint_for(Path(socket_path))
+            )
         else:
             entry["dashboard_token"] = ""
         out.append(entry)

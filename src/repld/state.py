@@ -75,6 +75,26 @@ def pid_alive(pid) -> bool:
     return not _is_zombie(pid)
 
 
+def dashboard_token(hint_path: Path) -> str:
+    """The dashboard's API token from a kernel's hint file, "" if unavailable.
+
+    One owner for the credential read behind repld's only authenticated
+    surface. It was open-coded at all three call sites (`repld dashboard`,
+    `repld status`, and the dashboard's own cross-project sidebar), each with
+    a different exception tuple and a different empty-token fallback — which
+    is the wrong thing to have three opinions about.
+
+    Absent, unreadable, malformed and token-less all collapse to "": every
+    caller's next move is the same, since a dashboard reachable but not
+    authenticatable is one you render unlinked rather than one you retry.
+    """
+    try:
+        hint = json.loads(hint_path.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ""
+    return str(hint.get("token") or "") if isinstance(hint, dict) else ""
+
+
 def read_lock(lock_path: Path) -> dict | str:
     """Read + validate a kernel lockfile.
 

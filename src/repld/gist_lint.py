@@ -255,27 +255,20 @@ def _dot_dep_import_names(gist_path: Path) -> set[str]:
 
 def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
     """Import roots covered by __repld_deps__ -- import names, not dist names."""
-    node = gists._dunder_value(tree, "__repld_deps__")
-    if node is None:
-        return set()
-    try:
-        reqs = ast.literal_eval(node)
-    except Exception:
-        return set()
-    if not isinstance(reqs, list):
-        return set()
+    # Forms come from `gist_deps.classify_deps` so the linter can't recognise a
+    # different set of them than the installer does. No `on_malformed`: a
+    # `__repld_deps__` that won't parse declares nothing, and the `legacy`
+    # rule is what reports the file itself.
     declared: set[str] = set()
-    for r in reqs:
-        req_str = str(r).strip()
-        if req_str == ".":
+    for form, value in gist_deps.classify_deps(tree, gist_path):
+        if form == gist_deps.DEP_DOT:
             declared.update(_dot_dep_import_names(gist_path))
-            continue
-        if req_str.startswith("path:"):
-            target = gist_deps.resolve_path_target(req_str[len("path:") :], gist_path)
+        elif form == gist_deps.DEP_PATH:
+            target = gist_deps.resolve_path_target(value, gist_path)
             if target.is_dir():
                 declared.update(_importable_stems(target))
-            continue
-        declared.update(_import_names(gist_deps._parse_pkg_name(req_str)))
+        else:
+            declared.update(_import_names(gist_deps._parse_pkg_name(value)))
     return declared
 
 

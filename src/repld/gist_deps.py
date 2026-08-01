@@ -43,6 +43,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -272,6 +273,69 @@ def _resolve_path_dep(rel_path: str, gist_path: Path) -> Path | None:
     return resolved
 
 
+# The three forms a `__repld_deps__` entry can take.
+DEP_DOT = "dot"  # "."       — the gist's own project, as an editable install
+DEP_PATH = "path"  # "path:X"  — a local directory to prepend to sys.path
+DEP_PKG = "pkg"  # anything else — a PEP 508 requirement string
+
+
+def _warn_malformed(gist_path: Path, suffix: str, reason: str) -> None:
+    gists._warn_once(
+        f"{gist_path}:__repld_deps__{suffix}",
+        f"repld: {gist_path.name}: {reason} — skipped",
+    )
+
+
+def classify_deps(
+    tree: ast.Module,
+    gist_path: Path,
+    *,
+    on_malformed: Callable[[Path, str, str], None] | None = None,
+) -> list[tuple[str, str]]:
+    """A gist's `__repld_deps__` entries as (form, value) pairs.
+
+    `value` is the entry with its form marker stripped: "" for `DEP_DOT`, the
+    path text for `DEP_PATH`, the verbatim requirement for `DEP_PKG`.
+
+    The installer and the linter read the same dunder and recognise the same
+    three forms, diverging only in what they do with each — so the taxonomy
+    is written once, here. It used to be spelled out in both, which meant a
+    fourth form would be understood by whichever module remembered to add it
+    and silently misreported by the other. `on_malformed` is called rather
+    than raising, because the two disagree there too: the installer warns,
+    the linter treats the file as declaring nothing.
+    """
+    node = gists._dunder_value(tree, "__repld_deps__")
+    if node is None:
+        return []
+    try:
+        reqs = ast.literal_eval(node)
+    except Exception:
+        if on_malformed:
+            on_malformed(
+                gist_path, "", "malformed __repld_deps__ (not a valid literal)"
+            )
+        return []
+    if not isinstance(reqs, list):
+        if on_malformed:
+            on_malformed(
+                gist_path,
+                ":type",
+                f"__repld_deps__ is {type(reqs).__name__}, expected a list",
+            )
+        return []
+    forms: list[tuple[str, str]] = []
+    for req in reqs:
+        req_str = str(req).strip()
+        if req_str == ".":
+            forms.append((DEP_DOT, ""))
+        elif req_str.startswith("path:"):
+            forms.append((DEP_PATH, req_str[len("path:") :]))
+        else:
+            forms.append((DEP_PKG, req_str))
+    return forms
+
+
 def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
     """AST-scan gist files for __repld_deps__. Returns missing deps with their sources.
 
@@ -289,28 +353,8 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
         tree = gists._parse(p)
         if tree is None:
             continue
-        node = gists._dunder_value(tree, "__repld_deps__")
-        if node is None:
-            continue
-        try:
-            reqs = ast.literal_eval(node)
-        except Exception:
-            gists._warn_once(
-                f"{p}:__repld_deps__",
-                f"repld: {p.name}: malformed __repld_deps__ "
-                f"(not a valid literal) — skipped",
-            )
-            continue
-        if not isinstance(reqs, list):
-            gists._warn_once(
-                f"{p}:__repld_deps__:type",
-                f"repld: {p.name}: __repld_deps__ is {type(reqs).__name__}, "
-                f"expected a list — skipped",
-            )
-            continue
-        for req in reqs:
-            req_str = str(req).strip()
-            if req_str == ".":
+        for form, value in classify_deps(tree, p, on_malformed=_warn_malformed):
+            if form == DEP_DOT:
                 info = _resolve_dot_dep(p)
                 if info is not None:
                     key = info.requirement
@@ -318,17 +362,16 @@ def scan_deps(paths: list[Path] | None = None) -> list[_DepInfo]:
                         deps[key].gists.append(p.stem)
                     else:
                         deps[key] = info
-                continue
-            if req_str.startswith("path:"):
-                _resolve_path_dep(req_str[len("path:") :], p)
-                continue
-            pkg = _parse_pkg_name(req_str)
-            if _is_importable(pkg):
-                continue
-            if pkg in deps:
-                deps[pkg].gists.append(p.stem)
+            elif form == DEP_PATH:
+                _resolve_path_dep(value, p)
             else:
-                deps[pkg] = _DepInfo(req_str, [p.stem])
+                pkg = _parse_pkg_name(value)
+                if _is_importable(pkg):
+                    continue
+                if pkg in deps:
+                    deps[pkg].gists.append(p.stem)
+                else:
+                    deps[pkg] = _DepInfo(value, [p.stem])
     return list(deps.values())
 
 

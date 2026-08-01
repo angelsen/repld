@@ -166,10 +166,7 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
     port = lock.get("dashboard_port")
     if not port:
         return None
-    try:
-        token = json.loads(hint_path.read_text()).get("token")
-    except (OSError, json.JSONDecodeError):
-        return None
+    token = state.dashboard_token(hint_path)
     if not token:
         return None
     req = urllib.request.Request(

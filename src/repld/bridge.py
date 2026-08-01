@@ -221,7 +221,7 @@ class Bridge:
             resources = (
                 cache["resources"]
                 if cache
-                else core_schemas.wire(core_schemas.DOC_RESOURCES)
+                else core_schemas.wire(core_schemas.STATIC_RESOURCES)
             )
             self._to_client(
                 {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}

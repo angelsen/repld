@@ -44,16 +44,22 @@ def run_gist(argv: list[str]) -> int:
         print(f"repld gist: unknown command '{cmd}'\n")
         _print_gist_usage()
         return 2
-    func, _, _ = entry
-    return func(rest)
+    return entry[0](rest)
 
 
 def _print_gist_usage() -> None:
     print("repld gist — manage tool gists")
     print()
-    width = max(len(usage) for _, usage, _ in _GIST_COMMANDS.values())
-    for _, usage, desc in _GIST_COMMANDS.values():
-        print(f"  repld gist {usage:<{width}}    {desc}")
+    width = max(len(spec) for _, spec, _, _ in _GIST_COMMANDS.values())
+    for _, spec, desc, _ in _GIST_COMMANDS.values():
+        print(f"  repld gist {spec:<{width}}    {desc}")
+
+
+def _usage(verb: str) -> str:
+    """A verb's usage text, composed from the one table that also lists it."""
+    _, spec, desc, detail = _GIST_COMMANDS[verb]
+    line = f"repld gist {spec} — {desc}"
+    return f"{line}\n{detail}" if detail else line
 
 
 def _wants_help(argv: list[str]) -> bool:
@@ -121,7 +127,7 @@ def _shadow_conflict(
 def _gist_new(argv: list[str]) -> int:
     from . import gist_links
 
-    usage = "repld gist new <name> — scaffold ./gists/<name>.py"
+    usage = _usage("new")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -258,11 +264,7 @@ def _gist_fetch(argv: list[str]) -> int:
 
     from . import gist_deps, gist_links
 
-    usage = (
-        "repld gist fetch <gist-url> [--global] [--name NAME] [--force] — "
-        "download a GitHub gist into ./gists (like `new`, but seeded from "
-        "someone's working code; --global installs to ~/.repld/gists instead)"
-    )
+    usage = _usage("fetch")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -371,7 +373,7 @@ def _gist_fetch(argv: list[str]) -> int:
 def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
-    usage = "repld gist add <name> — link a gist registered in another project"
+    usage = _usage("add")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -408,7 +410,7 @@ def _gist_add(argv: list[str]) -> int:
 def _gist_rm(argv: list[str]) -> int:
     from . import gist_links
 
-    usage = "repld gist rm <name> | --stale — unlink a gist (or all dead links)"
+    usage = _usage("rm")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -448,12 +450,7 @@ def _gist_lint(argv: list[str]) -> int:
     from . import gist_lint
     from . import gists as _gists
 
-    usage = (
-        "repld gist lint [--local] [name...] — check gist(s) against best "
-        "practices (default: everything a kernel here would import — "
-        "~/.repld/gists, ./gists, and linked; --local restricts to ./gists, "
-        "so the exit code is usable as a gate for this project alone)"
-    )
+    usage = _usage("lint")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -527,7 +524,7 @@ def _gist_list(argv: list[str]) -> int:
     from . import gist_links
     from . import gists as _gists
 
-    usage = "repld gist list — local + linked gists, and what's linkable"
+    usage = _usage("list")
     if _wants_help(argv):
         print(usage)
         return 0
@@ -599,21 +596,35 @@ def _gist_list(argv: list[str]) -> int:
     return 0
 
 
-# name → (handler, usage suffix, one-line help). Single source for both
-# dispatch and the usage listing, so they can't drift.
+# name → (handler, arg spec, one-line help, extra lines for `<verb> --help`).
+#
+# The single source for dispatch, for the `repld gist --help` listing, *and*
+# for each verb's own usage line. The verbs used to keep a third copy apiece
+# and four of the six had drifted from this table — under a comment claiming
+# they couldn't, which is what a "single source" is worth when nothing reads
+# from it. `_usage()` is the thing that makes the claim true.
+#
+# Keep the spec short: `_print_gist_usage` pads every entry to the longest
+# one, so a flag list belongs in the detail lines, not here.
 _GIST_COMMANDS = {
-    "new": (_gist_new, "new <name>", "scaffold ./gists/<name>.py"),
+    "new": (_gist_new, "new <name>", "scaffold ./gists/<name>.py", ""),
     "fetch": (
         _gist_fetch,
         "fetch <gist-url>",
-        "download a GitHub gist into ./gists (--global for ~/.repld/gists)",
+        "download a GitHub gist into ./gists",
+        "Like `new`, but seeded from someone else's working code.\n"
+        "flags: --global (install to ~/.repld/gists), --name NAME, --force",
     ),
-    "add": (_gist_add, "add <name>", "link a gist registered in another project"),
-    "rm": (_gist_rm, "rm <name>", "unlink (use --stale to drop all dead links)"),
-    "list": (_gist_list, "list", "show local + linked + linkable gists"),
+    "add": (_gist_add, "add <name>", "link a gist registered in another project", ""),
+    "rm": (_gist_rm, "rm <name> | --stale", "unlink a gist (or all dead links)", ""),
+    "list": (_gist_list, "list", "show local + linked + linkable gists", ""),
     "lint": (
         _gist_lint,
         "lint [--local] [name...]",
         "check gist(s) against best practices",
+        "Default scope is everything a kernel here would import — "
+        "~/.repld/gists, ./gists, and linked.\n"
+        "--local restricts to ./gists, so the exit code is usable as a gate "
+        "for this project alone.",
     ),
 }

@@ -545,46 +545,39 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
     fn._handle = handle
     fn.cancel = handle.cancel
 
-    if delay > 0:
-        try:
+    # One unregister covering every way out, rather than a discard at each
+    # `await` that can be cancelled. It was the latter, and the await a ticker
+    # spends nearly all its life in — the inter-tick sleep — was the one
+    # missing it: `EveryHandle.cancel()` discards first so the user-facing
+    # path looked fine, but the watchdog cancels by task (`_pick_victim`
+    # treats an unnamed loop task as fair game and names an @every as the
+    # typical one), which left `every.list()` and the dashboard reporting a
+    # ticker that no longer existed, exactly when someone is debugging a
+    # wedged loop. `except Exception` below cannot swallow the cancellation
+    # on its way here — `CancelledError` is a `BaseException`.
+    try:
+        if delay > 0:
             await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            with _every_lock:
-                _every_registry.discard(handle)
-            raise
 
-    while True:
-        try:
-            result = fn()
-            if inspect.iscoroutine(result):
-                result = await result
-        except asyncio.CancelledError:
-            with _every_lock:
-                _every_registry.discard(handle)
-            raise
-        except Exception as exc:
-            _push(
-                f"@every {label}: {type(exc).__name__}: {exc}",
-                "every",
-                label=label,
-                error="1",
-            )
-        else:
-            if result is not None:
-                _push(str(result), "every", label=label)
-        try:
+        while True:
+            try:
+                result = fn()
+                if inspect.iscoroutine(result):
+                    result = await result
+            except Exception as exc:
+                _push(
+                    f"@every {label}: {type(exc).__name__}: {exc}",
+                    "every",
+                    label=label,
+                    error="1",
+                )
+            else:
+                if result is not None:
+                    _push(str(result), "every", label=label)
             await asyncio.sleep(seconds)
-        except asyncio.CancelledError:
-            # The await a ticker spends nearly all its life in, and the only
-            # one that wasn't unregistering. EveryHandle.cancel() discards
-            # first so the user-facing path was fine, but the watchdog cancels
-            # by task — `_pick_victim` treats an unnamed loop task as fair
-            # game and names an @every as the typical one — and that left
-            # every.list() and the dashboard reporting a ticker that no longer
-            # exists, at exactly the moment someone is debugging a wedged loop.
-            with _every_lock:
-                _every_registry.discard(handle)
-            raise
+    finally:
+        with _every_lock:
+            _every_registry.discard(handle)
 
 
 def _make_every(loop: asyncio.AbstractEventLoop):

@@ -10,7 +10,6 @@ separates "the user who owns this kernel" from "any process on the box", and
 loopback is not a uid boundary.
 """
 
-import json
 import sys
 import webbrowser
 from urllib.parse import quote
@@ -53,10 +52,7 @@ def run_dashboard(argv: list[str]) -> int:
         )
         return 1
 
-    try:
-        token = json.loads(paths.hint_for(sock_path).read_text()).get("token") or ""
-    except (OSError, json.JSONDecodeError, ValueError):
-        token = ""
+    token = state.dashboard_token(paths.hint_for(sock_path))
     if not token:
         print(
             "repld dashboard: no API token in the kernel's hint file — the "

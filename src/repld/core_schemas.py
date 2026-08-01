@@ -122,6 +122,24 @@ DOC_RESOURCES = [
 # that never serves a doc shouldn't pay to parse help.py.
 DOC_HELP_ATTRS = {r["uri"]: r["_help_attr"] for r in DOC_RESOURCES}
 
+# The cross-project gist registry. Advertised unconditionally by both sides,
+# but *not* a doc: there is no help.py attribute behind it (the kernel renders
+# it from the registry file), so it sits beside DOC_RESOURCES rather than in
+# it, which would put a bogus entry in DOC_HELP_ATTRS. It belongs in this
+# module for the reason everything else here does — `resources/list` has two
+# authors, and this was declared only in `protocol.py`, so a session starting
+# with no kernel and no cache was never told the resource existed.
+REGISTRY_RESOURCE = {
+    "uri": "repld://gists/_registry",
+    "name": "gist-registry",
+    "description": "Every gist seen across projects; link one in with `repld gist add`.",
+    "mimeType": "text/plain",
+}
+
+# Every resource both sides advertise unconditionally. What the bridge serves
+# as its cold fallback, and what the kernel builds its live list on top of.
+STATIC_RESOURCES = [*DOC_RESOURCES, REGISTRY_RESOURCE]
+
 
 def wire(resources: list[dict]) -> list[dict]:
     """Strip internal `_`-prefixed keys so a resource dict is MCP-clean."""

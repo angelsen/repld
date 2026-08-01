@@ -14,8 +14,8 @@ from .core_schemas import (
     CAPABILITIES,
     CORE_TOOLS,
     DOC_HELP_ATTRS,
-    DOC_RESOURCES,
     PROTOCOL_VERSION,
+    STATIC_RESOURCES,
     wire as _wire,
 )
 from .help import build_instructions as _build_instructions
@@ -457,7 +457,7 @@ _BROWSER_RESOURCES = [
 # console dumps); everything above it falls back to the spill preview.
 _RESOURCE_MAX_BYTES = 64 * 1024
 _RESOURCE_MIMETYPES = {
-    r["uri"]: r["mimeType"] for r in DOC_RESOURCES + _BROWSER_RESOURCES
+    r["uri"]: r["mimeType"] for r in STATIC_RESOURCES + _BROWSER_RESOURCES
 }
 
 
@@ -809,16 +809,8 @@ def _compute_tools() -> list[dict]:
 def _compute_resources() -> list[dict]:
     from . import gists
 
-    resources = _wire(DOC_RESOURCES) + (
+    resources = _wire(STATIC_RESOURCES) + (
         list(_BROWSER_RESOURCES) if _has_browser() else []
-    )
-    resources.append(
-        {
-            "uri": "repld://gists/_registry",
-            "name": "gist-registry",
-            "description": "Every gist seen across projects; link one in with `repld gist add`.",
-            "mimeType": "text/plain",
-        }
     )
     for name, doc in gists.scan():
         resources.append(
