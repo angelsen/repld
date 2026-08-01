@@ -32,8 +32,7 @@ paused_fetch AS (
         rowid as paused_id,
         p.responseStatusCode as fetch_status,
         p.responseHeaders as fetch_response_headers,
-        CASE WHEN p.responseStatusCode IS NOT NULL THEN 'Response' ELSE 'Request' END as pause_stage,
-        request_id as fetch_request_id
+        CASE WHEN p.responseStatusCode IS NOT NULL THEN 'Response' ELSE 'Request' END as pause_stage
     FROM (
         SELECT rowid, request_id,
             (json_transform(event, '{"params": {
@@ -370,7 +369,13 @@ http_entries AS (
         CONCAT(
             'curl -X ', COALESCE(rh.method, 'GET'), ' ', chr(39), rh.url, chr(39),
             CASE WHEN crb.body IS NOT NULL
-                 THEN CONCAT(' --data-raw ', chr(39), REPLACE(crb.body, chr(39), chr(39) || '\' || chr(39) || chr(39)), chr(39))
+                 -- Shell-quote apostrophes in the body: ' becomes '\'' (close,
+                 -- escaped quote, reopen). Spelled with chr(92) rather than a
+                 -- '\' literal because this SQL lives in a non-raw Python
+                 -- string, which would eat the backslash before DuckDB sees it
+                 -- and emit ''' — a curl that still runs, but silently drops
+                 -- the apostrophe and everything quoted around it.
+                 THEN CONCAT(' --data-raw ', chr(39), REPLACE(crb.body, chr(39), chr(39) || chr(92) || chr(39) || chr(39)), chr(39))
                  ELSE '' END
         ) as curl_command
     FROM request_hops rh

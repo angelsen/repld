@@ -644,17 +644,12 @@ class BrowserPool:
                         "title": info.get("title", ""),
                     }
                 )
-        patterns = (
-            [
-                {
-                    "pattern": p,
-                    "count": sum(1 for t in tab_list if fnmatch(t["url"], p)),
-                }
-                for p in self.patterns
-            ]
-            if self._connected
-            else []
-        )
+        # No _connected guard: `patterns` already skips disconnected browsers,
+        # so when nothing is connected it is empty and this is [] either way.
+        patterns = [
+            {"pattern": p, "count": sum(1 for t in tab_list if fnmatch(t["url"], p))}
+            for p in self.patterns
+        ]
         return {
             "connected": self._connected,
             "ports": self.ports,

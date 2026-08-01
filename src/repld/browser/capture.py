@@ -69,10 +69,10 @@ async def handle_paused(session: CDPSession, params: dict) -> None:
             await _handle_request(session, request_id, network_id, params)
     except Exception as exc:
         logger.debug("handle_paused error for %s: %s", request_id, exc)
-        try:
-            await _fast_continue(session, request_id, is_response)
-        except Exception:
-            pass
+        # Unguarded on purpose: _fast_continue swallows its own exceptions, so
+        # a try/except here would never fire. Chrome still needs the continue —
+        # a paused request nobody resumes hangs the page.
+        await _fast_continue(session, request_id, is_response)
 
 
 async def _fast_continue(

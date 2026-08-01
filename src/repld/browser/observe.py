@@ -393,8 +393,11 @@ class PreObservation:
     """State captured before the mutation."""
 
     iframe_children: list["Tab"] = field(default_factory=list)
-    har_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
-    console_snapshots: dict[str, int] = field(default_factory=dict)  # tab_key → MAX(id)
+    # target_id → events.rowid high-water mark. One cutoff for both the network
+    # and console deltas — see _snapshot_max_ids for why that is sufficient.
+    # These were two separate fields until the cutoff moved to `events`; they
+    # only ever held the same values, in both construction sites.
+    snapshots: dict[str, int] = field(default_factory=dict)
 
 
 def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
@@ -428,12 +431,9 @@ async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
     """Capture state before a mutation. Fast — no blocking."""
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
-    # One cutoff serves both deltas — see _snapshot_max_ids.
-    snaps = _snapshot_max_ids(all_tabs)
     return PreObservation(
         iframe_children=iframe_children,
-        har_snapshots=snaps,
-        console_snapshots=dict(snaps),
+        snapshots=_snapshot_max_ids(all_tabs),
     )
 
 
@@ -608,7 +608,7 @@ async def post_observe(
 
     # Deltas use the post-mutation iframe set so a newly-appeared iframe's
     # network/console activity isn't silently dropped (a stale/missing
-    # target_id in pre.*_snapshots just means "everything is new" — see
+    # target_id in pre.snapshots just means "everything is new" — see
     # network_delta/console_delta's pre_ids.get(..., 0) default).
     all_tabs_post = [tab] + fresh_iframes
     # Off the loop. Unlike the pre-snapshot, these genuinely need the views —
@@ -618,8 +618,8 @@ async def post_observe(
     # precisely so it can be called from another thread while the loop keeps
     # writing through the main connection.
     net_entries, console_lines = await asyncio.gather(
-        asyncio.to_thread(network_delta, all_tabs_post, pre.har_snapshots),
-        asyncio.to_thread(console_delta, all_tabs_post, pre.console_snapshots),
+        asyncio.to_thread(network_delta, all_tabs_post, pre.snapshots),
+        asyncio.to_thread(console_delta, all_tabs_post, pre.snapshots),
     )
 
     obs = Observation(

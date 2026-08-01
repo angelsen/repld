@@ -57,10 +57,40 @@ def _print_gist_usage() -> None:
 
 
 def _wants_help(argv: list[str]) -> bool:
-    return bool(argv) and argv[0] in ("-h", "--help")
+    # Scans every argument, not just argv[0], to match the rest of the CLI.
+    # `repld gist rm foo --help` used to fall through and unlink foo.
+    return any(a in ("-h", "--help") for a in argv)
+
+
+def _shadow_conflict(
+    stem: str,
+    *,
+    to_global: bool,
+    local_dir: Path,
+    global_dir: Path,
+    links: dict[str, str],
+) -> str | None:
+    """Error text if *stem* would shadow a gist outside the destination dir.
+
+    A name that resolves in two places silently shadows one of them at import
+    time — `_GistFinder` consults local dirs before the linked overlay — so
+    every command that writes a fresh `.py` into a gists dir enforces this:
+    `new` and `fetch` alike, for the reason `add_link` already did. The
+    destination dir's *own* collision is left to the caller, because the two
+    disagree there: `fetch` overwrites under `--force`, `new` never does.
+    """
+    other = (local_dir if to_global else global_dir) / f"{stem}.py"
+    if other.is_file():
+        scope = "locally" if other.parent == local_dir else "globally"
+        return f"'{stem}' already exists {scope}: {other}"
+    if stem in links:
+        return f"'{stem}' is already linked from {links[stem]}"
+    return None
 
 
 def _gist_new(argv: list[str]) -> int:
+    from . import gist_links
+
     usage = "repld gist new <name> — scaffold ./gists/<name>.py"
     if _wants_help(argv):
         print(usage)
@@ -74,11 +104,26 @@ def _gist_new(argv: list[str]) -> int:
         return 2
     cwd = Path.cwd()
     gists_dir = cwd / "gists"
-    gists_dir.mkdir(exist_ok=True)
     path = gists_dir / f"{name}.py"
     if path.exists():
         print(f"error: {path} already exists")
         return 1
+    try:
+        links = gist_links.read_links(gists_dir)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
+    conflict = _shadow_conflict(
+        name,
+        to_global=False,
+        local_dir=gists_dir,
+        global_dir=Path.home() / ".repld" / "gists",
+        links=links,
+    )
+    if conflict:
+        print(f"error: {conflict}")
+        return 1
+    gists_dir.mkdir(exist_ok=True)
     path.write_text(_GIST_TEMPLATE.format(name=name))
     print(f"created: {path}")
     print()
@@ -231,9 +276,13 @@ def _gist_fetch(argv: list[str]) -> int:
     local_dir = Path.cwd() / "gists"
     global_dir = Path.home() / ".repld" / "gists"
     dest_dir = global_dir if to_global else local_dir
-    # Same collision rules add_link enforces, for the same reason: a name that
-    # resolves in two places silently shadows one of them at import time.
-    links = gist_links.read_links(local_dir)
+    try:
+        links = gist_links.read_links(local_dir)
+    except ValueError as e:
+        # A corrupt manifest is an error to report, not a traceback — `add`,
+        # `rm` and `list` all treat it that way.
+        print(f"error: {e}")
+        return 1
     for fname in sorted(files):
         stem = fname[: -len(".py")]
         if not stem.isidentifier():
@@ -243,13 +292,15 @@ def _gist_fetch(argv: list[str]) -> int:
         if target.exists() and not force:
             print(f"error: {target} already exists (use --force to overwrite)")
             return 1
-        other = (local_dir if to_global else global_dir) / fname
-        if other.is_file():
-            scope = "locally" if other.parent == local_dir else "globally"
-            print(f"error: '{stem}' already exists {scope}: {other}")
-            return 1
-        if stem in links:
-            print(f"error: '{stem}' is already linked from {links[stem]}")
+        conflict = _shadow_conflict(
+            stem,
+            to_global=to_global,
+            local_dir=local_dir,
+            global_dir=global_dir,
+            links=links,
+        )
+        if conflict:
+            print(f"error: {conflict}")
             return 1
 
     url = f"https://gist.github.com/{gist_id}"

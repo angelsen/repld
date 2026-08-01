@@ -259,11 +259,7 @@ class BrowserDispatchMixin:
         tab = self._run_async(browser.open(args["url"]))
         session = self._session_for(browser, tab)
         key = tab.target_id
-        pre = PreObservation(
-            iframe_children=[],
-            har_snapshots={key: 0},
-            console_snapshots={key: 0},
-        )
+        pre = PreObservation(iframe_children=[], snapshots={key: 0})
         return self._run_async(
             post_observe(
                 tab,

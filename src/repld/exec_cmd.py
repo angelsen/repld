@@ -223,6 +223,11 @@ def _wait_task(rfile: IO[str], wfile: IO[str], task_id: str, json_mode: bool) ->
                         json_mode=json_mode,
                     )
                     if resp is None:
+                        # Every other _call site reports the disconnect; this
+                        # one used to exit 1 with an empty stderr, which is the
+                        # worst moment for silence — the task finished and its
+                        # output died with the kernel.
+                        _err("kernel disconnected while fetching task output")
                         return 1
                     result = resp.get("result", {})
                     snap_text = (

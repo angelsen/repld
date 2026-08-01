@@ -27,7 +27,7 @@ _SUBCOMMANDS = {
     ),
     "gate": ("gate_cmd", "run_gate", "list / answer pending human gates"),
     "help": ("help", "run_help", "agent/human docs"),
-    "gist": ("gist_cmd", "run_gist", "new / add / rm / list gists"),
+    "gist": ("gist_cmd", "run_gist", "new / fetch / add / rm / list / lint gists"),
     "browser": (
         "relaunch",
         "run_browser",
