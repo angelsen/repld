@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from ..channel import push_channel
@@ -21,6 +22,23 @@ logger = logging.getLogger(__name__)
 MAX_EVENTS = 50_000
 PRUNE_BATCH_SIZE = 5_000
 PRUNE_CHECK_INTERVAL = 1_000
+
+# Backstop for requests that never report a terminal event. Well above
+# observe.settle's own 5s deadline, so an entry is only ever evicted long
+# after any settle that could have legitimately been waiting on it.
+_INFLIGHT_MAX_AGE = 60.0
+
+# Response mime types whose body stays open by design: the response has
+# arrived, and waiting for `loadingFinished` means waiting for the stream to
+# end. Matched against Network.responseReceived, where Chrome has already
+# parsed the header for us.
+_STREAMING_MIME_TYPES = ("text/event-stream",)
+
+
+def _is_streaming(params: dict) -> bool:
+    mime = (params.get("response") or {}).get("mimeType") or ""
+    return mime.split(";")[0].strip().lower() in _STREAMING_MIME_TYPES
+
 
 # ---------------------------------------------------------------------------
 # Console error suppress + cross-tab dedup
@@ -272,12 +290,14 @@ class CDPSession:
         # Event count for FIFO pruning
         self._event_count = 0
 
-        # In-flight requestIds — maintained by _handle_event, read by
-        # observe.settle().  A set (not a counter) is self-correcting:
-        # redirect re-emits are idempotent adds, terminal events for
-        # pre-attach requests are no-op discards.  WS never enters (no
-        # Network.requestWillBeSent for WebSockets).
-        self._inflight: set[str] = set()
+        # In-flight requestIds -> monotonic time they were opened. Maintained
+        # by _handle_event, read by observe.settle() via inflight_count().
+        # Keyed by id (not a counter) so it stays self-correcting: redirect
+        # re-emits are idempotent, terminal events for pre-attach requests are
+        # no-op discards.  WS never enters (no Network.requestWillBeSent for
+        # WebSockets).  The timestamp is what lets inflight_count() age out a
+        # response whose body never ends — see _INFLIGHT_MAX_AGE.
+        self._inflight: dict[str, float] = {}
 
         # Serializes state-preserving reattach (BrowserSession.reattach_session)
         self._reattach_lock = asyncio.Lock()
@@ -432,9 +452,17 @@ class CDPSession:
 
             if request_id:
                 if method == "Network.requestWillBeSent":
-                    self._inflight.add(request_id)
+                    self._inflight[request_id] = time.monotonic()
                 elif method in ("Network.loadingFinished", "Network.loadingFailed"):
-                    self._inflight.discard(request_id)
+                    self._inflight.pop(request_id, None)
+                elif method == "Network.responseReceived" and _is_streaming(params):
+                    # The response arrived; only the body is open-ended. An SSE
+                    # stream never emits loadingFinished until it closes, so
+                    # counting it as pending work means this tab can never
+                    # settle again — every later mutation would burn its full
+                    # deadline. Settle asks "has the network gone quiet", and
+                    # for a stream the answer is yes the moment the headers land.
+                    self._inflight.pop(request_id, None)
 
             if method == "Fetch.requestPaused":
                 # Dispatch async handler without blocking the recv loop
@@ -573,6 +601,26 @@ class CDPSession:
             return fut.result(timeout=10)
         except Exception as exc:
             return {"error": str(exc)}
+
+    def inflight_count(self) -> int:
+        """Requests still pending, for observe.settle(). Ages out the stuck ones.
+
+        `_is_streaming` handles the case we can name, but it can only act on a
+        response we actually saw: a request whose `Network.responseReceived`
+        never arrives (a hung connection, a body Chrome stops reporting on, a
+        stream with a mime type we didn't recognise) would otherwise sit here
+        forever and pin this tab's settle at its full deadline for the rest of
+        the session. `_INFLIGHT_MAX_AGE` is deliberately far longer than any
+        request settle would legitimately wait on, so this evicts wedged
+        entries without ever cutting a slow-but-live one short.
+        """
+        if not self._inflight:
+            return 0
+        cutoff = time.monotonic() - _INFLIGHT_MAX_AGE
+        stale = [rid for rid, started in self._inflight.items() if started < cutoff]
+        for rid in stale:
+            del self._inflight[rid]
+        return len(self._inflight)
 
     def clear_events(self) -> None:
         """Delete all stored events.  Cursor per call — may run on IPC threads."""

@@ -582,6 +582,17 @@ class Dispatcher(BrowserDispatchMixin):
         finished = done_event.wait(timeout=timeout)
         snap = self.ctx.snapshot(task_id)
         assert snap is not None  # task_id was just created by start_task
+        # `mark_nudged` is what promises the completion push, and it refuses
+        # when the cell finished first — including in the window this very
+        # snapshot() opens, which for a multi-megabyte spill is milliseconds
+        # wide. Taking its word for it is the difference between answering
+        # with the result and telling the client to wait for a channel
+        # notification nobody is going to send.
+        if not finished:
+            finished = not self.ctx.mark_nudged(task_id)
+            if finished:
+                snap = self.ctx.snapshot(task_id)
+                assert snap is not None
         if finished:
             text = _format_spill(snap, "(no output)")
             return _response(
@@ -597,7 +608,6 @@ class Dispatcher(BrowserDispatchMixin):
                     },
                 },
             )
-        self.ctx.mark_nudged(task_id)
         preview = snap["text"].rstrip()
         msg = f"[task {task_id} still running after {timeout}s; completion will arrive via channel]"
         if preview:

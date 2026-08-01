@@ -329,7 +329,9 @@ class Tab(TabQueryMixin):
 
     async def ask(self, prompt: str, **kw: Any) -> str:
         """Gate routed like confirm/choose — but the pill UI has no text
-        input, so the response is always typed in the terminal."""
+        input, so this one never reaches the tab. It is answered wherever an
+        ordinary `ask()` is: the kernel's pane, or `repld gate answer` when
+        there isn't one."""
         from ..gates import ask as _ask
 
         return await _ask(prompt, tab=self, **kw)

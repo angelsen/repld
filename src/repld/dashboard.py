@@ -203,7 +203,12 @@ async def _rpc_browser_unwatch(browser, params: dict) -> Any:
 
 async def _rpc_browser_console(browser, params: dict) -> Any:
     tab = _resolve_tab(browser, params.get("target_id", ""))
-    rows = tab.console()
+    # Off the loop: console_entries/har_summary re-evaluate a CTE chain that
+    # observe.py measured at 39-56 ms per tab, and this server shares the
+    # kernel's loop — so a Refresh click would stall every cell, ticker and
+    # observation for as long as the scan takes. query_dicts opens a per-call
+    # cursor precisely so another thread can read while the loop writes.
+    rows = await asyncio.to_thread(tab.console)
     return [
         {
             "level": r.level,
@@ -217,7 +222,9 @@ async def _rpc_browser_console(browser, params: dict) -> Any:
 
 async def _rpc_browser_network(browser, params: dict) -> Any:
     tab = _resolve_tab(browser, params.get("target_id", ""))
-    rows = tab.network()
+    rows = await asyncio.to_thread(
+        tab.network
+    )  # off the loop — see _rpc_browser_console
     return [
         {
             "method": r.method,
@@ -1076,7 +1083,13 @@ refreshSessions();
 setInterval(refreshSessions, 10000);
 
 // --- initial load ---
+// Polled on the same cadence as the sidebar. Fetching it once left uptime,
+// active tasks, tickers and the tab table frozen at page-load values for as
+// long as the panel stayed open, while the sidebar kept ticking beside them —
+// so the stale half read as live, and anything started from exec (a ticker, a
+// browser.watch) never showed up at all.
 refreshState();
+setInterval(refreshState, 10000);
 
 // --- util ---
 function formatUptime(s) {

@@ -354,7 +354,7 @@ _exec_count = itertools.count(1)
 def _maybe_push_done(task_id: str) -> None:
     """Push channel notification for nudged tasks on completion."""
     task = tasks.get(task_id)
-    if task is None or not task.get("nudged"):
+    if task is None or not tasks.claim_done_push(task_id):
         return
     cutoff = task.get("nudge_cutoff", 0)
     path = task.get("spill_path")
@@ -567,7 +567,19 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
         else:
             if result is not None:
                 _push(str(result), "every", label=label)
-        await asyncio.sleep(seconds)
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            # The await a ticker spends nearly all its life in, and the only
+            # one that wasn't unregistering. EveryHandle.cancel() discards
+            # first so the user-facing path was fine, but the watchdog cancels
+            # by task — `_pick_victim` treats an unnamed loop task as fair
+            # game and names an @every as the typical one — and that left
+            # every.list() and the dashboard reporting a ticker that no longer
+            # exists, at exactly the moment someone is debugging a wedged loop.
+            with _every_lock:
+                _every_registry.discard(handle)
+            raise
 
 
 def _make_every(loop: asyncio.AbstractEventLoop):
@@ -628,8 +640,8 @@ class _Context:
     def snapshot(self, task_id: str) -> dict | None:
         return tasks.snapshot(task_id)
 
-    def mark_nudged(self, task_id: str) -> None:
-        tasks.mark_nudged(task_id)
+    def mark_nudged(self, task_id: str) -> bool:
+        return tasks.mark_nudged(task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         """Attempt to cancel a running cell. Returns True if the cancellation

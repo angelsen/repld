@@ -278,20 +278,42 @@ def snapshot(task_id: str) -> dict | None:
     }
 
 
-def mark_nudged(task_id: str) -> None:
-    task = get(task_id)
-    if task is None:
-        return
-    task["nudged"] = True
-    fp = task.get("spill_file")
-    if fp is not None:
-        try:
-            fp.flush()
-            task["nudge_cutoff"] = fp.tell()
-        except Exception:
+def mark_nudged(task_id: str) -> bool:
+    """Promise a completion push for a cell that outran its `exec` timeout.
+
+    Returns whether the promise was actually taken on. False means the cell
+    finished first and no push is coming, so the caller must answer with the
+    result instead of telling the client to wait for a channel that will
+    stay silent.
+
+    The check and the flag are one critical section, paired with the one in
+    `claim_done_push`, because the window between them is wide: `_exec` takes
+    a full `snapshot()` — a re-read of the entire spill file — between its
+    wait expiring and this call. A cell landing in that gap used to have its
+    push dropped for not being nudged yet *and* be reported as still running.
+    """
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task is None or task["done_event"].is_set():
+            return False
+        task["nudged"] = True
+        fp = task.get("spill_file")
+        if fp is not None:
+            try:
+                fp.flush()
+                task["nudge_cutoff"] = fp.tell()
+            except Exception:
+                task["nudge_cutoff"] = 0
+        else:
             task["nudge_cutoff"] = 0
-    else:
-        task["nudge_cutoff"] = 0
+        return True
+
+
+def claim_done_push(task_id: str) -> bool:
+    """Whether this finished task owes a completion push. See `mark_nudged`."""
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        return bool(task and task.get("nudged"))
 
 
 def finalize(task_id: str) -> None:
@@ -309,7 +331,11 @@ def finalize(task_id: str) -> None:
             fp.flush()
         except Exception:
             pass
-    task["done_event"].set()
+    # Under the lock, so `mark_nudged` either gets its promise in before this
+    # or sees the task as finished — never lands between this and the
+    # `claim_done_push` that follows it, which would strand the push.
+    with _tasks_lock:
+        task["done_event"].set()
     task["done_at"] = time.monotonic()
     # Drop the asyncio.Task reference now — it's no longer needed once the
     # cell is done, and holding it keeps the whole coroutine frame chain alive.

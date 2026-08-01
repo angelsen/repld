@@ -330,9 +330,13 @@ async def settle(
 ) -> int:
     """Wait for network idle across all tabs.
 
-    Polls each session's in-memory _inflight set (maintained by
+    Polls each session's in-memory _inflight map (maintained by
     CDPSession._handle_event) — O(1) per iteration, no DuckDB round-trip
     on the kernel loop.  Returns settle time in ms.
+
+    Reads it through inflight_count() rather than len(), which is what drops
+    streamed responses and ages out requests that never report a terminal event —
+    without it, one SSE connection pins the tab at the full deadline forever.
     """
     start = time.monotonic()
     deadline = start + timeout
@@ -344,7 +348,7 @@ async def settle(
             break
 
         # Count inflight requests across all tabs
-        inflight = sum(len(tab._session._inflight) for tab in tabs)
+        inflight = sum(tab._session.inflight_count() for tab in tabs)
 
         if inflight > 0:
             last_activity = now

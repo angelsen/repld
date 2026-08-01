@@ -170,12 +170,13 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
 def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
     """Link `name` (and its siblings) into gists_dir's manifest.
 
-    Refuses on local collision — a target already present in ./gists or
-    ~/.repld/gists, or resolving to a path inside this project. Returns the newly
-    linked (name, path) pairs.
+    Refuses on collision — a target already present in ./gists or
+    ~/.repld/gists, already linked to a different file, or resolving to a path
+    inside this project. Returns the newly linked (name, path) pairs.
     """
     targets = link_targets(name)
     project_root = gists_dir.parent.resolve()
+    links = read_links(gists_dir)
     for tname, tpath in targets:
         if (gists_dir / f"{tname}.py").is_file():
             raise FileExistsError(
@@ -186,7 +187,16 @@ def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
             raise FileExistsError(f"'{tname}' already exists globally: {global_gist}")
         if project_root in tpath.resolve().parents:
             raise FileExistsError(f"'{tname}' already lives in this project: {tpath}")
-    links = read_links(gists_dir)
+        # The manifest is a flat name->path map, so a co-linked sibling could
+        # silently repoint a name another linked gist already depends on —
+        # `add foo` stealing `helpers` out from under `bar`, reported as
+        # nothing more than "+ siblings: helpers". `new` and `fetch` both
+        # refuse this scope; the one that writes the manifest did not.
+        existing = links.get(tname)
+        if existing is not None and Path(existing) != tpath.resolve():
+            raise FileExistsError(
+                f"'{tname}' is already linked to a different file: {existing}"
+            )
     for tname, tpath in targets:
         links[tname] = str(tpath.resolve())
     write_links(gists_dir, links)

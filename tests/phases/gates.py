@@ -143,6 +143,39 @@ def phase_17_gates(kernel: Kernel) -> None:
         )
         print("  ✓ unknown gate id reported, not silently swallowed")
 
+        # -- ask() on a pinned tab ---------------------------------------------
+        # The pill has buttons and no text input, so it can never answer an
+        # ask. Routing to it anyway suppressed the "repld gate answer" hint
+        # *and* drew nothing — on this kernel, a gate with no surface at all.
+        b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "class _FakePinned:\n"
+                        "    _pinned = True\n"
+                        "    async def _show_gate(self, *a): pass\n"
+                        "defer(ask('token?', tab=_FakePinned()), 'pinned-ask')\n"
+                    ),
+                    "timeout": 5.0,
+                },
+            },
+            timeout=15.0,
+        )
+        push = b.wait_notification(
+            "notifications/claude/channel", kind="awaiting_human", timeout=10
+        )
+        text = push["params"]["content"]
+        assert_true(
+            "repld gate answer" in text,
+            f"a pinned-tab ask still names its answer command (got {text!r})",
+        )
+        gate_id = _pending(kernel)[0]["gate_id"]
+        answered = _gate_cli(kernel, "answer", gate_id, "sk-123")
+        assert_eq(answered.returncode, 0, "and the CLI can actually answer it")
+        print("  ✓ ask on a pinned tab keeps its headless answer route")
+
         _pane_reshows_the_question()
     finally:
         b.close()

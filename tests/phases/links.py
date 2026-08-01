@@ -58,6 +58,40 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         )
         print("  ✓ gist add records target + sibling in ./gists/.links")
 
+        # --- a co-linked sibling may not steal a name already linked ---
+        # The manifest is a flat name->path map, so `add` pulling in a sibling
+        # called `sib` from somewhere else used to repoint the existing entry
+        # and report it as nothing but "+ siblings: sib" — silently breaking
+        # the gist that was already linked against it. `new` and `fetch` both
+        # refuse this scope; the command that writes the manifest did not.
+        elsewhere = Path(tempfile.mkdtemp(prefix="repld-link-other2-")) / "gists"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "sib.py").write_text('"""A different sib entirely."""\n')
+        prev_registry = gists.registry
+        gists.registry = lambda: {
+            **prev_registry(),
+            "sib": {
+                "path": str(elsewhere / "sib.py"),
+                "project": str(elsewhere.parent),
+            },
+        }
+        raised = ""
+        try:
+            g.add_link("sib", gd)
+        except FileExistsError as exc:
+            raised = str(exc)
+        assert_true(
+            "already linked" in raised,
+            f"relinking a linked name to a different file is refused (got {raised!r})",
+        )
+        assert_eq(
+            json.loads((gd / ".links").read_text())["sib"],
+            str((src / "sib.py").resolve()),
+            "and the manifest still points at the original",
+        )
+        gists.registry = prev_registry
+        print("  ✓ add refuses to repoint a name another linked gist depends on")
+
         # --- scan_deps surfaces a linked gist's declared dependency ---
         g.add_link("needy", gd)
         missing = gist_deps.scan_deps(paths=[src / "needy.py"])

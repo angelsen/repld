@@ -178,7 +178,13 @@ async def _gate(
     with _gates_lock:
         _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic())
 
-    use_pill = tab is not None and getattr(tab, "_pinned", False)
+    # `kind` is part of this, not just pinnedness: the pill is a row of
+    # buttons with no text input, so `_show_gate` renders confirm and choose
+    # and returns without drawing anything for an ask. Deciding on pinnedness
+    # alone made `tab.ask()` suppress the "repld gate answer" hint below *and*
+    # show no pill — on a headless kernel (the usual one) a gate that no
+    # surface could answer.
+    use_pill = tab is not None and getattr(tab, "_pinned", False) and kind != "ask"
 
     # Channel push first, then prompt — so the panel renders on a fresh
     # line in the viewer before the prompt text (which ends with `: ` and

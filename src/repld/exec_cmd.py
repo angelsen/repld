@@ -229,6 +229,13 @@ def _wait_task(rfile: IO[str], wfile: IO[str], task_id: str, json_mode: bool) ->
                         # output died with the kernel.
                         _err("kernel disconnected while fetching task output")
                         return 1
+                    if "error" in resp:
+                        # Same silence, different cause: an evicted task_id
+                        # answers -32602, and without this the empty result
+                        # became "{}" and exited 0 — a clean success for a
+                        # result we never got.
+                        _err(resp["error"].get("message", "unknown error"))
+                        return 1
                     result = resp.get("result", {})
                     snap_text = (
                         result["content"][0]["text"] if result.get("content") else "{}"
