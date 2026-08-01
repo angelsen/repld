@@ -134,8 +134,18 @@ def run_log(argv: list[str]) -> int:
             except ValueError:
                 print(f"repld log: -n expects a number, got {rest[i + 1]!r}")
                 return 2
+            # read_records ends with `out[-tail:] if tail else out`, so 0 read
+            # as "no limit" and printed the whole log, and -5 became out[5:] —
+            # everything *except* the oldest five, which is the opposite of
+            # what anyone typing it wants.
+            if tail < 1:
+                print(f"repld log: -n expects a positive count, got {tail}")
+                return 2
             i += 1
         else:
+            # Reported before the option loop can consume it as a value, so
+            # `repld log -n` with nothing after it names -n rather than
+            # silently falling through.
             print(f"repld log: unknown argument {arg!r}\n")
             print(_USAGE)
             return 2

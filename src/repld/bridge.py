@@ -85,9 +85,9 @@ def _static_docs() -> dict[str, str]:
 
 
 def _minimal_instructions() -> str:
-    from .help import _EXEC_MODEL
+    from .help import static_instructions
 
-    return _EXEC_MODEL
+    return static_instructions()
 
 
 def _err(msg: str) -> None:

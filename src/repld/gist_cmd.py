@@ -62,6 +62,36 @@ def _wants_help(argv: list[str]) -> bool:
     return any(a in ("-h", "--help") for a in argv)
 
 
+def _check_args(
+    verb: str,
+    argv: list[str],
+    usage: str,
+    *,
+    flags: tuple[str, ...] = (),
+    positionals: int | None = 1,
+) -> int | None:
+    """Reject unknown flags and surplus positionals. Exit code, or None if fine.
+
+    Only `fetch` and `list` did this, so the rest quietly ignored whatever they
+    didn't recognise: `gist new x --global` scaffolded locally while its
+    sibling `fetch` honours that exact flag, `gist add foo bar` linked only
+    foo, and `gist lint --json` looked for a gist named '--json'. Silently
+    doing something other than what was typed is the worst of the options.
+    `positionals=None` means the verb takes any number of names.
+    """
+    unknown = [a for a in argv if a.startswith("-") and a not in flags]
+    if unknown:
+        print(f"repld gist {verb}: unknown argument {unknown[0]!r}\n")
+        print(usage)
+        return 2
+    names = [a for a in argv if not a.startswith("-")]
+    if positionals is not None and len(names) > positionals:
+        print(f"repld gist {verb}: unexpected argument {names[positionals]!r}\n")
+        print(usage)
+        return 2
+    return None
+
+
 def _shadow_conflict(
     stem: str,
     *,
@@ -95,6 +125,9 @@ def _gist_new(argv: list[str]) -> int:
     if _wants_help(argv):
         print(usage)
         return 0
+    bad = _check_args("new", argv, usage)
+    if bad is not None:
+        return bad
     if not argv:
         print(usage)
         return 2
@@ -342,6 +375,9 @@ def _gist_add(argv: list[str]) -> int:
     if _wants_help(argv):
         print(usage)
         return 0
+    bad = _check_args("add", argv, usage)
+    if bad is not None:
+        return bad
     if not argv:
         print(usage)
         return 2
@@ -376,6 +412,15 @@ def _gist_rm(argv: list[str]) -> int:
     if _wants_help(argv):
         print(usage)
         return 0
+    bad = _check_args("rm", argv, usage, flags=("--stale",), positionals=1)
+    if bad is not None:
+        return bad
+    if "--stale" in argv and any(not a.startswith("-") for a in argv):
+        # --stale drops every dead link; pairing it with a name reads as
+        # "only this one", which it never meant.
+        print("repld gist rm: --stale takes no name\n")
+        print(usage)
+        return 2
     gists_dir = Path.cwd() / "gists"
     try:
         if argv and argv[0] == "--stale":
@@ -412,19 +457,35 @@ def _gist_lint(argv: list[str]) -> int:
     if _wants_help(argv):
         print(usage)
         return 0
+    bad = _check_args("lint", argv, usage, flags=("--local",), positionals=None)
+    if bad is not None:
+        return bad
     local_only = "--local" in argv
     argv = [a for a in argv if a != "--local"]
     gists_dir = Path.cwd() / "gists"
     # Same dirs + precedence a live kernel resolves against (kernel.py boot).
     # Needed even under --local: _find_gist resolves names against them.
-    _gists.install([Path.home() / ".repld" / "gists", gists_dir])
+    # create=False — linting is a read-only question and must not conjure the
+    # directories it finds nothing in.
+    _gists.install([Path.home() / ".repld" / "gists", gists_dir], create=False)
 
     if argv:
         paths = []
         missing = []
         nonlocal_hits = []
         for name in argv:
-            p = _gists._find_gist(name)
+            # Under --local, look in ./gists first rather than asking
+            # _find_gist, which walks the kernel's precedence (global before
+            # local) and has no local_only notion: with both a global and a
+            # local `helpers`, it returned the global one and this rejected
+            # the name outright — while the no-name form linted that same
+            # local file happily.
+            local_hit = gists_dir / f"{name}.py"
+            p = (
+                local_hit
+                if local_only and local_hit.is_file()
+                else _gists._find_gist(name)
+            )
             if p is None:
                 missing.append(name)
             elif local_only and p.parent.resolve() != gists_dir.resolve():

@@ -974,8 +974,16 @@ def resolve_tool(name: str) -> Callable | None:
     return None
 
 
-def install(dirs: list[Path]) -> None:
-    """Add gist directories to sys.path and install the auto-reload finder."""
+def install(dirs: list[Path], *, create: bool = True) -> None:
+    """Add gist directories to sys.path and install the auto-reload finder.
+
+    `create=False` for callers that only want name resolution. A booting
+    kernel wants the directories to exist — that's where `repld gist new`
+    writes and what the agent is told to look at — but `repld gist lint` in a
+    project with no gists would otherwise bring `./gists` and `~/.repld/gists`
+    into being and then report "no gists found", which is the side effect
+    commit 6221f26a already took off the rejected-scaffold path.
+    """
     import builtins
 
     global _installed_dirs
@@ -985,7 +993,8 @@ def install(dirs: list[Path]) -> None:
     gist_deps.ensure_deps_on_path()
 
     for d in dirs:
-        d.mkdir(parents=True, exist_ok=True)
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
         s = str(d)
         if s not in sys.path:
             sys.path.insert(0, s)

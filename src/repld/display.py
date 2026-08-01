@@ -52,9 +52,12 @@ _RESET = render.RESET
 
 
 # Pinned at import time. typeshed types these as Optional (None in GUI /
-# no-console contexts); run_display() checks at entry, and a --no-display
-# kernel never imports this module at all — so importing it must stay safe
-# without a terminal.
+# no-console contexts); run_display() checks at entry. Importing this module
+# must stay safe without a terminal, and the reason is the opposite of what
+# it looks like: a --no-display kernel imports it on every boot, via
+# eventlog's module-level `from .display import VIEWER_MAX_BYTES`. So
+# import-time work here runs in every bridge-spawned kernel — the
+# configuration nobody watches boot.
 _STDOUT = cast(TextIO, sys.__stdout__)
 _STDIN = cast(TextIO, sys.__stdin__)
 

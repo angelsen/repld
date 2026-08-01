@@ -28,9 +28,7 @@ RESET = "\033[0m"
 
 # Task ids are uuid4().hex[:12]; 8 is enough to eyeball. Chrome target ids are
 # `{port}:{6-hex}`, which is already short — 12 is a guard, not a squeeze.
-# TASK_ID_CHARS is public because the TUI labels out-of-band output with the
-# same abbreviation outside any of the formatters below.
-TASK_ID_CHARS = 8
+_TASK_ID_CHARS = 8
 _TARGET_ID_CHARS = 12
 
 
@@ -39,7 +37,7 @@ def clock(t: float) -> str:
 
 
 def short_task(task_id: str) -> str:
-    return task_id[:TASK_ID_CHARS]
+    return task_id[:_TASK_ID_CHARS]
 
 
 def cell_header_text(task_id: str, t: float) -> str:

@@ -793,13 +793,16 @@ Two tiers of body access:
 
 wait_for_idle() and the MCP observation pipeline use the same settle logic:
 
-  Polls DuckDB every 50ms across all tabs (including iframe children):
-    SELECT COUNT(*) FROM har_entries
-    WHERE state NOT IN ('complete', 'failed', 'redirect', 'closed')
-    AND method != 'WS'
+  Polls each tab's in-memory set of open requestIds every 50ms, across all
+  tabs (including iframe children).  No DuckDB query — the count is kept by
+  the CDP event handler, so the poll never touches the kernel loop's DB.
 
-  WebSocket connections are excluded — they stay 'open' indefinitely and would
-  block settle forever.
+  A request enters on Network.requestWillBeSent and leaves on
+  loadingFinished/loadingFailed.  WebSockets never enter (no
+  requestWillBeSent).  Streamed responses (text/event-stream) leave as soon as
+  their headers arrive: the body stays open by design, and waiting for it
+  would mean this tab never settles again.  Anything still open after 60s is
+  aged out as stuck.
 
   Returns when the inflight count is 0 for a continuous quiet period
   (default 0.5s).  Timeout default is 5s.
@@ -939,6 +942,42 @@ Never navigate an iframe directly — it destroys the embedded session.
 """
 
 
+def _deps_hint() -> str:
+    """The dependency paragraph. Reads cwd only — no kernel needed."""
+    if (Path.cwd() / "uv.lock").exists():
+        return (
+            "Dependencies: this is a uv project. "
+            "Add packages with `uv add <pkg>`, then restart the kernel. "
+            "Gists can also declare __repld_deps__ for auto-install at boot."
+        )
+    return (
+        'Dependencies: gists can declare __repld_deps__ = ["pkg"] '
+        "for boot-time install into a shared, interpreter-versioned dir "
+        "(never the project venv, which uv sync would prune). "
+        "Stdlib and pre-installed packages are always available."
+    )
+
+
+def static_instructions() -> str:
+    """`build_instructions` minus everything that needs a live kernel.
+
+    The bridge answers `initialize` from here when no kernel has ever run in
+    this project and there is no cache to read, so this is the instruction
+    text for exactly the sessions that start cold. It was `_EXEC_MODEL` alone,
+    which left the first session in a project — the one deciding how to
+    structure the work — never told that ./gists is on sys.path, that _tool_*
+    functions become MCP tools, or that __repld_deps__ exists. Nothing
+    re-sends `instructions` after the lazy spawn, so it stayed missing for
+    that whole session.
+
+    Deliberately adjacent to `build_instructions`: the two compose the same
+    constants in the same order, and what's absent here is only what genuinely
+    depends on kernel state — the browser model, the gist listing, and
+    registered gist tools.
+    """
+    return "\n\n".join([_EXEC_MODEL, _GISTS_MODEL, _deps_hint(), _PLAYBOOK, _REFERENCE])
+
+
 def build_instructions() -> str:
     """Compose INSTRUCTIONS dynamically based on kernel state."""
     import __main__
@@ -971,21 +1010,7 @@ def build_instructions() -> str:
             + " — call directly as MCP tools (no exec needed)."
         )
 
-    # Dependency management hint
-    if (Path.cwd() / "uv.lock").exists():
-        parts.append(
-            "Dependencies: this is a uv project. "
-            "Add packages with `uv add <pkg>`, then restart the kernel. "
-            "Gists can also declare __repld_deps__ for auto-install at boot."
-        )
-    else:
-        parts.append(
-            'Dependencies: gists can declare __repld_deps__ = ["pkg"] '
-            "for boot-time install into a shared, interpreter-versioned dir "
-            "(never the project venv, which uv sync would prune). "
-            "Stdlib and pre-installed packages are always available."
-        )
-
+    parts.append(_deps_hint())
     parts.append(_PLAYBOOK)
     parts.append(_REFERENCE)
     return "\n\n".join(parts)
@@ -1081,7 +1106,6 @@ cancel(task_id)    → {cancelled: bool}
 
 Channel kinds:
   task_done             exec or defer finished
-  user                  notify() from user code
   every                 periodic tick result or error (kind=every, label=fn_name)
   awaiting_human        ask/confirm/choose pending
   bg_task_error         uncaught exception in background task
@@ -1096,6 +1120,10 @@ Channel kinds:
   console_error         console.error or uncaught exception from watched tab
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
   browser_disconnect    dashboard disconnected a Chrome connection or tab
+  venv                  a project venv was adopted onto the running kernel
+
+  A bare notify("...") carries no kind at all — meta is whatever keywords you
+  passed, and {} if you passed none. Pass kind= yourself to filter on it.
 """,
     "browser": """\
 Tab (async unless noted):
@@ -1257,8 +1285,10 @@ Dependencies:
   No install step; modules imported from it auto-reload like gists do. A
   missing directory warns with a git-submodule hint instead of failing later
   with a bare ModuleNotFoundError.
-  Kernel scans at boot, prompts to install missing PyPI packages into the venv.
-  Lost on `uv tool upgrade`; next boot re-scans (gist file is source of truth).
+  Kernel scans at boot and prompts to install missing PyPI packages into a
+  shared, interpreter-versioned dir (~/.local/share/repld/deps/pyX.Y) -- never
+  the project venv, which `uv sync` would prune. It goes on sys.path *after*
+  the project's own packages, so a project install always shadows a gist dep.
 
 Linting:
   repld gist lint [name...]   Check gist(s) for common authoring gaps
