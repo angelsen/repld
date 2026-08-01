@@ -13,6 +13,10 @@ import json
 
 from .kernel_context import KernelContext
 
+# Wall-clock ceiling on one loop round-trip made from the IPC thread. Bounds
+# every browser tool and every async gist tool — see `_run_async`.
+_ASYNC_CALL_TIMEOUT = 30.0
+
 
 async def route_detach(browser, target, port) -> str | None:
     """Shared target/port detach routing (MCP tool + dashboard RPC).
@@ -72,9 +76,32 @@ class BrowserDispatchMixin:
         return browser
 
     def _run_async(self, coro):
-        """Run a coroutine on the repld asyncio loop from the IPC thread."""
+        """Run a coroutine on the repld asyncio loop from the IPC thread.
+
+        The deadline is named in the exception because nothing else would say
+        it: `concurrent.futures.TimeoutError` *is* `TimeoutError` and carries
+        an empty message, so both callers' `f"{name}: {exc}"` used to answer
+        with the tool name, a colon, and nothing — for user-controlled work
+        (`browser_js` awaiting a promise, `browser_fetch`, `browser_cdp`, any
+        async gist tool) that can legitimately outrun 30s.
+        """
         fut = asyncio.run_coroutine_threadsafe(coro, self.ctx.loop)
-        return fut.result(timeout=30)
+        try:
+            return fut.result(timeout=_ASYNC_CALL_TIMEOUT)
+        except TimeoutError:
+            # Same class either way, so `fut.done()` — not the exception — is
+            # what says whose deadline this was. Settled means the coroutine
+            # raised a TimeoutError of its own, or landed in the race between
+            # our deadline expiring and this check; taking the result answers
+            # both correctly instead of masking them with the message below.
+            if fut.done():
+                return fut.result()
+            raise TimeoutError(
+                f"still running on the kernel loop after {_ASYNC_CALL_TIMEOUT:.0f}s "
+                "— abandoned, not cancelled, so it may still complete. Work that "
+                "takes this long belongs in `exec`, which defers past its timeout "
+                "and reports back on channel."
+            ) from None
 
     def _get_tab(self, browser, args):
         return self._run_async(browser.get(args["target"]))

@@ -110,9 +110,15 @@ def _write_cache(socket_path: Path) -> None:
 
 
 # Set once the project bootstrap has run (or immediately, when there is none).
-# `_run_cell` waits on it; see its docstring for why the wait lives there and
-# not in the socket bind.
+# `_run_cell` awaits it, and `_Context.wait_ready` blocks on it for the tool
+# calls that can't defer; see their docstrings for why the wait lives at those
+# two points and not in the socket bind.
 _init_done = asyncio.Event()
+
+# How long the bootstrap gets, and therefore the longest anything can wait on
+# it: `_run_init_file` sets `_init_done` unconditionally once this expires, so
+# a single bound keeps the two waiters from outliving the thing they wait for.
+_INIT_WAIT_SECONDS = 30.0
 
 _active_lock_path: Path | None = None
 # flock fd for the one-kernel-per-project mutex. Module-level because it must
@@ -635,6 +641,32 @@ class _Context:
         asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), self.loop)
         return task_id, task["done_event"]
 
+    def wait_ready(self) -> None:
+        """Block the calling IPC thread until the project bootstrap has run.
+
+        The blocking sibling of `_run_cell`'s `await _init_done.wait()`, for the
+        tool calls that have no deferral to degrade into. `exec` gets its
+        task_id immediately and turns a long wait into the ordinary
+        `{task_id, done:false}` plus a completion push, so it must *not* come
+        through here — but a gist or browser tool answers inline or not at all,
+        and one arriving before `repld_init.py` finished sees a bare `__main__`.
+        That is not hypothetical since lazy spawn: `tools/call` is what spawns
+        the kernel, and the socket binds before the bootstrap runs.
+
+        Bounded by the same 30s `_run_init_file` gives the bootstrap itself, so
+        this can never wait longer than the bootstrap can possibly take. On
+        expiry it returns rather than raising, for the reason `_init_done` is
+        set unconditionally: a kernel whose bootstrap hung still has to answer,
+        or nothing can be run in it to repair the thing that hung.
+        """
+        if _init_done.is_set():
+            return
+        fut = asyncio.run_coroutine_threadsafe(_init_done.wait(), self.loop)
+        try:
+            fut.result(timeout=_INIT_WAIT_SECONDS)
+        except (concurrent.futures.TimeoutError, RuntimeError):
+            fut.cancel()
+
     def snapshot(self, task_id: str) -> dict | None:
         return tasks.snapshot(task_id)
 
@@ -690,7 +722,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
         )
         # Block until the bootstrap completes (including any run_until_complete
         # semantics — background tasks it spawned stay alive on the loop).
-        future.result(timeout=30)
+        future.result(timeout=_INIT_WAIT_SECONDS)
     except Exception:
         tb = traceback.format_exc()
         sys.stderr.write(f"\033[31m[repld] {path.name} raised:\n{tb}\033[0m\n")

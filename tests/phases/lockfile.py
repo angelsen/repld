@@ -424,6 +424,42 @@ def phase_5_init(_kernel: Kernel) -> None:
         finally:
             k.stop()
 
+        # 6b. …and so must a gist tool, which is the *other* thing that lazily
+        #     spawns a kernel. It has no deferral to degrade into — it answers
+        #     inline or not at all — so the wait can't live where exec's does.
+        #     No _boot_in here: the bridge does the spawning, which is the shape
+        #     that actually arrives before a bootstrap has run.
+        (tmp / "gists").mkdir(exist_ok=True)
+        (tmp / "gists" / "bootstate.py").write_text(
+            '"""Reads what the project bootstrap put in __main__."""\n'
+            "\n"
+            "def _tool_boot_state() -> str:\n"
+            '    """Report the bootstrap-set value."""\n'
+            "    import __main__\n"
+            '    return getattr(__main__, "SLOW", "MISSING")\n'
+        )
+        b = Bridge(tmp)
+        try:
+            b.call("initialize", {"protocolVersion": "2024-11-05"})
+            b.send("notifications/initialized", {}, notif=True)
+            # Generous: this call pays for the lazy spawn *and* the 2s
+            # bootstrap it now has to wait through.
+            resp = b.call(
+                "tools/call",
+                {"name": "boot_state", "arguments": {}},
+                timeout=60.0,
+            )
+            content = resp["result"]["content"][0]["text"]
+            assert_true(
+                "bootstrap finished" in content,
+                f"gist tool waits for a slow bootstrap (got {content!r})",
+            )
+            print("  ✓ a gist tool waits for the bootstrap too, not just exec")
+        finally:
+            b.close()
+            _repld(tmp, "stop")
+        shutil.rmtree(tmp / "gists", ignore_errors=True)
+
         # 7. A bootstrap that raises must still release exec — a kernel nobody
         #    can run code in is a kernel nobody can repair.
         (tmp / "repld_init.py").write_text("raise RuntimeError('boom')\n")

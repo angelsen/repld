@@ -556,8 +556,6 @@ class Dispatcher(BrowserDispatchMixin):
             return self._get_task(rid, args)
         if name == "cancel":
             return self._cancel(rid, args)
-        if name and name.startswith("browser_"):
-            return self._browser_tool(rid, name, args)
         if not name:
             return _error(rid, -32602, "missing tool name")
         if name in _bridge_tool_names():
@@ -571,6 +569,16 @@ class Dispatcher(BrowserDispatchMixin):
                 f"{name} is served by `repld bridge`, not the kernel — this "
                 "connection bypassed it",
             )
+        # Everything past here answers inline off live state, with no deferral
+        # to fall back on — so unlike `exec` above (which gets its task_id
+        # immediately and waits inside `_run_cell`), these have to wait for the
+        # project bootstrap here or risk running against a bare `__main__`.
+        # `tools/call` is itself what lazily spawns a kernel, and the socket
+        # binds before `repld_init.py` runs, so that window is the norm rather
+        # than a race.
+        self.ctx.wait_ready()
+        if name.startswith("browser_"):
+            return self._browser_tool(rid, name, args)
         return self._gist_tool(rid, name, args)
 
     def _exec(self, rid, args: dict, session=None) -> dict:

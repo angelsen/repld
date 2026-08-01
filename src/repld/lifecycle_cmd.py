@@ -252,7 +252,15 @@ def run_status(argv: list[str]) -> int:
         print(f"  cwd:       {here.get('cwd')}")
         _print_python(here)
         if here.get("dashboard_port"):
-            print(f"  dashboard: http://127.0.0.1:{here['dashboard_port']}/")
+            # The port, not a URL — same reason the boot banner stopped
+            # printing one: `GET /` carries the API token and so requires one,
+            # and a bare http://127.0.0.1:<port>/ answers 401. `repld
+            # dashboard` reads the token from the 0600 hint file and opens the
+            # authenticated URL.
+            print(
+                f"  dashboard: port {here['dashboard_port']}"
+                f"{_DIM} — open with `repld dashboard`{_RESET}"
+            )
         if here.get("tasks_active") is not None:
             print(
                 f"  active:    {here['tasks_active']} task(s), {here['tickers']} ticker(s)"
@@ -261,8 +269,15 @@ def run_status(argv: list[str]) -> int:
 
     if siblings:
         print(f"\n{_DIM}live kernels elsewhere:{_RESET}")
+        any_dash = False
         for s in sorted(siblings, key=lambda x: str(x.get("cwd", ""))):
             port = s.get("dashboard_port")
-            dash = f"  http://127.0.0.1:{port}/" if port else ""
+            dash = f"  dashboard port {port}" if port else ""
+            any_dash = any_dash or bool(port)
             print(f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{_RESET}")
+        if any_dash:
+            # A sibling's dashboard needs *its* token, which lives in its own
+            # project's 0600 hint file — so the way in is that project's own
+            # `repld dashboard`, not a URL printed here.
+            print(f"{_DIM}  open one with: cd <its dir> && repld dashboard{_RESET}")
     return 0
