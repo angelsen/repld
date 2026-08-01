@@ -173,6 +173,28 @@ def _bridge_served_tools(tmp: Path) -> None:
         _exec(b, "notify('after restart')")
         b.wait_notification("notifications/claude/channel", timeout=10)
         print("  ✓ session survived the restart: handshake replayed, push lands")
+
+        # The guard that keeps the above honest when the drain is slow. A
+        # SIGTERMed kernel holds its pid and its bound socket for as long as
+        # `_shutdown` takes, so `_reconnect` used to hand the dying process
+        # back and report `pid N → N`. A live kernel is indistinguishable from
+        # a draining one here, which is what makes it testable.
+        from repld import bridge as _bridge
+        from repld import paths
+
+        live_pid = int(_lock(tmp)["pid"])
+        probe = _bridge.Bridge(paths.socket_path(tmp))
+        refused = probe._connect_excluding(live_pid)
+        assert_true(
+            isinstance(refused, str) and str(live_pid) in refused,
+            f"the kernel being replaced is refused, not reattached (got {refused!r})",
+        )
+        accepted = probe._connect_excluding(None)
+        assert_true(
+            not isinstance(accepted, str), "the same kernel attaches unexcluded"
+        )
+        accepted[0].close()
+        print("  ✓ restart refuses to reattach to the kernel it is replacing")
     finally:
         b.close()
 
@@ -226,6 +248,17 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
             not lock_path_for(tmp).exists(), "doc resource read did not spawn a kernel"
         )
         print("  ✓ tools/list + resources/read(docs) served from cache, no spawn")
+
+        # A method no kernel of ours implements must not cost one. `ping` is
+        # standard MCP and clients send it unprompted, so the old fall-through
+        # to _ensure_kernel meant a liveness probe silently spawned a kernel
+        # and paid the full 5s spawn-and-wait to be told "method not found".
+        resp = b.call("ping", {}, timeout=10)
+        assert_eq(
+            resp["error"]["code"], -32601, "unknown method answered by the bridge"
+        )
+        assert_true(not lock_path_for(tmp).exists(), "ping did not spawn a kernel")
+        print("  ✓ unknown method answered without spawning a kernel")
 
         resp = _exec(b, "print('post-cache spawn')", timeout=40)
         assert_true(

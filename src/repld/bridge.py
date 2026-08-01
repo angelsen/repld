@@ -55,6 +55,12 @@ KERNEL_GONE = -31001
 # String id, so it can never collide with a client's integer ids.
 BRIDGE_INIT_ID = "repld-bridge-init"
 
+# The only two methods worth spawning a kernel for. Everything else the client
+# can send is either answered by `_try_bridge_intercept` from cache or is a
+# method repld does not implement; `resources/read` is here because the
+# intercept declines exactly the gist and browser URIs, which do need one.
+_NEEDS_KERNEL = frozenset({"tools/call", "resources/read"})
+
 _static_docs_cache: dict[str, str] | None = None
 
 
@@ -258,12 +264,18 @@ class Bridge:
         self._attach(*result)
         return True
 
-    def _spawn_kernel(self) -> None:
+    def _spawn_kernel(self, *, quiet: bool = False) -> None:
         # Both non-failures are followed by the same poll in _reconnect; they
         # differ only in what happened, which is worth saying accurately —
         # claiming to have spawned a kernel that a racing boot actually started
         # would send anyone reading stderr after the wrong process.
+        #
+        # `quiet` is for the retry inside that poll: the outcome has already
+        # been reported once, and repeating it every 500 ms would bury the
+        # line that matters.
         outcome = spawn.spawn_headless(self.socket_path)
+        if quiet:
+            return
         if outcome == spawn.STARTED:
             _err("no kernel running for this project — spawned a headless one")
         elif outcome == spawn.INCUMBENT:
@@ -281,8 +293,38 @@ class Bridge:
             self._on_kernel_gone()
         return self._reconnect()
 
-    def _reconnect(self) -> bool:
+    def _connect_excluding(
+        self, exclude_pid: int | None
+    ) -> tuple[socket.socket, dict] | str:
+        """`ipc.connect_to_kernel`, refusing one pid. Returns a reason on failure.
+
+        A kernel that has been SIGTERMed keeps both its pid and its bound
+        socket for as long as `_shutdown` takes to drain `@every` and
+        `defer()` finally blocks, so a plain connect during a restart hands
+        back the very process we just killed.
+        """
         result = ipc.connect_to_kernel(self.lock_path)
+        if isinstance(result, str):
+            return result
+        sock, lock = result
+        if exclude_pid is not None and lock.get("pid") == exclude_pid:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            return f"kernel pid {exclude_pid} is still shutting down"
+        return sock, lock
+
+    def _reconnect(self, *, exclude_pid: int | None = None) -> bool:
+        """Attach to this project's kernel, spawning one if there is none.
+
+        `exclude_pid` is set by `restart_kernel` and refuses the kernel being
+        replaced. Refusing it has a consequence the plain path doesn't have:
+        the first spawn is a no-op, because one kernel per project is enforced
+        by an flock the dying kernel still holds, so the poll below has to keep
+        asking. Once it lets go, nothing else is going to start one for us.
+        """
+        result = self._connect_excluding(exclude_pid)
         if not isinstance(result, str):
             self._attach(*result)
             return True
@@ -290,10 +332,12 @@ class Bridge:
         self._spawn_kernel()
         for _ in range(WAIT_STEPS):
             time.sleep(WAIT_STEP_SECONDS)
-            result = ipc.connect_to_kernel(self.lock_path)
+            result = self._connect_excluding(exclude_pid)
             if not isinstance(result, str):
                 self._attach(*result)
                 return True
+            if exclude_pid is not None:
+                self._spawn_kernel(quiet=True)
         _err(f"kernel unreachable after spawn: {result}")
         return False
 
@@ -336,6 +380,12 @@ class Bridge:
         Teardown goes through `_on_kernel_gone` so requests already in flight
         get their `-31001` reply instead of hanging, exactly as they do when a
         kernel dies on its own.
+
+        The wait is a budget, not a guarantee — a kernel draining a slow
+        `finally` can outlast it — so the reattach is guarded by `exclude_pid`
+        rather than by the wait having succeeded. Without that guard a slow
+        shutdown reports `pid N → N`: the same process, replied to as the
+        replacement, with the handshake replayed onto it on its way out.
         """
         import os
         import signal
@@ -351,7 +401,7 @@ class Bridge:
                     break
                 time.sleep(WAIT_STEP_SECONDS)
         self._on_kernel_gone()
-        if not self._reconnect():
+        if not self._reconnect(exclude_pid=old_pid):
             return old_pid, None
         return old_pid, self._kernel_pid
 
@@ -395,6 +445,14 @@ class Bridge:
             self._kernel_pid = None
             orphans, self._inflight = self._inflight, set()
         if sock is not None:
+            # shutdown() before close(): the reader thread holds a makefile,
+            # which keeps its own reference to the fd, so close() alone leaves
+            # it parked in recv() on a socket nobody will ever write to. Only
+            # a shutdown forces the EOF that ends that generation's pump.
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 sock.close()
             except OSError:
@@ -426,11 +484,19 @@ class Bridge:
 
     def _read_kernel(self, sock: socket.socket, gen: int) -> None:
         """Pump one kernel generation's replies to the client."""
+        rfile = None
         try:
             rfile = sock.makefile("r", encoding="utf-8")
             for line in rfile:
                 if not line.strip():
                     continue
+                # Checked per line, not just at EOF: a superseded generation
+                # can still have whole replies buffered in its makefile, and
+                # forwarding them would interleave a dead kernel's answers
+                # with the replacement's.
+                with self._state_lock:
+                    if gen != self._generation:
+                        break
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
@@ -445,6 +511,12 @@ class Bridge:
                 self._to_client_raw(line)
         except (BrokenPipeError, OSError, ValueError):
             pass
+        finally:
+            if rfile is not None:
+                try:
+                    rfile.close()
+                except OSError:
+                    pass
         # EOF: the kernel died. Only the current generation may declare that —
         # a superseded reader is just finishing its own closed socket.
         with self._state_lock:
@@ -460,13 +532,22 @@ class Bridge:
         except json.JSONDecodeError:
             msg = None
 
-        rid = msg.get("id") if isinstance(msg, dict) else None
+        if not isinstance(msg, dict):
+            # Dropped rather than forwarded. There is no id to answer, the
+            # kernel can't act on it either, and the old fall-through reached
+            # _ensure_kernel — so one truncated stdin line used to spawn a
+            # kernel and then ship it the garbage.
+            _err("ignoring unparseable line from client")
+            return
+
+        rid = msg.get("id")
 
         # Bridge-served tools are answered *before* the liveness ladder. They
         # exist for the cases where the kernel is dead or is about to be
         # replaced, so insisting on a live one first would be backwards — and
         # for a restart it would spawn a kernel only to kill it.
-        if isinstance(msg, dict) and msg.get("method") == "tools/call":
+        method = msg.get("method")
+        if method == "tools/call":
             params = msg.get("params") or {}
             if params.get("name") in bridge_tools.BRIDGE_TOOLS:
                 self._handle_bridge_tool(
@@ -484,8 +565,26 @@ class Bridge:
         # what triggers the lazy spawn.
         if self._sock is None:
             self._try_attach_existing()
-        if self._sock is None and isinstance(msg, dict):
+        if self._sock is None:
             if self._try_bridge_intercept(msg, rid):
+                return
+            if method not in _NEEDS_KERNEL:
+                # Everything the intercept declined that isn't one of those two
+                # is a method no kernel of ours implements — a client-side
+                # `ping`, a `prompts/list` probe. Spawning one to have it say
+                # "method not found" is the whole cost of the lazy-spawn
+                # design paid for an answer we already know.
+                if rid is not None:
+                    self._to_client(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rid,
+                            "error": {
+                                "code": -32601,
+                                "message": f"method not found: {method}",
+                            },
+                        }
+                    )
                 return
 
         if not self._ensure_kernel():
