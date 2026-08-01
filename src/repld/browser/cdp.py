@@ -496,7 +496,21 @@ class CDPSession:
             logger.debug("_handle_event error: %s", exc)
 
     async def _async_prune(self) -> None:
-        """FIFO prune oldest events. Runs as a task to avoid blocking recv."""
+        """FIFO prune oldest events, on the loop — deliberately, see below.
+
+        `create_task` only gets this out of the recv *handler*; the SQL still
+        runs on the shared loop. That is fine here, and measured: the delete is
+        a rowid-range op on a columnar store, so it costs ~7 ms flat at
+        MAX_EVENTS — independent of row width (checked at 2 KB/event) — and
+        fires at most once per PRUNE_CHECK_INTERVAL events, i.e. under 10 µs
+        amortised per event. That is at the level the observation pipeline was
+        *optimised down to*, not above it, so `to_thread` here would buy single
+        -digit milliseconds in exchange for a second writer to the event store
+        (its own cursor, since `store_event` holds the main connection) plus an
+        in-flight guard, because the loop keeps counting past MAX_EVENTS while
+        a thread works and would spawn a concurrent delete over the same rows.
+        Not worth it. Re-measure before assuming otherwise.
+        """
         excess = self._event_count - MAX_EVENTS
         delete_count = max(excess, PRUNE_BATCH_SIZE)
         try:

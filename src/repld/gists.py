@@ -22,6 +22,7 @@ from pathlib import Path
 # time (never `from x import y`), which is cycle-safe and keeps test
 # monkeypatching (e.g. gists.registry) effective.
 from . import gist_deps, gist_links
+from .channel import push_kind
 from .state import atomic_write_json
 
 __all__ = [
@@ -341,8 +342,6 @@ def _recover_missing_import(original, args):
         if added is None:
             _unusable_venvs.add(venv)
         else:
-            from .channel import push_kind
-
             push_kind(f"[repld] bound {venv} — its packages are now importable", "venv")
     importlib.invalidate_caches()
     try:
