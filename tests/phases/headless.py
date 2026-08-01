@@ -193,7 +193,8 @@ def _bridge_served_tools(tmp: Path) -> None:
         assert_true(
             not isinstance(accepted, str), "the same kernel attaches unexcluded"
         )
-        accepted[0].close()
+        if not isinstance(accepted, str):  # narrowing: assert_true isn't a TypeGuard
+            accepted[0].close()
         print("  ✓ restart refuses to reattach to the kernel it is replacing")
     finally:
         b.close()

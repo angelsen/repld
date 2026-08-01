@@ -548,12 +548,16 @@ def _gist_list(argv: list[str]) -> int:
             sig = _gists.signature_for_path(gists_dir / f"{name}.py")
             print(f"  {name:<20} {sig}")
 
-    # Linked gists, flagging stale entries.
+    # Linked gists, flagging stale entries. A corrupt manifest is an error,
+    # not an empty section: continuing would print a listing that silently
+    # omits every linked gist and still exit 0, so a script gating on this
+    # reads a truncated answer as a complete one. `add`, `rm` and `fetch`
+    # all return 1 here.
     try:
         links = gist_links.read_links(gists_dir)
     except ValueError as e:
         print(f"error: {e}")
-        links = {}
+        return 1
     if links:
         print("linked:")
         stale = 0

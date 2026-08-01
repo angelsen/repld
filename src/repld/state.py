@@ -232,6 +232,14 @@ def acquire_lock(flock_path: Path) -> int | None:
     O_CREAT *without* O_TRUNC: opening must not clobber anything before we
     know whether we win, and this file is never replaced by an atomic rename,
     so the flock keeps referring to the inode every contender opened.
+
+    The pid we then write is a debugging courtesy — nothing reads it, and the
+    authoritative copy is `kernel.lock`. It is truncated first regardless:
+    without that, a shorter pid landing on a longer one leaves the tail of
+    the old number behind (99 over 123456 reads as `99456`), so the one
+    thing the file is good for would be actively misleading. `ftruncate`
+    rather than `O_TRUNC` — it empties the file we already hold the lock on
+    instead of the one we were about to contend for, and keeps the inode.
     """
     flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -240,5 +248,6 @@ def acquire_lock(flock_path: Path) -> int | None:
     except OSError:
         os.close(fd)
         return None
+    os.ftruncate(fd, 0)
     os.write(fd, f"{os.getpid()}\n".encode())
     return fd

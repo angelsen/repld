@@ -412,16 +412,16 @@ object.  Read this instead of diving into source code.
   await browser.watch("*example.com*")               # auto-attach current + future
 
   browser.tabs                                       # list[Tab] currently attached
-  browser.pages()                                    # all Chrome targets (dict list)
+  await browser.pages()                              # all Chrome targets (dict list)
   browser.patterns                                   # active watch patterns
-  browser.detach("*example.com*")                    # detach pattern + tabs
-  browser.detach()                                   # detach everything
+  await browser.detach("*example.com*")              # detach pattern + tabs
+  await browser.detach()                             # detach everything
   browser.clear(target=)                             # clear all captured data
 
   await browser.connect(9223)                        # add another Chrome instance
   await browser.connect(profile="/tmp/my-chrome")    # connect by user-data-dir
-  browser.disconnect()                               # unpin tabs, close all WebSockets
-  browser.disconnect(port=9222)                      # unpin + close one Chrome instance
+  await browser.disconnect()                         # unpin tabs, close all WebSockets
+  await browser.disconnect(port=9222)                # unpin + close one Chrome instance
 
 Quirks:
   - get(glob) skips workers (service_worker, shared_worker, worker). To reach
@@ -1416,13 +1416,17 @@ _ / _N history works — _ is the last expression, _1, _2, etc. for earlier.
 
 == Project context ==
 
-When repld runs inside a project (via uv run repld or an activated venv),
-exec has access to everything in the project environment — your app
-modules, ORM models, config, database sessions, API clients.
+When repld runs in a project directory, exec has access to everything in
+the project environment — your app modules, ORM models, config, database
+sessions, API clients.
 
-Note: this only works when repld is installed in the project's environment
-(uv add --dev repld-tool). A globally-installed repld (uv tool install)
-cannot see project dependencies.
+A globally-installed repld (uv tool install repld-tool, the recommended
+setup) still sees them: entry points that run a kernel re-exec under
+./.venv's interpreter first, so the kernel is bound to the project's Python
+rather than to repld's own. Nothing needs to be added to the project's
+dependencies. The one hard requirement is that ./.venv match repld's minor
+version — a cross-version venv is refused outright rather than spliced in
+half, and imports from it then fail with an error saying so.
 
   # FastAPI project — query the DB directly
   from myapp.db import async_session_maker

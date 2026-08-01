@@ -110,18 +110,32 @@ class TabQueryMixin:
         return Rows(_row_from_console(r, self._session) for r in rows)
 
     def control_observations(self) -> list[dict]:
-        """Parsed __controls__ observations from console.debug messages."""
+        """Parsed __controls__ observations from console.debug messages.
+
+        Reads the base `events` table rather than `console_entries`: an
+        observation is logged as `console.debug("__controls__", json)`, and
+        the view's `text` column is only ever the *first* console argument,
+        so the payload isn't in it at all. Same two-argument shape the live
+        push path parses (`cdp._check_controls_observation`) — note the JSON
+        path indices are 0-based here, unlike the view's 1-based DuckDB list
+        subscripts.
+        """
         rows = self._session.query(
-            f"SELECT text FROM console_entries WHERE level = 'debug' AND text LIKE '{_CONTROLS_PREFIX}%' ORDER BY id DESC LIMIT 100"
+            """
+            SELECT json_extract_string(event, '$.params.args[1].value')
+            FROM events
+            WHERE method = 'Runtime.consoleAPICalled'
+              AND json_extract_string(event, '$.params.type') = 'debug'
+              AND json_extract_string(event, '$.params.args[0].value') = ?
+            ORDER BY rowid DESC LIMIT 100
+            """,
+            [_CONTROLS_PREFIX],
         )
         results = []
         for row in rows:
             raw = row[0]
             if not isinstance(raw, str):
                 continue
-            prefix = f"{_CONTROLS_PREFIX} "
-            if raw.startswith(prefix):
-                raw = raw[len(prefix) :]
             try:
                 results.append(json.loads(raw))
             except (json.JSONDecodeError, TypeError):

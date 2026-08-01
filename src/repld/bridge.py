@@ -94,6 +94,15 @@ def _err(msg: str) -> None:
     print(f"repld bridge: {msg}", file=sys.stderr, flush=True)
 
 
+def _rid_of(line: str) -> object | None:
+    """The `id` of a client line, or None if it has none or won't parse."""
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return msg.get("id") if isinstance(msg, dict) else None
+
+
 class Bridge:
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
@@ -527,6 +536,41 @@ class Bridge:
     # -- main loop ----------------------------------------------------------
 
     def _handle_client_line(self, line: str) -> None:
+        """Answer our own bugs instead of dying of them.
+
+        `run()`'s loop is the only reader of client stdin, so an exception
+        escaping here ends that loop and closes our stdout — and an MCP
+        client dispatcher is single-shot, so it can never re-handshake. The
+        kernel end of this same socket has always answered its own bugs with
+        -32603 (`ipc.py`); this is the matching guard on the side that has to
+        survive. Narrow excepts stay where they are, in the paths that know
+        what they're catching — this is only the backstop for the rest.
+        """
+        try:
+            self._dispatch_client_line(line)
+        except Exception as exc:
+            _err(f"internal error handling client message: {exc!r}")
+            rid = _rid_of(line)
+            if rid is None:
+                return  # a notification: nothing to answer.
+            # Discard before replying: the id may have been registered on the
+            # way in, and answering it here means nothing downstream will.
+            # Left in place it would hang the client and then burn
+            # _drain_inflight's whole budget at shutdown.
+            with self._state_lock:
+                self._inflight.discard(rid)
+            self._to_client(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "error": {
+                        "code": -32603,
+                        "message": f"repld bridge internal error: {exc}",
+                    },
+                }
+            )
+
+    def _dispatch_client_line(self, line: str) -> None:
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:

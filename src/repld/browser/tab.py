@@ -869,9 +869,13 @@ class Tab(TabQueryMixin):
             params["captureBeyondViewport"] = True
 
         metrics = await self._exec("Page.getLayoutMetrics", {})
-        vp = metrics.get("cssVisualViewport", {})
-        src_w = int(vp.get("clientWidth", 0))
-        src_h = int(vp.get("clientHeight", 0))
+        # Measure whatever CDP actually captured. With captureBeyondViewport
+        # the PNG is the full content box, so sizing the resize off the visual
+        # viewport squashed a tall full-page shot down to viewport height —
+        # and reported a `scale` that mapped back to nothing.
+        box = metrics.get("cssContentSize" if full_page else "cssVisualViewport", {})
+        src_w = int(box.get("width") or box.get("clientWidth") or 0)
+        src_h = int(box.get("height") or box.get("clientHeight") or 0)
 
         result = await self._exec("Page.captureScreenshot", params)
         img_bytes = base64.b64decode(result.get("data", ""))
