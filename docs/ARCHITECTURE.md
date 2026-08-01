@@ -58,7 +58,7 @@ Eleven CLI subcommands, all dispatched from `repld:main`:
 - `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned ones don't accumulate unseen.
 - `repld stop [--all]` — SIGTERM this project's kernel and wait for it to clear; `--all` stops every live kernel in the session registry.
 - `repld restart` — stop, then spawn a fresh headless kernel.
-- `repld dashboard [--print]` — resolve the dashboard port and open it, printing the URL when a browser can't be opened.
+- `repld dashboard [--print]` — resolve the dashboard port, read the API token from the project's 0600 hint file, and open the authenticated URL (printing it when a browser can't be opened). The panel embeds that token, so `GET /` requires one too — a bare `http://127.0.0.1:<port>/` answers 401.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field.
 - `repld gist <verb>` — `new` / `add` / `rm` / `list` / `lint` for tool gists in `./gists/`.
 

@@ -186,8 +186,13 @@ def _banner(
         f"(REPLD_LOOP_KILL_THRESHOLD)",
     ]
     if dashboard_port is not None:
+        # The port, not a URL: `GET /` needs the API token now, and this banner
+        # goes to the systemd journal on a service-spawned kernel — a readable
+        # destination that a credential has no business reaching. `repld
+        # dashboard` reads the token from the 0600 hint file instead.
         lines.append(
-            f"  dashboard: \033[0m\033[4mhttp://localhost:{dashboard_port}\033[0m\033[90m"
+            f"  dashboard: port {dashboard_port} — open with \033[0m\033[4mrepld "
+            f"dashboard\033[0m\033[90m"
         )
     lines += [
         "  register:  claude mcp add repld -- repld bridge",

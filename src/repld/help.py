@@ -1053,7 +1053,8 @@ Commands:
   repld status [--json]    pid / uptime / dashboard + live kernels elsewhere
   repld stop [--all]       Stop this project's kernel (or every one)
   repld restart            Stop, then start a fresh headless kernel
-  repld dashboard          Open the kernel's web control panel
+  repld dashboard          Open the kernel's web control panel (supplies its API
+                           token; the page is not served without one)
   repld gate               List gates waiting on a human answer
   repld gate answer ID VAL Answer one (the route for a headless kernel)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)

@@ -251,14 +251,45 @@ _BROWSER_RPCS = {
 }
 
 
+def _sessions_with_tokens() -> list[dict]:
+    """Live sessions, each carrying its own dashboard token.
+
+    The sidebar links to sibling projects' dashboards, and those now refuse an
+    unauthenticated `GET /` like this one does — so the links need each peer's
+    token. Read here rather than in `sessions.register`: a token belongs to a
+    dashboard, not to the session registry, and `repld status` / `stop --all`
+    read that registry with no business carrying credentials around.
+
+    Every hint file is 0600 and owned by this uid, so this reveals nothing to
+    the caller it couldn't already read — but only *because* the caller is
+    already holding this kernel's token, which is the point of the gate.
+    """
+    from . import paths, sessions
+
+    out = []
+    for info in sessions.list_sessions():
+        entry = dict(info)
+        socket_path = entry.get("socket_path")
+        if entry.get("pid") == os.getpid():
+            entry["dashboard_token"] = _token
+        elif isinstance(socket_path, str) and socket_path:
+            try:
+                hint = json.loads(paths.hint_for(Path(socket_path)).read_text())
+                entry["dashboard_token"] = hint.get("token") or ""
+            except (OSError, json.JSONDecodeError, ValueError):
+                entry["dashboard_token"] = ""
+        else:
+            entry["dashboard_token"] = ""
+        out.append(entry)
+    return out
+
+
 async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "state":
         return _collect_state()
 
     if method == "sessions":
-        from . import sessions
-
-        return sessions.list_sessions()
+        return _sessions_with_tokens()
 
     handler = _BROWSER_RPCS.get(method)
     if handler is None:
@@ -284,6 +315,69 @@ def _cors_header(origin: str | None) -> str:
     return ""
 
 
+def _cookie_name() -> str:
+    """Per-port cookie name.
+
+    Cookies ignore the port — every dashboard on 127.0.0.1 shares one cookie
+    jar — so a fixed name would have each project's kernel overwrite the last
+    one's cookie and log you out of every sibling tab. Nothing leaks either
+    way (a cookie carrying project A's token simply fails B's compare_digest),
+    but the suffix keeps each dashboard reading only its own.
+    """
+    return f"repld_token_{_bound_port()}"
+
+
+def _parse_cookies(header: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in header.split(";"):
+        key, sep, value = part.strip().partition("=")
+        if sep:
+            out[key] = value
+    return out
+
+
+def _token_ok(candidate: str | None) -> bool:
+    return bool(candidate) and secrets.compare_digest(candidate or "", _token)
+
+
+def _page_auth(query: str, headers: dict[str, str]) -> tuple[bool, bool]:
+    """`(authorized, came_from_query)` for a `GET /`.
+
+    `GET /` is authenticated because it *carries* the token — the page needs
+    it inlined to call `POST /api`. Serving it to anyone who asks made the
+    token gate nothing at all: any process on the box could read the page,
+    grep the token out, and then enumerate every project cwd via `sessions`
+    or attach to the user's Chrome. Loopback is not a uid boundary, and every
+    other file holding this data is written 0600.
+
+    Two accepted sources. `?token=` is what `repld dashboard` opens with,
+    reading it from the 0600 hint file; the cookie is what makes a refresh
+    work after the page strips that query out of the address bar. The cookie
+    is never accepted for `POST /api` — that stays Bearer-only, so a request
+    a browser was tricked into making cannot carry credentials by itself.
+    """
+    from urllib.parse import parse_qs
+
+    supplied = parse_qs(query).get("token", [None])[0]
+    if _token_ok(supplied):
+        return True, True
+    cookies = _parse_cookies(headers.get("cookie", ""))
+    return _token_ok(cookies.get(_cookie_name())), False
+
+
+_UNAUTHORIZED_PAGE = """<!doctype html>
+<meta charset="utf-8"><title>repld dashboard</title>
+<body style="font:14px/1.6 ui-monospace,monospace;padding:2rem;max-width:40rem">
+<h1 style="font-size:1.1rem">repld dashboard — not authorized</h1>
+<p>This page carries an API token, so it is not served without one.</p>
+<p>Open it from the project directory with:</p>
+<pre style="background:#eee;padding:.6rem">repld dashboard</pre>
+<p>That reads the token from the kernel's private state file and opens an
+authenticated URL. If you had this page open across a kernel restart, the
+token changed — reopen it the same way.</p>
+</body>"""
+
+
 def _host_allowed(host: str | None) -> bool:
     """Reject DNS rebinding: the Host header must name this loopback server.
 
@@ -304,6 +398,7 @@ async def _send_response(
     body: bytes,
     content_type: str = "application/json",
     origin: str | None = None,
+    extra_headers: str = "",
 ) -> None:
     reason = {
         200: "OK",
@@ -317,7 +412,13 @@ async def _send_response(
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
+        # The page embeds a token and briefly has one in its URL: never cache
+        # it to disk, and never hand the URL to whatever it links out to (the
+        # sidebar links to sibling dashboards).
+        "Cache-Control: no-store\r\n"
+        "Referrer-Policy: no-referrer\r\n"
         f"{_cors_header(origin)}"
+        f"{extra_headers}"
         "\r\n"
     )
     writer.write(header.encode() + body)
@@ -355,7 +456,8 @@ async def _handle_connection(
         parts = request_line.decode("utf-8", errors="replace").strip().split()
         if len(parts) < 2:
             return
-        method_http, path = parts[0], parts[1]
+        method_http, target = parts[0], parts[1]
+        path, _, query = target.partition("?")
 
         while True:
             line = await asyncio.wait_for(reader.readline(), timeout=5.0)
@@ -386,13 +488,35 @@ async def _handle_connection(
             return
 
         if method_http == "GET" and path == "/":
+            authorized, from_query = _page_auth(query, headers)
+            if not authorized:
+                await _send_response(
+                    writer,
+                    401,
+                    _UNAUTHORIZED_PAGE.encode("utf-8"),
+                    "text/html; charset=utf-8",
+                    origin=origin,
+                )
+                return
             html = _HTML.replace("__DASHBOARD_TOKEN__", _token)
+            extra = ""
+            if from_query:
+                # So a refresh works after the page drops ?token= from the
+                # address bar. HttpOnly because the page is handed the token
+                # inline and has no reason to read it back out of here;
+                # SameSite=Strict so it never rides along on a request some
+                # other site initiated.
+                extra = (
+                    f"Set-Cookie: {_cookie_name()}={_token}; Path=/; "
+                    "HttpOnly; SameSite=Strict\r\n"
+                )
             await _send_response(
                 writer,
                 200,
                 html.encode("utf-8"),
                 "text/html; charset=utf-8",
                 origin=origin,
+                extra_headers=extra,
             )
             return
 
@@ -762,6 +886,14 @@ if (location.hash) switchTab(location.hash.slice(1));
 
 // --- RPC ---
 const TOKEN = '__DASHBOARD_TOKEN__';
+
+// Drop ?token= out of the address bar now that the page holds it. The server
+// set a cookie for this port on the way in, so a refresh or a back-button
+// still authenticates without it. Keeps the token out of the URL bar, the
+// history entry, and anything the user copies out of either.
+if (location.search) {
+  try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) {}
+}
 async function rpc(method, params = {}) {
   const res = await fetch('/api', {
     method: 'POST',
@@ -1068,11 +1200,16 @@ function renderSessions(list) {
     const name = (s.cwd || '').split('/').filter(Boolean).pop() || s.cwd || ('pid ' + s.pid);
     const uptime = formatUptime(Date.now() / 1000 - (s.started_at || 0));
     const dot = '<span class="status on"></span>';
-    if (isCurrent || !s.dashboard_port) {
+    // A sibling dashboard refuses an unauthenticated GET / exactly as this
+    // one does, so its link has to carry that kernel's own token — supplied
+    // by the sessions RPC, which reads each peer's 0600 hint file. Without a
+    // token there is nothing to link to but the 401 page, so render it plain.
+    if (isCurrent || !s.dashboard_port || !s.dashboard_token) {
       li.innerHTML = dot + '<span class="session-name" title="' + esc(s.cwd || '') + '">' + esc(name) + '</span>'
         + '<span class="session-uptime">' + uptime + '</span>';
     } else {
-      li.innerHTML = dot + '<a href="http://127.0.0.1:' + s.dashboard_port + '/" title="' + esc(s.cwd || '') + '">' + esc(name) + '</a>'
+      const href = 'http://127.0.0.1:' + s.dashboard_port + '/?token=' + encodeURIComponent(s.dashboard_token);
+      li.innerHTML = dot + '<a href="' + esc(href) + '" rel="noreferrer" title="' + esc(s.cwd || '') + '">' + esc(name) + '</a>'
         + '<span class="session-uptime">' + uptime + '</span>';
     }
     ul.appendChild(li);
