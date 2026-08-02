@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import paths
+from . import cli_args, paths
 from .exec_cmd import _call, _connect
 from .render import BOLD, DIM, RESET, gate_hint
 
@@ -75,7 +75,9 @@ def _fmt(gate: dict) -> str:
 
 
 def run_gate(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    # Ahead of the `answer` branch, so `repld gate answer --help` is a request
+    # for usage rather than a gate id of '--help' with no value.
+    if cli_args.wants_help(argv):
         print(_USAGE)
         return 0
 
@@ -95,10 +97,11 @@ def run_gate(argv: list[str]) -> int:
         value = " ".join(rest[2:])
         return _answer(lock_path, gate_id, value, as_json)
 
-    if rest:
-        print(f"{_LABEL}: unknown argument {rest[0]!r}\n")
-        print(_USAGE)
-        return 2
+    # Only the listing form reaches here — `answer` returned above, and its
+    # trailing words are the answer itself, which no flag-set check can vet.
+    bad = cli_args.check_args(_LABEL, rest, _USAGE, positionals=0)
+    if bad is not None:
+        return bad
     return _list(lock_path, as_json)
 
 

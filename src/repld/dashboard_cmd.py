@@ -14,7 +14,7 @@ import sys
 import webbrowser
 from urllib.parse import quote
 
-from . import paths, state
+from . import cli_args, paths, state
 
 _USAGE = """\
 repld dashboard — open this project's kernel dashboard
@@ -26,18 +26,18 @@ repld dashboard — open this project's kernel dashboard
 
 
 def run_dashboard(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    if cli_args.wants_help(argv):
         print(_USAGE)
         return 0
 
     sock_path, rest = paths.resolve_socket_path(argv)
     lock_path = paths.lock_for(sock_path)
+    bad = cli_args.check_args(
+        "repld dashboard", rest, _USAGE, flags=("--print",), positionals=0
+    )
+    if bad is not None:
+        return bad
     print_only = "--print" in rest
-    unknown = [a for a in rest if a != "--print"]
-    if unknown:
-        print(f"repld dashboard: unknown argument {unknown[0]!r}\n")
-        print(_USAGE)
-        return 2
 
     lock = state.read_lock(lock_path)
     if isinstance(lock, str):

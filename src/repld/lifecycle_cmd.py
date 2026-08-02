@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import paths, sessions, spawn, state
+from . import cli_args, paths, sessions, spawn, state
 from .render import (
     DIM as _DIM,
     GREEN as _GREEN,
@@ -81,18 +81,17 @@ def _stop_one(pid: int, lock_path: Path, label: str) -> bool:
 
 
 def run_stop(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    if cli_args.wants_help(argv):
         print(_STOP_USAGE)
         return 0
     sock_path, rest = paths.resolve_socket_path(argv)
-    stop_all = "--all" in rest
-    unknown = [a for a in rest if a != "--all"]
-    if unknown:
-        print(f"repld stop: unknown argument {unknown[0]!r}\n")
-        print(_STOP_USAGE)
-        return 2
+    bad = cli_args.check_args(
+        "repld stop", rest, _STOP_USAGE, flags=("--all",), positionals=0
+    )
+    if bad is not None:
+        return bad
 
-    if stop_all:
+    if "--all" in rest:
         live = sessions.list_sessions()
         if not live:
             print("no repld kernels running")
@@ -140,14 +139,13 @@ def _spawn_headless(sock_path: Path) -> int:
 
 
 def run_restart(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    if cli_args.wants_help(argv):
         print(_RESTART_USAGE)
         return 0
     sock_path, rest = paths.resolve_socket_path(argv)
-    if rest:
-        print(f"repld restart: unknown argument {rest[0]!r}\n")
-        print(_RESTART_USAGE)
-        return 2
+    bad = cli_args.check_args("repld restart", rest, _RESTART_USAGE, positionals=0)
+    if bad is not None:
+        return bad
     rc = run_stop(["--socket", str(sock_path)])
     if rc != 0:
         return rc
@@ -213,16 +211,16 @@ def _print_python(lock: dict) -> None:
 
 
 def run_status(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    if cli_args.wants_help(argv):
         print(_STATUS_USAGE)
         return 0
     sock_path, rest = paths.resolve_socket_path(argv)
+    bad = cli_args.check_args(
+        "repld status", rest, _STATUS_USAGE, flags=("--json",), positionals=0
+    )
+    if bad is not None:
+        return bad
     as_json = "--json" in rest
-    unknown = [a for a in rest if a != "--json"]
-    if unknown:
-        print(f"repld status: unknown argument {unknown[0]!r}\n")
-        print(_STATUS_USAGE)
-        return 2
 
     lock_path = paths.lock_for(sock_path)
     lock = state.read_lock(lock_path)

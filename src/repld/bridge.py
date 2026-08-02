@@ -651,12 +651,12 @@ class Bridge:
         # _client_init would have the handshake replayed onto it — firing
         # list_changed at a client that hasn't yet had its `initialize`
         # answered. Only a kernel attached from here on is a *fresh* one.
-        if isinstance(msg, dict) and msg.get("method") == "initialize":
+        if method == "initialize":
             self._client_init = msg
         # Reaching here (rather than the discovery intercept) means a kernel
         # was already attached, so this is a plain forward — record it the
         # same way, for whatever *next* reconnect's _replay_handshake needs.
-        if isinstance(msg, dict) and msg.get("method") == "notifications/initialized":
+        if method == "notifications/initialized":
             self._client_initialized = True
 
         # Registered before the write, so a send that fails mid-flight is

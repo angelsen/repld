@@ -2,10 +2,36 @@
 
 import http.client
 import json
+import socket
 
 from harness import Kernel, assert_eq, assert_true
 
 from repld import paths
+
+
+def _declared_length(port: int, length: int, token: str | None) -> int:
+    """Status for a POST /api that *declares* `length` and sends no body.
+
+    Raw socket rather than `_request`, which derives Content-Length from the
+    bytes it is given — the whole point here is a header that lies. Returns 0
+    when the server accepted the declaration and is waiting for a body that
+    never comes, which is what "not rejected" looks like from out here.
+    """
+    req = f"POST /api HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+    if token is not None:
+        req += f"Authorization: Bearer {token}\r\n"
+    req += f"Content-Length: {length}\r\n\r\n"
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    try:
+        s.sendall(req.encode())
+        data = s.recv(256)
+    except socket.timeout:
+        return 0
+    finally:
+        s.close()
+    if not data:
+        return 0
+    return int(data.split(b" ")[1])
 
 
 def _request(
@@ -101,6 +127,32 @@ def phase_14_dashboard(kernel: Kernel) -> None:
     )
     assert_eq(status, 200, "POST /api accepts the Bearer token")
     print("  ✓ POST /api stays Bearer-only — a cookie does not authenticate it")
+
+    # Content-Length feeds readexactly() directly, so an unbounded one lets an
+    # authenticated caller allocate the kernel to death from a single header —
+    # and the 5 s read timeout is no defence at loopback speed. The order
+    # matters as much as the cap: an anonymous caller must still see 401, so
+    # the limit isn't something to probe for without the token.
+    from repld.dashboard import _MAX_BODY_BYTES
+
+    assert_eq(
+        _declared_length(port, _MAX_BODY_BYTES + 1, token),
+        413,
+        "POST /api over the body cap",
+    )
+    assert_eq(
+        _declared_length(port, 10_000_000_000, None),
+        401,
+        "oversized POST /api without a token is still 401, not 413",
+    )
+    assert_eq(
+        _declared_length(port, _MAX_BODY_BYTES, token),
+        0,
+        "a body exactly at the cap is accepted (awaits the body, no 413)",
+    )
+    print(
+        f"  ✓ POST /api body capped at {_MAX_BODY_BYTES >> 10}KiB, after the auth check"
+    )
 
     # The sidebar links to sibling dashboards, which now refuse an
     # unauthenticated GET / too, so each entry has to carry its own token.

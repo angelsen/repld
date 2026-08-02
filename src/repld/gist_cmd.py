@@ -7,6 +7,8 @@ Dispatched from `cli.py`'s _SUBCOMMANDS table.
 
 from pathlib import Path
 
+from . import cli_args
+
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
 
@@ -62,42 +64,6 @@ def _usage(verb: str) -> str:
     return f"{line}\n{detail}" if detail else line
 
 
-def _wants_help(argv: list[str]) -> bool:
-    # Scans every argument, not just argv[0], to match the rest of the CLI.
-    # `repld gist rm foo --help` used to fall through and unlink foo.
-    return any(a in ("-h", "--help") for a in argv)
-
-
-def _check_args(
-    verb: str,
-    argv: list[str],
-    usage: str,
-    *,
-    flags: tuple[str, ...] = (),
-    positionals: int | None = 1,
-) -> int | None:
-    """Reject unknown flags and surplus positionals. Exit code, or None if fine.
-
-    Only `fetch` and `list` did this, so the rest quietly ignored whatever they
-    didn't recognise: `gist new x --global` scaffolded locally while its
-    sibling `fetch` honours that exact flag, `gist add foo bar` linked only
-    foo, and `gist lint --json` looked for a gist named '--json'. Silently
-    doing something other than what was typed is the worst of the options.
-    `positionals=None` means the verb takes any number of names.
-    """
-    unknown = [a for a in argv if a.startswith("-") and a not in flags]
-    if unknown:
-        print(f"repld gist {verb}: unknown argument {unknown[0]!r}\n")
-        print(usage)
-        return 2
-    names = [a for a in argv if not a.startswith("-")]
-    if positionals is not None and len(names) > positionals:
-        print(f"repld gist {verb}: unexpected argument {names[positionals]!r}\n")
-        print(usage)
-        return 2
-    return None
-
-
 def _shadow_conflict(
     stem: str,
     *,
@@ -128,10 +94,10 @@ def _gist_new(argv: list[str]) -> int:
     from . import gist_links
 
     usage = _usage("new")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
-    bad = _check_args("new", argv, usage)
+    bad = cli_args.check_args("repld gist new", argv, usage, positionals=1)
     if bad is not None:
         return bad
     if not argv:
@@ -265,7 +231,7 @@ def _gist_fetch(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
     usage = _usage("fetch")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
     to_global = "--global" in argv
@@ -374,10 +340,10 @@ def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
     usage = _usage("add")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
-    bad = _check_args("add", argv, usage)
+    bad = cli_args.check_args("repld gist add", argv, usage, positionals=1)
     if bad is not None:
         return bad
     if not argv:
@@ -411,10 +377,12 @@ def _gist_rm(argv: list[str]) -> int:
     from . import gist_links
 
     usage = _usage("rm")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
-    bad = _check_args("rm", argv, usage, flags=("--stale",), positionals=1)
+    bad = cli_args.check_args(
+        "repld gist rm", argv, usage, flags=("--stale",), positionals=1
+    )
     if bad is not None:
         return bad
     if "--stale" in argv and any(not a.startswith("-") for a in argv):
@@ -451,10 +419,12 @@ def _gist_lint(argv: list[str]) -> int:
     from . import gists as _gists
 
     usage = _usage("lint")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
-    bad = _check_args("lint", argv, usage, flags=("--local",), positionals=None)
+    bad = cli_args.check_args(
+        "repld gist lint", argv, usage, flags=("--local",), positionals=None
+    )
     if bad is not None:
         return bad
     local_only = "--local" in argv
@@ -525,7 +495,7 @@ def _gist_list(argv: list[str]) -> int:
     from . import gists as _gists
 
     usage = _usage("list")
-    if _wants_help(argv):
+    if cli_args.wants_help(argv):
         print(usage)
         return 0
     if argv:

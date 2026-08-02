@@ -25,6 +25,15 @@ _server: asyncio.Server | None = None
 _hint_path: Path | None = None
 _token: str = ""
 
+# Ceiling on a `POST /api` body. Every real request is a small JSON-RPC
+# envelope — the largest is a `browser.connect` params dict — so this is three
+# orders of magnitude of headroom. It exists because `Content-Length` feeds
+# `readexactly()` directly: without a bound, one header claiming 10 GB has the
+# kernel allocate toward it, and the 5 s read timeout is no defence when the
+# sender is on loopback. Holding the token is not licence to OOM the process
+# the token exists to protect.
+_MAX_BODY_BYTES = 1 << 20
+
 
 def _bound_port() -> int | None:
     """The dashboard's listening port, or None before/without a bound server."""
@@ -404,6 +413,7 @@ async def _send_response(
         400: "Bad Request",
         403: "Forbidden",
         404: "Not Found",
+        413: "Payload Too Large",
         500: "Internal Server Error",
     }.get(status, "OK")
     header = (
@@ -523,6 +533,18 @@ async def _handle_connection(
             if not secrets.compare_digest(auth, f"Bearer {_token}"):
                 await _send_response(
                     writer, 401, b'{"error":"unauthorized"}', origin=origin
+                )
+                return
+            # Checked after the Bearer compare, so an unauthenticated caller
+            # learns nothing about the limit — and before the read, which is
+            # the whole point: `readexactly` allocates toward whatever the
+            # header claimed.
+            if content_length > _MAX_BODY_BYTES:
+                await _send_response(
+                    writer,
+                    413,
+                    b'{"error":"request body too large"}',
+                    origin=origin,
                 )
                 return
             body = (
