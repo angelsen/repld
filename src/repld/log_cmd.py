@@ -70,6 +70,11 @@ def _render(rec: dict) -> str | None:
         ).rstrip()
     if kind == "HumanPromptResponse":
         return render.prompt_response(rec.get("value"))
+    if kind == "HumanPromptClosed":
+        # A replay is the one place a gate that nobody answered is visible at
+        # all — the pane has scrolled on and `repld gate` only ever lists what
+        # is still pending — so it gets its own line rather than being elided.
+        return render.prompt_closed(str(rec.get("reason", "")))
     if kind == "BrowserTabAttached":
         return render.browser_attached(
             str(rec.get("target", "")), rec.get("url", ""), rec.get("title", "")

@@ -20,6 +20,7 @@ from .events import (
     CellStart,
     ChannelPush,
     Event,
+    HumanPromptClosed,
     HumanPromptOpen,
     HumanPromptResponse,
     StderrChunk,
@@ -259,20 +260,42 @@ def _render_prompt_open(ev: HumanPromptOpen) -> None:
     _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
 
 
-def _render_prompt_response(ev: HumanPromptResponse) -> None:
-    # Drop the gate that was actually answered — the answer may have come from
-    # `repld gate` or a browser pill for an *older* gate, in which case the one
-    # on screen is still open and must stay answerable from stdin.
-    _open_gates.pop(ev.gate_id, None)
+def _close_gate(gate_id: str, line: str) -> None:
+    """Drop one gate from the pane and re-show whatever is still waiting.
+
+    Shared by the two ways a gate ends, because the pane's job is the same
+    either way. Drops *this* gate by id rather than whichever is on screen: an
+    answer can arrive from `repld gate` or a browser pill for an older one, and
+    a timeout fires against whichever gate set it — in both cases the newest is
+    still open and must stay answerable from stdin.
+    """
+    if _open_gates.pop(gate_id, None) is None:
+        return  # not ours to close (already gone, or opened before this pane)
     # Leading newline closes the line the prompt left the cursor on.
-    _out("\n" + render.prompt_response(ev.value) + "\n")
+    _out("\n" + line + "\n")
     # Something else is still waiting: re-show it, since its prompt has now
-    # scrolled above the response line and the cursor is no longer parked on it.
+    # scrolled above this line and the cursor is no longer parked on it.
     if _open_gates:
         # Its own question, not a placeholder: this is the only thing on screen
         # telling the human what they are still being asked.
         gate_id, (kind, prompt, options) = next(reversed(_open_gates.items()))
         _out(render.prompt_open(kind, prompt, options, gate_id))
+
+
+def _render_prompt_response(ev: HumanPromptResponse) -> None:
+    _close_gate(ev.gate_id, render.prompt_response(ev.value))
+
+
+def _render_prompt_closed(ev: HumanPromptClosed) -> None:
+    """A gate that timed out or whose cell was cancelled.
+
+    Without this the entry never leaves `_open_gates`: `HumanPromptResponse`
+    only fires when a human actually answered, so a `timeout=` expiring left a
+    phantom that swallowed every subsequent stdin line — the reader routes to
+    the newest open gate, and resolving a gate the kernel has already dropped
+    is a silent no-op.
+    """
+    _close_gate(ev.gate_id, render.prompt_closed(ev.reason))
 
 
 def _render_browser_attached(ev: BrowserTabAttached) -> None:
@@ -298,6 +321,8 @@ def _render(ev: Event) -> None:
         _render_prompt_open(ev)
     elif isinstance(ev, HumanPromptResponse):
         _render_prompt_response(ev)
+    elif isinstance(ev, HumanPromptClosed):
+        _render_prompt_closed(ev)
     elif isinstance(ev, BrowserTabAttached):
         _render_browser_attached(ev)
     elif isinstance(ev, BrowserTabDetached):

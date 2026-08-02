@@ -128,6 +128,16 @@ def prompt_response(value: object) -> str:
     return f"{DIM}↳ response recorded: {value}{RESET}"
 
 
+def prompt_closed(reason: str) -> str:
+    """A gate that stopped waiting with nobody having answered it.
+
+    Deliberately shaped like `prompt_response`: both close out a `prompt_open`
+    that left the cursor parked mid-line, and reading back a session you should
+    be able to see at a glance which of the two happened to each question.
+    """
+    return f"{DIM}↳ no response ({reason}){RESET}"
+
+
 def browser_attached(target: str, url: str, title: str = "") -> str:
     suffix = f" ({title})" if title else ""
     return f"{DIM}[browser] attached {target[:_TARGET_ID_CHARS]} {url}{suffix}{RESET}"

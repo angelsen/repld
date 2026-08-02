@@ -176,9 +176,45 @@ def phase_17_gates(kernel: Kernel) -> None:
         assert_eq(answered.returncode, 0, "and the CLI can actually answer it")
         print("  ✓ ask on a pinned tab keeps its headless answer route")
 
+        _timeout_closes_the_gate(b, kernel)
         _pane_reshows_the_question()
+        _pane_drops_a_timed_out_gate()
     finally:
         b.close()
+
+
+def _timeout_closes_the_gate(b: Bridge, kernel: Kernel) -> None:
+    """A gate that expires must *announce* that it did, not just disappear.
+
+    `timeout=` is the documented way to keep a gate from parking a cell
+    indefinitely, and it resolves nothing — so `HumanPromptResponse` never
+    fires. Every surface that mirrors the open-gate set (the pane, a `repld
+    log` replay) learns only from an event, and without one the pane kept a
+    phantom that swallowed every subsequent line typed at it.
+    """
+    task_id = _open_gate(b, 'await ask("Never answered?", timeout=1.5, default="dflt")')
+    gate_id = _pending(kernel)[0]["gate_id"]
+
+    assert_eq(_await_task(b, task_id).strip(), "'dflt'", "the default was returned")
+    assert_eq(_pending(kernel), [], "an expired gate is no longer pending")
+
+    proc = subprocess.run(
+        ["uv", "run", "--project", str(REPO), "repld", "log", "-n", "500", "--json"],
+        cwd=str(kernel.cwd),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert_eq(proc.returncode, 0, f"repld log --json exits 0 (stderr: {proc.stderr})")
+    closed = [
+        json.loads(line)
+        for line in proc.stdout.splitlines()
+        if line.strip() and '"HumanPromptClosed"' in line
+    ]
+    mine = [r for r in closed if r.get("gate_id") == gate_id]
+    assert_eq(len(mine), 1, f"the expired gate logged exactly one close ({closed!r})")
+    assert_eq(mine[0]["reason"], "timeout", "and named the reason it ended")
+    print("  ✓ an expired gate emits HumanPromptClosed rather than vanishing")
 
 
 def _pane_reshows_the_question() -> None:
@@ -217,3 +253,45 @@ def _pane_reshows_the_question() -> None:
         display._open_gates.clear()
         display._open_gates.update(real_gates)
     print("  ✓ pane re-asks the surviving gate's own question, not a placeholder")
+
+
+def _pane_drops_a_timed_out_gate() -> None:
+    """A gate that expired must leave the pane's registry, same as an answered one.
+
+    It never did: `HumanPromptResponse` is the only thing that removed an entry,
+    so an expired gate stayed the newest forever — and `_stdin_reader_loop`
+    routes to the newest, resolving a gate the kernel already dropped, which is
+    a silent no-op. The pane's stdin went dead until some later gate opened.
+    """
+    from repld import display
+    from repld.events import HumanPromptClosed, HumanPromptOpen
+
+    written: list[str] = []
+    real_out, display._out = display._out, written.append
+    real_gates = dict(display._open_gates)
+    try:
+        display._open_gates.clear()
+        display._render_prompt_open(HumanPromptOpen("aaa", "confirm", "Deploy?", None))
+        display._render_prompt_open(
+            HumanPromptOpen("bbb", "ask", "Never answered?", None)
+        )
+        written.clear()
+        display._render_prompt_closed(HumanPromptClosed("bbb", "timeout"))
+        out = "".join(written)
+        assert_eq(list(display._open_gates), ["aaa"], "the expired gate is dropped")
+        assert_true("no response (timeout)" in out, f"and says why (got {out!r})")
+        # Same re-ask as the answered path: the older gate is still open and its
+        # prompt has scrolled above the line just written.
+        assert_true("Deploy?" in out, f"the surviving gate is re-asked (got {out!r})")
+
+        # Idempotent: `repld gate` may already have removed it, and a second
+        # close must not re-print or disturb what is still on screen.
+        written.clear()
+        display._render_prompt_closed(HumanPromptClosed("bbb", "timeout"))
+        assert_eq("".join(written), "", "closing an unknown gate writes nothing")
+        assert_eq(list(display._open_gates), ["aaa"], "and leaves the rest alone")
+    finally:
+        display._out = real_out
+        display._open_gates.clear()
+        display._open_gates.update(real_gates)
+    print("  ✓ pane drops an expired gate instead of routing stdin at it forever")

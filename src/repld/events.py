@@ -74,6 +74,21 @@ class HumanPromptResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class HumanPromptClosed:
+    """A gate that stopped waiting without anyone answering it.
+
+    The counterpart to HumanPromptResponse, and needed for the same reason: a
+    surface that mirrors open gates (the pane's `_open_gates`, a `repld log`
+    replay) has no other way to learn that one is gone. `timeout=` expiring and
+    the awaiting cell being cancelled both end a gate with nobody having
+    answered, and without this the pane keeps routing stdin at it forever.
+    """
+
+    gate_id: str
+    reason: Literal["timeout", "cancelled"]
+
+
+@dataclass(frozen=True, slots=True)
 class BrowserTabAttached:
     target: str
     url: str
@@ -93,6 +108,7 @@ Event = (
     | ChannelPush
     | HumanPromptOpen
     | HumanPromptResponse
+    | HumanPromptClosed
     | BrowserTabAttached
     | BrowserTabDetached
 )

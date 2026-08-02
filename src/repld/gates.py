@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import IO, Literal
 
 from .channel import push_channel
-from .events import HumanPromptOpen, HumanPromptResponse, emit
+from .events import HumanPromptClosed, HumanPromptOpen, HumanPromptResponse, emit
 
 
 @dataclass
@@ -49,6 +49,13 @@ class _Gate:
     prompt: str
     options: list[str] | None
     opened_at: float
+    # Whether a human actually answered, as opposed to the gate ending some
+    # other way. Read by `_gate`'s finally to decide between the two closing
+    # events, and a flag rather than an inspection of `future` because the
+    # states are not the same question: a cancelled future is indistinguishable
+    # from one whose `set_result` lost a race, and only this is set by the one
+    # code path that means "a human said something".
+    answered: bool = False
 
 
 _gates: dict[str, _Gate] = {}
@@ -212,18 +219,32 @@ async def _gate(
             name=f"repld-gate-show-{gate_id}",
         )
 
+    # Only read when nobody answered, so the remaining question is which of the
+    # two silent endings it was: `timeout=` expiring, or the awaiting cell being
+    # cancelled (`cancel`, or the loop watchdog).
+    reason: Literal["timeout", "cancelled"] = "cancelled"
     try:
         wrapped = asyncio.wrap_future(fut)
         if timeout is not None:
             return await asyncio.wait_for(wrapped, timeout=timeout)
         return await wrapped
     except asyncio.TimeoutError:
+        reason = "timeout"
         if default is not None:
             return default
         raise TimeoutError(f"no response to {prompt!r} within {timeout}s")
     finally:
         with _gates_lock:
-            _gates.pop(gate_id, None)
+            gate = _gates.pop(gate_id, None)
+        # A gate ending unanswered has to be announced, not just forgotten:
+        # `open_gates` is this dict, so `repld gate` self-corrects, but every
+        # surface that *mirrors* it learns only from an event. Without this the
+        # pane's `_open_gates` keeps the entry forever — stdin keeps routing to
+        # a gate nothing can resolve, and the dead prompt is re-shown whenever a
+        # later one is answered. Note `timeout=` is the documented way to keep a
+        # gate from parking a cell indefinitely, so this is the recommended path.
+        if gate is not None and not gate.answered:
+            emit(HumanPromptClosed(gate_id, reason))
 
 
 def resolve_gate(gate_id: str, value) -> bool:
@@ -233,14 +254,23 @@ def resolve_gate(gate_id: str, value) -> bool:
     race to resolve the same gate — first one wins by design; set_result on an
     already-done future raises InvalidStateError, which we swallow rather than
     crash the caller.
+
+    `answered` is claimed *before* `set_result` and released again if that
+    raises. Setting it afterwards would leave a window in which a gate whose
+    timeout has just fired is marked answered by a losing caller, and `_gate`'s
+    finally would then emit no closing event at all — the very leak the flag
+    exists to close.
     """
     with _gates_lock:
         gate = _gates.get(gate_id)
-    if gate is None:
-        return False
+        if gate is None or gate.answered:
+            return False
+        gate.answered = True
     try:
         gate.future.set_result(value)
     except concurrent.futures.InvalidStateError:
+        with _gates_lock:
+            gate.answered = False
         return False
     emit(HumanPromptResponse(gate_id, value))
     return True

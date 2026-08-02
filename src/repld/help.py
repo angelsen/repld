@@ -25,6 +25,7 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
 
 from pathlib import Path
 
+from . import cli_args
 from .state import read_lock
 
 # ---------------------------------------------------------------------------
@@ -1776,14 +1777,37 @@ def _suggestion(cwd: Path) -> str:
     )
 
 
+def _usage() -> str:
+    """Usage for the argv checks, listing the topics that actually exist."""
+    return (
+        "repld help — agent/human docs\n"
+        "\n"
+        "  repld help [TOPIC]\n"
+        "\n"
+        f"  TOPIC   one of: {', '.join(sorted(_TOPICS))}\n"
+        "\n"
+        "  With no TOPIC, prints the overview.\n"
+    )
+
+
 def run_help(argv: list[str]) -> int:
-    if argv and argv[0] in ("-h", "--help"):
+    # Via cli_args like every other subcommand, rather than the `argv[0] in
+    # (-h, --help)` this open-coded: that only ever looked at the first
+    # argument, so `repld help gists --help` printed the gists topic instead of
+    # usage — the exact case `wants_help`'s scan-every-argument rule exists for.
+    if cli_args.wants_help(argv):
         print(OVERVIEW)
         return 0
     if not argv:
         print(OVERVIEW)
         print(_suggestion(Path.cwd()))
         return 0
+    # No flags: `repld help` takes a topic and nothing else, so `--socket` (or
+    # anything else borrowed from a sibling command) is refused rather than
+    # silently ignored on the way to printing a topic.
+    bad = cli_args.check_args("repld help", argv, _usage(), positionals=1)
+    if bad is not None:
+        return bad
     topic = argv[0]
     if topic not in _TOPICS:
         print(f"Unknown topic: {topic}")

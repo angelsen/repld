@@ -67,5 +67,9 @@ def run_dashboard(argv: list[str]) -> int:
     if print_only or not webbrowser.open(url):
         print(url)
         return 0
-    print(f"opened {url}")
+    # The port, not the URL — the same reason the boot banner and `repld status`
+    # print one. The URL carries the API token, and once the browser has it
+    # there is nothing left to gain by also leaving it in shell scrollback.
+    # `--print` is there for when you do want the credential.
+    print(f"opened the dashboard on port {port}")
     return 0
