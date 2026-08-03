@@ -237,13 +237,27 @@ class Tab(TabQueryMixin):
             )
 
     async def unpin(self) -> None:
-        """Remove pill + beforeunload + heartbeat."""
+        """Remove pill + beforeunload + heartbeat.
+
+        The state clears in a `finally` for the same reason `pin()` rolls back
+        in an `except`: the DOM half can fail on its own. Removing the pill is
+        a `Runtime.evaluate` on a tab that may already be gone, in which case
+        `_exec` raises "target ... no longer exists" — and by then the
+        heartbeat, the one other thing that would eventually have cleared
+        `_pinned`, has already been cancelled. Leaving the flag set stranded
+        the session pinned forever: `pin()` afterwards sees `_pinned` and takes
+        the reason-only branch, so it never re-injects and never restarts the
+        heartbeat, and nothing else ever writes False.
+        """
         session = self._session
-        if session._pinned:
-            if session._heartbeat_task is not None:
-                session._heartbeat_task.cancel()
-                session._heartbeat_task = None
+        if not session._pinned:
+            return
+        if session._heartbeat_task is not None:
+            session._heartbeat_task.cancel()
+            session._heartbeat_task = None
+        try:
             await self.js("window.__repld_remove && window.__repld_remove()")
+        finally:
             session._pinned = False
             session._pin_reason = ""
             session._pin_origin = ""

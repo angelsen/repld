@@ -92,6 +92,58 @@ def phase_6_png_resize(_kernel: Kernel) -> None:
     print("  ✓ _model_dims: token-budget invariants hold across sizes")
 
 
+def phase_6_capture_filter(_kernel: Kernel) -> None:
+    """`_should_capture_body` skips what the HAR view calls an asset.
+
+    Capture registers on `*` because Fetch.enable has no resource-type filter,
+    so this predicate is the only thing standing between a page load and a full
+    fetch+fulfill round trip per image, font, stylesheet and script. It has to
+    agree with har.py's `is_asset` derivation: capture and query disagreeing
+    about what an asset is means bodies stored for rows `tab.network()` hides
+    by default, which is the expensive half of the mistake.
+    """
+    from repld.browser.capture import _should_capture_body
+
+    def _params(status: int = 200, rtype: str = "XHR", ctype: str = "") -> dict:
+        p: dict = {"responseStatusCode": status, "resourceType": rtype}
+        if ctype:
+            p["responseHeaders"] = [{"name": "Content-Type", "value": ctype}]
+        return p
+
+    for rtype in ("Image", "Font", "Stylesheet", "Media", "Script"):
+        assert_true(
+            not _should_capture_body(_params(rtype=rtype)),
+            f"asset resourceType {rtype} is not captured",
+        )
+    # Chrome labels plenty of asset traffic XHR/Other; Content-Type is the
+    # backstop, and mirrors the same mime markers har.py matches on.
+    for ctype in ("image/png", "font/woff2", "text/css", "video/mp4", "audio/mpeg"):
+        assert_true(
+            not _should_capture_body(_params(ctype=ctype)),
+            f"asset Content-Type {ctype} is not captured",
+        )
+    assert_true(
+        not _should_capture_body(_params(status=302)),
+        "redirects are not captured (getResponseBody errors on them)",
+    )
+    assert_true(
+        not _should_capture_body(_params(ctype="text/event-stream")),
+        "SSE is not captured (getResponseBody never returns)",
+    )
+    # The traffic the capture store exists for still goes through.
+    for rtype, ctype in [
+        ("XHR", "application/json"),
+        ("Fetch", "application/json"),
+        ("Document", "text/html"),
+        ("Other", ""),
+    ]:
+        assert_true(
+            _should_capture_body(_params(rtype=rtype, ctype=ctype)),
+            f"{rtype}/{ctype or 'no content-type'} is still captured",
+        )
+    print("  ✓ _should_capture_body: assets skipped, API/document traffic kept")
+
+
 def phase_6_har_redirects(_kernel: Kernel) -> None:
     """har_entries resolves a redirect chain hop-by-hop — no kernel or Chrome.
 
@@ -109,8 +161,11 @@ def phase_6_har_redirects(_kernel: Kernel) -> None:
 
     from repld.browser.har import _create_views
 
-    def _entries(hops: list[tuple[int, str]]) -> list[tuple]:
-        """Build a redirect chain and return (redirect_index, status, state)."""
+    def _entries(hops: list[tuple[int, str]]) -> tuple[list[tuple], tuple]:
+        """Build a redirect chain, returning (rows, final-hop request_headers).
+
+        rows is one (redirect_index, status, state) per hop, oldest first.
+        """
         db = duckdb.connect(":memory:")
         db.execute(
             "CREATE TABLE events "
@@ -173,7 +228,11 @@ def phase_6_har_redirects(_kernel: Kernel) -> None:
             "SELECT request_headers FROM har_entries WHERE redirect_index = ? LIMIT 1",
             [len(hops) - 1],
         ).fetchone()
-        return [rows, headers]
+        if headers is None:
+            raise AssertionError(
+                f"har_entries has no row for the final hop of {hops!r}"
+            )
+        return rows, headers
 
     # 302 -> 200: the final hop must report 200, not the chain's lexicographic max.
     rows, headers = _entries([(302, "a=1"), (200, "b=2")])

@@ -22,7 +22,9 @@ name have to mean the same thing whether they were typed into the pane or into
 (ask the human), different mechanism. It runs during boot — installing gist
 deps, restoring a browser session — before the loop, the display, or the
 output tee exist, so it talks straight to the controlling terminal instead of
-routing through an event.
+routing through an event. Boot-only is a hard requirement, not a description:
+past it the display thread owns stdin, and `_stdin_owned` is what makes a late
+caller decline instead of deadlocking against it.
 """
 
 import asyncio
@@ -66,6 +68,16 @@ _gates_lock = threading.Lock()
 # which is what lets `_gate` tell the agent that nobody is listening.
 _has_terminal = False
 
+# Whether that reader is *running right now*, i.e. parked in readline() on
+# sys.__stdin__. A separate flag because it answers a separate question, and
+# the two are deliberately true at different times: `_has_terminal` is set at
+# the top of `kernel._boot_runtime` and means "a pane will exist", which is
+# what a gate needs to know when it decides whether to print the `repld gate
+# answer` fallback. This one is set by `display.run_display`, long after boot
+# finishes, and is what `tty_prompt` consults — see its docstring for why
+# anything that reads stdin directly has to.
+_stdin_owned = False
+
 _YES = frozenset({"y", "yes", "1", "true"})
 _NO = frozenset({"n", "no", "0", "false"})
 
@@ -74,6 +86,17 @@ def set_terminal(value: bool) -> None:
     """Record whether a display thread will be reading stdin for gate answers."""
     global _has_terminal
     _has_terminal = value
+
+
+def set_stdin_owned(value: bool) -> None:
+    """Record that display's stdin reader thread is live and consuming lines."""
+    global _stdin_owned
+    _stdin_owned = value
+
+
+def stdin_owned() -> bool:
+    """Whether display's stdin reader owns sys.__stdin__ right now."""
+    return _stdin_owned
 
 
 def open_gates() -> list[dict]:
@@ -294,10 +317,28 @@ def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
     or a detached child (`Popen(stdin=DEVNULL)`) — where `readline()` returns
     "" immediately. Callers that read a bare Enter as consent (`[Y/n]`) would
     otherwise see unattended agreement from a process no human is watching.
+
+    **Boot-time only, and that is now enforced rather than assumed.** Once
+    `display.run_display` starts its stdin reader, that thread is parked in
+    `readline()` on this same `sys.__stdin__` and consumes every line whether
+    or not a gate is open. A second reader here doesn't compete for the line so
+    much as deadlock behind the reader's buffer lock — and `gist_deps` reaches
+    this function well after boot, from `_check_reload` / `_scan_new_deps`,
+    which run under `builtins.__import__` inside a user cell. On an `await`
+    cell that cell *is* the loop (`runtime._eval` only threads pure-sync ones),
+    so the kernel wedges: the watchdog's cancel lands at the next await point,
+    and there isn't one until a blocking `readline()` that nothing will
+    satisfy returns. `stdin_owned()` is False for the whole of boot — which is
+    when the two legitimate callers, the gist-dep prompt and the browser-restore
+    prompt, actually run — and True from `run_display` onward. Returning None
+    puts a late caller on the same path as a headless kernel, which every
+    caller already handles.
     """
     out = stream if stream is not None else sys.__stderr__
     stdin = sys.__stdin__
     if out is None or stdin is None:
+        return None
+    if _stdin_owned:
         return None
     try:
         if not stdin.isatty():

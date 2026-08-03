@@ -2,10 +2,27 @@
 
 Enables Fetch domain interception on attach. Captures:
 - Request POST bodies (all requests)
-- Response bodies (any response under 500KB)
+- Response bodies for non-asset responses; stored only if under 500KB
 
-SSE streams pass through untouched (infinite body). Captured bodies
+Redirects, SSE streams, and assets pass through untouched. Captured bodies
 are replayed to the page via fulfillRequest.
+
+**Capturing a body is not free, so it is not the default for everything.**
+Interception is registered on `*` at both stages because Chrome gives no
+resource-type filter on `Fetch.enable` — the filtering has to happen here, in
+`_should_capture_body`. Anything that reaches `Fetch.getResponseBody` has its
+whole body pulled over the DevTools WebSocket as base64 and then pushed back
+the other way via `fulfillRequest`, because `getResponseBody` consumes the
+internal buffer and a plain `continueResponse` after it delivers an empty
+response. That is a round trip plus roughly 2.7x the resource's bytes, on every
+matching response, added to page-load latency on any tab `get()`/`open()`
+touched. Worth it for the JSON/XHR/document traffic the whole capture store
+exists to make greppable; not worth it for images, fonts, stylesheets, media
+and scripts, which `tab.network()` hides by default and `format_observation`
+collapses to a byte count. Skipping them costs nothing that isn't recoverable:
+`CDPSession.fetch_body` already falls back to `Network.getResponseBody` for
+anything with no stored body, so an asset body is still one call away when
+someone actually wants it.
 """
 
 import asyncio
@@ -20,6 +37,17 @@ __all__ = ["enable", "disable", "handle_paused"]
 logger = logging.getLogger(__name__)
 
 _MAX_BODY_SIZE = 500_000
+
+# What counts as an asset, mirroring har.py's `is_asset` derivation exactly —
+# the same five resource types and the same mime markers. That column is this
+# codebase's one definition of "network noise" (it drives `tab.network()`'s
+# `include_assets=False` default and `format_observation`'s asset rollup), so
+# capture and query have to agree about which requests it names. Two lists,
+# kept together deliberately: `resourceType` is Chrome's own classification and
+# is present on every paused response, while the mime check catches the ones it
+# labels `Other`/`XHR` but whose Content-Type gives them away.
+_ASSET_RESOURCE_TYPES = frozenset({"Image", "Font", "Stylesheet", "Media", "Script"})
+_ASSET_MIME_MARKERS = ("image/", "font/", "css", "woff", "video/", "audio/")
 
 
 async def enable(session: CDPSession) -> None:
@@ -93,15 +121,21 @@ def _should_capture_body(params: dict) -> bool:
     """Decide whether to even attempt a response body fetch.
 
     Skips redirects (CDP puts them in kRedirectReceived state —
-    getResponseBody errors) and SSE (infinite stream — getResponseBody
-    blocks forever). NOT a size gate: Content-Length is absent on
-    chunked responses and, when present, reflects the wire (possibly
-    compressed) size rather than the decoded body getResponseBody
-    returns — the actual cap is enforced in _handle_response after the
-    body comes back.
+    getResponseBody errors), SSE (infinite stream — getResponseBody
+    blocks forever), and assets (see the module docstring: the fetch +
+    fulfill round trip costs more than the body is worth, and
+    `fetch_body` can still get it on demand).
+
+    NOT a size gate: Content-Length is absent on chunked responses and,
+    when present, reflects the wire (possibly compressed) size rather
+    than the decoded body getResponseBody returns — the actual cap is
+    enforced in _handle_response after the body comes back.
     """
     status = params.get("responseStatusCode", 0)
     if status in (301, 302, 303, 307, 308):
+        return False
+
+    if params.get("resourceType", "") in _ASSET_RESOURCE_TYPES:
         return False
 
     response_headers = params.get("responseHeaders", [])
@@ -112,6 +146,9 @@ def _should_capture_body(params: dict) -> bool:
             break
 
     if "text/event-stream" in content_type:
+        return False
+
+    if any(marker in content_type for marker in _ASSET_MIME_MARKERS):
         return False
 
     return True

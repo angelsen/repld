@@ -53,6 +53,53 @@ def _pending(kernel: Kernel) -> list[dict]:
     return json.loads(proc.stdout)
 
 
+def _tty_prompt_declines_once_display_owns_stdin() -> None:
+    """`tty_prompt` is boot-only, and refuses rather than fighting the pane.
+
+    Once `display.run_display` starts its reader thread, that thread is parked
+    in readline() on sys.__stdin__ and eats every line whether a gate is open
+    or not. A second reader doesn't race it for the line so much as block
+    behind its buffer lock — and the caller that gets here late is
+    `gist_deps.install_deps`, reached from a gist import inside a user cell. On
+    an `await` cell that runs on the shared loop, so the kernel wedges with no
+    await point for the watchdog's cancel to land on. Declining puts it on the
+    same path as a headless kernel, which every caller already handles.
+    """
+    from repld import gates, gist_deps
+
+    real = gates.stdin_owned()
+    try:
+        gates.set_stdin_owned(True)
+        assert_true(
+            gates.tty_prompt("should never be asked: ") is None,
+            "tty_prompt declines while the display thread owns stdin",
+        )
+        assert_true(
+            not gist_deps._can_prompt(),
+            "install_deps reports instead of falling into the prompt",
+        )
+        # Not a blanket disable: boot, which is when the two legitimate callers
+        # run, is exactly the window before run_display sets the flag.
+        gates.set_stdin_owned(False)
+        assert_true(
+            gist_deps._can_prompt() == bool(_stdin_is_tty()),
+            "with stdin free, the decision is back to whether there is a tty",
+        )
+    finally:
+        gates.set_stdin_owned(real)
+    print("  ✓ tty_prompt declines once display owns stdin (no second reader)")
+
+
+def _stdin_is_tty() -> bool:
+    import sys
+
+    stdin = sys.__stdin__
+    try:
+        return stdin is not None and stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
 def phase_17_gates(kernel: Kernel) -> None:
     b = Bridge(kernel.cwd)
     try:
@@ -179,6 +226,7 @@ def phase_17_gates(kernel: Kernel) -> None:
         _timeout_closes_the_gate(b, kernel)
         _pane_reshows_the_question()
         _pane_drops_a_timed_out_gate()
+        _tty_prompt_declines_once_display_owns_stdin()
     finally:
         b.close()
 

@@ -27,7 +27,7 @@ from .events import (
     StdoutChunk,
     get_queue,
 )
-from .gates import parse_response, resolve_gate
+from .gates import parse_response, resolve_gate, set_stdin_owned
 
 # ---------------------------------------------------------------------------
 # Optional rich
@@ -379,6 +379,10 @@ def run_display(stop: threading.Event) -> None:
         )
     q = get_queue()
 
+    # Claim stdin before the reader can touch it: from here on this thread owns
+    # every line typed, and `gates.tty_prompt` must decline rather than open a
+    # second reader on the same stream (see its docstring).
+    set_stdin_owned(True)
     stdin_thread = threading.Thread(
         target=_stdin_reader_loop,
         args=(stop,),

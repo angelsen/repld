@@ -9,6 +9,7 @@ import json
 import sys
 
 from . import eventlog, paths, render, state
+from .cli_args import wants_help
 from .render import DIM as _DIM, RED as _RED, RESET as _RESET
 
 # Rendered as a raw byte stream rather than as lines — see _emit.
@@ -118,7 +119,7 @@ def _emit(rec: dict, as_json: bool) -> None:
 
 
 def run_log(argv: list[str]) -> int:
-    if any(a in ("-h", "--help") for a in argv):
+    if wants_help(argv):
         print(_USAGE)
         return 0
 

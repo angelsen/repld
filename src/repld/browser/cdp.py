@@ -77,12 +77,11 @@ def _expire_hint(key: str) -> None:
     _hint_counts.pop(key, None)
 
 
-def _track_hint(key: str, loop: asyncio.AbstractEventLoop | None) -> bool:
+def _track_hint(key: str, loop: asyncio.AbstractEventLoop) -> bool:
     """Increment hint counter, return True if hint should be shown."""
     tracker = _hint_counts.get(key)
     if tracker is None:
-        if loop:
-            loop.call_later(_HINT_WINDOW, _expire_hint, key)
+        loop.call_later(_HINT_WINDOW, _expire_hint, key)
         tracker = _HintTracker()
         _hint_counts[key] = tracker
     tracker.count += 1
@@ -116,6 +115,24 @@ def _dedup_push(
     dedup_key: str,
     loop: asyncio.AbstractEventLoop | None,
 ) -> None:
+    if loop is None:
+        # Both windows below are opened by registering a dict entry and closed
+        # only by a `call_later` callback. With no loop to schedule one, the
+        # entry would never be flushed or expired, and since the first branch
+        # collapses into an existing entry and returns, this would be the last
+        # time this error text was ever reported — silence, from an error
+        # reporter, for the rest of the session. Degrade to no dedup instead:
+        # noisier is the right direction to fail in here.
+        #
+        # Unreachable today (BrowserSession.attach always passes the running
+        # loop), which is exactly why it is spelled out rather than left as a
+        # falsy check that reads like it was considered.
+        try:
+            push_channel(text, meta)
+        except Exception:
+            pass
+        return
+
     if dedup_key in _dedup_pending:
         _dedup_pending[dedup_key].count += 1
         _track_hint(dedup_key, loop)
@@ -128,8 +145,7 @@ def _dedup_push(
     except Exception:
         return
 
-    if loop:
-        loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key)
+    loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key)
     _dedup_pending[dedup_key] = _DedupEntry(text, meta)
 
 

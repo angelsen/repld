@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from . import __version__
+from .cli_args import wants_help
 from .core_schemas import PROTOCOL_VERSION
 from .ipc import connect_to_kernel
 from .paths import resolve_lock_path
@@ -313,7 +314,7 @@ def run_exec(argv: list[str]) -> int:
     """Entrypoint for `repld exec`."""
     args = list(argv)
 
-    if "-h" in args or "--help" in args:
+    if wants_help(args):
         print("usage: repld exec [--json] [--socket PATH] [CODE]")
         print()
         print("  CODE given:  one-shot (run, print, exit)")

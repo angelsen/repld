@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gists
-from .gates import tty_prompt
+from .gates import stdin_owned, tty_prompt
 
 _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
 
@@ -384,9 +384,16 @@ def _tty_write(msg: str) -> None:
 
 
 def _can_prompt() -> bool:
-    """Whether there is a real terminal to put a question on."""
+    """Whether there is a real terminal to put a question on, and it is free.
+
+    Mirrors `tty_prompt`'s own two guards so the caller can print a useful
+    explanation instead of falling into `_prompt_dep_selection` and reading a
+    None as a decline. `stdin_owned()` is the one that matters after boot:
+    `install_deps` is reached from `gists._check_reload` / `_scan_new_deps`
+    inside a user cell, where the display thread already holds stdin.
+    """
     stdin = sys.__stdin__
-    if stdin is None:
+    if stdin is None or stdin_owned():
         return False
     try:
         return stdin.isatty()
@@ -448,10 +455,29 @@ def install_deps(missing: list[_DepInfo]) -> bool:
         # `repld exec` is no help — it's a separate process talking IPC, and
         # the install runs here. The two things that actually work are running
         # a kernel with a terminal, or installing into the shared dir by hand.
+        #
+        # Two different reasons land here and they need different advice. A
+        # headless kernel has no terminal at all. A pane kernel has one, but
+        # only until `run_display` starts reading it — and this is reached from
+        # a gist import inside a user cell, i.e. always after that. Telling
+        # someone staring at a pane to "run `repld` in a pane" reads as a bug in
+        # the message; the boot scan is what actually re-asks.
+        if stdin_owned():
+            reason = (
+                "  \033[33m⚠\033[0m the pane's stdin is reading gate answers "
+                "— skipped.\n"
+                "  `repld restart` to be asked at boot, or install them "
+                "yourself:\n"
+            )
+        else:
+            reason = (
+                "  \033[33m⚠\033[0m no terminal to ask on — skipped.\n"
+                "  run `repld` in a pane to be prompted, or install them "
+                "yourself:\n"
+            )
         _tty_write(
-            "  \033[33m⚠\033[0m no terminal to ask on — skipped.\n"
-            "  run `repld` in a pane to be prompted, or install them yourself:\n"
-            f"    uv pip install --target {_deps_dir()} --python {sys.executable} "
+            reason
+            + f"    uv pip install --target {_deps_dir()} --python {sys.executable} "
             + " ".join(d.requirement for d in missing)
             + "\n"
         )

@@ -13,9 +13,12 @@ five commands — `stop`, `restart`, `status`, `dashboard`, `gate` — each
 open-coded the same two checks, correctly but separately, which is five places
 for the next flag to be forgotten in. Same job, one owner.
 
-`log_cmd` deliberately doesn't use this: `-n N` takes a value, so its argv
-needs a real parser loop rather than a flag-set membership test, and squeezing
-that in here would cost more than the eight lines it saved.
+`log_cmd` deliberately doesn't use `check_args`: `-n N` takes a value, so its
+argv needs a real parser loop rather than a flag-set membership test, and
+squeezing that in here would cost more than the eight lines it saved. That
+carve-out is about `check_args` only — `wants_help` is argv-shape-agnostic, so
+`log_cmd` and `exec_cmd` (which has the same value-taking `--socket`) call it
+like everyone else rather than keeping a third and fourth spelling of it.
 """
 
 

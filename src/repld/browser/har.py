@@ -11,6 +11,19 @@ Ported from webtap's har.py with:
 - Added derived columns: initiator_*, curl_command, auth_scheme, auth_cookies,
   csrf_token_header, mime_family, is_asset, loader_id, frame_id
 - console_entries view for Runtime.consoleAPICalled + Runtime.exceptionThrown + Log.entryAdded
+
+**No view here ends in ORDER BY, deliberately.** Every one of them used to, and
+every caller overrides it anyway — `tab_query`'s four query methods, `tab.request`,
+and `observe`'s two delta functions all name their own ordering — so the sort ran
+over the full CTE result before the outer query re-sorted and applied its LIMIT.
+Measured at 40k events: 35.4 ms → 30.4 ms on the `har_summary WHERE id > ?` that
+`post_observe` runs per tab per mutation. The bigger reason is correctness: a
+view-level ORDER BY is not a guarantee SQL owes an outer query, but it *looks*
+like one, and a caller that leans on it fails only once the result set outgrows
+its LIMIT. That is not hypothetical — `Tab.sse()` / `Tab.lifecycle()` shipped
+with `LIMIT 500` and no ORDER BY against views defined oldest-first, and silently
+returned the oldest 500 entries instead of the newest past that mark. Add the
+ORDER BY to the query, never to the view.
 """
 
 import logging
@@ -463,7 +476,6 @@ websocket_entries AS (
 SELECT * FROM http_entries
 UNION ALL
 SELECT * FROM websocket_entries
-ORDER BY id DESC
 """
 
 # ---------------------------------------------------------------------------
@@ -569,7 +581,6 @@ FROM (
     FROM events
     WHERE method IN ('Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded')
 ) t
-ORDER BY rowid DESC
 """
 
 
@@ -595,7 +606,6 @@ FROM (
     FROM events
     WHERE method = 'Network.eventSourceMessageReceived'
 ) t
-ORDER BY rowid ASC
 """
 
 
@@ -619,7 +629,6 @@ FROM (
     FROM events
     WHERE method = 'Page.lifecycleEvent'
 ) t
-ORDER BY rowid ASC
 """
 
 
