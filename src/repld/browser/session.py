@@ -147,11 +147,10 @@ class BrowserSession:
             cdp.cleanup()
         self._sessions.clear()
 
-        # Fail all pending futures
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(RuntimeError("BrowserSession disconnected"))
-        self._pending.clear()
+        # Deliberately *not* a "recv loop ended" message: this teardown was
+        # asked for, so the in-flight callers must see a plain failure rather
+        # than something `_is_recoverable` would answer by reconnecting.
+        self._fail_pending("BrowserSession disconnected")
 
     def _is_connected(self) -> bool:
         """True if the WebSocket is alive and the recv loop is running."""
@@ -498,8 +497,24 @@ class BrowserSession:
     # Recv loop
     # ------------------------------------------------------------------
 
+    def _fail_pending(self, reason: str) -> None:
+        """Fail every in-flight command future and clear the map."""
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(RuntimeError(reason))
+        self._pending.clear()
+
     async def _recv_loop(self) -> None:
-        """Receive and dispatch all WebSocket messages from Chrome."""
+        """Receive and dispatch all WebSocket messages from Chrome.
+
+        Both ways this loop can end on its own fail `_pending`, and the tidier
+        one used to be the one that didn't. A cancellation from `_teardown_ws`
+        lands in neither branch below — `CancelledError` is a `BaseException`,
+        so it propagates past `except Exception` and skips the `else` — which
+        is deliberate: the two teardown callers handle `_pending` themselves
+        (`disconnect` fails it with its own message, `_reconnect` drops it
+        because the caller driving the reconnect is about to retry).
+        """
         count = 0
         try:
             async for raw in self._ws:  # type: ignore[union-attr]
@@ -513,11 +528,19 @@ class BrowserSession:
                     await asyncio.sleep(0)
         except Exception as exc:
             logger.debug("recv_loop ended: %s", exc)
-            # Fail any remaining pending futures
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(RuntimeError(f"WS recv loop ended: {exc}"))
-            self._pending.clear()
+            self._fail_pending(f"WS recv loop ended: {exc}")
+        else:
+            # Fell out of the `async for` with nothing raised, which means a
+            # *clean* close (1000/1001 — a `Browser.close`, Chrome shutting the
+            # endpoint politely): websockets' `__aiter__` catches
+            # ConnectionClosedOK and simply returns. Leaving `_pending` alone
+            # here was strictly worse than the unclean path — every in-flight
+            # execute() blocked its full 30 s `wait_for`, and `_is_recoverable`
+            # excludes TimeoutError on purpose, so the reconnect-and-retry that
+            # a dropped socket gets for free never ran. Same "recv loop ended"
+            # wording as above so both endings read as recoverable.
+            logger.debug("recv_loop ended: connection closed")
+            self._fail_pending("WS recv loop ended: connection closed")
 
     async def _dispatch(self, data: dict) -> None:
         """Route a parsed CDP message to the right handler."""

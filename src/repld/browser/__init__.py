@@ -65,8 +65,24 @@ _NO_TABS = "(no attached tabs)"
 # and dependent on the user's browsing rather than on anything repld did.
 # `list(d.values())` is atomic under the GIL (the copy happens in C, with no
 # bytecode boundary for a thread switch), so the snapshot closes it outright.
-# The async methods don't need this: they only ever run on the loop, which is
-# the one thread doing the mutating.
+#
+# Being on the loop is *not* on its own a reason to skip the snapshot, and
+# reading the rule that way is what left `BrowserPool`'s fan-out methods
+# unguarded. What matters is whether the loop body can yield: an `await` inside
+# `for b in self._browsers.values()` hands control back to the loop, another
+# task runs `connect()` (`self._browsers[port] = b`) or `disconnect()`
+# (`.pop()`), and resuming the iteration raises the same "dictionary changed
+# size during iteration". `_rpc_browser_connect` / `_rpc_browser_disconnect`
+# are `async def` on this loop, so a dashboard Connect click during a
+# `browser.watch("*x*")` fan-out reaches it. So: snapshot when the body can
+# yield (any `await` in it) or when the method may run off-loop. An async loop
+# whose body never awaits, and one that `return`s out on the first match
+# without ever resuming, are the two cases that genuinely don't need it.
+#
+# Snapshotting fixes the crash, not the semantics: a browser connected midway
+# through a fan-out simply misses that sweep. That matches the sync siblings
+# and is fine — the alternative is holding a lock across N WebSocket round
+# trips.
 
 
 def _is_target_id(s: str) -> bool:
@@ -334,7 +350,22 @@ class Browser:
             for t in await self._session.list_targets():
                 tid = self._glob_target_id(t, pattern, exclude)
                 if tid:
-                    tab = await self._attach_and_wrap(tid, t, ready=ready)
+                    # `_attach_racing`, not `_attach_and_wrap`: a target that
+                    # matches this glob may equally match a *watch* pattern, in
+                    # which case our own `_auto_attach` holds it and `attach()`
+                    # answers None. Treating that as a miss made a glob `get()`
+                    # with the default timeout=None raise TabNotFoundError for
+                    # a tab that was seconds from being attached — the exact
+                    # race `_get_by_id` and `open()` already wait out. The
+                    # budget is the caller's own remaining deadline, so
+                    # `get(glob, timeout=1)` still means one second in total
+                    # rather than one second per matching target.
+                    budget = (
+                        max(0.0, deadline - asyncio.get_running_loop().time())
+                        if deadline is not None
+                        else None
+                    )
+                    tab = await self._attach_racing(tid, t, ready=ready, budget=budget)
                     if tab is not None:
                         return tab
 
@@ -679,13 +710,21 @@ class BrowserPool:
                 self._save_hint()
                 return f"Disconnected from Chrome on port {port}."
             return f"No browser on port {port}."
-        count = len(self._browsers)
-        for b in self._browsers.values():
+        # Snapshot, then remove by key rather than `clear()`. A `connect()`
+        # landing on the loop mid-sweep is invisible to the snapshot, and a
+        # blanket clear would drop that brand-new Browser from the registry
+        # with a live WebSocket and recv task nothing would ever close —
+        # exactly the leak `connect`'s own lock exists to prevent. `count`
+        # comes from the snapshot for the same reason: it has to report what
+        # was actually disconnected.
+        targets = list(self._browsers.items())
+        count = len(targets)
+        for port_, b in targets:
             try:
                 await b.disconnect()
             except Exception:
                 pass
-        self._browsers.clear()
+            self._browsers.pop(port_, None)
         self._save_hint()
         return f"Disconnected {count} browser(s)."
 
@@ -775,7 +814,7 @@ class BrowserPool:
         """All Chrome targets across all connected browsers."""
         await self._ensure_any()
         result = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if b._connected:
                 result.extend(await b.pages())
         return result
@@ -784,7 +823,7 @@ class BrowserPool:
         """Watch a pattern across all connected browsers."""
         await self._ensure_any()
         results = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             results.append(await b.watch(pattern))
         self._save_hint()
         return "\n".join(results)
@@ -792,7 +831,7 @@ class BrowserPool:
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs across all connected browsers."""
         results = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             results.append(await b.detach(pattern))
         self._save_hint()
         return "\n".join(results)
@@ -838,7 +877,7 @@ class BrowserPool:
         deadline = (
             asyncio.get_running_loop().time() + timeout if timeout is not None else None
         )
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if not b._connected:
                 continue
             remaining = (
@@ -857,7 +896,7 @@ class BrowserPool:
     async def open(self, url: str) -> Tab:
         """Open a URL in the first connected browser."""
         await self._ensure_any()
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if b._connected:
                 return await b.open(url)
         raise RuntimeError("No browsers connected")
@@ -872,7 +911,7 @@ class BrowserPool:
     ) -> dict:
         """In-page fetch using any attached tab (inherits cookies/session)."""
         await self._ensure_any()
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if not b._connected:
                 continue
             if b._iter_tabs():

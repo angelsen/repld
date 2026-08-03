@@ -30,7 +30,7 @@ import base64
 import logging
 import time
 
-from .cdp import CDPSession
+from .cdp import _STREAMING_MIME_TYPES, CDPSession
 
 __all__ = ["enable", "disable", "handle_paused"]
 
@@ -145,7 +145,13 @@ def _should_capture_body(params: dict) -> bool:
             content_type = h.get("value", "").lower()
             break
 
-    if "text/event-stream" in content_type:
+    # `cdp._STREAMING_MIME_TYPES`, not a literal: "which mime types have a body
+    # that never ends" is one fact with two consumers that must agree, the same
+    # way the asset lists above mirror har.py's `is_asset`. cdp drops these from
+    # `_inflight` so settle stops waiting on them; here we skip the body fetch,
+    # because getResponseBody on a stream blocks until it closes. A type added
+    # to one list and not the other reintroduces exactly one of those hangs.
+    if any(mime in content_type for mime in _STREAMING_MIME_TYPES):
         return False
 
     if any(marker in content_type for marker in _ASSET_MIME_MARKERS):

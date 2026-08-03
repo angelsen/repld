@@ -306,8 +306,18 @@ class CDPSession:
         self.db = duckdb.connect(":memory:")
         self._setup_schema()
 
-        # Event count for FIFO pruning
+        # Event count for FIFO pruning, maintained by store_event so it covers
+        # *every* insert. It used to be incremented in _handle_event instead,
+        # which meant capture.py's synthetic rows (Network.requestBodyCaptured
+        # / responseBodyCaptured, written by calling store_event directly) were
+        # the only ones never counted — and those are the rows that dominate
+        # the store's memory, at up to _MAX_BODY_SIZE each.
         self._event_count = 0
+        # Next count at which _handle_event checks whether a prune is due. A
+        # threshold rather than `_event_count % PRUNE_CHECK_INTERVAL == 0`:
+        # body captures now advance the counter too, so it can step by more
+        # than one between checks and skip an exact multiple entirely.
+        self._next_prune_check = PRUNE_CHECK_INTERVAL
 
         # In-flight requestIds -> monotonic time they were opened. Maintained
         # by _handle_event, read by observe.settle() via inflight_count().
@@ -468,7 +478,12 @@ class CDPSession:
     # ------------------------------------------------------------------
 
     def store_event(self, event: dict, method: str, request_id: str | None) -> None:
-        """Insert an event row into this session's DuckDB event store."""
+        """Insert an event row into this session's DuckDB event store.
+
+        Counts the row as well as writing it — capture.py stores its synthetic
+        body rows through here, and those have to age out of the FIFO like
+        anything else.
+        """
         self.db.execute(
             "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
             [
@@ -478,6 +493,7 @@ class CDPSession:
                 self.target_info.get("targetId", ""),
             ],
         )
+        self._event_count += 1
 
     def _handle_event(self, data: dict) -> None:
         """Store event in DuckDB and dispatch Fetch handler if needed."""
@@ -488,9 +504,10 @@ class CDPSession:
 
             target_id = self.target_info.get("targetId", "")
 
-            # Synchronous insert — microseconds, no contention
+            # Synchronous insert — microseconds, no contention. store_event
+            # owns the counter (see there); the prune trigger stays here so it
+            # is driven by real CDP traffic rather than by a body-capture task.
             self.store_event(data, method, request_id)
-            self._event_count += 1
 
             if request_id:
                 if method == "Network.requestWillBeSent":
@@ -530,7 +547,8 @@ class CDPSession:
                 _push_exception(params, target_id, self.port, self._loop)
 
             # Periodic pruning — async task to avoid blocking the recv loop
-            if self._event_count % PRUNE_CHECK_INTERVAL == 0:
+            if self._event_count >= self._next_prune_check:
+                self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
                 if self._event_count > MAX_EVENTS:
                     asyncio.create_task(self._async_prune(), name="repld-prune")
 
@@ -563,6 +581,7 @@ class CDPSession:
             )
             row = self.db.execute("SELECT COUNT(*) FROM events").fetchone()
             self._event_count = row[0] if row else 0
+            self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
             logger.debug(
                 "Pruned %d events; %d remaining", delete_count, self._event_count
             )
@@ -694,6 +713,7 @@ class CDPSession:
         finally:
             cur.close()
         self._event_count = 0
+        self._next_prune_check = PRUNE_CHECK_INTERVAL
         self._inflight.clear()
 
     def cleanup(self) -> None:
