@@ -221,6 +221,9 @@ def _dict_from_har_entry(c: dict) -> dict:
         d["request"]["headers"] = req_headers
     if c["post_data"]:
         d["request"]["postData"] = c["post_data"]
+    req_cookies = _parse_json(c["request_cookies"])
+    if req_cookies:
+        d["request"]["cookies"] = req_cookies
 
     # Response details
     if c["status_text"]:
@@ -243,8 +246,22 @@ def _dict_from_har_entry(c: dict) -> dict:
     # Auth
     if c["auth_scheme"]:
         d["auth_scheme"] = c["auth_scheme"]
+    if c["auth_cookies"]:
+        d["auth_cookies"] = c["auth_cookies"]
     if c["csrf_token_header"]:
         d["csrf_token_header"] = c["csrf_token_header"]
+
+    # Navigation correlation — "which requests belong to this navigation".
+    if c["loader_id"]:
+        d["loader_id"] = c["loader_id"]
+    if c["frame_id"]:
+        d["frame_id"] = c["frame_id"]
+
+    # Reconstructed curl. SQL-computed (see har.py) so it is also greppable
+    # via tab.query("... WHERE curl_command LIKE ..."); surfaced here because
+    # help.py documents it as part of this entry.
+    if c["curl_command"]:
+        d["curl_command"] = c["curl_command"]
 
     # Initiator
     init_type = c["initiator_type"]

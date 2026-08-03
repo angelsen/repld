@@ -168,26 +168,34 @@ http_failed AS (
     GROUP BY request_id
 ),
 
--- Request ExtraInfo: raw headers with cookies
+-- Request ExtraInfo: raw headers with cookies, one row per redirect hop.
+-- Chrome fires *ExtraInfo once per hop, all under the same requestId, so these
+-- are numbered and joined on redirect_index rather than collapsed with
+-- MAX() GROUP BY. Collapsing re-introduced exactly the redirect bug this view
+-- exists to fix: MAX over a VARCHAR status is a lexicographic pick across
+-- hops, so a 302 -> 200 chain reported the *final* hop as 302 (with
+-- state='complete' beside it), and the final hop's headers came from whichever
+-- hop's JSON happened to sort highest. Single-hop requests emit one event
+-- each, which is why it looked correct everywhere except redirects.
 request_extra AS (
     SELECT
         request_id,
-        MAX(json_extract(event, '$.params.headers')) as raw_headers,
-        MAX(json_extract(event, '$.params.associatedCookies')) as cookies
+        ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY rowid) - 1 as hop_index,
+        json_extract(event, '$.params.headers') as raw_headers,
+        json_extract(event, '$.params.associatedCookies') as cookies
     FROM events
     WHERE method = 'Network.requestWillBeSentExtraInfo'
-    GROUP BY request_id
 ),
 
--- Response ExtraInfo: Set-Cookie headers and true status
+-- Response ExtraInfo: Set-Cookie headers and true status, one row per hop.
 response_extra AS (
     SELECT
         request_id,
-        MAX(json_extract(event, '$.params.headers')) as raw_headers,
-        MAX(json_extract_string(event, '$.params.statusCode')) as true_status
+        ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY rowid) - 1 as hop_index,
+        json_extract(event, '$.params.headers') as raw_headers,
+        json_extract_string(event, '$.params.statusCode') as true_status
     FROM events
     WHERE method = 'Network.responseReceivedExtraInfo'
-    GROUP BY request_id
 ),
 
 -- Captured request POST bodies (from Fetch request stage)
@@ -381,11 +389,12 @@ http_entries AS (
     FROM request_hops rh
     LEFT JOIN redirect_responses rr ON rh.rowid = rr.request_rowid
     LEFT JOIN http_responses resp ON rh.request_id = resp.request_id AND rh.is_final
-    LEFT JOIN response_extra respx ON rh.request_id = respx.request_id AND rh.is_final
+    -- ExtraInfo joins are per-hop, not is_final-gated: each hop has its own row.
+    LEFT JOIN response_extra respx ON rh.request_id = respx.request_id AND rh.redirect_index = respx.hop_index
     LEFT JOIN http_finished fin ON rh.request_id = fin.request_id AND rh.is_final
     LEFT JOIN http_failed fail ON rh.request_id = fail.request_id AND rh.is_final
     LEFT JOIN active_paused ap ON rh.request_id = ap.network_id AND rh.is_final
-    LEFT JOIN request_extra reqx ON rh.request_id = reqx.request_id AND rh.is_final
+    LEFT JOIN request_extra reqx ON rh.request_id = reqx.request_id AND rh.redirect_index = reqx.hop_index
     LEFT JOIN captured_request_bodies crb ON rh.request_id = crb.request_id
     LEFT JOIN captured_bodies cb ON rh.request_id = cb.request_id AND rh.is_final
 ),

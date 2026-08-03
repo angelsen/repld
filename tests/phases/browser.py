@@ -92,6 +92,122 @@ def phase_6_png_resize(_kernel: Kernel) -> None:
     print("  ✓ _model_dims: token-budget invariants hold across sizes")
 
 
+def phase_6_har_redirects(_kernel: Kernel) -> None:
+    """har_entries resolves a redirect chain hop-by-hop — no kernel or Chrome.
+
+    Chrome fires Network.*ExtraInfo once per redirect hop under a single
+    requestId. Aggregating those with MAX() GROUP BY picks lexicographically
+    across hops, which reported a 302 -> 200 chain's *final* hop as 302 and
+    pulled its headers from whichever hop's JSON sorted highest. Single-hop
+    requests emit one event each and so never showed it — hence the chain here.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        print("  - har redirects: duckdb not installed (uv sync --extra browser), skip")
+        return
+
+    from repld.browser.har import _create_views
+
+    def _entries(hops: list[tuple[int, str]]) -> list[tuple]:
+        """Build a redirect chain and return (redirect_index, status, state)."""
+        db = duckdb.connect(":memory:")
+        db.execute(
+            "CREATE TABLE events "
+            "(event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR)"
+        )
+        _create_views(db.execute)
+
+        def ins(method: str, params: dict) -> None:
+            db.execute(
+                "INSERT INTO events VALUES (?, ?, ?, ?)",
+                [
+                    json.dumps({"method": method, "params": params}),
+                    method,
+                    params.get("requestId"),
+                    "T",
+                ],
+            )
+
+        for i, (status, cookie) in enumerate(hops):
+            req: dict = {
+                "requestId": "R",
+                "wallTime": str(1000 + i),
+                "timestamp": str(i + 1),
+                "request": {"method": "GET", "url": f"https://x/{i}", "headers": {}},
+                "type": "Document",
+            }
+            if i:
+                req["redirectResponse"] = {"status": hops[i - 1][0]}
+            ins("Network.requestWillBeSent", req)
+            ins(
+                "Network.requestWillBeSentExtraInfo",
+                {"requestId": "R", "headers": {"Cookie": cookie}},
+            )
+            ins(
+                "Network.responseReceivedExtraInfo",
+                {"requestId": "R", "statusCode": status, "headers": {}},
+            )
+        final = hops[-1][0]
+        ins(
+            "Network.responseReceived",
+            {
+                "requestId": "R",
+                "response": {
+                    "status": final,
+                    "statusText": "OK",
+                    "headers": {},
+                    "mimeType": "text/html",
+                },
+            },
+        )
+        ins(
+            "Network.loadingFinished",
+            {"requestId": "R", "timestamp": "9", "encodedDataLength": 10},
+        )
+        rows = db.execute(
+            "SELECT redirect_index, status, state FROM har_summary "
+            "ORDER BY redirect_index"
+        ).fetchall()
+        headers = db.execute(
+            "SELECT request_headers FROM har_entries WHERE redirect_index = ? LIMIT 1",
+            [len(hops) - 1],
+        ).fetchone()
+        return [rows, headers]
+
+    # 302 -> 200: the final hop must report 200, not the chain's lexicographic max.
+    rows, headers = _entries([(302, "a=1"), (200, "b=2")])
+    assert_eq(
+        [(r[0], r[1]) for r in rows],
+        [(0, 302), (1, 200)],
+        "redirect chain reports each hop's own status",
+    )
+    assert_eq(rows[-1][2], "complete", "final hop state is complete")
+    assert_true(
+        "b=2" in (headers[0] or ""),
+        f"final hop carries its own request headers (got {headers[0]!r})",
+    )
+
+    # Final hop's cookie sorts *below* the first hop's — the case a MAX() over
+    # header JSON silently got backwards.
+    _rows, headers = _entries([(302, "z=1"), (200, "a=2")])
+    assert_true(
+        "a=2" in (headers[0] or ""),
+        f"header hop resolution is positional, not lexicographic (got {headers[0]!r})",
+    )
+
+    # 307 -> 200, and a single-hop control that must be unaffected.
+    rows, _headers = _entries([(307, "a=1"), (200, "b=2")])
+    assert_eq(rows[-1][1], 200, "307 chain reports 200 on the final hop")
+    rows, _headers = _entries([(200, "a=1")])
+    assert_eq(
+        [(r[0], r[1], r[2]) for r in rows],
+        [(0, 200, "complete")],
+        "single-hop request is unchanged",
+    )
+    print("  ✓ har_entries: redirect hops resolve status + headers per hop")
+
+
 def phase_6_tools_and_gists(kernel: Kernel) -> None:
     """Verify new tool registrations and gist auto-reload machinery."""
     b = Bridge(kernel.cwd)

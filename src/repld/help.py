@@ -626,12 +626,20 @@ Lifecycle rows: id, frame_id, loader_id, name, timestamp, target
 
 Rows is a list subclass with one-entry-per-line repr for grep-friendly output.
 
-=== Full HAR entry fields (via tab.request()) ===
+=== Full HAR entry (via tab.request()) ===
 
-All of the above plus: request_headers, post_data, response_headers, mime_type,
-  timing, error_text, request_cookies, status_text, auth_scheme, auth_cookies,
-  csrf_token_header, curl_command, loader_id, frame_id, initiator_function,
-  initiator_line
+A nested dict, not a flat Row — keys are omitted entirely when empty:
+
+  {"request":  {method, url, headers, postData, cookies},
+   "response": {status, statusText, headers, mimeType},
+   "state", "type", "size", "time_ms", "timing", "error_text",
+   "auth_scheme", "auth_cookies", "csrf_token_header",
+   "loader_id", "frame_id", "curl_command",
+   "initiator": {type, url, function, line}}
+
+Everything except the response body — use tab.body(request_id) for that.
+Row-level fields (id, redirect_index, target, is_asset, ...) stay on the Row
+from tab.network(); this is the per-request detail view, not a superset.
 
 == Tab properties ==
 
@@ -1129,13 +1137,13 @@ Channel kinds:
 """,
     "browser": """\
 Tab (async unless noted):
-  tab.js(code, await_promise=)                     → any
+  tab.js(expr, await_promise=, user_gesture=)      → any
   tab.tree()                                       → list[str]
-  tab.click(selector)                              → None (auto-waits 2s, mouse event)
+  tab.click(selector, button=, click_count=)       → None (auto-waits 2s, mouse event)
   tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
-  tab.type_text(selector, text, press_enter=)      → None (clears first, auto-waits)
+  tab.type_text(selector, text, delay_ms=, press_enter=)  → None (clears first, auto-waits)
   tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter")
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
@@ -1144,7 +1152,7 @@ Tab (async unless noted):
   tab.reload()                                     → None
   tab.controls()                                   → dict | None
   tab.invoke(control, action, args=)               → dict
-  tab.screenshot(full_page=)                        → dict {path, source, model, scale, bytes}
+  tab.screenshot(full_page=, path=)                → dict {path, source, model, scale, bytes}
   tab.cookies()                                    → list[dict]
   tab.cdp(method, **params)                        → dict
 
