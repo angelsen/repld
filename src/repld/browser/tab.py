@@ -15,7 +15,7 @@ from typing import Any
 from .. import bg
 from ..channel import push_channel
 from .cdp import CDPSession
-from .pin import _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
+from .pin import BINDING_NAME, _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
 from .png import _model_dims, _resize_png
 from .selector import resolve as _resolve_selector
 from .tab_query import TabQueryMixin
@@ -317,8 +317,12 @@ class Tab(TabQueryMixin):
         session._pin_origin = ""
 
     async def _setup_binding(self) -> None:
-        """Register __repld_resolve CDP binding for gate callbacks."""
-        await self._exec("Runtime.addBinding", {"name": "__repld_resolve"})
+        """Register the gate-callback CDP binding on this session.
+
+        Setting `_binding_handler` is also what tells `_reattach_core` this
+        session owes a re-registration after a reconnect — see there.
+        """
+        await self._exec("Runtime.addBinding", {"name": BINDING_NAME})
         self._session._binding_handler = _handle_binding
 
     async def _show_gate(

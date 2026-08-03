@@ -162,7 +162,23 @@ def _unit_running(sock_path: Path) -> bool:
     return r.stdout.strip() in ("active", "activating")
 
 
-def _spawn_via_systemd(cmd: list[str], sock_path: Path, cwd: Path) -> str:
+def _note(msg: str, quiet: bool) -> None:
+    """Diagnostics that a retrying caller must be able to switch off.
+
+    Every print below is on a path `bridge._reconnect` can re-enter once per
+    poll tick while it waits out a dying kernel's flock, so a spawn that keeps
+    failing would otherwise repeat its explanation dozens of times and bury the
+    line that matters. `quiet` used to be the bridge's own flag and stopped at
+    its own stderr call — the prints that actually say *why* a spawn failed all
+    live here, and none of them were reachable from it.
+    """
+    if not quiet:
+        print(msg, file=sys.stderr)
+
+
+def _spawn_via_systemd(
+    cmd: list[str], sock_path: Path, cwd: Path, *, quiet: bool = False
+) -> str:
     """Hand the kernel to the user manager.
 
     STARTED, INCUMBENT (a racing boot got there first) or FAILED — three
@@ -173,7 +189,7 @@ def _spawn_via_systemd(cmd: list[str], sock_path: Path, cwd: Path) -> str:
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"repld: systemd-run failed ({e})", file=sys.stderr)
+        _note(f"repld: systemd-run failed ({e})", quiet)
         return FAILED
     if r.returncode == 0:
         return STARTED
@@ -184,14 +200,14 @@ def _spawn_via_systemd(cmd: list[str], sock_path: Path, cwd: Path) -> str:
     if _unit_running(sock_path):
         return INCUMBENT
     detail = (r.stderr or r.stdout).strip().splitlines()
-    print(
+    _note(
         f"repld: systemd-run failed ({detail[-1] if detail else r.returncode})",
-        file=sys.stderr,
+        quiet,
     )
     return FAILED
 
 
-def _spawn_directly(cmd: list[str], cwd: Path) -> bool:
+def _spawn_directly(cmd: list[str], cwd: Path, *, quiet: bool = False) -> bool:
     try:
         subprocess.Popen(
             cmd,
@@ -202,12 +218,12 @@ def _spawn_directly(cmd: list[str], cwd: Path) -> bool:
             start_new_session=True,
         )
     except OSError as e:
-        print(f"repld: could not spawn kernel: {e}", file=sys.stderr)
+        _note(f"repld: could not spawn kernel: {e}", quiet)
         return False
     return True
 
 
-def spawn_headless(sock_path: Path) -> str:
+def spawn_headless(sock_path: Path, *, quiet: bool = False) -> str:
     """Start a headless kernel for the current cwd, outliving its spawner.
 
     As a transient systemd user service where that's available, so the kernel
@@ -222,14 +238,17 @@ def spawn_headless(sock_path: Path) -> str:
 
     STARTED means the *process* started, not that the kernel is up; poll either
     way.
+
+    `quiet` silences the stderr diagnostics for a caller that retries — see
+    `_note`. It never changes what is attempted, only what is said about it.
     """
     cwd = Path(os.getcwd())
     cmd = _kernel_argv(sock_path)
     if _systemd_available():
-        outcome = _spawn_via_systemd(cmd, sock_path, cwd)
+        outcome = _spawn_via_systemd(cmd, sock_path, cwd, quiet=quiet)
         if outcome in (STARTED, INCUMBENT):
             # Starting a second one behind systemd's back would only give the
             # flock mutex something to reject.
             return outcome
-        print("repld: spawning a detached child instead", file=sys.stderr)
-    return STARTED if _spawn_directly(cmd, cwd) else FAILED
+        _note("repld: spawning a detached child instead", quiet)
+    return STARTED if _spawn_directly(cmd, cwd, quiet=quiet) else FAILED

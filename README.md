@@ -31,7 +31,7 @@ tails it, `repld status` shows what's running, and `repld stop` shuts it down.
 Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
 project directory and there's nothing to `.gitignore`.
 
-For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `duckdb`/`websockets` extra for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
+For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` extra (`duckdb`, `websockets`, `pillow`) for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
 
 ## Quick example
 

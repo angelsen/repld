@@ -228,6 +228,76 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
     print("  ✓ connect races collapse to one socket; fetch lock is re-entry safe")
 
 
+def phase_6_reattach_binding(_kernel: Kernel) -> None:
+    """A reattached session re-registers the pill's gate binding.
+
+    No Chrome — `_reattach_core`'s CDP traffic is all it needs to be judged on.
+
+    Bindings are scoped to the session that added them: Chrome drops
+    `window.__repld_resolve` from the page the moment that session detaches.
+    A reattach caused by *navigation* recovers on its own, because the pill goes
+    with the document and `Tab._heartbeat_loop` sees 'reload' and re-injects —
+    but a WebSocket `_reconnect` reattaches every session while leaving the
+    pages alone, so the heartbeat sees 'ok' and never re-injects. The pill then
+    looks live and its buttons call an undefined function, having already
+    cleared the gate from their own queue: a human gate that cannot be answered
+    from the surface that is showing it, on a kernel where the pill may be the
+    only surface there is.
+
+    Both directions matter. The control is the second half — an unpinned tab
+    must not be handed a binding it never asked for, since `_binding_handler`
+    is what `_handle_event` dispatches on.
+    """
+    from repld.browser.session import BrowserSession
+
+    class _Cdp:
+        """CDPSession stand-in: only what _reattach_core touches."""
+
+        def __init__(self, *, pinned: bool) -> None:
+            self._session_id = "old-sid"
+            self.chrome_target_id = "t1"
+            self._inflight = {"req-1": 0.0}
+            self._fetch_enabled = False
+            self._binding_handler = (lambda *_a: None) if pinned else None
+            self.sent: list[str] = []
+
+        async def _enable_domains(self) -> None:
+            self.sent.append("_enable_domains")
+
+        async def execute(self, method: str, params: dict | None = None) -> dict:
+            self.sent.append(method)
+            return {}
+
+    async def _reattach(*, pinned: bool) -> "_Cdp":
+        session = BrowserSession(port=9999)
+        cdp = _Cdp(pinned=pinned)
+        session._sessions["old-sid"] = cdp  # type: ignore[assignment]
+
+        async def fake_execute(method, params=None, session_id=None, timeout=30):
+            return {"sessionId": "new-sid"}
+
+        session.execute = fake_execute  # type: ignore[assignment]
+        await session._reattach_core(cdp)  # type: ignore[arg-type]
+        return cdp
+
+    pinned = asyncio.run(_reattach(pinned=True))
+    assert_true(
+        "Runtime.addBinding" in pinned.sent,
+        "a reattached pinned session re-registers its gate binding",
+    )
+    assert_true(
+        pinned.sent.index("_enable_domains") < pinned.sent.index("Runtime.addBinding"),
+        "and does it after Runtime is re-enabled, not before",
+    )
+    plain = asyncio.run(_reattach(pinned=False))
+    assert_eq(
+        [m for m in plain.sent if m == "Runtime.addBinding"],
+        [],
+        "an unpinned session gets no binding it never had",
+    )
+    print("  ✓ reattach re-registers the pill's gate binding (and only when pinned)")
+
+
 def phase_6_capture_filter(_kernel: Kernel) -> None:
     """`_should_capture_body` skips what the HAR view calls an asset.
 

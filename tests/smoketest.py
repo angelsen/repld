@@ -26,6 +26,7 @@ from phases.browser import (
     phase_6_label_and_reattach,
     phase_6_like_escaping,
     phase_6_png_resize,
+    phase_6_reattach_binding,
     phase_6_tools_and_gists,
 )
 from phases.channels import phase_4, phase_4_push_kind_args, phase_4b_pregate
@@ -69,6 +70,7 @@ PHASES = {
         phase_6_png_resize(k),
         phase_6_capture_filter(k),
         phase_6_connect_race(k),
+        phase_6_reattach_binding(k),
         phase_6_har_redirects(k),
         phase_6_like_escaping(k),
         phase_6_tools_and_gists(k),

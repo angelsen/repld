@@ -43,12 +43,18 @@ def _render(rec: dict) -> str | None:
     if kind in _CHUNK_TYPES:
         # Verbatim, newlines and all — _emit writes these raw. See its comment.
         text = rec.get("text") or ""
-        if not text:
+        truncated = bool(rec.get("truncated"))
+        if not text and not truncated:
             return None
-        if rec.get("truncated"):
-            text = (
-                text.rstrip("\n") + f"\n{_DIM}… output elided (per-cell cap){_RESET}\n"
-            )
+        notice = f"{_DIM}… output elided (per-cell cap){_RESET}\n"
+        if truncated:
+            # `text` is empty when the previous chunk filled the cap exactly:
+            # eventlog only learns there was more to come on the *next* chunk,
+            # which it clips to nothing and flags. Dropping that record for
+            # having no text — the old `if not text` above — is how a capped
+            # cell got silently truncated with no notice at all, on the one
+            # alignment where the cap lands on a chunk boundary.
+            text = (text.rstrip("\n") + "\n" + notice) if text else notice
         return f"{_RED}{text}{_RESET}" if kind == "StderrChunk" else text
     if kind == "CellDone":
         return render.cell_done_line(

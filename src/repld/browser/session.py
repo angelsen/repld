@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from .. import bg
 from .cdp import CDPSession
+from .pin import BINDING_NAME
 
 # Target types that are infrastructure, not user-visible pages/iframes.
 # Excluded from glob-based resolution in get()/watch()/_resolve_target().
@@ -359,6 +360,19 @@ class BrowserSession:
         had_fetch = cdp._fetch_enabled
         cdp._fetch_enabled = False
         await cdp._enable_domains()
+        if cdp._binding_handler is not None:
+            # Bindings are session-scoped: Chrome removes `window.__repld_resolve`
+            # from the page when the session that added it detaches, and nothing
+            # else ever re-adds it. A reattach caused by *navigation* self-heals,
+            # because the pill goes with the document and `_heartbeat_loop` sees
+            # 'reload' and re-injects — but a WebSocket `_reconnect` (sleep,
+            # network blip, Chrome restart) reattaches every session while
+            # leaving the pages untouched, so the heartbeat sees 'ok' and never
+            # re-injects. The pill then looks live and its buttons call an
+            # undefined function, having already dropped the gate from their own
+            # queue: a human gate that silently cannot be answered from the one
+            # surface that was showing it. Same shape as the Fetch restore below.
+            await cdp.execute("Runtime.addBinding", {"name": BINDING_NAME})
         if had_fetch:
             # The unlocked core, never `enable_fetch`: we may be running
             # *inside* an in-flight `enable_fetch` whose own `Fetch.enable`

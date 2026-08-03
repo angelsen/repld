@@ -48,6 +48,14 @@ from . import __version__, bridge_tools, core_schemas, ipc, paths, spawn, state
 WAIT_STEPS = 50
 WAIT_STEP_SECONDS = 0.1
 
+# Poll ticks between respawn attempts in `_reconnect`'s restart path. The
+# connect probe is cheap and runs every tick; a respawn is not — on systemd it
+# costs a `systemd-run` plus a `systemctl is-active` subprocess each time, so
+# retrying every tick spent ~100 process spawns per restart and stretched the
+# 5s window well past 5s of wall clock. It exists only to catch the moment the
+# dying kernel drops its flock, which nothing is timing to 100ms.
+_RESPAWN_EVERY = 5
+
 # Outside JSON-RPC's reserved -32768..-32000 range, per the MCP spec's guidance
 # for implementation-defined codes.
 KERNEL_GONE = -31001
@@ -281,8 +289,10 @@ class Bridge:
         #
         # `quiet` is for the retry inside that poll: the outcome has already
         # been reported once, and repeating it every 500 ms would bury the
-        # line that matters.
-        outcome = spawn.spawn_headless(self.socket_path)
+        # line that matters. It has to reach `spawn_headless` too — the prints
+        # that explain *why* a spawn failed live there, and suppressing only
+        # this function's line left them repeating unchecked.
+        outcome = spawn.spawn_headless(self.socket_path, quiet=quiet)
         if quiet:
             return
         if outcome == spawn.STARTED:
@@ -339,13 +349,13 @@ class Bridge:
             return True
 
         self._spawn_kernel()
-        for _ in range(WAIT_STEPS):
+        for step in range(WAIT_STEPS):
             time.sleep(WAIT_STEP_SECONDS)
             result = self._connect_excluding(exclude_pid)
             if not isinstance(result, str):
                 self._attach(*result)
                 return True
-            if exclude_pid is not None:
+            if exclude_pid is not None and (step + 1) % _RESPAWN_EVERY == 0:
                 self._spawn_kernel(quiet=True)
         _err(f"kernel unreachable after spawn: {result}")
         return False

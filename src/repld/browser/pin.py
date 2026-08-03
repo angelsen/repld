@@ -7,9 +7,18 @@ import json
 __all__ = [
     "_PIN_JS",
     "_LABEL_JS",
+    "BINDING_NAME",
     "_next_label_color",
     "_handle_binding",
 ]
+
+# The CDP binding the pill calls to answer a gate. Registered per *session* —
+# `Tab._setup_binding` on the first pin, `BrowserSession._reattach_core` again
+# on every session that outlives a reconnect — because Chrome drops the binding
+# from the page when the session that added it detaches. Spelled literally
+# inside `_PIN_JS` below as well: that blob is a raw JS string with no
+# substitution pass of its own, so the name lives in two places by necessity.
+BINDING_NAME = "__repld_resolve"
 
 # ---------------------------------------------------------------------------
 # Pill JS/CSS blob — injected via Runtime.evaluate on tab.pin()
