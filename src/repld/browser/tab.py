@@ -29,6 +29,16 @@ _HEARTBEAT_INTERVAL_S = 5
 _HEARTBEAT_MAX_MISSES = 3
 _HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
 
+# Grace period at the end of `_reattach`, after the ready signal is satisfied.
+# The re-attach re-enables this session's CDP domains through
+# `CDPSession._enable_domains`, which sends every `*.enable` with `send_nowait`
+# — deliberately, to keep attach fast, but it means they are in flight and
+# unacknowledged when the ready signal fires. Returning at that moment hands
+# back a Tab whose Network/Runtime/Log events Chrome may not be emitting yet,
+# so the first thing the caller does after a reattach is the thing least likely
+# to be observed. Empirical, and the cheapest place to absorb it.
+_POST_REATTACH_SETTLE_S = 0.3
+
 
 def _format_stack_trace(stack_trace: dict | None) -> str:
     """Render a CDP Runtime.StackTrace as a JS-style multi-line stack string."""
@@ -386,7 +396,7 @@ class Tab(TabQueryMixin):
         await self._await_ready_signal(
             self._ready or "document.readyState === 'complete'"
         )
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(_POST_REATTACH_SETTLE_S)
 
     async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
         """Wait for a ready signal — CSS selector or JS expression, by shape."""

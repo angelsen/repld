@@ -17,6 +17,30 @@ from .kernel_context import KernelContext
 # every browser tool and every async gist tool — see `_run_async`.
 _ASYNC_CALL_TIMEOUT = 30.0
 
+# Settle deadlines, scaled to how much work the mutation can plausibly kick
+# off. All three are *ceilings*, not waits: `observe.settle` returns as soon as
+# the network has been quiet for its `quiet` window, so a bigger number costs
+# nothing on a page that goes idle promptly and only buys headroom on one that
+# doesn't. A navigation or a freshly opened tab loads a document and everything
+# beneath it; a click, keypress or typed field usually triggers an XHR or two;
+# `invoke()` calls an app's own control and is the same shape as a click.
+#
+# `_SETTLE_NAVIGATION_S` is the largest of the three, which makes it the real
+# upper bound on how long a request may legitimately sit in a session's
+# `_inflight` map — `cdp._INFLIGHT_MAX_AGE` is chosen to clear it, so raising
+# this means revisiting that.
+_SETTLE_NAVIGATION_S = 8.0
+_SETTLE_INTERACTION_S = 5.0
+_SETTLE_DEFAULT_S = 3.0
+
+# Grace period after the last keystroke of `type_text`, before the observation
+# settles. Typing dispatches key events and returns; an app that debounces its
+# input (search-as-you-type being the standard case) has not issued its request
+# yet at that moment, so settle would see a quiet network and return before the
+# request it is meant to capture ever entered flight. Empirical — long enough
+# for a typical debounce, short enough not to pad every type_text noticeably.
+_POST_TYPE_DEBOUNCE_S = 0.3
+
 
 async def route_detach(browser, target, port) -> str | None:
     """Shared target/port detach routing (MCP tool + dashboard RPC).
@@ -103,6 +127,30 @@ class BrowserDispatchMixin:
                 "and reports back on channel."
             ) from None
 
+    def _run_sync_on_loop(self, fn, *args):
+        """Run a *synchronous* browser call on the kernel loop.
+
+        Handlers run on the IPC reader thread, and most reach the browser
+        through `_run_async`, so they land on the loop by construction. The two
+        sync entry points below (`format_tabs_nested`, `clear`) did not, and
+        both walk the session/browser maps the loop mutates on every tab that
+        opens or closes; `clear` also resets `_event_count` and empties
+        `_inflight`, which settle reads from the loop. The snapshots inside
+        `browser/__init__.py` keep the *reads* from crashing wherever they are
+        called from, but a write to loop-owned state belongs on the loop, so
+        these go there too.
+
+        Not for the DuckDB query methods — `tab.network()`, `console()`,
+        `body()` and friends are deliberately off-loop on a per-call cursor,
+        which is the whole reason a Refresh in the dashboard doesn't stall the
+        kernel.
+        """
+
+        async def _call():
+            return fn(*args)
+
+        return self._run_async(_call())
+
     def _get_tab(self, browser, args):
         return self._run_async(browser.get(args["target"]))
 
@@ -132,13 +180,13 @@ class BrowserDispatchMixin:
         return result
 
     def _bh_tabs(self, browser, args):
-        return browser.format_tabs_nested()
+        return self._run_sync_on_loop(browser.format_tabs_nested)
 
     def _bh_pages(self, browser, args):
         return self._run_async(browser.pages())
 
     def _bh_clear(self, browser, args):
-        return browser.clear(args.get("target"))
+        return self._run_sync_on_loop(browser.clear, args.get("target"))
 
     def _bh_controls(self, browser, args):
         tab = self._get_tab(browser, args)
@@ -154,7 +202,7 @@ class BrowserDispatchMixin:
         def mutate():
             self._run_async(tab.invoke(args["control"], args["action"], invoke_args))
 
-        return self._observed_mutation(browser, tab, mutate, timeout=3.0)
+        return self._observed_mutation(browser, tab, mutate, timeout=_SETTLE_DEFAULT_S)
 
     # ------------------------------------------------------------------
     # Browser handlers — tab read-only
@@ -277,7 +325,7 @@ class BrowserDispatchMixin:
             browser,
             tab,
             lambda: self._run_async(tab.navigate(args["url"])),
-            timeout=8.0,
+            timeout=_SETTLE_NAVIGATION_S,
         )
 
     def _bh_open(self, browser, args):
@@ -292,7 +340,7 @@ class BrowserDispatchMixin:
                 tab,
                 session,
                 pre,
-                timeout=8.0,
+                timeout=_SETTLE_NAVIGATION_S,
                 extra_header=f"target: {tab.target_id}",
             )
         )
@@ -303,7 +351,7 @@ class BrowserDispatchMixin:
             browser,
             tab,
             lambda: self._run_async(tab.key(args["key"])),
-            timeout=5.0,
+            timeout=_SETTLE_INTERACTION_S,
         )
 
     def _bh_click(self, browser, args):
@@ -312,7 +360,7 @@ class BrowserDispatchMixin:
             browser,
             tab,
             lambda: self._run_async(tab.click(args["selector"])),
-            timeout=5.0,
+            timeout=_SETTLE_INTERACTION_S,
         )
 
     def _bh_type(self, browser, args):
@@ -326,9 +374,11 @@ class BrowserDispatchMixin:
                     press_enter=bool(args.get("press_enter", False)),
                 )
             )
-            self._run_async(asyncio.sleep(0.3))
+            self._run_async(asyncio.sleep(_POST_TYPE_DEBOUNCE_S))
 
-        return self._observed_mutation(browser, tab, mutate, timeout=5.0)
+        return self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        )
 
     _BROWSER_DISPATCH = {
         "browser_watch": _bh_watch,

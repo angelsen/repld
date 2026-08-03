@@ -23,9 +23,12 @@ MAX_EVENTS = 50_000
 PRUNE_BATCH_SIZE = 5_000
 PRUNE_CHECK_INTERVAL = 1_000
 
-# Backstop for requests that never report a terminal event. Well above
-# observe.settle's own 5s deadline, so an entry is only ever evicted long
-# after any settle that could have legitimately been waiting on it.
+# Backstop for requests that never report a terminal event. The bound that
+# matters is the longest deadline any *caller* gives settle, not the 5s default
+# on `observe.settle` itself — nothing passes that. The real ceiling is
+# `browser_dispatch._SETTLE_NAVIGATION_S` (8s, for navigate/open); this sits
+# well clear of it, so an entry is only ever evicted long after any settle that
+# could legitimately have been waiting on it. Raise it if that ceiling rises.
 _INFLIGHT_MAX_AGE = 60.0
 
 # Response mime types whose body stays open by design: the response has
@@ -322,6 +325,13 @@ class CDPSession:
         # or explicitly via tab.capture_bodies = True / tab.enable_capture().
         self.capture_bodies: bool = False
         self._fetch_enabled: bool = False
+        # Serializes enable_fetch/disable_fetch. `Tab.capture_bodies`'s setter
+        # is fire-and-forget (it schedules a task and returns), so a
+        # True-then-False pair races: both claim their flag before awaiting,
+        # then interleave, and the pair could settle as capture_bodies=True with
+        # Fetch actually disabled. Under the lock the last call issued is the
+        # one that decides.
+        self._fetch_lock = asyncio.Lock()
 
         # Fetch handler (set by capture.enable, cleared by capture.disable)
         self._fetch_handler: Any | None = None
@@ -387,8 +397,18 @@ class CDPSession:
             except Exception as exc:
                 logger.debug("Domain enable %s: %s", method, exc)
 
-    async def enable_fetch(self) -> None:
-        """Enable Fetch body capture on this session. Idempotent."""
+    async def _enable_fetch_core(self) -> None:
+        """Unlocked core of `enable_fetch`, for the reconnect path only.
+
+        `_reattach_core` re-enables Fetch on a session that had it, and it can
+        be reached *from inside* an in-flight `enable_fetch`: that call's
+        `Fetch.enable` goes through `BrowserSession.execute`, which on a dead
+        socket triggers `_reconnect` → `_reattach_core` → back here. Taking
+        `_fetch_lock` again on the same task would deadlock outright, since
+        asyncio.Lock is not reentrant — the identical reason
+        `reattach_session` is a locked wrapper over `_reattach_core` rather
+        than locking the core itself.
+        """
         if self._fetch_enabled:
             return
         self._fetch_enabled = True  # claim before the await below yields
@@ -401,20 +421,26 @@ class CDPSession:
             self._fetch_enabled = False
             raise
 
+    async def enable_fetch(self) -> None:
+        """Enable Fetch body capture on this session. Idempotent."""
+        async with self._fetch_lock:
+            await self._enable_fetch_core()
+
     async def disable_fetch(self) -> None:
         """Disable Fetch body capture on this session. Idempotent."""
-        if not self._fetch_enabled:
-            return
-        self._fetch_enabled = False  # claim before the await below yields
-        self.capture_bodies = False
         from .capture import disable as fetch_disable
 
-        try:
-            await fetch_disable(self)
-        except Exception:
-            self._fetch_enabled = True
-            self.capture_bodies = True
-            raise
+        async with self._fetch_lock:
+            if not self._fetch_enabled:
+                return
+            self._fetch_enabled = False  # claim before the await below yields
+            self.capture_bodies = False
+            try:
+                await fetch_disable(self)
+            except Exception:
+                self._fetch_enabled = True
+                self.capture_bodies = True
+                raise
 
     # ------------------------------------------------------------------
     # Command execution
@@ -643,13 +669,21 @@ class CDPSession:
         the session. `_INFLIGHT_MAX_AGE` is deliberately far longer than any
         request settle would legitimately wait on, so this evicts wedged
         entries without ever cutting a slow-but-live one short.
+
+        Snapshots before scanning: `clear_events` empties this map and is
+        reachable off-loop (`tab.clear()` in a pure-sync exec cell runs in
+        `asyncio.to_thread`), so iterating it live could raise "dictionary
+        changed size during iteration" on the loop, out of `settle`, and fail
+        the whole observed mutation.
         """
         if not self._inflight:
             return 0
         cutoff = time.monotonic() - _INFLIGHT_MAX_AGE
-        stale = [rid for rid, started in self._inflight.items() if started < cutoff]
+        stale = [
+            rid for rid, started in list(self._inflight.items()) if started < cutoff
+        ]
         for rid in stale:
-            del self._inflight[rid]
+            self._inflight.pop(rid, None)
         return len(self._inflight)
 
     def clear_events(self) -> None:

@@ -7,6 +7,7 @@ cleans up — including on the failure path, so a broken run can't leave tabs
 behind for the next one to trip over.
 """
 
+import asyncio
 import io
 import json
 import time
@@ -90,6 +91,124 @@ def phase_6_png_resize(_kernel: Kernel) -> None:
         _model_dims(100, 100), (100, 100), "_model_dims leaves small images alone"
     )
     print("  ✓ _model_dims: token-budget invariants hold across sizes")
+
+
+def phase_6_connect_race(_kernel: Kernel) -> None:
+    """Concurrent connects collapse to one, and the fetch lock can't deadlock.
+
+    No kernel or Chrome — both are pure asyncio shapes. Two parallel `browser_*`
+    tool calls on a cold pool is the ordinary way to reach the first, and the
+    second is a hazard the fix for the third introduced: `enable_fetch` holding
+    a lock across `Fetch.enable` can be re-entered by
+    `BrowserSession._reattach_core` when that command trips a reconnect.
+    """
+    from repld.browser import Browser, BrowserPool
+    from repld.browser.cdp import CDPSession
+
+    class _FakeWS:
+        async def close(self) -> None: ...
+
+    async def _connect_once() -> int:
+        b = Browser(port=9999)
+        calls: list[int] = []
+
+        async def fake(*, discover: bool = True) -> None:
+            calls.append(1)
+            await asyncio.sleep(0.01)  # the real connect awaits a WS handshake
+            b._session._ws = _FakeWS()
+
+        b._session.connect = fake
+        await asyncio.gather(*[b._ensure_connected() for _ in range(4)])
+        return len(calls)
+
+    assert_eq(
+        asyncio.run(_connect_once()), 1, "4 concurrent _ensure_connected → 1 socket"
+    )
+
+    async def _pool_once() -> tuple[int, int]:
+        import repld.browser as mod
+
+        pool = BrowserPool()
+        made: list[object] = []
+        real = mod.Browser
+
+        class _Spy(real):
+            def __init__(self, port=None):
+                super().__init__(port)
+                made.append(self)
+
+            async def _ensure_connected(self) -> None:
+                await asyncio.sleep(0.01)
+                self._connected = True
+
+        mod.Browser = _Spy
+        try:
+            await asyncio.gather(*[pool.connect(9999) for _ in range(4)])
+        finally:
+            mod.Browser = real
+        return len(made), len(pool._browsers)
+
+    built, registered = asyncio.run(_pool_once())
+    assert_eq(built, 1, "4 concurrent BrowserPool.connect → 1 Browser built")
+    assert_eq(registered, 1, "and exactly one registered (no orphan holding a socket)")
+
+    class _S(CDPSession):
+        """CDPSession stand-in with no socket — real enable/disable_fetch.
+
+        `on_enable` fires once, from inside `Fetch.enable`, so a test can
+        reproduce a reconnect landing in the middle of an in-flight enable.
+        """
+
+        def __init__(self, on_enable=None) -> None:
+            self._fetch_lock = asyncio.Lock()
+            self._fetch_enabled = False
+            self.capture_bodies = False
+            self._fetch_handler = None
+            self.chrome_target_id = "t"
+            self._on_enable = on_enable
+
+        async def execute(
+            self, method: str, params: dict | None = None, timeout: float = 30
+        ) -> dict:
+            await asyncio.sleep(0.005)
+            if method == "Fetch.enable" and self._on_enable is not None:
+                hook, self._on_enable = self._on_enable, None  # one shot
+                await hook(self)
+            return {}
+
+        async def send_nowait(self, method: str, params: dict | None = None) -> None:
+            return None
+
+    async def _interleave() -> tuple[bool, bool]:
+        s = _S()
+        # What `tab.capture_bodies = True; tab.capture_bodies = False` schedules.
+        await asyncio.gather(s.enable_fetch(), s.disable_fetch())
+        return s._fetch_enabled, s.capture_bodies
+
+    enabled, capturing = asyncio.run(_interleave())
+    assert_eq(
+        enabled, capturing, "interleaved enable/disable leave the two flags agreeing"
+    )
+
+    async def _reentrant() -> bool:
+        async def reconnect(s: "_S") -> None:
+            # Precisely what _reattach_core does when this command's own socket
+            # error triggers a reconnect — on this same task, lock still held.
+            s._fetch_enabled = False
+            await s._enable_fetch_core()
+
+        s = _S(on_enable=reconnect)
+        try:
+            await asyncio.wait_for(s.enable_fetch(), timeout=2)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    assert_true(
+        asyncio.run(_reentrant()),
+        "a reconnect re-entering an in-flight enable_fetch does not deadlock",
+    )
+    print("  ✓ connect races collapse to one socket; fetch lock is re-entry safe")
 
 
 def phase_6_capture_filter(_kernel: Kernel) -> None:

@@ -360,7 +360,11 @@ class BrowserSession:
         cdp._fetch_enabled = False
         await cdp._enable_domains()
         if had_fetch:
-            await cdp.enable_fetch()
+            # The unlocked core, never `enable_fetch`: we may be running
+            # *inside* an in-flight `enable_fetch` whose own `Fetch.enable`
+            # tripped the reconnect that led here, and it holds `_fetch_lock`
+            # on this very task. See `_enable_fetch_core`.
+            await cdp._enable_fetch_core()
 
     async def reattach_session(self, cdp: CDPSession) -> None:
         """Re-attach an invalidated session in place (HMR, navigation).

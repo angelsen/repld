@@ -52,6 +52,22 @@ _ATTACH_TIMEOUT_S = 5.0
 # place only, the pool would emit one of these lines per connected browser.
 _NO_TABS = "(no attached tabs)"
 
+# The *sync* methods below snapshot `_sessions` / `_browsers` with `list(...)`
+# before walking them, and that is load-bearing rather than stylistic. Both
+# dicts are written from the asyncio loop — attach, detach, and the recv loop's
+# Target.targetDestroyed handler all mutate `_sessions` on every tab that opens
+# or closes — while these methods run on whatever thread called them. Two such
+# threads exist and neither is exotic: `browser_dispatch` answers some tools on
+# the IPC reader thread, and `runtime._eval` runs every pure-sync exec cell in
+# `asyncio.to_thread`, so `browser.tabs` typed into a cell is already off-loop.
+# Iterating a live dict from there raises "dictionary changed size during
+# iteration" the moment a page opens a popup — reproducible, unattributable,
+# and dependent on the user's browsing rather than on anything repld did.
+# `list(d.values())` is atomic under the GIL (the copy happens in C, with no
+# bytecode boundary for a thread switch), so the snapshot closes it outright.
+# The async methods don't need this: they only ever run on the loop, which is
+# the one thread doing the mutating.
+
 
 def _is_target_id(s: str) -> bool:
     """True if s looks like a short target ID (e.g. '9222:a81998')."""
@@ -98,16 +114,41 @@ class Browser:
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         self._session: BrowserSession = BrowserSession(self.port)
         self._connected: bool = False
+        # Serializes the first connect. BrowserSession already guards the
+        # *re*connect path with its own lock; this is the same shape one step
+        # earlier — see `_ensure_connected`.
+        self._connect_lock = asyncio.Lock()
 
     async def _ensure_connected(self) -> None:
-        if not self._connected:
-            await self._session.connect()
-            self._session._on_target_created = self._on_target_created
-            self._session._on_target_destroyed = self._on_target_destroyed
-            self._connected = True
-            logger.debug("BrowserSession connected on port %s", self.port)
-        elif not self._session._is_connected():
-            await self._session._reconnect()
+        """Connect if we aren't, reconnect if the socket died. Idempotent.
+
+        Locked because the check and the connect straddle an await, and
+        `BrowserSession.connect` unconditionally rebinds `_ws` and `_recv_task`:
+        N callers arriving together produced N WebSockets and N recv loops, with
+        only the last reachable and the rest left open against Chrome forever.
+        Two concurrent `browser_*` tool calls on a cold pool is enough to do it
+        — `connect()` yields for milliseconds inside `to_thread` fetching
+        /json/version — and so is any `gather()` in user code.
+
+        The fast path stays lock-free so the common case (already connected,
+        every call after the first) doesn't serialize on it.
+        """
+        if self._connected and self._session._is_connected():
+            return
+        async with self._connect_lock:
+            # Re-check: a caller that queued behind the lock is usually looking
+            # at work the holder already did.
+            if not self._connected:
+                await self._session.connect()
+                self._session._on_target_created = self._on_target_created
+                self._session._on_target_destroyed = self._on_target_destroyed
+                self._connected = True
+                logger.debug("BrowserSession connected on port %s", self.port)
+            elif not self._session._is_connected():
+                # _reconnect takes _reconnect_lock, never _connect_lock, and
+                # nothing under it re-enters here — so holding this across it
+                # can't deadlock.
+                await self._session._reconnect()
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:
         """Called when a new tab is auto-attached."""
@@ -123,7 +164,7 @@ class Browser:
         """Wrap all attached CDPSessions as Tab objects."""
         return [
             Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-            for cdp in self._session._sessions.values()
+            for cdp in list(self._session._sessions.values())
         ]
 
     # ------------------------------------------------------------------
@@ -145,8 +186,10 @@ class Browser:
         skips tabs that already matched at call time.
 
         **Target ID** (e.g. ``"9222:a81998"``): resolves any type including
-        workers. Attaches if not already attached. ``timeout``/``fresh``
-        are ignored.
+        workers. Attaches if not already attached. ``fresh`` is ignored;
+        ``timeout`` bounds only the wait for a concurrent attach to land
+        (default ``_ATTACH_TIMEOUT_S``) — an unknown ID fails at once either
+        way, since polling for a target that isn't there buys nothing.
 
         **ready**: CSS selector or JS expression that must be truthy before
         the Tab is returned. Also used for auto-recovery on HMR/navigation.
@@ -155,7 +198,7 @@ class Browser:
         Enables proactive Fetch body capture on freshly attached tabs.
         """
         if _is_target_id(target):
-            return await self._get_by_id(target, ready=ready)
+            return await self._get_by_id(target, ready=ready, timeout=timeout)
         return await self._get_by_glob(
             target, timeout=timeout, fresh=fresh, ready=ready
         )
@@ -167,7 +210,7 @@ class Browser:
         None on miss.
         """
         prefix = prefix.lower()
-        for sid, cdp in self._session._sessions.items():
+        for sid, cdp in list(self._session._sessions.items()):
             chrome_id = cdp.target_info.get("targetId", "")
             if chrome_id[:6].lower() == prefix:
                 return sid, cdp, chrome_id
@@ -188,7 +231,12 @@ class Browser:
         return Tab(cdp, tid, self.port, ready=ready)
 
     async def _attach_racing(
-        self, tid: str, t: dict | None = None, *, ready: str | None = None
+        self,
+        tid: str,
+        t: dict | None = None,
+        *,
+        ready: str | None = None,
+        budget: float | None = None,
     ) -> "Tab | None":
         """Attach to `tid`, waiting out a concurrent attach for the same target.
 
@@ -203,12 +251,15 @@ class Browser:
         its session. Re-calling `attach()` is the whole of it, since it returns
         the existing session once one exists.
 
-        Returns None if nothing lands within `_ATTACH_TIMEOUT_S`. The two
-        callers report that differently: a named target that never appears is a
-        `TabNotFoundError` the pool may retry elsewhere, while a tab we just
-        created and cannot attach to is a plain failure.
+        Returns None if nothing lands within `budget` (default
+        `_ATTACH_TIMEOUT_S`). The two callers report that differently: a named
+        target that never appears is a `TabNotFoundError` the pool may retry
+        elsewhere, while a tab we just created and cannot attach to is a plain
+        failure. `_get_by_id` passes the caller's own `timeout` so that
+        `get(id, timeout=1)` means one second here too, rather than silently
+        taking the five-second default.
         """
-        deadline = time.monotonic() + _ATTACH_TIMEOUT_S
+        deadline = time.monotonic() + (_ATTACH_TIMEOUT_S if budget is None else budget)
         while True:
             tab = await self._attach_and_wrap(tid, t, ready=ready)
             if tab is not None:
@@ -217,8 +268,14 @@ class Browser:
                 return None
             await asyncio.sleep(_ATTACH_POLL_INTERVAL_S)
 
-    async def _get_by_id(self, target: str, ready: str | None = None) -> Tab:
-        """Resolve a target ID, attaching on demand if needed."""
+    async def _get_by_id(
+        self, target: str, ready: str | None = None, timeout: float | None = None
+    ) -> Tab:
+        """Resolve a target ID, attaching on demand if needed.
+
+        `timeout` bounds only the attach race — an ID that matches no target at
+        all still fails immediately, since there is nothing to wait for.
+        """
         _, prefix = _split_target(target)
         _sid, cdp, chrome_id = self._find_by_prefix(prefix)
         if cdp is not None:
@@ -228,7 +285,7 @@ class Browser:
         for t in await self._session.list_targets():
             tid = t.get("targetId", "")
             if tid and tid[:6].lower() == prefix:
-                tab = await self._attach_racing(tid, t, ready=ready)
+                tab = await self._attach_racing(tid, t, ready=ready, budget=timeout)
                 if tab is not None:
                     return tab
 
@@ -240,7 +297,7 @@ class Browser:
         """Short target IDs of all attached sessions, for error messages."""
         return [
             make_target(self.port, cdp.target_info.get("targetId", ""))
-            for cdp in self._session._sessions.values()
+            for cdp in list(self._session._sessions.values())
         ]
 
     async def _get_by_glob(
@@ -424,7 +481,7 @@ class Browser:
             cdp.clear_events()
             return f"Cleared events for {target}."
         count = 0
-        for cdp in self._session._sessions.values():
+        for cdp in list(self._session._sessions.values()):
             cdp.clear_events()
             count += 1
         return f"Cleared events for {count} tab(s)."
@@ -552,10 +609,22 @@ class BrowserPool:
 
     def __init__(self) -> None:
         self._browsers: dict[int, Browser] = {}
+        # Guards the registry mutation in `connect`, which is the same
+        # check-then-act-across-an-await as Browser._ensure_connected one level
+        # up: two callers both missing the port both built a Browser, both
+        # connected it, and the loser was left in `self._browsers`' place with a
+        # live WebSocket nothing would ever close.
+        self._connect_lock = asyncio.Lock()
 
     async def _ensure_any(self) -> None:
-        """Auto-connect to the default port if no browsers are connected."""
-        if not any(b._connected for b in self._browsers.values()):
+        """Auto-connect to the default port if no browsers are connected.
+
+        Deliberately unlocked: `connect` does its own check-then-act under the
+        lock, so a second caller arriving here concurrently finds the port
+        already connected and gets the incumbent back. Taking the lock here too
+        would just deadlock on the re-entrant call.
+        """
+        if not any(b._connected for b in list(self._browsers.values())):
             await self.connect()
 
     @staticmethod
@@ -587,11 +656,17 @@ class BrowserPool:
                 ) from exc
         if port is None:
             port = int(os.environ.get("REPLD_CHROME_PORT", "9222"))
-        if port in self._browsers and self._browsers[port]._connected:
-            return self._browsers[port]
-        b = Browser(port=port)
-        await b._ensure_connected()
-        self._browsers[port] = b
+        async with self._connect_lock:
+            existing = self._browsers.get(port)
+            if existing is not None and existing._connected:
+                return existing
+            # Reuse a disconnected Browser rather than replacing it: callers may
+            # be holding the object, and `_ensure_connected` on it either
+            # reconnects in place (preserving its CDPSessions and their event
+            # stores) or connects fresh, both of which beat orphaning it.
+            b = existing if existing is not None else Browser(port=port)
+            await b._ensure_connected()
+            self._browsers[port] = b
         self._save_hint()
         return b
 
@@ -630,7 +705,7 @@ class BrowserPool:
 
     def resolve_tab(self, target_id: str) -> "Tab":
         """Find an attached Tab by its raw Chrome targetId, across all ports."""
-        for port, b in self._browsers.items():
+        for port, b in list(self._browsers.items()):
             if not b._connected:
                 continue
             cdp = b._session.find_by_target_id(target_id)
@@ -641,10 +716,10 @@ class BrowserPool:
     def snapshot(self) -> dict:
         """Serializable state for the dashboard: connection + tab list."""
         tab_list = []
-        for port, b in self._browsers.items():
+        for port, b in list(self._browsers.items()):
             if not b._connected:
                 continue
-            for cdp in b._session._sessions.values():
+            for cdp in list(b._session._sessions.values()):
                 info = cdp.target_info
                 tab_list.append(
                     {
@@ -676,13 +751,13 @@ class BrowserPool:
     @property
     def connected_ports(self) -> list[int]:
         """Ports whose Browser is currently connected (for hint persistence)."""
-        return [p for p, b in self._browsers.items() if b._connected]
+        return [p for p, b in list(self._browsers.items()) if b._connected]
 
     @property
     def tabs(self) -> Rows:
         """Tabs from all connected browsers."""
         all_tabs = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if b._connected:
                 all_tabs.extend(b.tabs)
         return Rows(all_tabs)
@@ -691,7 +766,7 @@ class BrowserPool:
     def patterns(self) -> list[str]:
         """Watch patterns from all connected browsers."""
         result = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if b._connected:
                 result.extend(b.patterns)
         return result
@@ -756,7 +831,7 @@ class BrowserPool:
         """Find a tab by target ID or URL glob across all browsers."""
         if _is_target_id(target):
             b = self.browser_for(target)
-            return await b.get(target, ready=ready)
+            return await b.get(target, timeout=timeout, ready=ready)
         await self._ensure_any()
         # One deadline shared across all browsers — otherwise each browser
         # gets the full `timeout`, so N browsers can take up to N*timeout.
@@ -809,13 +884,13 @@ class BrowserPool:
             b = self.browser_for(target)
             return b.clear(target)
         results = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             results.append(b.clear())
         return "\n".join(results)
 
     def format_tabs_nested(self) -> str:
         parts = []
-        for b in self._browsers.values():
+        for b in list(self._browsers.values()):
             if b._connected:
                 text = b.format_tabs_nested()
                 if text != _NO_TABS:
@@ -824,7 +899,7 @@ class BrowserPool:
 
     @property
     def _connected(self) -> bool:
-        return any(b._connected for b in self._browsers.values())
+        return any(b._connected for b in list(self._browsers.values()))
 
     def help(self) -> None:
         _print_browser_help()
@@ -833,7 +908,7 @@ class BrowserPool:
         if not self._browsers:
             return "<BrowserPool (no connections)>"
         parts = []
-        for port, b in self._browsers.items():
+        for port, b in list(self._browsers.items()):
             n = len(b._session._sessions) if b._connected else 0
             parts.append(f"{port}({n})")
         return f"<BrowserPool [{', '.join(parts)}] patterns={self.patterns}>"

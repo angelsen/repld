@@ -21,6 +21,7 @@ from harness import Kernel
 from phases.browser import (
     phase_6,
     phase_6_capture_filter,
+    phase_6_connect_race,
     phase_6_har_redirects,
     phase_6_label_and_reattach,
     phase_6_png_resize,
@@ -66,6 +67,7 @@ PHASES = {
     6: lambda k: (
         phase_6_png_resize(k),
         phase_6_capture_filter(k),
+        phase_6_connect_race(k),
         phase_6_har_redirects(k),
         phase_6_tools_and_gists(k),
         phase_6(k),
