@@ -171,15 +171,19 @@ def read_records(path: Path, *, tail: int | None = None) -> list[dict]:
     return out[-tail:] if tail else out
 
 
-def follow(path: Path, *, stop: threading.Event | None = None) -> Iterator[dict]:
+def follow(path: Path) -> Iterator[dict]:
     """Yield records as they are appended, starting from the current end.
 
     Handles the writer truncating underneath us (size cap, or a kernel restart
     reopening the file) by rewinding to the start of the shorter file.
+
+    Unbounded on purpose: the caller stops by abandoning the iterator (`repld
+    log -f` does it on KeyboardInterrupt), which is the ordinary way to end a
+    generator and needs no cancellation channel of its own.
     """
     pos = path.stat().st_size if path.exists() else 0
     buf = ""
-    while stop is None or not stop.is_set():
+    while True:
         try:
             size = path.stat().st_size
         except OSError:

@@ -245,11 +245,14 @@ def _gist_fetch(argv: list[str]) -> int:
             return 2
         rename = rest[i + 1]
         del rest[i : i + 2]
-    unknown = [a for a in rest if a.startswith("-")]
-    if unknown:
-        print(f"error: unknown flag '{unknown[0]}'\n\n{usage}")
-        return 2
-    if len(rest) != 1:
+    # No `flags=`: every option this verb understands has already been
+    # stripped from `rest` above, so anything still starting with `-` is
+    # unknown by construction. Same ordering rule `check_args` documents for
+    # `--socket` — consume the value-taking flags first, then validate.
+    bad = cli_args.check_args("repld gist fetch", rest, usage, positionals=1)
+    if bad is not None:
+        return bad
+    if not rest:
         print(usage)
         return 2
 
@@ -498,10 +501,9 @@ def _gist_list(argv: list[str]) -> int:
     if cli_args.wants_help(argv):
         print(usage)
         return 0
-    if argv:
-        print(f"repld gist list: unknown argument {argv[0]!r}\n")
-        print(usage)
-        return 2
+    bad = cli_args.check_args("repld gist list", argv, usage, positionals=0)
+    if bad is not None:
+        return bad
 
     gists_dir = Path.cwd() / "gists"
 

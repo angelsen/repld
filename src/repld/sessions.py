@@ -23,8 +23,10 @@ __all__ = ["register", "unregister", "list_sessions"]
 SESSIONS_DIR = RUNTIME_DIR / "sessions"
 
 
-def _session_path(pid: int | None = None) -> Path:
-    return SESSIONS_DIR / f"{pid or os.getpid()}.json"
+def _session_path() -> Path:
+    """This process's own session file. Reading someone else's goes through
+    `list_sessions`, which has to prune stale entries as it walks anyway."""
+    return SESSIONS_DIR / f"{os.getpid()}.json"
 
 
 def register(cwd: str, socket_path: str, dashboard_port: int | None) -> None:
