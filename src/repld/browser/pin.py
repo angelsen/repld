@@ -306,18 +306,33 @@ _PIN_JS = r"""
 # ---------------------------------------------------------------------------
 # Label JS — injected via Page.addScriptToEvaluateOnNewDocument
 # ---------------------------------------------------------------------------
+# **Must not touch `document.body` at top level.**
+# `addScriptToEvaluateOnNewDocument` runs at document *start*, before the page's
+# own scripts and before the parser has built `<body>` — so `document.body` is
+# null there and any reach through it throws. That took out the whole mount, on
+# exactly the code path the registration exists for: surviving a navigation.
+# `runImmediately: True` also evaluates it against the currently-loaded
+# document, where body *does* exist, so setting a label looked like it worked
+# and the bar then silently failed to come back on the next page.
+#
+# `_PIN_JS` above dereferences `document.body` freely because it goes in via
+# `Runtime.evaluate` on a live page. The two are not interchangeable.
 _LABEL_JS = r"""
 (function() {
-  if (document.getElementById('__repld_label_bar')) return;
-  var el = document.createElement('div');
-  el.id = '__repld_label_bar';
-  el.textContent = %TEXT%;
-  el.style.cssText = 'position:fixed;top:0;left:0;right:0;height:24px;'
-    + 'background:%COLOR%;color:#fff;font:bold 12px system-ui;'
-    + 'display:flex;align-items:center;justify-content:center;'
-    + 'z-index:2147483647;pointer-events:none;';
-  document.body.style.paddingTop = '24px';
-  document.body.appendChild(el);
+  function mount() {
+    if (document.getElementById('__repld_label_bar')) return;
+    var el = document.createElement('div');
+    el.id = '__repld_label_bar';
+    el.textContent = %TEXT%;
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;height:24px;'
+      + 'background:%COLOR%;color:#fff;font:bold 12px system-ui;'
+      + 'display:flex;align-items:center;justify-content:center;'
+      + 'z-index:2147483647;pointer-events:none;';
+    document.body.style.paddingTop = '24px';
+    document.body.appendChild(el);
+  }
+  if (document.body) mount();
+  else document.addEventListener('DOMContentLoaded', mount);
 })();
 """
 

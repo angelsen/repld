@@ -11,6 +11,7 @@ import re
 import time
 from typing import Any
 
+from .. import bg
 from ..channel import push_channel
 from .har import _create_views
 
@@ -524,16 +525,21 @@ class CDPSession:
                     self._inflight.pop(request_id, None)
 
             if method == "Fetch.requestPaused":
-                # Dispatch async handler without blocking the recv loop
+                # Dispatch async handler without blocking the recv loop.
+                # `bg.spawn`, not a bare create_task: this coroutine is the only
+                # thing that ever resumes the paused request, so a task
+                # collected mid-flight leaves it hanging in Chrome until the
+                # request times out — with `settle` waiting on it the whole
+                # time. See bg.py.
                 if self._fetch_handler is not None:
-                    asyncio.create_task(
+                    bg.spawn(
                         self._fetch_handler(self, params),
                         name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
                     )
 
             if method == "Runtime.bindingCalled":
                 if self._binding_handler is not None:
-                    asyncio.create_task(
+                    bg.spawn(
                         self._binding_handler(self, params),
                         name=f"repld-binding-{params.get('name', '?')}",
                     )
@@ -550,7 +556,7 @@ class CDPSession:
             if self._event_count >= self._next_prune_check:
                 self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
                 if self._event_count > MAX_EVENTS:
-                    asyncio.create_task(self._async_prune(), name="repld-prune")
+                    bg.spawn(self._async_prune(), name="repld-prune")
 
         except Exception as exc:
             logger.debug("_handle_event error: %s", exc)

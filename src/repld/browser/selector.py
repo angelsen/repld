@@ -33,6 +33,31 @@ class Selector:
     js: str
 
 
+# Visibility *ranks* candidates, it does not filter them: a match that is
+# present but invisible is still a match — apps routinely keep the real control
+# off-screen behind a styled proxy — so the rule is "prefer a visible match,
+# fall back to the first one".
+#
+# Every custom form runs this same rule. `text=` used to be the only one that
+# looked at visibility at all, and it looked at `offsetWidth` alone, so
+# `text=Save` skipped a hidden button while `role=button[name="Save"]` returned
+# it and the click landed on nothing. `offsetHeight` is in the test because a
+# short-and-wide element is as visible as a tall-and-narrow one.
+#
+# Every builder below must return a single *expression* — `Tab._resolve` wraps
+# it as `!!(expr)` — which is why these are IIFEs rather than statements.
+_PICK_FN = (
+    "function(els){"
+    " return els.find(function(el){"
+    " return el.offsetWidth > 0 || el.offsetHeight > 0; }) || els[0] || null; }"
+)
+
+
+def _pick(candidates_js: str) -> str:
+    """Wrap a candidate-array expression in the shared visibility-ranked pick."""
+    return f"(function() {{ var pick = {_PICK_FN}; return pick({candidates_js}); }})()"
+
+
 def resolve(selector: str) -> Selector:
     """Resolve a Playwright-style selector string.
 
@@ -61,14 +86,15 @@ def resolve(selector: str) -> Selector:
 
 
 def _text_selector(text: str) -> str:
-    return (
-        f"(function() {{"
-        f" const text = {json.dumps(text)};"
-        f" const all = Array.from(document.querySelectorAll('*'));"
-        f" const exact = all.filter(el => el.offsetWidth > 0 && ("
-        f"   el.textContent.trim() === text || el.getAttribute('aria-label') === text));"
-        f" return exact.sort((a,b) => a.textContent.length - b.textContent.length)[0] || null;"
-        f"}})()"
+    # Sorted before the pick, not after: shortest textContent is the tightest
+    # match (the button, not the <div> wrapping it), so ranking by visibility
+    # within that order returns the tightest *visible* one.
+    t = json.dumps(text)
+    return _pick(
+        f"Array.from(document.querySelectorAll('*'))"
+        f".filter(function(el) {{ return el.textContent.trim() === {t}"
+        f" || el.getAttribute('aria-label') === {t}; }})"
+        f".sort(function(a, b) {{ return a.textContent.length - b.textContent.length; }})"
     )
 
 
@@ -76,7 +102,7 @@ def _role_selector(m: re.Match) -> str:
     role, op, name = m.group(1), m.group(2), m.group(3)
     css = _ROLE_CSS.get(role, f'[role="{role}"]')
     if not name:
-        return f"document.querySelector({json.dumps(css)})"
+        return _pick(f"Array.from(document.querySelectorAll({json.dumps(css)}))")
     n = json.dumps(name)
     if op == "*=":
         cmp = (
@@ -98,14 +124,22 @@ def _role_selector(m: re.Match) -> str:
             f" || el.value === {n}"
             f" || (el.labels && Array.from(el.labels).some(l => l.textContent.trim() === {n}))"
         )
-    return f"Array.from(document.querySelectorAll({json.dumps(css)})).find(el => {cmp})"
+    return _pick(
+        f"Array.from(document.querySelectorAll({json.dumps(css)}))"
+        f".filter(function(el) {{ return {cmp}; }})"
+    )
 
 
 def _label_selector(label_text: str) -> str:
+    # The pick ranks the *labels*, then the control is read off the winner —
+    # a hidden label's control is hidden with it, so ranking the controls
+    # instead would only re-derive the same order one indirection later.
     return (
         f"(function() {{"
-        f" const lbl = Array.from(document.querySelectorAll('label'))"
-        f"   .find(l => l.textContent.trim() === {json.dumps(label_text)});"
+        f" var pick = {_PICK_FN};"
+        f" var lbl = pick(Array.from(document.querySelectorAll('label'))"
+        f"   .filter(function(l) {{"
+        f"     return l.textContent.trim() === {json.dumps(label_text)}; }}));"
         f" if (!lbl) return null;"
         f" if (lbl.htmlFor) return document.getElementById(lbl.htmlFor);"
         f" return lbl.querySelector('input, textarea, select');"
@@ -116,8 +150,9 @@ def _label_selector(label_text: str) -> str:
 def _has_text_selector(m: re.Match) -> str:
     css_base, text = m.group(1), m.group(2)
     css_expanded = _ROLE_CSS.get(css_base, css_base)
-    return (
+    t = json.dumps(text)
+    return _pick(
         f"Array.from(document.querySelectorAll({json.dumps(css_expanded)}))"
-        f".find(el => el.textContent.trim().includes({json.dumps(text)})"
-        f" || (el.getAttribute('aria-label') || '').includes({json.dumps(text)}))"
+        f".filter(function(el) {{ return el.textContent.trim().includes({t})"
+        f" || (el.getAttribute('aria-label') || '').includes({t}); }})"
     )

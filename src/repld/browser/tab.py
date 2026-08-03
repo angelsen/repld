@@ -12,6 +12,7 @@ import json
 import pathlib
 from typing import Any
 
+from .. import bg
 from ..channel import push_channel
 from .cdp import CDPSession
 from .pin import _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
@@ -128,14 +129,16 @@ class Tab(TabQueryMixin):
         if loop is None:
             raise RuntimeError("tab session has no event loop (not attached)")
         if value:
-            loop.create_task(
+            bg.spawn(
                 self._session.enable_fetch(),
                 name=f"repld-fetch-enable-{self._chrome_target_id[:8]}",
+                loop=loop,
             )
         else:
-            loop.create_task(
+            bg.spawn(
                 self._session.disable_fetch(),
                 name=f"repld-fetch-disable-{self._chrome_target_id[:8]}",
+                loop=loop,
             )
 
     async def enable_capture(self) -> None:
@@ -167,7 +170,7 @@ class Tab(TabQueryMixin):
         loop = self._session._loop
         if loop is None:
             raise RuntimeError("tab session has no event loop (not attached)")
-        loop.create_task(self._set_label(value), name="repld-label-set")
+        bg.spawn(self._set_label(value), name="repld-label-set", loop=loop)
 
     async def _set_label(self, value: str | tuple[str, str] | None) -> None:
         """Apply or remove the label bar."""

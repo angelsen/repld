@@ -23,6 +23,23 @@ _CDP = "http://localhost:9222"
 _MARKER = "repld-smoketest"
 _TEST_URL = f"data:text/html,<title>{_MARKER}</title><p>{_MARKER}</p>"
 
+# Selector-ranking fixture. Attribute values are deliberately unquoted (valid
+# HTML5 while they contain no spaces) so the markup survives being nested three
+# quoting levels deep — Python source → exec cell → JS string literal.
+# The hidden member of each pair comes first in document order.
+_SEL_HTML = (
+    "<button id=hb style=display:none>Save</button>"
+    "<button id=vb>Save</button>"
+    "<label id=l1 for=i1 style=display:none>Name</label><input id=i1>"
+    "<label id=l2 for=i2>Name</label><input id=i2>"
+)
+_SEL_CASES = [
+    ("text=Save", "vb"),
+    ('role=button[name="Save"]', "vb"),
+    ("button:has-text('Save')", "vb"),
+    ("label=Name", "i2"),
+]
+
 
 def _chrome_ready(label: str) -> bool:
     """Whether the browser stack can run here at all. Prints why if not."""
@@ -263,6 +280,53 @@ def phase_6_capture_filter(_kernel: Kernel) -> None:
     print("  ✓ _should_capture_body: assets skipped, API/document traffic kept")
 
 
+def phase_6_like_escaping(_kernel: Kernel) -> None:
+    """`*` is the only wildcard a URL filter offers — no kernel or Chrome.
+
+    LIKE's own metacharacters have to be escaped out of the literal text, and
+    `_` (matches any single character) is common enough in URLs that leaving it
+    live made `network(url=...)` quietly over-match. Asserted against real
+    DuckDB rather than on the pattern string, because the escaping is only worth
+    anything paired with the ESCAPE clause on the comparison.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        print("  - like escaping: duckdb not installed (uv sync --extra browser), skip")
+        return
+
+    from repld.browser.tab_query import TabQueryMixin
+
+    urls = [
+        "/api/user_profile",
+        "/api/userXprofile",
+        "/api/user%profile",
+        "/static/app.js",
+    ]
+    con = duckdb.connect()
+    con.execute("CREATE TABLE u(url VARCHAR)")
+    con.executemany("INSERT INTO u VALUES (?)", [(u,) for u in urls])
+
+    def matches(filt: str) -> list[str]:
+        sql = "SELECT url FROM u WHERE url LIKE ?" + TabQueryMixin._LIKE_ESCAPE
+        pattern = TabQueryMixin._like_pattern(filt)
+        return sorted(r[0] for r in con.execute(sql, [pattern]).fetchall())
+
+    # `_` and `%` are literal; `*` still globs.
+    assert_eq(matches("/api/user_profile"), ["/api/user_profile"], "literal underscore")
+    assert_eq(matches("/api/user%profile"), ["/api/user%profile"], "literal percent")
+    assert_eq(matches("*.js"), ["/static/app.js"], "* still globs")
+    assert_eq(
+        matches("user*profile"),
+        ["/api/user%profile", "/api/userXprofile", "/api/user_profile"],
+        "* spans all three",
+    )
+    # A backslash in the filter must not eat the character after it.
+    con.execute(r"INSERT INTO u VALUES ('/api/a\b')")
+    assert_eq(matches(r"/api/a\b"), [r"/api/a\b"], "literal backslash")
+    print("  ✓ url filter: _ and % are literal, * globs, ESCAPE clause paired")
+
+
 def phase_6_har_redirects(_kernel: Kernel) -> None:
     """har_entries resolves a redirect chain hop-by-hop — no kernel or Chrome.
 
@@ -500,6 +564,27 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         assert_true("BARS= 1" in out, f"single label bar after re-label (got {out!r})")
         print("  ✓ label survives Tab re-wrap; re-label replaces, no orphaned bar")
 
+        # The registration is `addScriptToEvaluateOnNewDocument`, so surviving a
+        # navigation is the whole reason it isn't a one-shot evaluate — and it
+        # was the one case nothing asserted. That script runs at document
+        # *start*, where `document.body` is still null, so the mount threw
+        # before it appended anything and the bar never came back. It looked
+        # fine because `runImmediately: True` had already mounted it into the
+        # document that was live when the label was set.
+        out = _exec(
+            "await _t2.cdp('Page.navigate',"
+            f" url='data:text/html,<p>{_MARKER}-navigated</p>')\n"
+            "await _t2._await_ready_signal(\"document.readyState === 'complete'\")\n"
+            "await asyncio.sleep(0.5)\n"
+            "print('BARS=', await _t2.js("
+            "\"document.querySelectorAll('#__repld_label_bar').length\"))\n"
+            "print('TEXT=', await _t2.js("
+            "\"(document.getElementById('__repld_label_bar')||{}).textContent\"))"
+        )
+        assert_true("BARS= 1" in out, f"label bar re-mounts after navigation ({out!r})")
+        assert_true("TEXT= phase6b" in out, f"re-mounted bar keeps its text ({out!r})")
+        print("  ✓ label bar re-mounts after a navigation (document-start body)")
+
         # Ready-selector poll: navigate (replacing the document) while the
         # poll is waiting for an element only the *next* document has. The
         # old DOM.getDocument root went stale here and never matched.
@@ -519,6 +604,27 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             f"ready-selector survives document replacement (got {out!r})",
         )
         print("  ✓ ready-selector poll survives mid-wait navigation")
+
+        # Every custom selector form ranks visible matches over hidden ones.
+        # `text=` was the only one that considered visibility at all, so
+        # `text=Save` skipped the hidden button while `role=button[name="Save"]`
+        # returned it and the click landed on nothing. Each pair below puts the
+        # hidden match *first* in document order, so a form that ignores
+        # visibility picks the wrong one.
+        out = _exec(
+            f"_t4 = await browser.open('data:text/html,<p>{_MARKER}-sel</p>')\n"
+            f"await _t4.js({json.dumps(f'document.body.innerHTML = {json.dumps(_SEL_HTML)}')})\n"
+            "from repld.browser.selector import resolve as _rs\n"
+            f"for _s, _want in {_SEL_CASES!r}:\n"
+            "    _got = await _t4.js('(' + _rs(_s).js + ' || {}).id')\n"
+            "    print('SEL', _s, '->', _got, 'want', _want)\n"
+        )
+        for sel, want in _SEL_CASES:
+            assert_true(
+                f"SEL {sel} -> {want} want {want}" in out,
+                f"{sel} prefers the visible match (got {out!r})",
+            )
+        print(f"  ✓ all {len(_SEL_CASES)} selector forms rank visible over hidden")
 
         b.call("tools/call", {"name": "browser_detach", "arguments": {}}, timeout=5.0)
     finally:

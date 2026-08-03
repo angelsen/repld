@@ -36,6 +36,7 @@ import uuid
 from dataclasses import dataclass
 from typing import IO, Literal
 
+from . import bg
 from .channel import push_channel
 from .events import HumanPromptClosed, HumanPromptOpen, HumanPromptResponse, emit
 
@@ -237,7 +238,11 @@ async def _gate(
 
     # Route to pill UI if tab is pinned
     if use_pill and tab is not None:
-        asyncio.create_task(
+        # bg.spawn, not a bare create_task: `use_pill` is precisely the case
+        # where the push above withheld the `repld gate answer` command because
+        # a pill was going to render, so a task collected mid-flight leaves the
+        # gate with no surface at all. See bg.py.
+        bg.spawn(
             tab._show_gate(gate_id, kind, prompt, options),
             name=f"repld-gate-show-{gate_id}",
         )

@@ -17,6 +17,7 @@ import urllib.request
 from fnmatch import fnmatch
 from typing import Any, Callable
 
+from .. import bg
 from .cdp import CDPSession
 
 # Target types that are infrastructure, not user-visible pages/iframes.
@@ -426,7 +427,10 @@ class BrowserSession:
                 browser_session=self,
             )
             self._sessions[session_id] = cdp
-            asyncio.create_task(
+            # bg.spawn, not a bare create_task — a task collected mid-flight
+            # here leaves the tab attached but recording nothing at all. See
+            # bg.py.
+            bg.spawn(
                 cdp._enable_domains(),
                 name=f"repld-domains-{target_id[:8]}",
             )
@@ -584,7 +588,7 @@ class BrowserSession:
             target_info = params.get("targetInfo", {})
             matched_id = self._resolve_target(target_info)
             if matched_id and self._on_target_created:
-                asyncio.create_task(
+                bg.spawn(
                     self._auto_attach(target_info, matched_id),
                     name=f"repld-auto-attach-{matched_id[:8]}",
                 )
@@ -615,7 +619,7 @@ class BrowserSession:
             # Not attached yet — check if it now matches a pattern
             matched_id = self._resolve_target(target_info)
             if matched_id and self._on_target_created:
-                asyncio.create_task(
+                bg.spawn(
                     self._auto_attach(target_info, matched_id),
                     name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
                 )

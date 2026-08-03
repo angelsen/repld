@@ -36,10 +36,23 @@ class TabQueryMixin:
         sql = f"SELECT * FROM {source} {where} {tail}"
         return self._session.query_dicts(sql, bind_params if bind_params else None)
 
+    # `*` is the only wildcard this filter offers, so LIKE's own metacharacters
+    # have to be escaped out of the literal text — `_` matches any single
+    # character, and it is common enough in URLs (`/api/user_profile`) that
+    # leaving it live made the filter quietly over-match. Paired with
+    # `_LIKE_ESCAPE` on every comparison built from this; a pattern with
+    # backslashes in it means nothing without the ESCAPE clause.
+    _LIKE_ESCAPE = " ESCAPE '\\'"
+
     @staticmethod
     def _like_pattern(url: str) -> str:
-        """Convert a `*`-glob URL filter to a SQL LIKE pattern."""
-        pattern = url.replace("*", "%")
+        """Convert a `*`-glob URL filter to a SQL LIKE pattern.
+
+        Escaping runs before the `*` translation, or the `%` it produces would
+        be escaped along with the user's literal ones.
+        """
+        escaped = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = escaped.replace("*", "%")
         if not pattern.startswith("%"):
             pattern = "%" + pattern
         if not pattern.endswith("%"):
@@ -61,7 +74,7 @@ class TabQueryMixin:
         bind_params: list[Any] = []
 
         if url:
-            conditions.append("url LIKE ?")
+            conditions.append("url LIKE ?" + self._LIKE_ESCAPE)
             bind_params.append(self._like_pattern(url))
         if method:
             conditions.append("method = ?")
@@ -155,7 +168,8 @@ class TabQueryMixin:
 
         if url:
             conditions.append(
-                "request_id IN (SELECT request_id FROM har_summary WHERE url LIKE ?)"
+                "request_id IN (SELECT request_id FROM har_summary"
+                " WHERE url LIKE ?" + self._LIKE_ESCAPE + ")"
             )
             bind_params.append(self._like_pattern(url))
         if event_name:
