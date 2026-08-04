@@ -26,6 +26,18 @@ from .tasks import spill_marker, spill_text as _spill_text
 
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
+# The `target` property, one object shared by the fifteen browser tools whose
+# copy of it was byte-identical. Safe to share because TOOLS is read-only data:
+# `_tools_list` filters it into a new list and json-encodes it, and the only
+# `inputSchema` mutation in the tree is in `gists.py`, on schemas it builds
+# itself for gist tools. Anything that later wants to edit a schema in place
+# has to copy first, or it edits all fifteen.
+#
+# `browser_detach` and `browser_clear` deliberately keep their own literal —
+# both say something the shared text can't ("detach one tab", "omit to clear
+# all"), which is the distinction worth preserving over the uniformity.
+_TARGET_PARAM = {"type": "string", "description": _TARGET_DESC}
+
 TOOLS = [
     *CORE_TOOLS,
     {
@@ -86,10 +98,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "code": {
                     "type": "string",
                     "description": "JavaScript expression to evaluate",
@@ -111,10 +120,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "url": {"type": "string", "description": "URL substring filter"},
                 "method": {
                     "type": "string",
@@ -137,10 +143,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "request_id": {"type": "string"},
             },
             "required": ["target", "request_id"],
@@ -152,10 +155,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "request_id": {"type": "string"},
             },
             "required": ["target", "request_id"],
@@ -171,10 +171,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "url": {"type": "string"},
                 "force": {
                     "type": "boolean",
@@ -208,10 +205,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "key": {
                     "type": "string",
                     "description": "Key name: Enter, Escape, Tab, ArrowDown, etc.",
@@ -229,10 +223,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
             },
             "required": ["target"],
         },
@@ -250,10 +241,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "url": {"type": "string"},
                 "method": {"type": "string", "default": "GET"},
                 "body": {
@@ -281,10 +269,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "selector": {
                     "type": "string",
                     "description": "CSS, text=Label, role=button[name='OK'], label=Name, or tag:has-text('...')",
@@ -302,10 +287,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "selector": {"type": "string"},
                 "text": {"type": "string"},
                 "press_enter": {"type": "boolean", "default": False},
@@ -319,10 +301,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "level": {
                     "type": "string",
                     "description": "Filter by level: log, info, warning, error",
@@ -338,10 +317,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "full_page": {"type": "boolean", "default": False},
             },
             "required": ["target"],
@@ -353,10 +329,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "method": {
                     "type": "string",
                     "description": "CDP method, e.g. 'Page.navigate'",
@@ -391,10 +364,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
             },
             "required": ["target"],
         },
@@ -410,10 +380,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {
-                    "type": "string",
-                    "description": _TARGET_DESC,
-                },
+                "target": _TARGET_PARAM,
                 "control": {
                     "type": "string",
                     "description": "Control name (e.g. 'auth', 'thread')",
