@@ -88,7 +88,14 @@ print("FastAPI on :8000, db session ready")
 
 Nothing to pass — the file is found by name. The agent now has a live handle on your running app: inspect routes, query the ORM, call handlers directly. A bootstrap that raises leaves the kernel up (you need a live kernel to fix it from) and pushes an `init_error` notification.
 
-`./.env` is read at boot too, and never overrides a variable that's already set.
+`./.env` is read at boot too, and never overrides a variable that's already set. Unlike `./gists`, it doesn't reload on mtime — so if you write a value after the kernel is up, re-read it yourself:
+
+```python
+from repld import load_dotenv
+load_dotenv()
+```
+
+Existing variables still win, so a name captured while empty stays empty — `os.environ.pop("KEY", None)` first if you're correcting one.
 
 ## Answering a prompt
 

@@ -1,6 +1,16 @@
 # repld[browser] — design
 
-Design spec for the browser extra. Shipped as `repld[browser]` — see README for user-facing docs.
+Design spec for the browser extra, written before it was built and kept for its
+rationale — why the event store is DuckDB, why one WebSocket per port, why
+`click` is a builtin rather than a `tab.js` call. It is **not** the API
+reference: the shipped surface is `repld help browser` / `repld://docs/browser`
+(and the [Browser API page](https://angelsen.github.io/repld/docs/reference/browser/)),
+which are generated from and checked against the code. Where this document and
+those disagree, those are right.
+
+Sections that the implementation moved away from say so inline rather than
+being edited into agreement, because the gap between what was planned and what
+shipped is the part worth keeping.
 
 ## Premise
 
@@ -13,7 +23,7 @@ The load-bearing primitive is the DevTools **Network tab** reconstructed over CD
 1. **Network tab equivalent.** DuckDB HAR view over CDP events, including login redirects and WebSocket frames, with body capture via Fetch.
 2. **`tab.js(...)`.** The agent's primary interaction surface. `Runtime.evaluate` with auto-await and exception unwrap.
 3. **Console view.** `Runtime.consoleAPICalled` + `exceptionThrown` + `Log.entryAdded` collapsed into one queryable view.
-4. **Query-first API.** `tab.network(...)` / `tab.console(...)` return rows; `tab.events.query(sql)` is the escape hatch.
+4. **Query-first API.** `tab.network(...)` / `tab.console(...)` return rows, with raw SQL as the escape hatch beneath them. (Shipped as `tab.cdp(...)` instead — the SQL stayed internal; see the `Tab` section.)
 5. **Async-native.** Lives on repld's shared asyncio loop. No threads, no Futures, no SSE coalescing.
 
 ## Non-goals (v1)
@@ -100,7 +110,7 @@ Handler logic per `Fetch.requestPaused`:
 
 **Cost:** ~5–15ms per request (one CDP round-trip added at each stage). Acceptable for dev-time; on by default; per-tab opt-out via `tab.capture_bodies = False`.
 
-**Backpressure signal.** Track `paused_count` (incremented on `requestPaused`, decremented on `continueRequest`). Expose as `tab.capture_pending` so the agent can see when our handler is the bottleneck.
+**Backpressure signal.** Track `paused_count` (incremented on `requestPaused`, decremented on `continueRequest`). Expose as `tab.capture_pending` so the agent can see when our handler is the bottleneck. *(Not built — no public counter exists. The pressure it would have measured is handled instead by `_should_capture_body` skipping assets outright, and by `_INFLIGHT_MAX_AGE` ageing out anything left open.)*
 
 ### 4. HAR view SQL — port `webtap/cdp/har.py` + fix + extend
 
@@ -191,34 +201,42 @@ browser.port = 9222                 # default from REPLD_CHROME_PORT env
 
 ```python
 # interaction
-tab.js(expr, *, await_promise="auto", user_gesture=True)
+tab.js(expr, *, await_promise=True, user_gesture=True)
 tab.click(selector, *, button="left", click_count=1)
 tab.type_text(selector, text, *, delay_ms=0, press_enter=False)
 tab.navigate(url)
 tab.reload()
-tab.screenshot(*, full_page=False) -> bytes
+tab.screenshot(*, full_page=False, path=None) -> dict
 
-# query (all return list[Row])
+# query (sync, DuckDB-backed; all return list[Row])
 tab.network(url=None, method=None, status=None, type=None, since=None, include_assets=False)
 tab.console(level=None, source=None, since=None)
+tab.sse(url=None, event_name=None, since=None)
+tab.lifecycle(name=None, since=None)
 # since= is epoch seconds on every one of these — pass time.time().
-tab.ws(url=None)
-tab.ws_frames(url=None, direction=None)
 
 # detail
-tab.body(request_id) -> {body, base64_encoded, capture}
-tab.request(request_id) -> Row (full entry)
-tab.cookies -> dict  (property; calls Network.getAllCookies)
+tab.body(request_id) -> {body, base64Encoded[, capture]}
+tab.request(request_id) -> dict (full HAR entry)
+tab.cookies() -> list[dict]  (async; Network.getCookies, tab-scoped)
 
 # config
-tab.capture_bodies = True   # default; Fetch-based, captures login redirect bodies
-tab.preserve_log = True     # keep events across navigations; default
+tab.capture_bodies = True   # Fetch-based, captures login redirect bodies.
+                            # True on get()/open() tabs, False on watch().
 
-# escape hatches
-tab.events.query(sql, params=None)
-tab.events.subscribe(method_pattern)   # async iterator
+# escape hatch
 tab.cdp(method, **params)
 ```
+
+The shipped surface is much larger than this block — `fetch`, `key`, `tap`,
+`swipe`, `scroll`, `tree`, `wait_for`, `pin` and the gate methods all arrived
+after it was written. See the reference for those. What's worth recording here
+is the four names in the original draft that did *not* ship:
+
+- **`tab.ws` / `tab.ws_frames`.** WebSockets are in the HAR view — connection, handshake, close, and per-connection `frames_sent` / `frames_received` counts — so `tab.network()` already shows one and a dedicated method earned nothing. Individual frame *payloads* are the exception: they are stored as events, but with no public SQL surface nothing exposes them. That is a real gap rather than a decision. The two query methods that did earn their own signature, `tab.sse()` and `tab.lifecycle()`, are ones this draft never anticipated.
+- **`preserve_log`.** Not a toggle. Events are always kept, bounded only by the FIFO prune at `MAX_EVENTS`, and cleared explicitly with `tab.clear()` / `browser.clear()`. They survive more than the draft assumed: `reattach_session` re-attaches *in place*, so the same `CDPSession` and the same DuckDB carry through navigation, HMR and a WebSocket reconnect alike. A fresh store appears only with a genuinely new target.
+- **`tab.events.query(sql)` / `.subscribe()`.** The raw-SQL escape hatch is deliberately not public. `CDPSession.query` exists and takes a per-call cursor precisely so it can run off the loop, but exposing it would make the view schema a compatibility surface — and those views get reshaped for performance (the `ORDER BY` removal, the `har_summary` delta). `tab.cdp` is the escape hatch that shipped.
+- **`capture_pending`.** No public counter. See the backpressure note under Fetch capture.
 
 **Why `click` / `type_text` are builtins** (vs `tab.js`): the discovery loop — *trigger interaction → observe API call → synthesize client* — requires `event.isTrusted = true`. DOM `.click()` / `.value = 'x'` produce untrusted events that auth/CSRF-protected endpoints and debounced-input React components silently ignore. `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` produce real keyboard/mouse events. ~40 LOC combined, thin CDP wrappers.
 
@@ -328,6 +346,10 @@ patching `repld.browser.Browser` silently leaves the real class in play.
 
 ## Implementation order
 
+The build plan as written, kept as the record of it. All six landed, in this
+order; the LOC estimates and the two names that didn't survive
+(`tab.events.query`, `capture_pending`) are left as they were.
+
 1. **BrowserSession + CDPSession core** — WS connect, sessionId multiplex, event → DuckDB. Plus target-watching. ~450 LOC. Smoketest: attach to Chrome, see events arrive in DB.
 2. **HAR view + console view** — port + fix + extend. ~250 LOC SQL. Smoketest: browse to a site, query `har_entries`, verify redirects are separate rows.
 3. **Tab facade** — `tab.js`, `tab.network`, `tab.console`, `tab.body`, `tab.cookies`, `tab.events.query`, `tab.cdp`. ~250 LOC. Smoketest: run JS, query filtered network.
@@ -353,8 +375,10 @@ conversion existed each method compared the caller's number against its raw
 column, so only `network()` behaved as documented — `console(since=...)`
 matched every row and `sse`/`lifecycle` matched none.
 
-- **`browser.get(...)` when multiple tabs match.** Returns the first match — attach order, not alphabetical. Agent tightens the filter or calls `browser.tabs[i]` for explicit disambiguation.
-- **Default `tab` when only one is attached.** Useful sugar for single-tab workflows — `tab.js(...)` as a module-level function that delegates. Probably worth it; easy to remove if it's confusing.
-- **Redirect entry ID.** Composite `(request_id, redirect_index)`, synthetic `row_id`, or `request_id.N` string? Synthetic row_id is simplest for SQL; composite is more meaningful for agents reading results.
-- **DuckDB lifetime across navigation.** `preserve_log=True` is the default — but do we also preserve across full tab close and re-attach? Probably not; new attach = new session = new DB. Surface that clearly.
-- **Cookie domain scoping.** `tab.cookies` calls `Network.getAllCookies` which returns the *browser's* cookies, not just this tab's origin. Filter by tab URL's registrable domain by default, expose `tab.cookies.all` for the full jar.
+The rest are decided too, and are kept with their answers rather than deleted:
+
+- **`browser.get(...)` when multiple tabs match.** Returns the first match, in attach order — not alphabetical, and not an error. Tighten the pattern, or pass a `{port}:{6-hex}` target ID for an unambiguous handle.
+- **Default `tab` when only one is attached.** Dropped. A module-level `tab` that delegates to "the" tab is wrong the moment a popup opens, and the failure is silent — the call goes to a real tab, just not the intended one. `browser.get(pattern)` is one line and says which.
+- **Redirect entry ID.** Both, in the end. `redirect_index` is a `ROW_NUMBER()` over the hops of a `request_id`, so `(request_id, redirect_index)` reads meaningfully, while `rowid` stays available underneath for the SQL that needs a single monotonic key — `pre_observe` cuts its delta on exactly that.
+- **DuckDB lifetime across navigation.** Answered in the `Tab` section above: the store belongs to the `CDPSession`, and reattach happens in place, so it survives navigation, HMR and reconnect. Only a new target starts a new store.
+- **Cookie domain scoping.** Sidestepped rather than filtered. `tab.cookies()` calls `Network.getCookies`, which is already scoped to the tab's frames, so there was nothing to filter by registrable domain and no need for a `.all` escape hatch. `tab.cdp("Network.getAllCookies")` reaches the full jar for the rare caller who wants it.

@@ -11,7 +11,7 @@ A gist is a plain Python file in `./gists/` (project-local) or `~/.repld/gists/`
 repld gist new myapp
 ```
 
-This scaffolds `./gists/myapp.py` with a docstring, `__repld_usage__`, and a starter class.
+This scaffolds `./gists/myapp.py` split the way a gist is meant to grow: a docstring, a commented-out `__repld_deps__`, a plain `async def` holding the logic, and an `Annotated`-typed `_tool_*` wrapper below it. The top half is portable and survives if you ever [graduate the gist](/repld/production/) into a real service; the bottom half is the repld wiring you shed.
 
 A typical gist wraps a web app's internal API:
 
@@ -62,11 +62,21 @@ Declare external dependencies:
 __repld_deps__ = ["httpx>=0.27", "pandas>=2.3"]
 ```
 
-The kernel scans these at boot and prompts to install missing packages. Use `"."` to install the gist's own project as editable:
+The kernel scans these at boot and asks before installing anything missing. Two other forms are accepted: `"."` installs the gist's own project as editable, and `"path:some/dir"` just prepends a local directory to `sys.path` for vendored code with nothing to install.
 
 ```python
-__repld_deps__ = ["."]  # installs the project containing this gist
+__repld_deps__ = [
+    "httpx>=0.27",    # PEP 508 requirement — installed
+    ".",              # the project containing this gist, editable
+    "path:./vendor",  # no install — straight onto sys.path
+]
 ```
+
+Installs land in a shared, interpreter-versioned directory (`~/.local/share/repld/deps/py3.12`), never in your project's venv — `uv sync` would prune them, and a kernel bound to a project runs under an ephemeral `uv run` overlay that differs every invocation. The directory is *appended* to `sys.path`, so your project's own packages always win.
+
+:::caution[Headless kernels need one deliberate install]
+The prompt has to be answered at the kernel's own stdin, and since kernels spawn lazily the usual one is headless with stdin on `/dev/null`. It doesn't read that as consent: it reports what's missing and prints the `uv pip install --target …` command to run. Start `repld` in a pane once to be asked instead. `repld exec` can't answer it — that's a separate process talking over the socket, while the install runs in the kernel.
+:::
 
 ## MCP tool registration
 

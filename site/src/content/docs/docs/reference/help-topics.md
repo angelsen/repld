@@ -43,11 +43,13 @@ Fire-and-forget. The coroutine runs in the background; a `task_done` channel not
 ## @every
 
 ```python
-@every(seconds, label=None)
+@every(seconds, label=None, delay=0)
 def fn(): ...
 ```
 
-Periodic ticker. First tick runs immediately. The decorated function gets a `.cancel()` method. Errors don't stop the ticker — they push an `every` channel notification with the traceback.
+Periodic ticker. The first tick runs immediately unless `delay=` holds it back — use that when you're watching something you just started, or the first check races its warmup and a false negative sends the ticker after something that was about to be fine. The decorated function gets a `.cancel()` method. Errors don't stop the ticker — they push an `every` channel notification with the traceback.
+
+A ticker outlives the cell that registered it, so its output is ambient: rendered unattributed and uncapped, not charged against that cell's budget.
 
 ```python
 every.list()        # active EveryHandles

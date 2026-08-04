@@ -7,13 +7,13 @@ repld's browser integration attaches to your real Chrome via CDP. No headless au
 
 ## Prerequisites
 
-Start Chrome with remote debugging:
+**Chrome 140 or newer.** Start it with remote debugging:
 
 ```bash
 google-chrome --remote-debugging-port=9222
 ```
 
-Run the kernel via the `browser` subcommand — it re-execs under `uv run` with `duckdb`/`websockets` for this invocation, so browser tools work without adding anything to your project's dependencies:
+Run the kernel via the `browser` subcommand — it re-execs under `uv run` with `duckdb`, `websockets` and `pillow` for this invocation, so browser tools work without adding anything to your project's dependencies:
 
 ```bash
 repld browser
@@ -24,6 +24,8 @@ For a permanent global install instead:
 ```bash
 uv tool install repld-tool[browser]
 ```
+
+All three packages are required and all three are imported eagerly, so a two-of-three install doesn't degrade to "everything but screenshots" — the whole extra reads as absent and no `browser` object appears in the kernel.
 
 ## Getting tabs
 

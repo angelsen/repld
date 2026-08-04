@@ -27,7 +27,8 @@ Project cwd                     → no repld config; `claude mcp add` registers 
 $XDG_RUNTIME_DIR/repld/        → 0700; /tmp/repld-{uid} if XDG is unset
  └─ projects/<slug>/            → per-project runtime state, 0700
      ├─ kernel.sock             → unix-domain IPC socket
-     ├─ kernel.lock             → {pid, socket_path, cwd, dashboard_port}
+     ├─ kernel.lock             → {pid, socket_path, cwd, started_at, python,
+     │                              executable, dashboard_port}
      ├─ kernel.flock            → single-kernel-per-project mutex
      ├─ kernel.dashboard        → dashboard port/token + browser restore hint
      ├─ kernel.events           → NDJSON event log (`repld log` reads this)
@@ -49,7 +50,7 @@ Terminal 2 (optional): `repld`  Kernel with the live TUI display, when you
 Terminal 3: `repld exec`        Human REPL / one-shot CLI, same IPC socket
 ```
 
-Eleven CLI subcommands, all dispatched from `repld:main`:
+The bare `repld` runs a kernel; eleven subcommands dispatch from `repld:main`:
 
 - `repld` — long-running Python kernel for the cwd, with the live display. Takes a flock mutex; if a kernel already owns the project it prints a note and exits 0 rather than competing.
 - `repld bridge` — stdio MCP subprocess Claude Code spawns for a registered repld server. Inherits cwd; attaches to a kernel that's already running, or, if none exists, answers MCP discovery from `kernel.cache` and spawns a headless one lazily on the first real tool call. Proxies stdio MCP ↔ the kernel's IPC socket. Survives kernel death: it replays the client's handshake onto a fresh kernel and answers orphaned requests with `-31001`. Also relays channel notifications (`notifications/claude/channel`) back to the client.

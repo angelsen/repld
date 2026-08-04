@@ -21,7 +21,9 @@ uv tool install repld-tool        # global install (recommended)
 
 cd your-project
 claude mcp add repld -- repld bridge   # register it with the client
-claude                                 # the bridge starts a kernel for you
+
+# channel push is a research preview, so it takes a development flag
+claude --dangerously-load-development-channels server:repld
 ```
 
 You don't have to start the kernel yourself: `repld bridge` spawns a headless
@@ -85,6 +87,9 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 | `exec` | Execute Python. Returns inline within timeout (default 2s); otherwise returns `task_id` and pushes channel on completion. |
 | `get_task` | Status + head/tail preview of a running task's output. |
 | `cancel` | Cancel a running task by id. |
+| `repld_restart` | Restart the kernel, discarding in-memory state. The MCP session survives — the bridge respawns and replays the handshake. Not needed for gist edits; those auto-reload. |
+
+`repld_restart` is served by the bridge rather than the kernel, since a kernel can't answer "restart yourself" without the reply dying in flight.
 
 **Browser** (run `repld browser` instead of `repld`, or `uv tool install repld-tool[browser]`):
 

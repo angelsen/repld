@@ -11,7 +11,8 @@ coherent — the lockfile, flock mutex, dashboard hint, and event log all follow
 the socket wherever the caller pointed it.
 
     kernel.sock   unix-domain IPC socket
-    kernel.lock   JSON {pid, socket_path, cwd, started_at, dashboard_port}
+    kernel.lock   JSON {pid, socket_path, cwd, started_at, python, executable,
+                  dashboard_port}
     kernel.flock  flock(2) mutex — never replaced, so the lock survives
                   atomic rewrites of kernel.lock
     kernel.dashboard  dashboard port + token + browser restore hint (0600)
