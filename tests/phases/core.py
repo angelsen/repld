@@ -4,7 +4,7 @@ import socket
 import time
 from pathlib import Path
 
-from harness import Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true
 
 from repld import core_schemas
 from repld.ipc import Session
@@ -235,3 +235,102 @@ def phase_3_argv_and_registry(_kernel: Kernel) -> None:
         gists._REGISTRY_PATH = original
         gists._malformed_warned.clear()
     print("  ✓ gist registry: wrong-shaped JSON reads as empty, not as a crash")
+
+
+def phase_3_patch_targets(_kernel: Kernel) -> None:
+    """Every `mod.attr = ...` in tests/ patches a name something resolves there.
+
+    A monkeypatch is the one construct that fails *silently* when a module is
+    split: the assignment always succeeds, so the test goes on passing while
+    the real object stays in play. That is what happened when `Browser` moved
+    out of `repld/browser/__init__.py` — phase 6 patched the re-export, the spy
+    never saw a call, and the only reason it surfaced was that the real class
+    then tried to open a socket.
+
+    The rule is not "patch the module that defines it". `repld.gist_deps` does
+    not read its own `scan_deps`, yet patching it works, because `gist_cmd` and
+    `kernel` call `gist_deps.scan_deps(...)` — a lookup on the module object at
+    call time. So a patch on `M.attr` reaches someone iff either M's own code
+    reads a bare `attr`, or some module reads `<alias-of-M>.attr`. Anything
+    else sets a name nobody ever resolves through.
+
+    Discovered by sweep rather than listed, so a patch written later is covered
+    without anyone remembering to add it here.
+    """
+    import ast
+    import importlib
+
+    src_trees = {
+        f.resolve(): ast.parse(f.read_text())
+        for f in sorted((REPO / "src" / "repld").rglob("*.py"))
+    }
+
+    def module_aliases(tree, modname: str) -> set[str]:
+        """Local names in `tree` that refer to the module `modname`."""
+        out, tail = set(), modname.split(".")[-1]
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name == modname:
+                        out.add(a.asname or a.name.split(".")[0])
+            elif isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    if a.name == tail:
+                        out.add(a.asname or a.name)
+        return out
+
+    def resolved_through(modname: str, attr: str) -> bool:
+        own = Path(importlib.import_module(modname).__file__ or "").resolve()
+        for n in ast.walk(src_trees[own]):
+            if isinstance(n, ast.Name) and n.id == attr and isinstance(n.ctx, ast.Load):
+                return True
+        for tree in src_trees.values():
+            aliases = module_aliases(tree, modname)
+            if not aliases:
+                continue
+            for n in ast.walk(tree):
+                if (
+                    isinstance(n, ast.Attribute)
+                    and n.attr == attr
+                    and isinstance(n.value, ast.Name)
+                    and n.value.id in aliases
+                    and isinstance(n.ctx, ast.Load)
+                ):
+                    return True
+        return False
+
+    inert, checked = [], 0
+    for f in sorted((REPO / "tests").rglob("*.py")):
+        tree = ast.parse(f.read_text())
+        # Local names bound to a repld module in this test file.
+        mods: dict[str, str] = {}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name.startswith("repld"):
+                        mods[a.asname or a.name.split(".")[0]] = a.name
+            elif isinstance(n, ast.ImportFrom) and (n.module or "").startswith("repld"):
+                for a in n.names:
+                    candidate = f"{n.module}.{a.name}"
+                    try:
+                        importlib.import_module(candidate)
+                    except Exception:
+                        continue  # a class or function, not a submodule
+                    mods[a.asname or a.name] = candidate
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Assign):
+                continue
+            for t in n.targets:
+                if not (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)):
+                    continue
+                modname = mods.get(t.value.id)
+                if modname is None:
+                    continue  # an object attribute, not a module patch
+                checked += 1
+                if not resolved_through(modname, t.attr):
+                    rel = f.relative_to(REPO)
+                    inert.append(f"{rel}:{n.lineno} {modname}.{t.attr}")
+
+    assert_eq(inert, [], "monkeypatches that nothing resolves through (inert)")
+    assert_true(checked >= 8, f"the sweep found the patches (got {checked})")
+    print(f"  ✓ {checked} module monkeypatch(es) all target a namespace in use")

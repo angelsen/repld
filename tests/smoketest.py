@@ -33,7 +33,7 @@ from phases.browser import (
     phase_6_tools_and_gists,
 )
 from phases.channels import phase_4, phase_4_push_kind_args, phase_4b_pregate
-from phases.core import phase_3, phase_3_argv_and_registry
+from phases.core import phase_3, phase_3_argv_and_registry, phase_3_patch_targets
 from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
@@ -57,7 +57,11 @@ from phases.shutdown import phase_11_shutdown
 from phases.venv import phase_16_venv_binding
 
 PHASES = {
-    3: lambda k: (phase_3(k), phase_3_argv_and_registry(k)),
+    3: lambda k: (
+        phase_3(k),
+        phase_3_argv_and_registry(k),
+        phase_3_patch_targets(k),
+    ),
     4: lambda k: (phase_4(k), phase_4b_pregate(k), phase_4_push_kind_args(k)),
     5: lambda k: (
         phase_5(k),
