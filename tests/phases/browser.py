@@ -298,6 +298,115 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     print("  ✓ reattach re-registers the pill's gate binding (and only when pinned)")
 
 
+def phase_6_offloop_writes(_kernel: Kernel) -> None:
+    """Loop-owned state is reached *through* the loop by callers not on it.
+
+    Two things sat on the same mistake, and neither needs Chrome — a loop on a
+    thread and a CDPSession over a stub transport are enough.
+
+    `bg.spawn(..., loop=)` exists precisely for the sync callers that are off
+    the loop (`Tab`'s `capture_bodies` / `label` setters, which any pure-sync
+    exec cell reaches through `asyncio.to_thread`) and used
+    `loop.create_task`. From a foreign thread that appends the task's first
+    step to the ready queue without the `_write_to_self()` that
+    `call_soon_threadsafe` does, so an idle loop is never woken and the
+    coroutine simply does not run. It passed unnoticed only because the
+    watchdog probes the loop once a second — hence the *idle* loop here, with
+    nothing else scheduled to wake it.
+
+    `CDPSession.clear_events` wrote `_event_count` / `_next_prune_check` /
+    `_inflight` from whatever thread called it, racing `store_event`'s
+    `+=` on the loop. Asserted by blocking the loop: the reset must still be
+    pending, which is the observable difference from writing them in place.
+    """
+    import threading
+
+    from repld import bg
+    from repld.browser.cdp import PRUNE_CHECK_INTERVAL, CDPSession
+
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    try:
+        # Let the loop settle into its selector with no timers pending. Any
+        # wakeup at all would mask the bug this asserts.
+        time.sleep(0.2)
+
+        ran = threading.Event()
+        seen_name: list[str] = []
+
+        async def _work() -> None:
+            task = asyncio.current_task()
+            seen_name.append(task.get_name() if task else "?")
+            ran.set()
+
+        handle = bg.spawn(_work(), name="repld-offloop-probe", loop=loop)
+        assert_true(ran.wait(2.0), "bg.spawn(loop=) runs the coroutine on an idle loop")
+        assert_eq(handle, None, "the off-loop spawn returns no handle to this thread")
+        # An unnamed loop task is what kernel._pick_victim treats as fair game
+        # when the watchdog escalates, so the name has to survive the hop.
+        assert_eq(seen_name, ["repld-offloop-probe"], "the task keeps its repld- name")
+        print("  ✓ bg.spawn(loop=) wakes an idle loop and keeps the task's name")
+
+        session = CDPSession(
+            send=None,
+            session_id="s1",
+            target_info={"targetId": "t" * 32, "type": "page"},
+            port=9222,
+            loop=loop,
+        )
+        try:
+            for i in range(3):
+                session.store_event({"method": "X", "params": {}}, "X", str(i))
+            session._inflight["r1"] = time.monotonic()
+
+            gate = threading.Event()
+            loop.call_soon_threadsafe(gate.wait)  # hold the loop
+            try:
+                session.clear_events()
+                assert_eq(
+                    session.query("SELECT COUNT(*) FROM events")[0][0],
+                    0,
+                    "the delete does not wait on the loop (per-call cursor)",
+                )
+                assert_eq(
+                    session._event_count,
+                    3,
+                    "the counter reset is queued on the loop, not written here",
+                )
+            finally:
+                gate.set()
+
+            deadline = time.monotonic() + 2.0
+            while session._event_count != 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert_eq(session._event_count, 0, "counters reset once the loop runs")
+            assert_eq(
+                session._next_prune_check,
+                PRUNE_CHECK_INTERVAL,
+                "prune threshold reset with it",
+            )
+            assert_eq(session._inflight, {}, "_inflight cleared with it")
+
+            # On the loop, it stays synchronous — browser_dispatch's
+            # _run_sync_on_loop path must not become fire-and-forget.
+            session.store_event({"method": "X", "params": {}}, "X", "9")
+
+            async def _on_loop_clear() -> int:
+                session.clear_events()
+                return session._event_count
+
+            assert_eq(
+                asyncio.run_coroutine_threadsafe(_on_loop_clear(), loop).result(2),
+                0,
+                "an on-loop caller sees the reset immediately",
+            )
+            print("  ✓ clear_events resets loop-owned counters on the loop")
+        finally:
+            session.cleanup()
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
 def phase_6_capture_filter(_kernel: Kernel) -> None:
     """`_should_capture_body` skips what the HAR view calls an asset.
 

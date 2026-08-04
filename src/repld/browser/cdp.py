@@ -44,6 +44,23 @@ def _is_streaming(params: dict) -> bool:
     return mime.split(";")[0].strip().lower() in _STREAMING_MIME_TYPES
 
 
+def _on_loop(loop: asyncio.AbstractEventLoop | None) -> bool:
+    """Whether the calling thread is running *loop* right now.
+
+    Half this class is reachable from both sides — `browser_dispatch` answers
+    some tools on the IPC reader thread, `runtime._eval` puts every pure-sync
+    exec cell in `asyncio.to_thread`, and the recv handler runs on the loop —
+    so "am I on the loop" is a question two methods here have to ask before
+    deciding how to reach it.
+    """
+    if loop is None:
+        return False
+    try:
+        return asyncio.get_running_loop() is loop
+    except RuntimeError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Console error suppress + cross-tab dedup
 # ---------------------------------------------------------------------------
@@ -662,11 +679,7 @@ class CDPSession:
             raise RuntimeError(
                 "CDPSession has no event loop — cannot fetch body via CDP"
             )
-        try:
-            on_loop = asyncio.get_running_loop() is self._loop
-        except RuntimeError:
-            on_loop = False
-        if on_loop:
+        if _on_loop(self._loop):
             # Blocking on fut.result() here would stall the loop the
             # coroutine needs, timing out after 10s. Fail fast instead.
             return {
@@ -711,16 +724,43 @@ class CDPSession:
             self._inflight.pop(rid, None)
         return len(self._inflight)
 
+    def _reset_counters(self) -> None:
+        """Loop-owned half of `clear_events`. Only ever run on the loop."""
+        self._event_count = 0
+        self._next_prune_check = PRUNE_CHECK_INTERVAL
+        self._inflight.clear()
+
     def clear_events(self) -> None:
-        """Delete all stored events.  Cursor per call — may run on IPC threads."""
+        """Delete all stored events.  Cursor per call — may run on IPC threads.
+
+        The delete is deliberately off-loop-safe; the counters are not, and the
+        two halves are reached differently for that reason. `_event_count`,
+        `_next_prune_check` and `_inflight` are written by `store_event` and
+        `_handle_event` from the recv handler, and `self._event_count += 1` is
+        a read-modify-write that a foreign thread's `= 0` can land inside and
+        lose — leaving the FIFO prune trigger describing a store it no longer
+        matches.
+
+        `browser_dispatch._run_sync_on_loop` already puts the MCP `browser_clear`
+        path on the loop, but that is not the only caller: a `browser.clear()`
+        typed into a pure-sync exec cell runs in `asyncio.to_thread`, and the
+        dashboard reaches `tab.clear()` the same way. Routing here rather than at
+        each entry point is what makes the rule hold for all of them.
+
+        The scheduled reset can miss events that arrive between the delete and
+        it — the count drifts low by however many, never high — and
+        `_async_prune` recounts with `SELECT COUNT(*)` on its next sweep, so the
+        drift is bounded and self-correcting. A lost increment is not.
+        """
         cur = self.db.cursor()
         try:
             cur.execute("DELETE FROM events")
         finally:
             cur.close()
-        self._event_count = 0
-        self._next_prune_check = PRUNE_CHECK_INTERVAL
-        self._inflight.clear()
+        if self._loop is None or _on_loop(self._loop):
+            self._reset_counters()
+        else:
+            self._loop.call_soon_threadsafe(self._reset_counters)
 
     def cleanup(self) -> None:
         """Close the DuckDB connection."""

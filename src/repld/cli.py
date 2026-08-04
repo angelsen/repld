@@ -31,7 +31,7 @@ _SUBCOMMANDS = {
     "browser": (
         "relaunch",
         "run_browser",
-        "re-exec via `uv run` with duckdb/websockets",
+        "re-exec via `uv run` with duckdb/websockets/pillow",
     ),
 }
 

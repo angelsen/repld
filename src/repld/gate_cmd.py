@@ -26,7 +26,7 @@ _USAGE = """\
 repld gate — human gates this project's kernel is waiting on
 
   repld gate [--json] [--socket PATH]
-  repld gate answer <gate_id> <value> [--socket PATH]
+  repld gate [--socket PATH] answer <gate_id> <value...>
 
   A kernel you started with `repld` takes answers in its own pane. One that
   was spawned for you has no pane — answer it here.
@@ -34,6 +34,9 @@ repld gate — human gates this project's kernel is waiting on
   <value> is y/n for a confirm, an option name or its 1-based number for a
   choose, and free text for an ask. Find the id in `repld log -f` or in the
   `awaiting human` channel message.
+
+  Everything after <gate_id> is the answer, verbatim — so an ask takes an
+  unquoted multi-word one, and flags for this command go before `answer`.
 """
 
 _LABEL = "repld gate"
@@ -74,31 +77,57 @@ def _fmt(gate: dict) -> str:
     )
 
 
+def _split_answer(argv: list[str]) -> tuple[list[str], list[str] | None]:
+    """Split argv into the part flags may be read from, and a verbatim value.
+
+    `answer`'s value is free text, so no flag parser may reach past the gate
+    id — and all three that run here did. `paths.resolve_socket_path` consumes
+    `--socket PATH` from *anywhere* in argv, `--json` was filtered the same
+    way, and `cli_args.wants_help` scans every argument by design. So
+    `repld gate answer g1 deploy --socket now` answered `"deploy now"` and
+    silently repointed the connection at a kernel called `now`, and any answer
+    containing `--json` or `--help` was mangled or swallowed outright. The one
+    rule that makes an unquoted multi-word `ask` answer possible is that
+    everything after the id is the answer, so the split has to happen first.
+
+    Returns (head, None) for the listing form. The trailing `[--socket PATH]`
+    the usage used to show after `<value>` is gone with this — it was never
+    distinguishable from an answer that happens to say the same words.
+    """
+    try:
+        i = argv.index("answer")
+    except ValueError:
+        return argv, None
+    # `index` finds the *first* occurrence, so an answer that is itself the
+    # word "answer" (`answer g1 answer this`) still splits at the verb.
+    return argv[: i + 2], argv[i + 2 :]
+
+
 def run_gate(argv: list[str]) -> int:
+    head, value_words = _split_answer(argv)
+
     # Ahead of the `answer` branch, so `repld gate answer --help` is a request
-    # for usage rather than a gate id of '--help' with no value.
-    if cli_args.wants_help(argv):
+    # for usage rather than a gate id of '--help' with no value. Scoped to
+    # `head`, so `repld gate answer g1 --help` answers with "--help".
+    if cli_args.wants_help(head):
         print(_USAGE)
         return 0
 
-    lock_path, rest = paths.resolve_lock_path(argv)
+    lock_path, rest = paths.resolve_lock_path(head)
     as_json = "--json" in rest
     rest = [a for a in rest if a != "--json"]
 
     if rest and rest[0] == "answer":
-        if len(rest) < 3:
+        if len(rest) < 2 or not value_words:
             # stdout, matching every other subcommand's usage-on-error. `_err`
             # is for runtime failures, where stderr is right.
             print(f"{_LABEL}: answer needs a gate id and a value\n")
             print(_USAGE)
             return 2
-        gate_id = rest[1]
-        # Everything after the id, so an unquoted multi-word `ask` answer works.
-        value = " ".join(rest[2:])
-        return _answer(lock_path, gate_id, value, as_json)
+        return _answer(lock_path, rest[1], " ".join(value_words), as_json)
 
     # Only the listing form reaches here — `answer` returned above, and its
-    # trailing words are the answer itself, which no flag-set check can vet.
+    # trailing words never entered `rest` in the first place.
     bad = cli_args.check_args(_LABEL, rest, _USAGE, positionals=0)
     if bad is not None:
         return bad

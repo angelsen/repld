@@ -1073,7 +1073,7 @@ Commands:
   repld gist rm NAME       Unlink a gist (--stale drops all dead links)
   repld gist list          Show local + linked gists
   repld gist lint [NAME]   Check gist(s) for common authoring gaps
-  repld browser ARGS...    Re-exec with browser deps (duckdb/websockets)
+  repld browser ARGS...    Re-exec with browser deps (duckdb/websockets/pillow)
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
 Topics:

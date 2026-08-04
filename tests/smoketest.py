@@ -25,6 +25,7 @@ from phases.browser import (
     phase_6_har_redirects,
     phase_6_label_and_reattach,
     phase_6_like_escaping,
+    phase_6_offloop_writes,
     phase_6_png_resize,
     phase_6_reattach_binding,
     phase_6_tools_and_gists,
@@ -69,6 +70,7 @@ PHASES = {
     6: lambda k: (
         phase_6_png_resize(k),
         phase_6_capture_filter(k),
+        phase_6_offloop_writes(k),
         phase_6_connect_race(k),
         phase_6_reattach_binding(k),
         phase_6_har_redirects(k),

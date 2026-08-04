@@ -181,6 +181,30 @@ def phase_17_gates(kernel: Kernel) -> None:
         )
         print("  ✓ ask takes an unquoted multi-word answer")
 
+        # -- ask, an answer that looks like this command's own flags ----------
+        # Every flag parser here used to reach past the gate id: `--socket PATH`
+        # is consumed from anywhere in argv by `paths.resolve_socket_path`,
+        # `--json` was filtered the same way, and `cli_args.wants_help` scans
+        # every argument by design. So this answer came back as "deploy now"
+        # with the connection silently repointed at a kernel called `now`.
+        task_id = _open_gate(b, 'await ask("Release name?")')
+        gate = _pending(kernel)[0]
+        ok = _gate_cli(
+            kernel, "answer", gate["gate_id"], "deploy", "--socket", "now", "--help"
+        )
+        assert_eq(ok.returncode, 0, f"answering the ask exits 0 (stderr: {ok.stderr})")
+        assert_eq(
+            _await_task(b, task_id).strip(),
+            "'deploy --socket now --help'",
+            "flags after the gate id stay part of the answer",
+        )
+        # The listing form still parses them, and so does `answer` when they
+        # come before the verb — the placement rule the usage text now states.
+        listed = _gate_cli(kernel, "--json")
+        assert_eq(listed.returncode, 0, "listing still accepts --json")
+        assert_eq(json.loads(listed.stdout), [], "…and reports no pending gates")
+        print("  ✓ an ask answer that looks like a flag is passed through verbatim")
+
         # -- unknown id --------------------------------------------------------
         missing = _gate_cli(kernel, "answer", "deadbeef", "y")
         assert_true(missing.returncode != 0, "answering an unknown gate id fails")
