@@ -15,16 +15,16 @@ tab = await browser.open("https://...")            # open new tab
 await browser.watch("*pattern*")                   # auto-attach current + future
 
 browser.tabs                                       # list[Tab] attached
-browser.pages()                                    # all Chrome targets
-browser.patterns()                                 # active watch patterns
-browser.detach("*pattern*")                        # detach by pattern
-browser.detach()                                   # detach everything
+await browser.pages()                              # all Chrome targets
+browser.patterns                                   # active watch patterns (property)
+await browser.detach("*pattern*")                  # detach by pattern
+await browser.detach()                             # detach everything
 browser.clear(target=)                             # clear captured data
 
 await browser.connect(9223)                        # add another Chrome instance
 await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePort
-browser.disconnect()                               # unpin tabs, close all WebSockets
-browser.disconnect(port=9222)                      # unpin + close one Chrome instance
+await browser.disconnect()                         # unpin tabs, close all WebSockets
+await browser.disconnect(port=9222)                # unpin + close one Chrome instance
 ```
 
 ### ready= parameter
@@ -111,8 +111,10 @@ Compact accessibility tree as text lines. Crosses iframes.
 ### screenshot
 
 ```python
-await tab.screenshot(*, full_page=False, path=None) → bytes | Path
+await tab.screenshot(*, full_page=False, path=None) → dict
 ```
+
+Always writes a PNG — to `path` if given, otherwise a 0600 file under `$XDG_RUNTIME_DIR/repld/`. Returns `{path, source: {width, height}, model: {width, height}, scale, bytes}`. The image is resized to the vision API's token grid; when `scale < 1`, multiply coordinates by `1/scale` to map back to page pixels.
 
 ### wait_for / wait_for_idle
 
@@ -146,6 +148,15 @@ await tab.cookies() → list[dict]
 ```
 
 All cookies for this tab via `Network.getCookies`.
+
+### controls / invoke
+
+```python
+await tab.controls() → dict | None
+await tab.invoke(control, action, args=None) → dict
+```
+
+`controls()` calls the page's `window.controls.describeAll()`, returning the schema for every registered control — or `None` if the page exposes no `window.controls`. `invoke()` runs one action and returns `{returned, stateBefore, stateAfter, duration}`. See the [controls guide](/repld/docs/guides/controls/) for the protocol a page implements.
 
 ## Sync query methods (DuckDB-backed)
 

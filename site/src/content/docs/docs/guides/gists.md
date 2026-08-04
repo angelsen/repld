@@ -129,7 +129,7 @@ repld gist fetch https://gist.github.com/someone/abc123
 repld gist fetch <url> --name weather --global
 ```
 
-Nothing tracks the file afterwards, so `rm` — which only unlinks — is not how you undo it; delete the file. Only `gist.github.com` ids are accepted, and the fetched file's `__repld_deps__` is deliberately _not_ installed: this is code from a URL, and its dependency list shouldn't drive an install before you've read the file.
+Nothing tracks the file afterwards, so `rm` — which only unlinks — is not how you undo it; delete the file. A bare gist id works too, as does a raw `gist.githubusercontent.com` URL, but nothing else: the file lands somewhere a kernel imports at boot, so the set of origins stays one a reader recognises. The fetched file's `__repld_deps__` is deliberately _not_ installed — this is code from a URL, and its dependency list shouldn't drive an install before you've read the file.
 
 ## Linting
 

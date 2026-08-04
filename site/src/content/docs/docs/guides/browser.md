@@ -35,12 +35,12 @@ tab = await browser.open("https://...")       # open new tab
 await browser.watch("*pattern*")              # auto-attach matching tabs
 ```
 
-`get()` returns a `Tab` object. The glob matches against the tab URL — `*` is a wildcard. If no tab matches, it raises `RuntimeError`.
+`get()` returns a `Tab` object. The glob matches against the tab URL — `*` is a wildcard. If no tab matches, it raises `TabNotFoundError` (from `repld.browser`), a `RuntimeError` subclass — catch the specific one, so a CDP or ready-signal failure isn't swallowed as "no such tab".
 
 ```python
 browser.tabs              # list of attached Tab objects
-browser.pages()           # all Chrome targets (attached or not)
-browser.detach()          # detach everything
+await browser.pages()     # all Chrome targets (attached or not)
+await browser.detach()    # detach everything
 ```
 
 ## The observe pipeline

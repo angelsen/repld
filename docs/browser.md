@@ -197,6 +197,24 @@ browser.port = 9222                 # default from REPLD_CHROME_PORT env
 
 `browser.tabs` is for display (`repld exec 'browser.tabs'`). Use `browser.get(pattern)` to get a stable handle. Index order is undefined and shifts on detach/reattach.
 
+Two names in that block are drafts the implementation moved away from, and the
+rest are async where this shows them sync — `watch`, `detach`, `get` and
+`open` are all awaited. See the reference for the shipped forms.
+
+- **`browser.pages`.** An `async` method returning plain dicts, not a property
+  over a `TargetInfo` type — `await browser.pages()`. There is no
+  `TargetInfo`; the draft's assumption that discovery needed its own value type
+  didn't survive contact with `/json/list`, which already hands back the shape
+  the agent wants. `browser.patterns` *is* a property, which is the asymmetry
+  worth remembering.
+- **`browser.port`.** Never existed on the pool. A port is a property of one
+  Chrome instance, not of the multiplexer over N of them, so it lives on
+  `Browser` and the pool exposes `browser.ports` (read-only) instead;
+  `REPLD_CHROME_PORT` is still the default, read at `connect()` time. Assigning
+  `browser.port` is the sharp edge: `LazyBrowser` has no `__setattr__` guard, so
+  it silently binds an attribute on the descriptor that nothing ever reads.
+  Pass the port to `browser.connect(port)`.
+
 ### `Tab` — per-page interaction + query
 
 ```python

@@ -29,7 +29,7 @@ Two more, if they apply to you:
 - **Self-healing bridge.** If the kernel dies mid-session the bridge answers each orphaned request with `-31001`, then respawns and replays the client's cached handshake so tools and channel pushes keep working. Liveness is probed before forwarding, never by retrying — `exec` runs arbitrary code and must never run twice.
 - **One kernel per project, enforced by flock.** A second `repld` in the same project prints a note and exits 0, so a racing bridge or human connects to the incumbent instead of failing.
 - `repld log [-n N] [-f] [--json]` — replay or follow a headless kernel's activity from any terminal, rendered as the TUI renders it. Backed by a new NDJSON event log; `--no-display` mode previously discarded every event.
-- `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard URL, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned kernels don't accumulate unseen.
+- `repld status [--json]` — this project's kernel (pid, uptime, socket, dashboard port, active tasks/tickers) plus every live kernel elsewhere, so auto-spawned kernels don't accumulate unseen.
 - `repld stop [--all]` / `repld restart` — lifecycle control for kernels you never started.
 - `repld dashboard [--print]` — resolve the running kernel's dashboard port and open it, printing the URL when a browser can't be opened.
 - `python -m repld` entry point (`src/repld/__main__.py`), which is how the bridge spawns kernels.
