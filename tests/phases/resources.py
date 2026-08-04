@@ -1,6 +1,118 @@
-"""Phase 8: Gist resources — resources/list includes gists, resources/read returns API."""
+"""Phase 8: Gist resources — resources/list includes gists, resources/read returns API.
+
+Also the doc-surface guard. CLAUDE.md names keeping the four agent-facing doc
+surfaces in sync as an invariant ("Never let the two drift"), and it was the
+one named invariant with nothing enforcing it — `BROWSER_GUIDE` and
+`_TOPICS["browser"]` are two independently hand-written prose blocks covering
+the same API, so nothing but a reader would have caught the next divergence.
+"""
+
+import ast
+import pathlib
+import re
 
 from harness import Bridge, Kernel, assert_eq, assert_true
+
+# Attribute reference in prose: `tab.click`, `browser.watch`. Lowercase-only so
+# it can't match a class (`Tab.foo`) or a sentence that happens to end in the
+# word "tab" before a capitalised one.
+_ATTR_RE = r"\b(?:tab|browser)\.([a-z_][a-z0-9_]*)"
+
+
+def _class_members(pkg: pathlib.Path, *specs: tuple[str, str]) -> set[str]:
+    """Public+private member names of the named classes, read from source.
+
+    AST rather than import: the browser package needs the `browser` extra
+    (duckdb/websockets/pillow), and a doc check has no business requiring it.
+    """
+    out: set[str] = set()
+    for rel, cls in specs:
+        tree = ast.parse((pkg / rel).read_text())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.ClassDef) and node.name == cls):
+                continue
+            for m in node.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out.add(m.name)  # methods and properties alike
+                elif isinstance(m, ast.AnnAssign) and isinstance(m.target, ast.Name):
+                    out.add(m.target.id)
+                elif isinstance(m, ast.Assign):
+                    out.update(t.id for t in m.targets if isinstance(t, ast.Name))
+    return out
+
+
+def phase_8_doc_surfaces(_kernel: Kernel) -> None:
+    """The agent-facing docs describe the API that exists, on every surface.
+
+    No kernel needed — `help.py` is pure stdlib data and the API is read from
+    source. Three drift modes, each of which has a distinct failure:
+
+    1. A doc names a method that was renamed or removed. This is the one that
+       actively misleads: the agent reads `instructions`/`repld help` and calls
+       something that isn't there.
+    2. A method is documented on one browser surface but not the other.
+    3. A new public `Tab` method is documented on neither.
+    """
+    import repld.help as h
+
+    pkg = pathlib.Path(h.__file__).parent
+    tab = _class_members(
+        pkg, ("browser/tab.py", "Tab"), ("browser/tab_query.py", "TabQueryMixin")
+    )
+    pool = _class_members(
+        pkg, ("browser/pool.py", "BrowserPool"), ("browser/pool.py", "LazyBrowser")
+    )
+    assert_true(
+        "click" in tab and "watch" in pool,
+        f"AST member extraction found the classes (tab={len(tab)}, pool={len(pool)})",
+    )
+
+    # Every module-level str in help.py, plus every topic. Deliberately
+    # reflective rather than a hand-listed set: a doc constant added later is
+    # covered the day it lands, which a list would not be.
+    surfaces = {
+        n: v
+        for n, v in vars(h).items()
+        if isinstance(v, str) and not n.startswith("__")
+    }
+    surfaces.update({f'_TOPICS["{k}"]': v for k, v in h._TOPICS.items()})
+    assert_true(
+        len(surfaces) > 8, f"found the doc surfaces to scan (got {len(surfaces)})"
+    )
+
+    # 1. No phantom API.
+    phantom = [
+        f"{name}: {obj}.{attr}"
+        for name, text in sorted(surfaces.items())
+        for obj, real in (("tab", tab), ("browser", pool))
+        for attr in sorted(set(re.findall(rf"\b{obj}\.([a-z_][a-z0-9_]*)", text)))
+        if attr not in real
+    ]
+    assert_eq(phantom, [], "docs reference no API that doesn't exist")
+    print(f"  ✓ {len(surfaces)} doc surfaces reference no phantom tab.*/browser.* API")
+
+    # 2. The two browser surfaces cover the same symbols.
+    guide = set(re.findall(_ATTR_RE, h.BROWSER_GUIDE))
+    topic = set(re.findall(_ATTR_RE, h._TOPICS["browser"]))
+    assert_eq(sorted(guide - topic), [], 'in BROWSER_GUIDE but not _TOPICS["browser"]')
+    assert_eq(sorted(topic - guide), [], 'in _TOPICS["browser"] but not BROWSER_GUIDE')
+    print(f"  ✓ BROWSER_GUIDE and _TOPICS['browser'] agree on {len(guide)} symbols")
+
+    # 3. Every public Tab method reaches both. Tab's internals are `_`-prefixed
+    # by convention, so a new name tripping this wants either the underscore or
+    # a doc line — which is the prompt this check exists to deliver.
+    undocumented = sorted(
+        m
+        for m in tab
+        if not m.startswith("_")
+        and (m not in h.BROWSER_GUIDE or m not in h._TOPICS["browser"])
+    )
+    assert_eq(
+        undocumented, [], "every public Tab method is documented on both surfaces"
+    )
+    print(
+        f"  ✓ all {sum(1 for m in tab if not m.startswith('_'))} public Tab methods documented on both surfaces"
+    )
 
 
 def phase_8_gist_resources(kernel: Kernel) -> None:

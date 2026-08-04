@@ -51,7 +51,7 @@ from phases.lockfile import (
     phase_5_sweep,
     phase_5_zombie,
 )
-from phases.resources import phase_8_gist_resources
+from phases.resources import phase_8_doc_surfaces, phase_8_gist_resources
 from phases.sessions import phase_13_sessions
 from phases.shutdown import phase_11_shutdown
 from phases.venv import phase_16_venv_binding
@@ -88,7 +88,7 @@ PHASES = {
         phase_6_label_and_reattach(k),
     ),
     7: phase_7_defer,
-    8: phase_8_gist_resources,
+    8: lambda k: (phase_8_doc_surfaces(k), phase_8_gist_resources(k)),
     9: phase_9_gist_tools,
     10: phase_10_every,
     11: phase_11_shutdown,
