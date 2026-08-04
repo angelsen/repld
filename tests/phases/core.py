@@ -171,3 +171,67 @@ def phase_3(kernel: Kernel) -> None:
         print("  ✓ Session.close() explicitly closes rfile/wfile, not just the socket")
     finally:
         b.close()
+
+
+def phase_3_argv_and_registry(_kernel: Kernel) -> None:
+    """Two guards that only fire on input nobody types on purpose.
+
+    `repld bridge` was the one subcommand with no argv validation at all — it
+    discarded `resolve_socket_path`'s residue into `_`. That is the command
+    Claude Code spawns from an MCP registration, so a typo'd flag there is
+    ignored on the one process with no terminal to notice it.
+
+    `gists._read_registry` returned whatever JSON the registry file held,
+    including a list or a string. Three callers then did `.items()` / `.values()`
+    on it — `repld gist list`, `gist_links.link_targets`, and the
+    `repld://gists/_registry` MCP resource — and a file nobody edits by hand
+    took out all three. Its sibling `gist_links.read_links` has always guarded
+    the same case on the same kind of file.
+    """
+    import json
+    import subprocess
+    import sys
+
+    def _repld(*args: str) -> tuple[int, str]:
+        p = subprocess.run(
+            [sys.executable, "-m", "repld", *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return p.returncode, p.stdout + p.stderr
+
+    code, out = _repld("bridge", "--help")
+    assert_eq(code, 0, "repld bridge --help exits 0")
+    assert_true("repld bridge" in out, f"…and prints usage (got {out[:120]!r})")
+    code, out = _repld("bridge", "--sockett", "/x")
+    assert_eq(code, 2, "repld bridge rejects an unknown flag")
+    assert_true("--sockett" in out, f"…naming it (got {out[:120]!r})")
+    print("  ✓ repld bridge validates argv like every other subcommand")
+
+    code, out = _repld("gist", "badverb", "--help")
+    assert_eq(code, 0, "repld gist badverb --help asks for usage, not the verb")
+    print("  ✓ `gist <unknown> --help` prints usage (wants_help scans every arg)")
+
+    # Registry shape, checked directly — reaching it through the CLI would need
+    # a real ~/.config/repld to clobber.
+    from repld import gists
+
+    original = gists._REGISTRY_PATH
+    tmp = _kernel.cwd / "bogus-registry.json"
+    try:
+        for payload in ("[1, 2, 3]", '"a string"', "42", "not json at all"):
+            tmp.write_text(payload)
+            gists._REGISTRY_PATH = tmp
+            gists._malformed_warned.clear()
+            got = gists.registry()
+            assert_eq(got, {}, f"registry root {payload[:12]!r} reads as empty")
+            # The shape the three callers actually use.
+            assert_eq(list(got.items()), [], "…and is safely .items()-able")
+        tmp.write_text(json.dumps({"x": {"path": "/tmp/x.py"}}))
+        gists._REGISTRY_PATH = tmp
+        assert_eq(list(gists.registry()), ["x"], "a well-formed registry still reads")
+    finally:
+        gists._REGISTRY_PATH = original
+        gists._malformed_warned.clear()
+    print("  ✓ gist registry: wrong-shaped JSON reads as empty, not as a crash")

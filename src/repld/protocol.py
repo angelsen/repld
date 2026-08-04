@@ -16,6 +16,8 @@ from .core_schemas import (
     DOC_HELP_ATTRS,
     PROTOCOL_VERSION,
     STATIC_RESOURCES,
+    error as _error,
+    response as _response,
     wire as _wire,
 )
 from .help import build_instructions as _build_instructions
@@ -400,8 +402,10 @@ TOOLS = [
     {
         "name": "browser_invoke",
         "description": (
-            "Invoke a control action on a tab. Returns {returned, stateBefore, stateAfter, duration}. "
-            "Runs the full observation pipeline (settle + tree + network + console delta) after the action."
+            "Invoke a control action on a tab. Returns {result, observation} — `result` is "
+            "whatever window.controls.invoke() returned (by convention "
+            "{returned, stateBefore, stateAfter, duration}), `observation` is the full "
+            "observation pipeline (settle + tree + network + console delta) after the action."
         ),
         "inputSchema": {
             "type": "object",
@@ -850,9 +854,5 @@ def build_discovery_cache() -> dict:
     }
 
 
-def _response(rid, result: dict) -> dict:
-    return {"jsonrpc": "2.0", "id": rid, "result": result}
-
-
-def _error(rid, code: int, message: str) -> dict:
-    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+# `_response` / `_error` are imported from core_schemas at the top of this
+# module: the bridge builds the same envelopes and cannot import this one.

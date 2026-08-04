@@ -58,6 +58,32 @@ def _pick(candidates_js: str) -> str:
     return f"(function() {{ var pick = {_PICK_FN}; return pick({candidates_js}); }})()"
 
 
+# A string that is unambiguously a selector rather than a JS expression.
+# `resolve()` itself can't answer this — its fallback treats *anything*
+# unrecognised as CSS, which is right for `click`/`type_text`, where a selector
+# is the only thing a caller can mean. `ready=` is the one parameter that
+# accepts either, so it needs the question asked separately, and it needs the
+# answer to agree with `resolve()` about what a selector looks like.
+#
+# The bare-name branch is the whole reason this exists: `ready="main"` and
+# `ready="my-app"` are ordinary CSS, and the hand-rolled
+# `startswith((".", "#", "[", "data-"))` test that used to live in
+# `Tab._await_ready_signal` sent them down the JS path to be evaluated as
+# identifiers. Anchored and dot-free, so a real expression (`window.ready`,
+# `app.isLoaded`) still reads as JS.
+_BARE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
+_SELECTOR_PREFIXES = (".", "#", "[", "data-", "text=", "role=", "label=")
+
+
+def looks_like_selector(s: str) -> bool:
+    """True if *s* should be resolved as a selector rather than evaluated as JS."""
+    if s.startswith(_SELECTOR_PREFIXES):
+        return True
+    if ":has-text(" in s:
+        return True
+    return bool(_BARE_NAME.match(s))
+
+
 def resolve(selector: str) -> Selector:
     """Resolve a Playwright-style selector string.
 

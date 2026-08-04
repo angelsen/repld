@@ -7,7 +7,7 @@ Dispatched from `cli.py`'s _SUBCOMMANDS table.
 
 from pathlib import Path
 
-from . import cli_args
+from . import cli_args, paths
 
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
@@ -37,12 +37,23 @@ async def _tool_{name}_example(
 
 
 def run_gist(argv: list[str]) -> int:
-    if not argv or argv[0] in ("-h", "--help"):
+    # The group's own help check goes through `cli_args.wants_help` like every
+    # verb below it. This was the last open-coded `argv[0] in ("-h", "--help")`
+    # in src/ — in the file `cli_args` was extracted *from* — and being
+    # `argv[0]`-only it sent `repld gist badverb --help` to "unknown command"
+    # instead of usage, the exact case `wants_help`'s scan-every-argument rule
+    # exists for. Checked before the verb lookup so it answers for an unknown
+    # verb too; a *known* verb's own `wants_help` never sees it, since the
+    # group's usage is the right answer when the verb doesn't resolve.
+    if not argv:
         _print_gist_usage()
-        return 0 if argv else 2
+        return 2
     cmd, rest = argv[0], argv[1:]
     entry = _GIST_COMMANDS.get(cmd)
     if entry is None:
+        if cli_args.wants_help(argv):
+            _print_gist_usage()
+            return 0
         print(f"repld gist: unknown command '{cmd}'\n")
         _print_gist_usage()
         return 2
@@ -108,7 +119,7 @@ def _gist_new(argv: list[str]) -> int:
         print(f"error: '{name}' is not a valid Python identifier")
         return 2
     cwd = Path.cwd()
-    gists_dir = cwd / "gists"
+    gists_dir = paths.local_gists_dir(cwd)
     path = gists_dir / f"{name}.py"
     if path.exists():
         print(f"error: {path} already exists")
@@ -122,7 +133,7 @@ def _gist_new(argv: list[str]) -> int:
         name,
         to_global=False,
         local_dir=gists_dir,
-        global_dir=Path.home() / ".repld" / "gists",
+        global_dir=paths.global_gists_dir(),
         links=links,
     )
     if conflict:
@@ -277,8 +288,8 @@ def _gist_fetch(argv: list[str]) -> int:
             return 2
         files = {f"{rename}.py": next(iter(files.values()))}
 
-    local_dir = Path.cwd() / "gists"
-    global_dir = Path.home() / ".repld" / "gists"
+    local_dir = paths.local_gists_dir()
+    global_dir = paths.global_gists_dir()
     dest_dir = global_dir if to_global else local_dir
     try:
         links = gist_links.read_links(local_dir)
@@ -353,7 +364,7 @@ def _gist_add(argv: list[str]) -> int:
         print(usage)
         return 2
     name = argv[0]
-    gists_dir = Path.cwd() / "gists"
+    gists_dir = paths.local_gists_dir()
     try:
         linked = gist_links.add_link(name, gists_dir)
     except (LookupError, FileExistsError, ValueError) as e:
@@ -394,7 +405,7 @@ def _gist_rm(argv: list[str]) -> int:
         print("repld gist rm: --stale takes no name\n")
         print(usage)
         return 2
-    gists_dir = Path.cwd() / "gists"
+    gists_dir = paths.local_gists_dir()
     try:
         if argv and argv[0] == "--stale":
             dropped = gist_links.remove_stale_links(gists_dir)
@@ -432,15 +443,16 @@ def _gist_lint(argv: list[str]) -> int:
         return bad
     local_only = "--local" in argv
     argv = [a for a in argv if a != "--local"]
-    gists_dir = Path.cwd() / "gists"
-    # Same dirs + precedence a live kernel resolves against (kernel.py boot).
-    # Needed even under --local: _find_gist resolves names against them.
-    # create=False — linting is a read-only question and must not conjure the
-    # directories it finds nothing in.
-    _gists.install([Path.home() / ".repld" / "gists", gists_dir], create=False)
+    gists_dir = paths.local_gists_dir()
+    # `paths.gist_dirs` *is* the precedence a live kernel resolves against, so
+    # there is nothing to keep in sync any more. Needed even under --local:
+    # _find_gist resolves names against them. create=False — linting is a
+    # read-only question and must not conjure the directories it finds nothing
+    # in.
+    _gists.install(paths.gist_dirs(), create=False)
 
     if argv:
-        paths = []
+        targets = []
         missing = []
         nonlocal_hits = []
         for name in argv:
@@ -461,7 +473,7 @@ def _gist_lint(argv: list[str]) -> int:
             elif local_only and p.parent.resolve() != gists_dir.resolve():
                 nonlocal_hits.append((name, p))
             else:
-                paths.append(p)
+                targets.append(p)
         if missing or nonlocal_hits:
             for name in missing:
                 print(f"error: '{name}' not found (local, global, or linked)")
@@ -472,16 +484,16 @@ def _gist_lint(argv: list[str]) -> int:
         # include_private: privates aren't gists, but they are imported, so
         # their deps/shape/legacy problems are real. lint_file() skips the
         # firstline rule on them, which is the only one that doesn't apply.
-        paths = sorted(
+        targets = sorted(
             gists_dir.glob("*.py")
             if local_only
             else _gists._iter_gist_files(include_private=True)
         )
-        if not paths:
+        if not targets:
             print("no gists found")
             return 0
 
-    findings = gist_lint.lint_paths(paths)
+    findings = gist_lint.lint_paths(targets)
     for f in findings:
         print(f)
     if findings:
@@ -489,7 +501,7 @@ def _gist_lint(argv: list[str]) -> int:
             f"\n{len(findings)} finding(s) in {len({f.path for f in findings})} file(s)"
         )
         return 1
-    print(f"clean: {len(paths)} gist(s) checked")
+    print(f"clean: {len(targets)} gist(s) checked")
     return 0
 
 
@@ -505,7 +517,7 @@ def _gist_list(argv: list[str]) -> int:
     if bad is not None:
         return bad
 
-    gists_dir = Path.cwd() / "gists"
+    gists_dir = paths.local_gists_dir()
 
     # Local gists (./gists), excluding privates.
     local = sorted(

@@ -40,7 +40,21 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__, bridge_tools, core_schemas, ipc, paths, spawn, state
+from . import (
+    __version__,
+    bridge_tools,
+    cli_args,
+    core_schemas,
+    ipc,
+    paths,
+    spawn,
+    state,
+)
+from .core_schemas import (
+    error as _error,
+    notification as _notification,
+    response as _response,
+)
 
 # 5s spawn window, polled at 100ms — long enough for a cold kernel with gists
 # to bind its socket, short enough that a broken spawn fails a tool call
@@ -90,6 +104,16 @@ def _static_docs() -> dict[str, str]:
             for uri, attr in core_schemas.DOC_HELP_ATTRS.items()
         }
     return _static_docs_cache
+
+
+def _static_mimetypes() -> dict[str, str]:
+    """URI → mimeType, from the same declaration `resources/list` advertises.
+
+    The kernel builds `protocol._RESOURCE_MIMETYPES` off `STATIC_RESOURCES` for
+    exactly this; the bridge is the other author of a `resources/read` reply
+    and had a bare "text/plain" literal instead.
+    """
+    return {r["uri"]: r["mimeType"] for r in core_schemas.STATIC_RESOURCES}
 
 
 def _minimal_instructions() -> str:
@@ -182,10 +206,9 @@ class Bridge:
             self._client_init = msg
             cache = self._load_cache()
             self._to_client(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {
+                _response(
+                    rid,
+                    {
                         # What the last kernel actually advertised, when we
                         # have it. Same value in practice — _load_cache drops a
                         # cache from another repld version — but the recorded
@@ -202,7 +225,7 @@ class Bridge:
                         if cache
                         else _minimal_instructions(),
                     },
-                }
+                )
             )
             return True
 
@@ -221,7 +244,7 @@ class Bridge:
                 if cache
                 else core_schemas.CORE_TOOLS + bridge_tools.SCHEMAS
             )
-            self._to_client({"jsonrpc": "2.0", "id": rid, "result": {"tools": tools}})
+            self._to_client(_response(rid, {"tools": tools}))
             return True
 
         if method == "resources/list":
@@ -231,15 +254,11 @@ class Bridge:
                 if cache
                 else core_schemas.wire(core_schemas.STATIC_RESOURCES)
             )
-            self._to_client(
-                {"jsonrpc": "2.0", "id": rid, "result": {"resources": resources}}
-            )
+            self._to_client(_response(rid, {"resources": resources}))
             return True
 
         if method == "resources/templates/list":
-            self._to_client(
-                {"jsonrpc": "2.0", "id": rid, "result": {"resourceTemplates": []}}
-            )
+            self._to_client(_response(rid, {"resourceTemplates": []}))
             return True
 
         if method == "resources/read":
@@ -247,16 +266,26 @@ class Bridge:
             text = _static_docs().get(uri)
             if text is None:
                 return False  # gist/browser resource — needs a live kernel
+            # mimeType from the same declaration both sides advertise in
+            # `resources/list`, not a literal. It was hardcoded "text/plain"
+            # here while the kernel read `core_schemas` (`protocol.py`'s
+            # `_RESOURCE_MIMETYPES`) — identical today, since all four docs are
+            # plain text, and silently divergent the moment a doc isn't. The
+            # cold path is the one nobody looks at, which is the whole argument
+            # for `core_schemas` existing.
             self._to_client(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {
+                _response(
+                    rid,
+                    {
                         "contents": [
-                            {"uri": uri, "mimeType": "text/plain", "text": text}
+                            {
+                                "uri": uri,
+                                "mimeType": _static_mimetypes().get(uri, "text/plain"),
+                                "text": text,
+                            }
                         ]
                     },
-                }
+                )
             )
             return True
 
@@ -377,12 +406,8 @@ class Bridge:
             # The fresh kernel may expose a different tool set (gists edited,
             # browser extra now present). Declared listChanged makes this the
             # sanctioned way to invalidate the client's cache.
-            self._to_client(
-                {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-            )
-            self._to_client(
-                {"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}
-            )
+            self._to_client(_notification("notifications/tools/list_changed"))
+            self._to_client(_notification("notifications/resources/list_changed"))
             _err("reconnected to a fresh kernel; handshake replayed")
 
     def restart_kernel(self) -> tuple[int | None, int | None]:
@@ -437,7 +462,7 @@ class Bridge:
                 "isError": True,
             }
         if rid is not None:
-            self._to_client({"jsonrpc": "2.0", "id": rid, "result": result})
+            self._to_client(_response(rid, result))
 
     def _replay_handshake(self) -> None:
         """Re-run the client's initialize (and initialized, if seen) on a new kernel.
@@ -456,10 +481,31 @@ class Bridge:
         replay["id"] = BRIDGE_INIT_ID
         self._to_kernel(replay)
         if self._client_initialized:
-            self._to_kernel({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            self._to_kernel(_notification("notifications/initialized"))
 
-    def _on_kernel_gone(self) -> None:
+    def _on_kernel_gone(self, gen: int | None = None) -> None:
+        """Tear down the current kernel attachment and orphan its in-flight ids.
+
+        `gen` makes the teardown *conditional*, and the condition is checked
+        under the same lock that performs it. That matters for the one caller
+        that has a generation: `_read_kernel` reaching EOF used to compare
+        `gen != self._generation` under the lock, release it, and then call in
+        here — which takes the lock again and unconditionally nulls `_sock`,
+        with no idea whose socket it is closing. A `_reconnect` completing in
+        that gap (main thread notices the dead pid first, `_attach` bumps the
+        generation and installs a fresh socket) left the superseded reader
+        tearing down the *replacement* and answering every id registered
+        against it with -31001. Passing the generation in rather than moving
+        the call inside the caller's `with` because `_state_lock` is a plain
+        Lock, not an RLock.
+
+        Callers with no generation to name (a send failure in `_to_kernel`, an
+        explicit `restart_kernel`) pass None and always tear down: they are
+        acting on whatever is current by definition.
+        """
         with self._state_lock:
+            if gen is not None and gen != self._generation:
+                return
             sock, self._sock = self._sock, None
             self._kernel_pid = None
             orphans, self._inflight = self._inflight, set()
@@ -478,14 +524,7 @@ class Bridge:
                 pass
         for rid in orphans:
             self._to_client(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {
-                        "code": KERNEL_GONE,
-                        "message": "repld kernel restarted; request was lost",
-                    },
-                }
+                _error(rid, KERNEL_GONE, "repld kernel restarted; request was lost")
             )
 
     # -- kernel I/O ---------------------------------------------------------
@@ -537,11 +576,10 @@ class Bridge:
                 except OSError:
                     pass
         # EOF: the kernel died. Only the current generation may declare that —
-        # a superseded reader is just finishing its own closed socket.
-        with self._state_lock:
-            current = gen == self._generation
-        if current:
-            self._on_kernel_gone()
+        # a superseded reader is just finishing its own closed socket. The
+        # check happens inside `_on_kernel_gone`, under the lock that does the
+        # teardown, so a reconnect can't land between deciding and acting.
+        self._on_kernel_gone(gen)
 
     # -- main loop ----------------------------------------------------------
 
@@ -569,16 +607,7 @@ class Bridge:
             # _drain_inflight's whole budget at shutdown.
             with self._state_lock:
                 self._inflight.discard(rid)
-            self._to_client(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {
-                        "code": -32603,
-                        "message": f"repld bridge internal error: {exc}",
-                    },
-                }
-            )
+            self._to_client(_error(rid, -32603, f"repld bridge internal error: {exc}"))
 
     def _dispatch_client_line(self, line: str) -> None:
         try:
@@ -629,30 +658,18 @@ class Bridge:
                 # "method not found" is the whole cost of the lazy-spawn
                 # design paid for an answer we already know.
                 if rid is not None:
-                    self._to_client(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": rid,
-                            "error": {
-                                "code": -32601,
-                                "message": f"method not found: {method}",
-                            },
-                        }
-                    )
+                    self._to_client(_error(rid, -32601, f"method not found: {method}"))
                 return
 
         if not self._ensure_kernel():
             if rid is not None:
                 self._to_client(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": rid,
-                        "error": {
-                            "code": KERNEL_GONE,
-                            "message": "repld kernel is not running and could "
-                            "not be started; see stderr",
-                        },
-                    }
+                    _error(
+                        rid,
+                        KERNEL_GONE,
+                        "repld kernel is not running and could not be started; "
+                        "see stderr",
+                    )
                 )
             return
 
@@ -724,6 +741,27 @@ class Bridge:
         return 0
 
 
+_BRIDGE_USAGE = (
+    "repld bridge — stdio MCP proxy (spawned by Claude Code, not run by hand)\n"
+    "\n"
+    "  repld bridge [--socket PATH]\n"
+    "\n"
+    "  Register with: claude mcp add repld -- repld bridge\n"
+)
+
+
 def run_bridge(argv: list[str]) -> int:
-    socket_path, _ = paths.resolve_socket_path(argv)
+    # Validated like every other subcommand, which this one alone was not: it
+    # threw the residue of `resolve_socket_path` away as `_`. That made `repld
+    # bridge --help` start a proxy that blocks on stdin forever instead of
+    # printing usage, and — the case that actually bites — a typo'd flag in an
+    # MCP registration (`repld bridge --sockett /x`) silently ignored, on the
+    # one command nobody ever sees a terminal for.
+    if cli_args.wants_help(argv):
+        print(_BRIDGE_USAGE)
+        return 0
+    socket_path, rest = paths.resolve_socket_path(argv)
+    bad = cli_args.check_args("repld bridge", rest, _BRIDGE_USAGE, positionals=0)
+    if bad is not None:
+        return bad
     return Bridge(socket_path).run()

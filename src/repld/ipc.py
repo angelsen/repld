@@ -49,6 +49,13 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     try:
         sock.connect(str(sock_resolved))
     except OSError as e:
+        # Closed rather than dropped: `bridge._reconnect` polls through here up
+        # to 50 times per spawn, every one of them failing while the kernel
+        # comes up, and returning the message alone left each socket to
+        # refcounting with a ResourceWarning apiece. `_connect_excluding`
+        # closes on its own reject path, so this was the asymmetry, not the
+        # intent.
+        sock.close()
         return f"cannot connect to kernel socket {sock_path}: {e}"
 
     return sock, lock

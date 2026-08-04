@@ -51,5 +51,20 @@ def push_channel(
 
 
 def push_kind(content: str, kind: str, *, session=None, **meta: str) -> None:
-    """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once."""
+    """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once.
+
+    Every push whose meta keys are known at the call site goes through here.
+    Three deliberately don't, and they are the ones that build their meta
+    conditionally — `gates._gate` (`options` only for a `choose`),
+    `kernel._maybe_push_done` (`label` only when the task has one),
+    `cdp._check_controls_observation` (`stateBefore`/`stateAfter` only when the
+    control reported them). Forcing those through `**meta` would mean building
+    the dict anyway and splatting it, which is the literal dict with extra
+    steps.
+
+    `tests/phases/channels.py::phase_4_push_kind_args` guards the argument
+    order across every call site, including callers that import this under
+    another name — `kernel.py` takes it as `_push`, which is where seven of
+    them are.
+    """
     push_channel(content, {"kind": kind, **meta}, session=session)

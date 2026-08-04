@@ -19,6 +19,7 @@ import inspect
 import itertools
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -51,7 +52,19 @@ def _claim_project(socket_path: Path) -> int:
     started `repld` while a headless kernel was already up) should just talk to
     the incumbent. Exiting 0 without touching the winner's lockfile is what
     makes an externally-started kernel adopted rather than competed with.
+
+    Ensures the runtime root first. This is the earliest thing in `run_kernel`
+    and `state.acquire_lock` does its own `mkdir(parents=True, mode=0o700)` —
+    which applies the mode to the *leaf* only, the exact failure
+    `paths.ensure_runtime_dir` exists to prevent. On the default socket path
+    `default_socket_path()` already routes through `project_dir()` and so has
+    ensured it; with `--socket` / `REPLD_SOCKET` pointing under the runtime
+    root it had not, so the root could be brought into being at umask default
+    and skip the foreign-owner refusal, only to be chmod'd back much later in
+    `_boot_runtime`. `state.py` can't call this itself — it imports nothing
+    from repld on purpose — so it belongs at the caller.
     """
+    paths.ensure_runtime_dir()
     fd = state.acquire_lock(paths.flock_for(socket_path))
     if fd is None:
         holder = state.read_lock(lock_for(socket_path))
@@ -121,9 +134,13 @@ _init_done = asyncio.Event()
 _INIT_WAIT_SECONDS = 30.0
 
 _active_lock_path: Path | None = None
-# flock fd for the one-kernel-per-project mutex. Module-level because it must
-# stay open for the process's whole life — closing it releases the lock.
-_project_lock_fd: int | None = None
+# No module-level handle for the flock fd, deliberately. There used to be one,
+# on the stated grounds that it "must stay open for the process's whole life —
+# closing it releases the lock", and it was written twice and read never.
+# The rationale was also wrong: `state.acquire_lock` returns a raw int from
+# `os.open`, and an int has no finalizer, so the descriptor stays open whether
+# or not any Python name refers to it. Holding the number bought nothing except
+# a comment that read as load-bearing.
 
 
 # ---------------------------------------------------------------------------
@@ -269,13 +286,29 @@ def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future
 
 
 def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | None":
-    """Pick the oldest active user task to cancel.
+    """Pick a wedged user task to cancel — oldest where that is knowable.
 
-    Prefers tracked cell/defer tasks (insertion-ordered in tasks.items(),
-    asyncio.Task referenced directly via task["asyncio_task"]). Falls back
-    to any non-internal loop task — typically an @every ticker — sorted by
-    name for determinism.
+    Tracked cell/defer tasks come first and are genuinely oldest-first:
+    `tasks.items()` is insertion-ordered and each entry references its
+    asyncio.Task directly.
+
+    The fallback — typically an `@every` ticker — is *not* ordered by age, and
+    the docstrings here and on `_loop_watchdog` both used to claim it was. It
+    sorted by `task.get_name()`, and asyncio names anonymous tasks `Task-N`
+    without zero-padding, so `Task-10` sorted ahead of `Task-2`: once `Task-1`
+    had finished, the watchdog cancelled an arbitrary ticker while reporting it
+    as the longest-running one — precisely when a human is debugging a wedged
+    loop and trusting the name in that push. Sorting by the numeric suffix
+    makes the claim true, since asyncio allocates those names from a
+    monotonic counter, so a lower N is an older task. Anything named some other
+    way sorts last rather than being silently reordered against them.
     """
+
+    def _age_key(t: "asyncio.Task[object]") -> tuple[int, int | str]:
+        name = t.get_name()
+        m = re.fullmatch(r"Task-(\d+)", name)
+        return (0, int(m.group(1))) if m else (1, name)
+
     for _tid, task in tasks.items():
         if task["done_event"].is_set():
             continue
@@ -284,7 +317,7 @@ def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | Non
             return atask
     candidates = sorted(
         (t for t in asyncio.all_tasks(loop) if not t.get_name().startswith("repld-")),
-        key=lambda t: t.get_name(),
+        key=_age_key,
     )
     return candidates[0] if candidates else None
 
@@ -785,7 +818,10 @@ def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
         parts.append(f"patterns {', '.join(patterns)}")
     prompt = f"repld: restore previous browser session ({'; '.join(parts)})? [Y/n] "
     answer = gates.tty_prompt(prompt, stream=sys.__stdout__)
-    return answer in ("", "y", "yes")
+    # `gates.yes_by_default`, not a local `in ("", "y", "yes")`: that accepted a
+    # narrower set than `gates.parse_response` does, so `1` and `true` declined
+    # here and confirmed a `confirm()` gate.
+    return gates.yes_by_default(answer)
 
 
 def _restore_browser_state(
@@ -910,12 +946,10 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     # 2c. Set up gist directories on sys.path with auto-reload.
     from . import gists as _gists
 
-    _gists.install(
-        [
-            Path.home() / ".repld" / "gists",
-            Path.cwd() / "gists",
-        ]
-    )
+    # `paths.gist_dirs()` is the definition of this precedence — global before
+    # local — and `gist_lint` resolves against the same call rather than
+    # against a copy that used to sit here.
+    _gists.install(paths.gist_dirs())
 
     # 2d. Check gist dependencies before IPC starts. Prompts when this kernel
     # has a terminal; headless it reports what's missing and installs nothing.
@@ -1085,9 +1119,8 @@ def run_kernel(
     *,
     display: bool = True,
 ) -> int:
-    global _project_lock_fd
     sock_path = Path(socket_path) if socket_path else default_socket_path()
-    _project_lock_fd = _claim_project(sock_path)
+    _claim_project(sock_path)
 
     loop = _start_loop()
     try:

@@ -164,3 +164,43 @@ def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:
     """``resolve_socket_path`` for callers that want the lockfile instead."""
     sock, rest = resolve_socket_path(argv)
     return lock_for(sock), rest
+
+
+# ---------------------------------------------------------------------------
+# Gist directories
+# ---------------------------------------------------------------------------
+#
+# Not runtime state — these are source directories the kernel imports from, and
+# they live in the project (and in $HOME) precisely because they are the user's
+# code. They belong here anyway, for the reason everything above does: they had
+# no owner and were derived by hand at fourteen call sites across `gist_cmd`,
+# `gists`, `gist_links` and `kernel`, one of which carried the comment "Same
+# dirs + precedence a live kernel resolves against (kernel.py boot)" — a
+# hand-sync note, which is exactly the thing a single derivation makes
+# unnecessary.
+
+
+def global_gists_dir() -> Path:
+    """``~/.repld/gists`` — importable by every kernel, whatever the cwd."""
+    return Path.home() / ".repld" / "gists"
+
+
+def local_gists_dir(cwd: Path | None = None) -> Path:
+    """``./gists`` for *cwd* (default: the current one).
+
+    Resolved at call time, never at import: `repld` is a long-lived process and
+    the CLI commands each run in the directory they were invoked from.
+    """
+    return (cwd or Path.cwd()) / "gists"
+
+
+def gist_dirs(cwd: Path | None = None) -> list[Path]:
+    """Both gist directories in the kernel's own import precedence.
+
+    Global first, then local — `gists.install` puts them on `sys.path` in this
+    order, so this is what "which gist wins" means anywhere it is asked.
+    `gist_lint --local` deliberately does *not* use this: it narrows to one
+    project and resolves names against `./gists` first, which is the opposite
+    precedence and the whole point of the flag.
+    """
+    return [global_gists_dir(), local_gists_dir(cwd)]

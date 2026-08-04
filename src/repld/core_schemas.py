@@ -144,3 +144,29 @@ STATIC_RESOURCES = [*DOC_RESOURCES, REGISTRY_RESOURCE]
 def wire(resources: list[dict]) -> list[dict]:
     """Strip internal `_`-prefixed keys so a resource dict is MCP-clean."""
     return [{k: v for k, v in r.items() if not k.startswith("_")} for r in resources]
+
+
+# The JSON-RPC envelope, for the same reason everything else here is shared:
+# more than one module writes these. `protocol.py` re-exports both (the kernel
+# and `dashboard._handle_api` import them from there), and `bridge.py` — which
+# deliberately cannot import `protocol`, since that drags in
+# browser_dispatch/help/kernel_context/tasks for a two-line dict — hand-built
+# them at ten sites, four of those full error bodies. This module is the one
+# both sides may read.
+
+
+def response(rid, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+def error(rid, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+
+def notification(method: str, params: dict | None = None) -> dict:
+    """An id-less JSON-RPC notification. `params` omitted when None, because
+    MCP clients distinguish an absent `params` from an empty one."""
+    msg: dict = {"jsonrpc": "2.0", "method": method}
+    if params is not None:
+        msg["params"] = params
+    return msg

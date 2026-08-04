@@ -1016,3 +1016,54 @@ def phase_6(kernel: Kernel) -> None:
     finally:
         _close_marked_tabs()
         b.close()
+
+
+def phase_6_ready_classification(_kernel: Kernel) -> None:
+    """`ready=` classifies selectors the way `click`/`type_text` do.
+
+    No kernel or Chrome — this is `selector.looks_like_selector`, which exists
+    because `Tab._await_ready_signal` used to hold a second opinion:
+    `startswith((".", "#", "[", "data-"))`. Under that test a bare tag or a
+    custom element took the JS branch, was evaluated as an identifier, came back
+    a ReferenceError whose `result.value` is simply absent, and polled silently
+    for the full 10 s — while `ready="#app"` on the same page worked. The two
+    halves asserted together are the point: bare names must read as selectors
+    *and* real expressions must still read as JS.
+    """
+    from repld.browser.selector import looks_like_selector, resolve
+
+    selectors = [
+        ".app-root",
+        "#app",
+        "[data-testid='root']",
+        "data-ready",
+        "main",  # bare tag — the regression
+        "my-app",  # custom element — the regression
+        "div",
+        "text=Loaded",
+        "role=button[name='Save']",
+        "label=Username",
+        "button:has-text('OK')",
+    ]
+    expressions = [
+        "window.__ready",
+        "app.isLoaded",
+        "!!window.store",
+        "document.readyState === 'complete'",
+        "window.ready && window.ready()",
+    ]
+    misread = [s for s in selectors if not looks_like_selector(s)]
+    assert_eq(misread, [], "every selector form reads as a selector")
+    wrong = [e for e in expressions if looks_like_selector(e)]
+    assert_eq(wrong, [], "JS expressions still read as JS, not as selectors")
+
+    # And what a selector resolves to is querySelector-shaped, so the
+    # `!!(...)` the ready poll wraps it in is a truthiness test on a node.
+    assert_true(
+        "querySelector" in resolve("main").js,
+        f"a bare tag resolves through querySelector (got {resolve('main').js!r})",
+    )
+    print(
+        f"  ✓ ready= classification: {len(selectors)} selector forms, "
+        f"{len(expressions)} expressions, no crossover"
+    )

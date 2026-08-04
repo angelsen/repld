@@ -66,11 +66,22 @@ async def enable(session: CDPSession) -> None:
 
 
 async def disable(session: CDPSession) -> None:
-    """Disable Fetch interception on a CDPSession."""
-    try:
-        await session.execute("Fetch.disable")
-    except Exception as exc:
-        logger.debug("Fetch.disable on %s: %s", session.chrome_target_id, exc)
+    """Disable Fetch interception on a CDPSession.
+
+    Propagates, and clears the handler only after Chrome has confirmed —
+    the mirror of `enable`, whose failure has always reached the caller.
+
+    Both halves of that matter. This used to swallow the `Fetch.disable`
+    exception and clear `_fetch_handler` regardless, which made
+    `CDPSession.disable_fetch`'s rollback unreachable and reported a failed
+    disable as a success. Worse than the bad report: `_fetch_handler` is the
+    only thing that ever resumes a paused request, so clearing it while
+    Chrome is still intercepting hangs every subsequent request on the tab
+    with `settle` waiting on it. Leaving the handler in place on failure
+    keeps those requests flowing, and the raise lets `disable_fetch` restore
+    the flags to what Chrome is actually doing.
+    """
+    await session.execute("Fetch.disable")
     session._fetch_handler = None
     logger.debug("Fetch capture disabled on %s", session.chrome_target_id)
 

@@ -19,15 +19,30 @@ def phase_4_push_kind_args(_kernel: Kernel) -> None:
 
     An AST sweep costs nothing and covers every call site, including ones
     written later, which a runtime test of one code path cannot.
+
+    Per-file alias resolution, because matching the bare name `push_kind`
+    covered one call site out of eight: `kernel.py` imports it as
+    `from .channel import push_kind as _push` and holds seven of them,
+    including the loop watchdog's, and every one was invisible to the sweep
+    that exists to check them. The `checked` count is asserted against a floor
+    for the same reason — a sweep that silently matches nothing passes.
     """
     bad: list[str] = []
     checked = 0
     for f in sorted((REPO / "src" / "repld").rglob("*.py")):
-        for node in ast.walk(ast.parse(f.read_text())):
+        tree = ast.parse(f.read_text())
+        # Local names bound to channel.push_kind in this file.
+        names = {"push_kind"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name == "push_kind" and a.asname:
+                        names.add(a.asname)
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            if name != "push_kind" or len(node.args) < 2:
+            if name not in names or len(node.args) < 2:
                 continue
             checked += 1
             kind = node.args[1]
@@ -43,7 +58,7 @@ def phase_4_push_kind_args(_kernel: Kernel) -> None:
             elif not re.fullmatch(r"[a-z][a-z0-9_]*", kind.value):
                 bad.append(f"{rel}:{node.lineno} kind={kind.value!r}")
     assert_eq(bad, [], "push_kind(content, kind) — second arg must be a kind")
-    assert_true(checked > 0, "the sweep actually found push_kind call sites")
+    assert_true(checked >= 10, f"the sweep found the call sites (got {checked})")
     print(f"  ✓ push_kind arg order: {checked} call site(s) pass a real kind")
 
 

@@ -264,7 +264,18 @@ def snapshot(task_id: str) -> dict | None:
         return None
     # Full re-read per poll is fine at current poll rates; revisit with a
     # head-cache + tail-seek if multi-MB spills under polling become common.
-    full = _read_from(task)
+    #
+    # Guarded like `preview_since`, which is the other public reader of the
+    # same file and has always been. `_prune_spill_files` pops the entry under
+    # `_tasks_lock` and unlinks *outside* it, so a poll resolving `get()` just
+    # before the pop and reading just after the unlink got a FileNotFoundError
+    # out of here, up through the dispatcher, and back to the agent as a bare
+    # `-32603 internal` — on the `exec`/`get_task` hot path. An evicted spill
+    # is missing output, not a protocol error.
+    try:
+        full = _read_from(task)
+    except Exception:
+        full = ""
     text, truncated = _make_preview(full)
     return {
         "task_id": task_id,

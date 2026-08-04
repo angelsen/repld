@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gists
-from .gates import stdin_owned, tty_prompt
+from .gates import stdin_owned, tty_prompt, yes_by_default
 
 _VERSION_SPECIFIERS = {">=", "<=", "==", "!=", "~=", ">", "<"}
 
@@ -411,11 +411,14 @@ def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
     n = len(missing)
     if n == 1:
         choice = tty_prompt("\nInstall? [\033[1mY\033[0m/n]: ")
-        return missing if choice in ("", "y", "yes") else []
+        return missing if yes_by_default(choice) else []
     choice = tty_prompt(f"\nInstall? [\033[1mY\033[0m/n] or pick \033[1m1-{n}\033[0m: ")
-    if choice in ("", "y", "yes", "all"):
+    # "all" is this prompt's own word — it has a third answer shape the plain
+    # [Y/n] callers don't — so it sits alongside the shared yes rather than in
+    # it. Everything else routes through `gates.yes_by_default`.
+    if yes_by_default(choice) or (choice or "").strip().lower() == "all":
         return missing
-    if choice is None or choice in ("n", "no", "none"):
+    if choice is None or choice.strip().lower() in ("n", "no", "none"):
         return []
     indices = []
     for part in choice.replace(",", " ").split():

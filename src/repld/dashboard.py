@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import tasks
-from .channel import push_channel
+from .channel import push_kind
 from .state import atomic_write_json
 
 _start_time: float = 0.0
@@ -33,6 +33,17 @@ _token: str = ""
 # sender is on loopback. Holding the token is not licence to OOM the process
 # the token exists to protect.
 _MAX_BODY_BYTES = 1 << 20
+
+# Ceiling on the request's header block. The same argument as `_MAX_BODY_BYTES`
+# — an unbounded read on loopback is an OOM the token was supposed to prevent —
+# except this one is worse, because the header loop runs *before* the Host
+# check and before either auth path, so it was the one thing an unauthenticated
+# caller could make the kernel do. `StreamReader.readline` caps each line at
+# its own 64 KiB limit, but nothing capped the *count*, and the per-line 5 s
+# timeout resets every line: measured, one connection fed 200 000 headers into
+# the dict without the server answering or ever stopping. A real request sends
+# a dozen; a generous browser with a long cookie jar sends a few dozen.
+_MAX_HEADER_LINES = 100
 
 
 def _bound_port() -> int | None:
@@ -144,7 +155,7 @@ async def _rpc_browser_disconnect(browser, params: dict) -> Any:
     result = await route_detach(browser, params.get("target"), params.get("port"))
     if result is None:
         result = await browser.disconnect()
-    push_channel(f"[dashboard] {result}", {"kind": "browser_disconnect"})
+    push_kind(f"[dashboard] {result}", "browser_disconnect")
     return {"result": result}
 
 
@@ -162,7 +173,7 @@ async def _rpc_browser_connect(browser, params: dict) -> Any:
     )
     if page_lines:
         summary += "\n" + "\n".join(page_lines[:10])
-    push_channel(summary, {"kind": "browser_connect", "port": str(port)})
+    push_kind(summary, "browser_connect", port=str(port))
     return {"connected": True, "port": port}
 
 
@@ -194,7 +205,7 @@ async def _rpc_browser_watch(browser, params: dict) -> Any:
     summary = f"[dashboard] watch '{pattern}': {result}"
     if tab_lines:
         summary += "\n" + "\n".join(tab_lines[:10])
-    push_channel(summary, {"kind": "browser_watch", "pattern": pattern})
+    push_kind(summary, "browser_watch", pattern=pattern)
     return {"result": result}
 
 
@@ -203,9 +214,10 @@ async def _rpc_browser_unwatch(browser, params: dict) -> Any:
     if not pattern:
         raise RuntimeError("pattern is required")
     result = await browser.detach(pattern)
-    push_channel(
+    push_kind(
         f"[dashboard] unwatch '{pattern}': {result}",
-        {"kind": "browser_unwatch", "pattern": pattern},
+        "browser_unwatch",
+        pattern=pattern,
     )
     return {"result": result}
 
@@ -414,12 +426,19 @@ async def _send_response(
         403: "Forbidden",
         404: "Not Found",
         413: "Payload Too Large",
+        431: "Request Header Fields Too Large",
         500: "Internal Server Error",
     }.get(status, "OK")
     header = (
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
+        # `_handle_connection` serves exactly one request and then closes in
+        # its `finally`, but HTTP/1.1 is keep-alive by default — so without
+        # this the client pools a socket the server has already FIN'd and the
+        # next request races the close. Chrome's socket-reuse retry hides it;
+        # saying what we actually do is cheaper than relying on that.
+        "Connection: close\r\n"
         # The page embeds a token and briefly has one in its URL: never cache
         # it to disk, and never hand the URL to whatever it links out to (the
         # sidebar links to sibling dashboards).
@@ -467,7 +486,7 @@ async def _handle_connection(
         method_http, target = parts[0], parts[1]
         path, _, query = target.partition("?")
 
-        while True:
+        for _ in range(_MAX_HEADER_LINES):
             line = await asyncio.wait_for(reader.readline(), timeout=5.0)
             if line in (b"\r\n", b"\n", b""):
                 break
@@ -475,6 +494,11 @@ async def _handle_connection(
             key, sep, value = decoded.partition(":")
             if sep:
                 headers[key.strip().lower()] = value.strip()
+        else:
+            # Ran the bound without reaching the blank line. Answered rather
+            # than parsed: whatever is on the other end is not a browser.
+            await _send_response(writer, 431, b'{"error":"too many headers"}')
+            return
 
         content_length = int(headers.get("content-length", "0") or "0")
         origin = headers.get("origin")
@@ -489,6 +513,7 @@ async def _handle_connection(
                 f"{_cors_header(origin)}"
                 "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
                 "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+                "Connection: close\r\n"
                 "\r\n"
             )
             writer.write(cors.encode())
@@ -1265,7 +1290,18 @@ function formatTs(ts) {
   if (!ts) return '';
   try { const d = new Date(parseFloat(ts) * 1000); return d.toLocaleTimeString(undefined, {hour12: false}); } catch { return ''; }
 }
-function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+// Safe in attribute position as well as in text, which the textContent →
+// innerHTML round-trip alone is not: that serialization escapes & < > (and
+// nbsp) but never quotes, because a text node has no quotes to escape. Every
+// use below is `title="' + esc(x) + '"`, `href=`, `data-origin=`, `value=` —
+// so a single " in a tab URL, a page title or a project path closed the
+// attribute and let the rest of the string inject markup into the page that
+// carries the API token. Quotes explicitly, then.
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function truncUrl(url, n) { return url.length > n ? url.slice(0, n - 1) + '\\u2026' : url; }
 function urlOrigin(url) {
   try { const u = new URL(url); return u.host; } catch { return ''; }

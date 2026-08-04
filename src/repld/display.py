@@ -341,25 +341,37 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
     so a pane and the CLI can't disagree about what "y" or "2" means. On a
     rejected line we re-prompt and leave the gate open — the human is right
     here and can try again.
+
+    Releases the stdin claim on the way out, whichever way it leaves. The flag
+    was set True in `run_display` and never set back, so once this thread ended
+    — EOF on a redirected stdin, an OSError, the stop event — `gates.tty_prompt`
+    went on declining to ask for the rest of the process's life, and
+    `gist_deps.install_deps` told the user the pane was reading gate answers
+    and pointed them at `repld restart`, which would do the same thing again.
+    Nobody owns stdin once this returns, which is exactly when `tty_prompt` is
+    allowed to read it.
     """
-    while not stop.is_set():
-        try:
-            line = _STDIN.readline()
-        except (OSError, EOFError):
-            break
-        if not line:
-            break
-        line = line.rstrip("\n")
-        # Newest open gate — the one whose prompt the cursor is parked on.
-        if not _open_gates:
-            continue
-        gate_id, (kind, _prompt, options) = next(reversed(_open_gates.items()))
-        try:
-            value = parse_response(kind, line, options)
-        except ValueError as exc:
-            _out(f"{_DIM}{exc}: {_RESET}")
-            continue
-        resolve_gate(gate_id, value)
+    try:
+        while not stop.is_set():
+            try:
+                line = _STDIN.readline()
+            except (OSError, EOFError):
+                break
+            if not line:
+                break
+            line = line.rstrip("\n")
+            # Newest open gate — the one whose prompt the cursor is parked on.
+            if not _open_gates:
+                continue
+            gate_id, (kind, _prompt, options) = next(reversed(_open_gates.items()))
+            try:
+                value = parse_response(kind, line, options)
+            except ValueError as exc:
+                _out(f"{_DIM}{exc}: {_RESET}")
+                continue
+            resolve_gate(gate_id, value)
+    finally:
+        set_stdin_owned(False)
 
 
 # ---------------------------------------------------------------------------

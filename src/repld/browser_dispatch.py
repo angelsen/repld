@@ -198,11 +198,25 @@ class BrowserDispatchMixin:
     def _bh_invoke(self, browser, args):
         tab = self._get_tab(browser, args)
         invoke_args = args.get("args")
+        captured: dict = {}
 
         def mutate():
-            self._run_async(tab.invoke(args["control"], args["action"], invoke_args))
+            captured["result"] = self._run_async(
+                tab.invoke(args["control"], args["action"], invoke_args)
+            )
 
-        return self._observed_mutation(browser, tab, mutate, timeout=_SETTLE_DEFAULT_S)
+        observation = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_DEFAULT_S
+        )
+        # `tab.invoke` returns the control's InvokeResult and this handler used
+        # to drop it on the floor for the observation text alone — so the one
+        # thing the tool is named for never reached the agent, and the only
+        # surface left was the app's own `console.debug("__controls__", …)`,
+        # which is opt-in instrumentation rather than the invoke result. Both
+        # halves are wanted: the return value *and* what it did to the page.
+        # Nested rather than spread, like `_bh_js`: the payload comes from
+        # `window.controls.invoke()`, so its shape is the app's to decide.
+        return {"result": captured.get("result"), "observation": observation}
 
     # ------------------------------------------------------------------
     # Browser handlers — tab read-only

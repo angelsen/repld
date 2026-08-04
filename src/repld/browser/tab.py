@@ -13,10 +13,11 @@ import pathlib
 from typing import Any
 
 from .. import bg
-from ..channel import push_channel
+from ..channel import push_kind
 from .cdp import CDPSession
 from .pin import BINDING_NAME, _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
 from .png import _model_dims, _resize_png
+from . import selector as selector_mod
 from .selector import resolve as _resolve_selector
 from .tab_query import TabQueryMixin
 
@@ -306,9 +307,10 @@ class Tab(TabQueryMixin):
                         break
                 continue
             # Cross-origin — pin contract broken.
-            push_channel(
+            push_kind(
                 f"pinned tab navigated away from {origin}",
-                {"kind": "pin_lost", "target": self.target_id},
+                "pin_lost",
+                target=self.target_id,
             )
             break
         session._pinned = False
@@ -406,11 +408,23 @@ class Tab(TabQueryMixin):
         await asyncio.sleep(_POST_REATTACH_SETTLE_S)
 
     async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
-        """Wait for a ready signal — CSS selector or JS expression, by shape."""
-        if ready.startswith((".", "#", "[", "data-")):
+        """Wait for a ready signal — selector or JS expression, by shape.
+
+        Classification comes from `selector.looks_like_selector`, not from a
+        second opinion held here. This used to test
+        `startswith((".", "#", "[", "data-"))`, which disagreed with
+        `selector.resolve` — the module that owns the question, and that
+        `_wait_for_node` two methods down already defers to — about every bare
+        tag and custom element. `ready="main"` and `ready="my-app"` took the JS
+        branch, evaluated as bare identifiers, came back as a ReferenceError
+        whose `result.value` is simply absent, and polled silently for the full
+        timeout while `ready="#app"` worked. Going through `resolve` also means
+        `text=`, `role=`, `label=` and `:has-text()` work here for free.
+        """
+        if selector_mod.looks_like_selector(ready):
             # Poll via Runtime.evaluate — a DOM.getDocument nodeId goes stale
             # when the document is replaced mid-load, silently never matching.
-            expr = f"!!document.querySelector({json.dumps(ready)})"
+            expr = f"!!({selector_mod.resolve(ready).js})"
             failure = f"Ready signal not found after re-attach: {ready}"
         else:
             expr = ready
@@ -421,6 +435,15 @@ class Tab(TabQueryMixin):
                 "Runtime.evaluate",
                 {"expression": expr, "returnByValue": True},
             )
+            # A raising expression is reported, not polled. Nothing inspected
+            # `exceptionDetails` before, so a typo'd or unsupported signal was
+            # indistinguishable from one that simply hadn't fired yet: the same
+            # full-timeout wait, then a message saying the page never became
+            # ready. A ReferenceError on the first evaluation will still be one
+            # on the hundredth.
+            if "exceptionDetails" in result:
+                desc = result["exceptionDetails"].get("text", "evaluation failed")
+                raise RuntimeError(f"Ready signal {ready!r} raised: {desc}")
             if result.get("result", {}).get("value"):
                 return
             await asyncio.sleep(0.1)

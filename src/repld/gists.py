@@ -21,7 +21,7 @@ from pathlib import Path
 # `from . import gists` back; all cross-module access is module.attr at call
 # time (never `from x import y`), which is cycle-safe and keeps test
 # monkeypatching (e.g. gists.registry) effective.
-from . import gist_deps, gist_links
+from . import gist_deps, gist_links, paths
 from .channel import push_kind
 from .state import atomic_write_json
 
@@ -128,18 +128,40 @@ _registered: set[tuple[str, str]] = set()
 
 
 def _read_registry() -> dict:
-    """Read the gist registry JSON, or {} on missing/corrupt file."""
+    """Read the gist registry JSON, or {} on missing/corrupt file.
+
+    "Corrupt" includes *valid JSON of the wrong shape*, which this used to
+    return verbatim. A registry whose root is a list or a string reached
+    `gist_cmd._gist_list`'s `.items()`, `gist_links.link_targets`'s
+    `.values()`, and `protocol.registry_summary()` — a traceback out of
+    `repld gist list` and a broken MCP resource, from a file no user edits by
+    hand and every kernel reads at boot. `gist_links.read_links` guards the
+    same case on the same kind of file; this is that guard, on the sibling.
+
+    `UnicodeDecodeError` is caught for the same reason: `read_text("utf-8")`
+    raises it, it is a ValueError rather than an OSError or a
+    JSONDecodeError, and a non-UTF-8 registry is exactly as corrupt as an
+    unparseable one.
+    """
     if not _REGISTRY_PATH.is_file():
         return {}
     try:
-        return json.loads(_REGISTRY_PATH.read_text("utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+        data = json.loads(_REGISTRY_PATH.read_text("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         _warn_once(
             "registry:corrupt",
             f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
             "treating as empty",
         )
         return {}
+    if not isinstance(data, dict):
+        _warn_once(
+            "registry:corrupt",
+            f"repld: gist registry {_REGISTRY_PATH} is not a JSON object "
+            f"(got {type(data).__name__}) — treating as empty",
+        )
+        return {}
+    return data
 
 
 def _register(name: str) -> None:
@@ -1017,4 +1039,4 @@ def install(dirs: list[Path], *, create: bool = True) -> None:
         builtins.__import__ = _GistImportHook(builtins.__import__)
 
     # Load cross-project links from the project gist dir's manifest.
-    gist_links._load_links(Path.cwd() / "gists")
+    gist_links._load_links(paths.local_gists_dir())

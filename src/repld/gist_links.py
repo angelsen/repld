@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import gists
+from . import gists, paths
 from .state import atomic_write_json
 
 # Cross-project linked gists: name → absolute source path. Populated from
@@ -182,7 +182,7 @@ def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
             raise FileExistsError(
                 f"'{tname}' already exists locally: {gists_dir / f'{tname}.py'}"
             )
-        global_gist = Path.home() / ".repld" / "gists" / f"{tname}.py"
+        global_gist = paths.global_gists_dir() / f"{tname}.py"
         if global_gist.is_file():
             raise FileExistsError(f"'{tname}' already exists globally: {global_gist}")
         if project_root in tpath.resolve().parents:

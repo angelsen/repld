@@ -5,9 +5,11 @@ event loop (microsecond inserts). FIFO pruning at 50k events.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -324,6 +326,17 @@ class CDPSession:
         self.db = duckdb.connect(":memory:")
         self._setup_schema()
 
+        # Guards the per-call cursors against `cleanup()` closing the
+        # connection under them. The read side got the cross-thread treatment
+        # and the close did not: `cleanup()` runs on the loop (disconnect,
+        # _reconnect, Target.targetDestroyed) while `query`/`query_dicts`/
+        # `clear_events`/`fetch_body` are off-loop by design, so a tab closing
+        # mid-query made `self.db.cursor()` raise a bare DuckDB "connection
+        # already closed" that reached the agent as `browser_network:
+        # Connection Error`. See `_cursor`.
+        self._db_lock = threading.Lock()
+        self._db_closed = False
+
         # Event count for FIFO pruning, maintained by store_event so it covers
         # *every* insert. It used to be incremented in _handle_event instead,
         # which meant capture.py's synthetic rows (Network.requestBodyCaptured
@@ -466,6 +479,12 @@ class CDPSession:
             try:
                 await fetch_disable(self)
             except Exception:
+                # Live, not decorative: `capture.disable` swallowed its own
+                # exception until it was made to propagate, so this branch was
+                # dead and a failed disable read as a success. It restores both
+                # flags because `capture.disable` leaves `_fetch_handler` in
+                # place when Chrome refuses — the session is still capturing,
+                # and saying otherwise would strand paused requests.
                 self._fetch_enabled = True
                 self.capture_bodies = True
                 raise
@@ -525,7 +544,21 @@ class CDPSession:
             # Synchronous insert — microseconds, no contention. store_event
             # owns the counter (see there); the prune trigger stays here so it
             # is driven by real CDP traffic rather than by a body-capture task.
-            self.store_event(data, method, request_id)
+            #
+            # Guarded separately from the dispatches below, which is the whole
+            # point: everything after this is *control flow*, not recording.
+            # The `Fetch.requestPaused` branch is the only thing that ever
+            # resumes a paused request, and the `Runtime.bindingCalled` branch
+            # is how a pill answers a human gate — under the single outer
+            # `except` a raise from here (a closed DuckDB after a torn-down
+            # session, a value the store rejects) skipped both, hanging the
+            # request in Chrome with `settle` waiting on it and swallowing the
+            # gate answer, at debug level. Losing an event from the store is a
+            # gap in history; losing the resume wedges the tab.
+            try:
+                self.store_event(data, method, request_id)
+            except Exception as exc:
+                logger.debug("store_event(%s) failed: %s", method, exc)
 
             if request_id:
                 if method == "Network.requestWillBeSent":
@@ -615,31 +648,54 @@ class CDPSession:
     # Query interface
     # ------------------------------------------------------------------
 
+    @contextlib.contextmanager
+    def _cursor(self):
+        """A per-call cursor, held against `cleanup()` for its whole lifetime.
+
+        The lock spans execute-and-fetch rather than just `self.db.cursor()`,
+        because a close landing anywhere in between is the same crash. That
+        means `cleanup()` waits out an in-flight query — bounded by the slowest
+        CTE the views build (tens of milliseconds, the figure `observe.py`
+        measured), and only when a read is genuinely running. Deliberate: the
+        alternative is closing the connection out from under a live cursor.
+
+        It does *not* serialize against the loop's own writes. `store_event`
+        and `_async_prune` go through `self.db` directly, and so does
+        `cleanup()` — all three run on the loop, so they are already ordered
+        with respect to each other, and DuckDB's MVCC isolates this cursor from
+        that writer. Only the off-loop readers need the guard.
+        """
+        with self._db_lock:
+            if self._db_closed:
+                raise RuntimeError(
+                    f"event store for target {self.chrome_target_id[:8]} is closed "
+                    "— the tab was detached or the browser reconnected"
+                )
+            cur = self.db.cursor()
+            try:
+                yield cur
+            finally:
+                cur.close()
+
     def query(self, sql: str, params: list | None = None) -> list:
         """Execute arbitrary SQL against the events DB.
 
         Runs on a per-call cursor: callers may be on IPC reader threads
         while the loop thread writes via the main connection.
         """
-        cur = self.db.cursor()
-        try:
+        with self._cursor() as cur:
             if params:
                 return cur.execute(sql, params).fetchall()
             return cur.execute(sql).fetchall()
-        finally:
-            cur.close()
 
     def query_dicts(self, sql: str, params: list | None = None) -> list[dict]:
         """Like `query`, but rows are dicts keyed by the query's live column
         names — a `SELECT *` reorder or rename can't silently misassign
         fields the way a positionally-zipped tuple would."""
-        cur = self.db.cursor()
-        try:
+        with self._cursor() as cur:
             result = cur.execute(sql, params) if params else cur.execute(sql)
             cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in result.fetchall()]
-        finally:
-            cur.close()
+            return [dict(zip(cols, row, strict=True)) for row in result.fetchall()]
 
     def fetch_body(self, request_id: str) -> dict:
         """Return captured body; fall back to Network.getResponseBody CDP call."""
@@ -752,19 +808,28 @@ class CDPSession:
         `_async_prune` recounts with `SELECT COUNT(*)` on its next sweep, so the
         drift is bounded and self-correcting. A lost increment is not.
         """
-        cur = self.db.cursor()
-        try:
+        with self._cursor() as cur:
             cur.execute("DELETE FROM events")
-        finally:
-            cur.close()
         if self._loop is None or _on_loop(self._loop):
             self._reset_counters()
         else:
             self._loop.call_soon_threadsafe(self._reset_counters)
 
     def cleanup(self) -> None:
-        """Close the DuckDB connection."""
-        try:
-            self.db.close()
-        except Exception:
-            pass
+        """Close the DuckDB connection.
+
+        Under `_db_lock`, so it waits out any off-loop reader holding a cursor
+        rather than closing the connection beneath it, and marks the store
+        closed so a reader arriving afterwards gets an attributable error
+        instead of a raw DuckDB one. Idempotent — every teardown path
+        (`disconnect`, a failed `_reconnect`, `Target.targetDestroyed`) can
+        reach it, and two of them can reach it for the same session.
+        """
+        with self._db_lock:
+            if self._db_closed:
+                return
+            self._db_closed = True
+            try:
+                self.db.close()
+            except Exception:
+                pass

@@ -83,6 +83,26 @@ _YES = frozenset({"y", "yes", "1", "true"})
 _NO = frozenset({"n", "no", "0", "false"})
 
 
+def yes_by_default(answer: str | None) -> bool:
+    """Whether a `[Y/n]` prompt's answer means yes. Enter (or "") means yes.
+
+    For the boot-time `tty_prompt` callers — restoring a browser session,
+    installing gist deps — which ask before the loop, the display or the tee
+    exist and so cannot use `confirm()`. They each kept their own
+    `answer in ("", "y", "yes")`, which accepted a *narrower* set than
+    `parse_response` does: typing `1` or `true` at the browser-restore prompt
+    read as a decline while the same word answers a `confirm()` gate as yes.
+    Same vocabulary now, in the one place that owns it; the empty-string
+    default is the only thing genuinely different about these prompts, and it
+    is what this function adds.
+
+    None — nobody to ask — is not consent.
+    """
+    if answer is None:
+        return False
+    return answer.strip() == "" or answer.strip().lower() in _YES
+
+
 def set_terminal(value: bool) -> None:
     """Record whether a display thread will be reading stdin for gate answers."""
     global _has_terminal
@@ -209,49 +229,56 @@ async def _gate(
     with _gates_lock:
         _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic())
 
-    # `kind` is part of this, not just pinnedness: the pill is a row of
-    # buttons with no text input, so `_show_gate` renders confirm and choose
-    # and returns without drawing anything for an ask. Deciding on pinnedness
-    # alone made `tab.ask()` suppress the "repld gate answer" hint below *and*
-    # show no pill — on a headless kernel (the usual one) a gate that no
-    # surface could answer.
-    use_pill = tab is not None and getattr(tab, "_pinned", False) and kind != "ask"
-
-    # Channel push first, then prompt — so the panel renders on a fresh
-    # line in the viewer before the prompt text (which ends with `: ` and
-    # waits on stdin, so it mustn't be followed by panel borders).
-    meta = {"kind": "awaiting_human", "gate_id": gate_id, "prompt_kind": kind}
-    if options:
-        meta["options"] = ",".join(options)
-    content = f"awaiting human: {prompt}"
-    if not _has_terminal and not use_pill:
-        # Nothing attached to this kernel can answer, and without timeout= the
-        # cell blocks indefinitely. The agent is the one who sees this push, so
-        # give it the literal command to hand the human rather than leaving both
-        # of them waiting on a pane that doesn't exist.
-        content += (
-            f"\nno terminal attached — answer from the project dir with: "
-            f"repld gate answer {gate_id} <value>"
-        )
-    push_channel(content, meta)
-    emit(HumanPromptOpen(gate_id, kind, prompt, options))
-
-    # Route to pill UI if tab is pinned
-    if use_pill and tab is not None:
-        # bg.spawn, not a bare create_task: `use_pill` is precisely the case
-        # where the push above withheld the `repld gate answer` command because
-        # a pill was going to render, so a task collected mid-flight leaves the
-        # gate with no surface at all. See bg.py.
-        bg.spawn(
-            tab._show_gate(gate_id, kind, prompt, options),
-            name=f"repld-gate-show-{gate_id}",
-        )
-
     # Only read when nobody answered, so the remaining question is which of the
     # two silent endings it was: `timeout=` expiring, or the awaiting cell being
     # cancelled (`cancel`, or the loop watchdog).
     reason: Literal["timeout", "cancelled"] = "cancelled"
+    # The `try` opens immediately after registration, covering the announce and
+    # the pill spawn as well as the await. It used to start below them, so
+    # anything raising in between — `bg.spawn` on a `tab` that is `_pinned` but
+    # has no `_show_gate`, a push that fails — left the entry in `_gates`
+    # permanently: `repld gate` would list it and let a human "answer" a future
+    # nobody is awaiting. `finally` popping an entry whose gate never opened is
+    # harmless; leaking one is not.
     try:
+        # `kind` is part of this, not just pinnedness: the pill is a row of
+        # buttons with no text input, so `_show_gate` renders confirm and choose
+        # and returns without drawing anything for an ask. Deciding on pinnedness
+        # alone made `tab.ask()` suppress the "repld gate answer" hint below *and*
+        # show no pill — on a headless kernel (the usual one) a gate that no
+        # surface could answer.
+        use_pill = tab is not None and getattr(tab, "_pinned", False) and kind != "ask"
+
+        # Channel push first, then prompt — so the panel renders on a fresh
+        # line in the viewer before the prompt text (which ends with `: ` and
+        # waits on stdin, so it mustn't be followed by panel borders).
+        meta = {"kind": "awaiting_human", "gate_id": gate_id, "prompt_kind": kind}
+        if options:
+            meta["options"] = ",".join(options)
+        content = f"awaiting human: {prompt}"
+        if not _has_terminal and not use_pill:
+            # Nothing attached to this kernel can answer, and without timeout= the
+            # cell blocks indefinitely. The agent is the one who sees this push, so
+            # give it the literal command to hand the human rather than leaving both
+            # of them waiting on a pane that doesn't exist.
+            content += (
+                f"\nno terminal attached — answer from the project dir with: "
+                f"repld gate answer {gate_id} <value>"
+            )
+        push_channel(content, meta)
+        emit(HumanPromptOpen(gate_id, kind, prompt, options))
+
+        # Route to pill UI if tab is pinned
+        if use_pill and tab is not None:
+            # bg.spawn, not a bare create_task: `use_pill` is precisely the case
+            # where the push above withheld the `repld gate answer` command because
+            # a pill was going to render, so a task collected mid-flight leaves the
+            # gate with no surface at all. See bg.py.
+            bg.spawn(
+                tab._show_gate(gate_id, kind, prompt, options),
+                name=f"repld-gate-show-{gate_id}",
+            )
+
         wrapped = asyncio.wrap_future(fut)
         if timeout is not None:
             return await asyncio.wait_for(wrapped, timeout=timeout)

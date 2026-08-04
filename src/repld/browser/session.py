@@ -214,8 +214,19 @@ class BrowserSession:
                 self._sessions.clear()
                 self._session_remap.clear()
 
-                # New WebSocket (no target discovery yet — re-attach first)
-                await self.connect(discover=False)
+                # New WebSocket (no target discovery yet — re-attach first).
+                # If Chrome is genuinely down this raises, and `old_cdps` is a
+                # local: without the cleanup every session's in-memory DuckDB
+                # would go out of scope still open, which is exactly the leak
+                # `disconnect()`'s docstring was written about, on the sibling
+                # path. The sessions are already out of `_sessions` above, so
+                # there is nothing left that could reach them.
+                try:
+                    await self.connect(discover=False)
+                except Exception:
+                    for cdp in old_cdps.values():
+                        cdp.cleanup()
+                    raise
 
                 # Re-attach old targets, preserving CDPSession state
                 for target_id, cdp in old_cdps.items():
@@ -225,6 +236,14 @@ class BrowserSession:
                         logger.debug(
                             "reconnect: re-attach %s failed: %s", target_id, exc
                         )
+                        # Unregister before closing. `_reattach_core` puts the
+                        # session in `_sessions` *before* it enables domains,
+                        # re-adds the binding and restores Fetch — so a raise
+                        # from any of those leaves it registered and attached in
+                        # Chrome while `cleanup()` closes its event store. Every
+                        # later event for that tab then raises inside
+                        # `_handle_event` and is swallowed at debug level.
+                        self._sessions.pop(cdp._session_id, None)
                         cdp.cleanup()
 
                 # Now enable target discovery (picks up new tabs)
@@ -331,8 +350,16 @@ class BrowserSession:
     # ------------------------------------------------------------------
 
     def find_by_target_id(self, target_id: str) -> CDPSession | None:
-        """Return the attached CDPSession for a Chrome targetId, or None."""
-        for cdp in self._sessions.values():
+        """Return the attached CDPSession for a Chrome targetId, or None.
+
+        Snapshotted because this may run off-loop: `BrowserPool.resolve_tab` is
+        a plain sync method on the object injected into `__main__`, so
+        `browser.resolve_tab(...)` in a pure-sync exec cell reaches it through
+        `asyncio.to_thread` while the loop is still adding and removing
+        sessions. `resolve_tab` already snapshots `_browsers` on its way here
+        and then delegated straight into this unguarded walk.
+        """
+        for cdp in list(self._sessions.values()):
             if cdp.target_info.get("targetId") == target_id:
                 return cdp
         return None

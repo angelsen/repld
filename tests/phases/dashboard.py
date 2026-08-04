@@ -34,6 +34,32 @@ def _declared_length(port: int, length: int, token: str | None) -> int:
     return int(data.split(b" ")[1])
 
 
+def _flood_headers(port: int, count: int) -> int:
+    """Status for a GET / that sends *count* headers and no terminating blank.
+
+    Raw socket, like `_declared_length`: `http.client` terminates the header
+    block for you, and never sending that terminator is the whole point.
+    Returns 0 if the server just kept reading — which is what the bug looked
+    like from out here, for as long as the client cared to keep typing.
+    """
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    try:
+        s.sendall(f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n".encode())
+        for i in range(count):
+            try:
+                s.sendall(b"X-Pad-%d: %s\r\n" % (i, b"a" * 64))
+            except OSError:
+                break  # server answered and closed part-way through
+        data = s.recv(256)
+    except (socket.timeout, OSError):
+        return 0
+    finally:
+        s.close()
+    if not data:
+        return 0
+    return int(data.split(b" ")[1])
+
+
 def _request(
     port: int,
     path: str = "/",
@@ -153,6 +179,25 @@ def phase_14_dashboard(kernel: Kernel) -> None:
     print(
         f"  ✓ POST /api body capped at {_MAX_BODY_BYTES >> 10}KiB, after the auth check"
     )
+
+    # The header block is the *other* unbounded read, and the one that mattered
+    # more: it runs before the Host check and before either auth path, so it was
+    # the only thing an unauthenticated caller could make the kernel do. It
+    # accepted 200,000 headers on one connection without answering.
+    from repld.dashboard import _MAX_HEADER_LINES
+
+    assert_eq(
+        _flood_headers(port, _MAX_HEADER_LINES + 50),
+        431,
+        "a header flood is refused rather than accumulated",
+    )
+    print(f"  ✓ header block capped at {_MAX_HEADER_LINES} lines, before any auth")
+
+    # One request per connection, so the response has to say so — otherwise an
+    # HTTP/1.1 client pools a socket the server has already closed.
+    _, _, headers = _request(port, "/", cookie=f"repld_token_{port}={token}")
+    assert_eq(headers.get("connection"), "close", "responses declare Connection: close")
+    print("  ✓ Connection: close — the server serves one request per connection")
 
     # The sidebar links to sibling dashboards, which now refuse an
     # unauthenticated GET / too, so each entry has to carry its own token.

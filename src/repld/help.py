@@ -445,9 +445,13 @@ ready= stores a CSS selector or JS expression on the Tab.  It's used by:
   - navigate() / reload() — waits after page load
   - _reattach() — waits after session recovery (HMR, navigation)
 
-CSS selectors (starts with '.', '#', '[', 'data-') use DOM.querySelector,
-polled every 100ms, 10s timeout.  Everything else is evaluated as a JS
-expression via Runtime.evaluate, polled every 100ms, must return truthy.
+Selectors use the same classification as click/type_text: '.', '#', '[',
+'data-', a bare tag or custom-element name ('main', 'my-app'), and the
+custom forms (text=, role=, label=, :has-text) are polled via
+document.querySelector every 100ms, 10s timeout.  Anything else — anything
+with a dot or an operator in it — is evaluated as a JS expression via
+Runtime.evaluate, polled the same way, and must return truthy.  An
+expression that *raises* is reported immediately rather than polled out.
 
 Default (no ready=): waits for document.readyState === 'complete'.
 
@@ -1200,11 +1204,13 @@ Browser:
   browser.unsuppress(pattern)                    → str  un-mute
   browser.suppressed                             → list[str]  active suppress patterns
 
-  ready= takes a CSS selector or a JS expression, dispatched by prefix:
-  '.', '#', '[', 'data-' → polled via document.querySelector; anything else
-  is evaluated as a JS expression and must return truthy. Tab waits for the
-  signal before returning; on session loss (HMR/navigation) it re-attaches
-  and waits again. navigate() and reload() also wait for the ready signal.
+  ready= takes a selector or a JS expression, classified exactly as
+  click/type_text classify theirs: '.', '#', '[', 'data-', a bare tag or
+  custom-element name, and text=/role=/label=/:has-text → polled via
+  document.querySelector; anything else is evaluated as a JS expression and
+  must return truthy (one that raises is reported, not polled out). Tab waits
+  for the signal before returning; on session loss (HMR/navigation) it
+  re-attaches and waits again. navigate() and reload() also wait for it.
   Convention: add data-testid to your root layout component.
 
 Selectors (click/tap/type_text):
