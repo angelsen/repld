@@ -28,6 +28,66 @@ class TabQueryMixin:
 
     _session: CDPSession
 
+    # ------------------------------------------------------------------
+    # `since=` — one time base across four methods
+    # ------------------------------------------------------------------
+    #
+    # **`since=` is epoch seconds everywhere: pass `time.time()`.** It has to be
+    # converted per view, because the CDP events behind them carry three
+    # different clocks and the views store each one raw:
+    #
+    #   network()   har_summary.last_activity  — epoch SECONDS, derived from
+    #                                            `requestWillBeSent.wallTime`
+    #   console()   Runtime.Timestamp          — epoch MILLISECONDS
+    #   sse()       Network.MonotonicTime      — seconds since an arbitrary
+    #   lifecycle()                              origin, not an epoch at all
+    #
+    # Comparing the caller's number against the raw column meant only
+    # `network()` did what it looked like. `tab.console(since=time.time())`
+    # compared ~1.7e9 against ~1.7e12 and matched every row — the opposite of
+    # what was asked, silently — and `sse()`/`lifecycle()` compared it against
+    # a number that counts from browser start, so it matched nothing.
+    # `docs/browser.md` carried this as an open question ("timestamp, row_id,
+    # or sentinel?"); this is the answer, chosen because `time.time()` is what
+    # a caller reaches for and the only base a caller can produce.
+
+    def _monotonic_offset(self) -> float | None:
+        """`wallTime - timestamp` for this tab, or None if nothing pins it.
+
+        Both numbers are on `Network.requestWillBeSent`, which is how
+        `har_summary.last_activity` converts monotonic durations to wall clock
+        already. Read fresh rather than cached: the monotonic origin is the
+        browser process's, so a cached offset outlives the thing it describes
+        across a Chrome restart, and this only runs when a caller actually
+        passes `since=`.
+        """
+        rows = self._session.query(
+            """
+            SELECT
+                CAST(json_extract_string(event, '$.params.wallTime') AS DOUBLE),
+                CAST(json_extract_string(event, '$.params.timestamp') AS DOUBLE)
+            FROM events
+            WHERE method = 'Network.requestWillBeSent'
+              AND json_extract(event, '$.params.wallTime') IS NOT NULL
+            ORDER BY rowid DESC LIMIT 1
+            """
+        )
+        if not rows or rows[0][0] is None or rows[0][1] is None:
+            return None
+        return float(rows[0][0]) - float(rows[0][1])
+
+    def _since_monotonic(self, since: float) -> float:
+        """Epoch-seconds *since* on this tab's monotonic clock.
+
+        With no request recorded there is nothing to anchor the conversion, so
+        this returns a bound nothing can satisfy — under-returning rather than
+        handing back the whole table, which is the direction the bug went. It
+        takes a store with zero network events to get there, i.e. a tab that
+        has only just attached.
+        """
+        offset = self._monotonic_offset()
+        return float("inf") if offset is None else since - offset
+
     def _filtered_query(
         self, source: str, conditions: list[str], bind_params: list[Any], tail: str
     ) -> list[dict]:
@@ -86,6 +146,8 @@ class TabQueryMixin:
             conditions.append("type = ?")
             bind_params.append(type)
         if since is not None:
+            # `last_activity` is already epoch seconds (derived from wallTime),
+            # so this is the one view `since` needs no conversion for.
             conditions.append("CAST(last_activity AS DOUBLE) >= ?")
             bind_params.append(since)
         if not include_assets:
@@ -114,8 +176,9 @@ class TabQueryMixin:
             conditions.append("source = ?")
             bind_params.append(source)
         if since is not None:
+            # Runtime.Timestamp is epoch *milliseconds*; `since` is seconds.
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
-            bind_params.append(since)
+            bind_params.append(since * 1000.0)
 
         rows = self._filtered_query(
             "console_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 200"
@@ -176,8 +239,9 @@ class TabQueryMixin:
             conditions.append("event_name = ?")
             bind_params.append(event_name)
         if since is not None:
+            # Network.MonotonicTime — not an epoch. See `_since_monotonic`.
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
-            bind_params.append(since)
+            bind_params.append(self._since_monotonic(since))
 
         rows = self._filtered_query(
             "sse_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 500"
@@ -204,8 +268,9 @@ class TabQueryMixin:
             conditions.append("name = ?")
             bind_params.append(name)
         if since is not None:
+            # Network.MonotonicTime, as for sse(). See `_since_monotonic`.
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
-            bind_params.append(since)
+            bind_params.append(self._since_monotonic(since))
 
         rows = self._filtered_query(
             "lifecycle_entries",

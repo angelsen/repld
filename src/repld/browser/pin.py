@@ -10,6 +10,8 @@ __all__ = [
     "BINDING_NAME",
     "_next_label_color",
     "_handle_binding",
+    "label_script",
+    "reapply_label",
 ]
 
 # The CDP binding the pill calls to answer a gate. Registered per *session* —
@@ -354,6 +356,41 @@ def _next_label_color() -> str:
     color = _LABEL_PALETTE[_label_color_index % len(_LABEL_PALETTE)]
     _label_color_index += 1
     return color
+
+
+def label_script(text: str, color: str) -> str:
+    """`_LABEL_JS` with this label's text and colour substituted in."""
+    return _LABEL_JS.replace("%TEXT%", json.dumps(text)).replace("%COLOR%", color)
+
+
+async def reapply_label(session) -> None:
+    """Re-register the label bar's on-new-document script on *session*.
+
+    `Page.addScriptToEvaluateOnNewDocument` is session-scoped exactly like
+    `Runtime.addBinding`, so a reattach drops it and the identifier held in
+    `_label_script_id` refers to nothing. Called from
+    `BrowserSession._reattach_core` for the same reason the binding is: a
+    reattach caused by *navigation* would be repaired by the next `_set_label`,
+    but a WebSocket `_reconnect` (sleep, network blip, Chrome restart)
+    reattaches every session while leaving the pages untouched.
+
+    This failure is invisible at the moment it happens, which is what made it
+    outlive the binding fix beside it: the bar is live DOM, so it survives on
+    the *current* document and only fails to come back on the next navigation
+    — the one thing the registration exists for. `_LABEL_JS`'s `mount()` is a
+    no-op when the bar is already there, so `runImmediately` re-evaluating
+    against a document that still has one costs nothing.
+    """
+    if session._label_text is None:
+        return
+    result = await session.execute(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {
+            "source": label_script(session._label_text, session._label_color or ""),
+            "runImmediately": True,
+        },
+    )
+    session._label_script_id = result.get("identifier")
 
 
 async def _handle_binding(session, params: dict) -> None:

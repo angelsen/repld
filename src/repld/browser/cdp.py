@@ -86,14 +86,11 @@ class _DedupEntry:
 _dedup_pending: dict[str, _DedupEntry] = {}
 
 
-class _HintTracker:
-    __slots__ = ("count",)
-
-    def __init__(self) -> None:
-        self.count = 0
-
-
-_hint_counts: dict[str, _HintTracker] = {}
+# key → how many times this error has been seen inside `_HINT_WINDOW`. A
+# `__slots__` class wrapping the one int bought nothing: the counter is only
+# ever incremented and compared, and `_flush_dedup` had to build a throwaway
+# instance just to serve as a `dict.get` default.
+_hint_counts: dict[str, int] = {}
 
 
 def _expire_hint(key: str) -> None:
@@ -102,13 +99,11 @@ def _expire_hint(key: str) -> None:
 
 def _track_hint(key: str, loop: asyncio.AbstractEventLoop) -> bool:
     """Increment hint counter, return True if hint should be shown."""
-    tracker = _hint_counts.get(key)
-    if tracker is None:
+    if key not in _hint_counts:
         loop.call_later(_HINT_WINDOW, _expire_hint, key)
-        tracker = _HintTracker()
-        _hint_counts[key] = tracker
-    tracker.count += 1
-    return tracker.count >= _HINT_THRESHOLD
+        _hint_counts[key] = 0
+    _hint_counts[key] += 1
+    return _hint_counts[key] >= _HINT_THRESHOLD
 
 
 _SUPPRESS_HINT = ' — browser.suppress("...") to mute'
@@ -125,7 +120,7 @@ def _flush_dedup(key: str) -> None:
     try:
         total = entry.count + 1
         msg = f"{entry.text} (×{total} tabs)"
-        if _hint_counts.get(key, _HintTracker()).count >= _HINT_THRESHOLD:
+        if _hint_counts.get(key, 0) >= _HINT_THRESHOLD:
             msg += _SUPPRESS_HINT
         push_channel(msg, entry.meta)
     except Exception:

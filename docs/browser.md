@@ -201,6 +201,7 @@ tab.screenshot(*, full_page=False) -> bytes
 # query (all return list[Row])
 tab.network(url=None, method=None, status=None, type=None, since=None, include_assets=False)
 tab.console(level=None, source=None, since=None)
+# since= is epoch seconds on every one of these — pass time.time().
 tab.ws(url=None)
 tab.ws_frames(url=None, direction=None)
 
@@ -324,9 +325,22 @@ Total: ~1–2 days of focused work.
 
 ## Open questions
 
+`since=` used to be listed here as undecided. It is decided: **epoch
+seconds, on all four query methods**. Row_id was the cheaper option and is
+what the observation pipeline uses internally (`pre_observe` cuts on
+`MAX(rowid)`), but a caller cannot produce a row_id without first making a
+query, whereas `time.time()` is always to hand. The cost is a per-view
+conversion in `tab_query.py`, because the three source clocks disagree:
+`har_summary.last_activity` is already epoch seconds, `Runtime.Timestamp`
+(console) is epoch milliseconds, and `Network.MonotonicTime` (sse,
+lifecycle) counts from an arbitrary origin and has to be offset against a
+`requestWillBeSent` carrying both `wallTime` and `timestamp`. Until that
+conversion existed each method compared the caller's number against its raw
+column, so only `network()` behaved as documented — `console(since=...)`
+matched every row and `sse`/`lifecycle` matched none.
+
 - **`browser.get(...)` when multiple tabs match.** Returns the first match — attach order, not alphabetical. Agent tightens the filter or calls `browser.tabs[i]` for explicit disambiguation.
 - **Default `tab` when only one is attached.** Useful sugar for single-tab workflows — `tab.js(...)` as a module-level function that delegates. Probably worth it; easy to remove if it's confusing.
-- **`since=` semantics for `tab.network(...)`.** Timestamp, row_id, or `last_seen` sentinel? Row_id is cheapest and monotonic; timestamp is more intuitive. Probably row_id with a `tab.network.latest_id` cursor accessor.
 - **Redirect entry ID.** Composite `(request_id, redirect_index)`, synthetic `row_id`, or `request_id.N` string? Synthetic row_id is simplest for SQL; composite is more meaningful for agents reading results.
 - **DuckDB lifetime across navigation.** `preserve_log=True` is the default — but do we also preserve across full tab close and re-attach? Probably not; new attach = new session = new DB. Surface that clearly.
 - **Cookie domain scoping.** `tab.cookies` calls `Network.getAllCookies` which returns the *browser's* cookies, not just this tab's origin. Filter by tab URL's registrable domain by default, expose `tab.cookies.all` for the full jar.

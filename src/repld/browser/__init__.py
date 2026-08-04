@@ -869,6 +869,12 @@ class BrowserPool:
     ) -> Tab:
         """Find a tab by target ID or URL glob across all browsers."""
         if _is_target_id(target):
+            # Auto-connect here too, not only on the glob path below. A target
+            # ID names the port it belongs to, so `browser.get("9222:abc123")`
+            # on a cold pool used to fail with "No browser on port 9222.
+            # Connected: []" — a lazy pool refusing to do the one thing it is
+            # lazy in order to do, on the more specific of the two arguments.
+            await self._ensure_any()
             b = self.browser_for(target)
             return await b.get(target, timeout=timeout, ready=ready)
         await self._ensure_any()

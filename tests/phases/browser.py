@@ -253,12 +253,15 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     class _Cdp:
         """CDPSession stand-in: only what _reattach_core touches."""
 
-        def __init__(self, *, pinned: bool) -> None:
+        def __init__(self, *, pinned: bool, label: str | None = None) -> None:
             self._session_id = "old-sid"
             self.chrome_target_id = "t1"
             self._inflight = {"req-1": 0.0}
             self._fetch_enabled = False
             self._binding_handler = (lambda *_a: None) if pinned else None
+            self._label_text = label
+            self._label_color = "#3b82f6"
+            self._label_script_id = "dead-identifier"
             self.sent: list[str] = []
 
         async def _enable_domains(self) -> None:
@@ -268,9 +271,9 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
             self.sent.append(method)
             return {}
 
-    async def _reattach(*, pinned: bool) -> "_Cdp":
+    async def _reattach(*, pinned: bool, label: str | None = None) -> "_Cdp":
         session = BrowserSession(port=9999)
-        cdp = _Cdp(pinned=pinned)
+        cdp = _Cdp(pinned=pinned, label=label)
         session._sessions["old-sid"] = cdp  # type: ignore[assignment]
 
         async def fake_execute(method, params=None, session_id=None, timeout=30):
@@ -296,6 +299,27 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         "an unpinned session gets no binding it never had",
     )
     print("  ✓ reattach re-registers the pill's gate binding (and only when pinned)")
+
+    # The label's addScriptToEvaluateOnNewDocument registration is scoped to the
+    # session exactly as the binding is, and was the one piece of per-session
+    # state `_reattach_core` didn't restore — the restore lived only in
+    # `Tab._reattach`, the navigation/HMR path. It stayed hidden because the
+    # failure is *delayed*: the bar is live DOM, so it survives on the current
+    # document and silently never comes back on the next navigation, which is
+    # the entire reason it is an on-new-document registration.
+    labelled = asyncio.run(_reattach(pinned=False, label="Skantz Tools"))
+    assert_true(
+        "Page.addScriptToEvaluateOnNewDocument" in labelled.sent,
+        f"a reattached labelled session re-registers its label bar "
+        f"(sent {labelled.sent!r})",
+    )
+    unlabelled = asyncio.run(_reattach(pinned=False))
+    assert_eq(
+        [m for m in unlabelled.sent if m == "Page.addScriptToEvaluateOnNewDocument"],
+        [],
+        "an unlabelled session gets no label script it never had",
+    )
+    print("  ✓ reattach re-registers the label bar too (and only when labelled)")
 
 
 def phase_6_offloop_writes(_kernel: Kernel) -> None:
@@ -1067,3 +1091,117 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         f"  ✓ ready= classification: {len(selectors)} selector forms, "
         f"{len(expressions)} expressions, no crossover"
     )
+
+
+def phase_6_since_time_base(_kernel: Kernel) -> None:
+    """`since=` is epoch seconds on all four query methods.
+
+    No kernel or Chrome — a real DuckDB with hand-written events is the whole
+    apparatus, and it has to be real, because the bug was arithmetic against
+    the stored column rather than anything in Python.
+
+    The three source clocks disagree: `har_summary.last_activity` is epoch
+    seconds, `Runtime.Timestamp` (console) is epoch *milliseconds*, and
+    `Network.MonotonicTime` (sse, lifecycle) counts from an arbitrary origin.
+    Comparing the caller's `time.time()` against each raw column meant
+    `console(since=now)` matched everything — the exact opposite of the request,
+    silently — while `sse`/`lifecycle` matched nothing.
+    """
+    import json as _json
+
+    from repld.browser.cdp import CDPSession
+    from repld.browser.tab import Tab
+
+    # A wall clock and a monotonic clock 1000s apart, so a base confusion can't
+    # coincidentally land on the right side of the cutoff.
+    t0, mono0 = 1_700_000_000.0, 1_000.0
+    cutoff = t0 + 50  # events at +10s are "old", at +90s are "new"
+
+    session = CDPSession(
+        send=None, session_id="s1", target_info={"targetId": "t1"}, port=9222
+    )
+    try:
+
+        def store(method: str, params: dict) -> None:
+            session.store_event(
+                {"method": method, "params": params},
+                method,
+                params.get("requestId"),
+            )
+
+        for age, rid in ((10.0, "old"), (90.0, "new")):
+            # A request pins the wall/monotonic offset and feeds har_summary.
+            store(
+                "Network.requestWillBeSent",
+                {
+                    "requestId": rid,
+                    "wallTime": t0 + age,
+                    "timestamp": mono0 + age,
+                    "request": {"url": f"https://x.test/{rid}", "method": "GET"},
+                    "type": "XHR",
+                },
+            )
+            store(
+                "Network.responseReceived",
+                {
+                    "requestId": rid,
+                    "timestamp": mono0 + age,
+                    "response": {"status": 200, "mimeType": "application/json"},
+                },
+            )
+            store(
+                "Network.loadingFinished",
+                {"requestId": rid, "timestamp": mono0 + age, "encodedDataLength": 1},
+            )
+            # Console carries epoch milliseconds.
+            store(
+                "Runtime.consoleAPICalled",
+                {
+                    "type": "log",
+                    "timestamp": (t0 + age) * 1000.0,
+                    "args": [{"value": rid}],
+                },
+            )
+            # SSE and lifecycle carry monotonic seconds.
+            store(
+                "Network.eventSourceMessageReceived",
+                {
+                    "requestId": rid,
+                    "timestamp": mono0 + age,
+                    "eventName": "tick",
+                    "data": _json.dumps({"n": rid}),
+                },
+            )
+            store("Page.lifecycleEvent", {"name": rid, "timestamp": mono0 + age})
+
+        tab = Tab(session, "t1", 9222)
+
+        # Every method: the +90s row is after the cutoff, the +10s row is not.
+        for label, rows_all, rows_since in (
+            ("network", tab.network(), tab.network(since=cutoff)),
+            ("console", tab.console(), tab.console(since=cutoff)),
+            ("sse", tab.sse(), tab.sse(since=cutoff)),
+            ("lifecycle", tab.lifecycle(), tab.lifecycle(since=cutoff)),
+        ):
+            assert_eq(len(rows_all), 2, f"{label}(): both rows stored")
+            assert_eq(
+                len(rows_since),
+                1,
+                f"{label}(since=epoch_seconds) keeps only the newer row "
+                f"(got {len(rows_since)} of {len(rows_all)})",
+            )
+
+        # A cutoff before everything keeps both; after everything keeps none.
+        # This is what caught the monotonic views: subtracting the offset has to
+        # move the bound with the cutoff, not just happen to exclude one row.
+        for label, early, late in (
+            ("network", tab.network(since=t0), tab.network(since=t0 + 500)),
+            ("console", tab.console(since=t0), tab.console(since=t0 + 500)),
+            ("sse", tab.sse(since=t0), tab.sse(since=t0 + 500)),
+            ("lifecycle", tab.lifecycle(since=t0), tab.lifecycle(since=t0 + 500)),
+        ):
+            assert_eq(len(early), 2, f"{label}(since=before everything) keeps both")
+            assert_eq(len(late), 0, f"{label}(since=after everything) keeps none")
+    finally:
+        session.cleanup()
+    print("  ✓ since= is epoch seconds across network/console/sse/lifecycle")

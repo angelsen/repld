@@ -603,6 +603,10 @@ Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
       Shortcut — calls tab.body(self.request_id) on the row's session.
 
   tab.lifecycle(name=, since=)           → Rows
+
+  since= is epoch seconds on all four — pass time.time(). The underlying
+  CDP clocks differ (epoch s / epoch ms / monotonic); the conversion is
+  done for you, so one base is all you need.
       Query Page.lifecycleEvent events.  Each row has: frame_id, loader_id,
       name, timestamp.  Requires Page.setLifecycleEventsEnabled (auto-enabled
       on attach).  Chrome replays already-fired events on late attach.
@@ -1174,6 +1178,7 @@ Tab (sync — DuckDB queries):
   tab.console(level=, source=, since=)                                 → Rows
   tab.sse(url=, event_name=, since=)                                   → Rows
   tab.lifecycle(name=, since=)                                         → Rows
+  since= on all four is epoch seconds (time.time()).
   tab.clear()                                                          → None
   tab.control_observations()                                           → list[dict]
 

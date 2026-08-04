@@ -15,7 +15,13 @@ from typing import Any
 from .. import bg
 from ..channel import push_kind
 from .cdp import CDPSession
-from .pin import BINDING_NAME, _handle_binding, _LABEL_JS, _next_label_color, _PIN_JS
+from .pin import (
+    BINDING_NAME,
+    _handle_binding,
+    _next_label_color,
+    _PIN_JS,
+    label_script,
+)
 from .png import _model_dims, _resize_png
 from . import selector as selector_mod
 from .selector import resolve as _resolve_selector
@@ -204,11 +210,9 @@ class Tab(TabQueryMixin):
         else:
             text, color = value, _next_label_color()
 
-        js = _LABEL_JS.replace("%TEXT%", json.dumps(text)).replace("%COLOR%", color)
-
         result = await session.execute(
             "Page.addScriptToEvaluateOnNewDocument",
-            {"source": js, "runImmediately": True},
+            {"source": label_script(text, color), "runImmediately": True},
         )
         session._label_script_id = result.get("identifier")
         session._label_text = text
@@ -385,22 +389,18 @@ class Tab(TabQueryMixin):
 
         The target ID usually survives — only the CDP session ID changes.
         The CDPSession object is preserved (event history, capture, pin and
-        label state); the pin pill re-injects via the heartbeat loop, but the
-        label's addScriptToEvaluateOnNewDocument registration died with the
-        old session and must be re-applied here.  Waits for the ready signal
-        (CSS selector or JS expression) if set, otherwise waits for
-        document.readyState === "complete".
+        label state); the pin pill re-injects via the heartbeat loop, and the
+        session-scoped registrations that died with the old session — the gate
+        binding and the label's addScriptToEvaluateOnNewDocument — are restored
+        by `_reattach_core`, so both paths into a reattach get them rather than
+        only this one.  Waits for the ready signal (selector or JS expression)
+        if set, otherwise waits for document.readyState === "complete".
         """
         browser_session = self._session.browser_session
         if browser_session is None:
             raise RuntimeError("Cannot re-attach: no BrowserSession reference")
 
         await browser_session.reattach_session(self._session)
-
-        if self._session._label_text is not None:
-            await self._set_label(
-                (self._session._label_text, self._session._label_color or "")
-            )
 
         await self._await_ready_signal(
             self._ready or "document.readyState === 'complete'"

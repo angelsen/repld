@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from .. import bg
 from .cdp import CDPSession
-from .pin import BINDING_NAME
+from .pin import BINDING_NAME, reapply_label
 
 # Target types that are infrastructure, not user-visible pages/iframes.
 # Excluded from glob-based resolution in get()/watch()/_resolve_target().
@@ -400,6 +400,10 @@ class BrowserSession:
             # queue: a human gate that silently cannot be answered from the one
             # surface that was showing it. Same shape as the Fetch restore below.
             await cdp.execute("Runtime.addBinding", {"name": BINDING_NAME})
+        # The label registration is session-scoped in exactly the same way, and
+        # was the one piece of per-session state this didn't restore — see
+        # `pin.reapply_label` for why it stayed hidden behind the binding bug.
+        await reapply_label(cdp)
         if had_fetch:
             # The unlocked core, never `enable_fetch`: we may be running
             # *inside* an in-flight `enable_fetch` whose own `Fetch.enable`
