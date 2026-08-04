@@ -323,7 +323,12 @@ class BrowserSession:
             return await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending.pop(msg_id, None)
-            raise TimeoutError(f"CDP command {method} timed out after {timeout}s")
+            # `from None`: on 3.11+ `asyncio.TimeoutError` *is* `TimeoutError`,
+            # so chaining shows the same class twice — once bare, once with the
+            # message that says which command and for how long.
+            raise TimeoutError(
+                f"CDP command {method} timed out after {timeout}s"
+            ) from None
         except asyncio.CancelledError:
             self._pending.pop(msg_id, None)
             raise

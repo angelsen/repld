@@ -575,7 +575,26 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
     Runs the first tick after `delay` seconds (immediately by default), then
     sleeps `seconds` between ticks. Catches exceptions so one bad tick doesn't
     stop the schedule. Sets fn._handle and fn.cancel once the task is live.
+
+    **A ticker's output is ambient, so it must clear the inherited task id.**
+    `_task_scope` is what binds `tasks._current_task`, and it wraps `_run_cell`
+    and `_run_deferred` — a ticker goes through neither, because it has no task
+    registry entry to attribute to. It inherits one anyway: `every(...)` applied
+    inside an exec cell schedules this coroutine from that cell's context, and
+    `copy_context()` carries `_current_task` into a task that then outlives the
+    cell by weeks. Every downstream cap is keyed on that id and reset only by
+    the cell's `CellDone`, which fired long ago — so a ticker's `print()` filled
+    the *cell's* 4 KB budget and was then dropped permanently by the pane
+    (`display._truncated_tasks`) and by the event log
+    (`eventlog._chunk_capped`), which on a headless kernel is the only surface
+    there is. The spill went the same way: writes landed in the finished cell's
+    file until `_prune_spill_files` unlinked it an hour later, and then nowhere.
+    Clearing it also restores what `defer()` documents about itself — a
+    `defer()` from a tick body is meant to be ambient, and was instead
+    inheriting a dead cell's `origin`, which the targeted-push rule says to
+    *drop* rather than broadcast once that session disconnects.
     """
+    tasks.set_current_task(None)
     task = asyncio.current_task()
     assert task is not None
     handle = EveryHandle(label, seconds, task)

@@ -234,5 +234,103 @@ def phase_10_every(kernel: Kernel) -> None:
         )
         print("  ✓ every: delay= defers the first tick, then ticks normally")
 
+        # --- 7. A ticker's output is ambient, not the registering cell's ---
+        #
+        # `every(...)` applied inside an exec cell schedules the ticker from
+        # that cell's context, so `copy_context()` hands the ticker task the
+        # cell's `_current_task` — and unlike a `defer()`, the ticker outlives
+        # the cell by weeks. Every cap downstream is keyed on that id and reset
+        # only by the cell's `CellDone`, which fires long before the ticker's
+        # second tick: the pane (`display._truncated_tasks`) and the event log
+        # (`eventlog._chunk_capped`) each dropped everything past 4 KB
+        # *permanently*, and on a headless kernel the event log is the only
+        # surface there is.
+        #
+        # Asserted through `get_task` on the *registering* cell, because
+        # `snapshot()` re-reads that cell's spill file live — and `finalize`
+        # deliberately leaves the handle open so background work can keep
+        # writing to it. So the spill is where the misattribution is visible
+        # from outside: the cell's own print has to be there (the control, or
+        # the absence below proves nothing) and the ticker's must not.
+        resp7 = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "from repld import tasks as _t\n"
+                        "TICK_CTX = []\n"
+                        "print('CELL-OUTPUT')\n"
+                        "@every(0.2, label='ctx_probe')\n"
+                        "def _ctx():\n"
+                        "    TICK_CTX.append(_t.current_task_id())\n"
+                        "    print('TICK-OUTPUT')\n"
+                    )
+                },
+            },
+            timeout=5.0,
+        )
+        assert_true(
+            not resp7["result"].get("isError", False),
+            f"@every ctx_probe defined ok: {resp7['result']['content'][0]['text']!r}",
+        )
+        cell_tid = resp7["result"]["_meta"]["task_id"]
+
+        # Let it tick a few times, from a cell of its own (whose task id is
+        # unrelated to the one under test).
+        b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": "import asyncio\nawait asyncio.sleep(0.7)",
+                    "timeout": 5,
+                },
+            },
+            timeout=10.0,
+        )
+
+        # The damage first...
+        resp = b.call(
+            "tools/call",
+            {"name": "get_task", "arguments": {"task_id": cell_tid}},
+            timeout=5.0,
+        )
+        spill = resp["result"]["_meta"]["text"]
+        assert_true(
+            "CELL-OUTPUT" in spill,
+            f"control: the registering cell's own print is in its spill (got {spill!r})",
+        )
+        assert_true(
+            "TICK-OUTPUT" not in spill,
+            f"ticker output is not written to the registering cell's spill "
+            f"(got {spill!r})",
+        )
+
+        # ...then the cause, so a failure says which of the two broke.
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "print(len(TICK_CTX) >= 2, all(x is None for x in TICK_CTX))"
+                    )
+                },
+            },
+            timeout=5.0,
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"].strip(),
+            "True True",
+            "a tick body runs with no current task id (ticked >=2x, all None)",
+        )
+        b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "every.cancel_all()"}},
+            timeout=5.0,
+        )
+        print("  ✓ every: tick output is ambient, not the registering cell's")
+
     finally:
         b.close()

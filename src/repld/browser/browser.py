@@ -517,7 +517,7 @@ class Browser:
         """Detach a single target by its short ID (e.g. '9222:abc123').
         Unpins first if the tab is pinned."""
         _, prefix = _split_target(target_id)
-        sid, cdp, full_id = self._find_by_prefix(prefix)
+        sid, cdp, _full_id = self._find_by_prefix(prefix)
         if sid is not None and cdp is not None:
             await self._unpin_and_detach(sid, cdp)
             return f"Detached {target_id}."

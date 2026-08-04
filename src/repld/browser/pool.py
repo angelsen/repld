@@ -148,7 +148,12 @@ class BrowserPool:
         try:
             port = int(port_str)
         except ValueError:
-            raise RuntimeError(f"Invalid target ID: {target}")
+            # `from None`: the int() failure says "invalid literal for int()"
+            # about a substring the caller never wrote, under a "during
+            # handling of the above exception" banner. This message already
+            # names the whole target — the cause is noise in a traceback that
+            # lands in an agent's exec output.
+            raise RuntimeError(f"Invalid target ID: {target}") from None
         b = self._browsers.get(port)
         if b is None:
             raise RuntimeError(

@@ -287,7 +287,9 @@ async def _gate(
         reason = "timeout"
         if default is not None:
             return default
-        raise TimeoutError(f"no response to {prompt!r} within {timeout}s")
+        # `from None`: same class either way on 3.11+, and this message is the
+        # one that names the prompt nobody answered.
+        raise TimeoutError(f"no response to {prompt!r} within {timeout}s") from None
     finally:
         with _gates_lock:
             gate = _gates.pop(gate_id, None)
