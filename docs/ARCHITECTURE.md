@@ -59,8 +59,10 @@ Eleven CLI subcommands, all dispatched from `repld:main`:
 - `repld stop [--all]` — SIGTERM this project's kernel and wait for it to clear; `--all` stops every live kernel in the session registry.
 - `repld restart` — stop, then spawn a fresh headless kernel.
 - `repld dashboard [--print]` — resolve the dashboard port, read the API token from the project's 0600 hint file, and open the authenticated URL (printing it when a browser can't be opened). The panel embeds that token, so `GET /` requires one too — a bare `http://127.0.0.1:<port>/` answers 401.
+- `repld gate [--json]` / `repld gate answer <id> <value...>` — list and resolve the human gates a cell is parked on. The only answering surface an auto-spawned kernel has, since it runs `--no-display` with stdin on `/dev/null`. Everything after `answer <id>` is the answer verbatim, so flags for the command go before the verb.
 - `repld help [TOPIC]` — agent-facing docs. Single source of truth shared with the MCP `initialize` `instructions` field.
-- `repld gist <verb>` — `new` / `add` / `rm` / `list` / `lint` for tool gists in `./gists/`.
+- `repld gist <verb>` — `new` / `fetch` / `add` / `rm` / `list` / `lint` for tool gists in `./gists/`.
+- `repld browser [ARGS...]` — re-exec `repld ARGS...` under `uv run` with the `browser` extra, so browser features work without adding `repld-tool` to the project's dependencies. A local editable checkout is preserved rather than falling back to the published package.
 
 ## Design properties
 
@@ -112,6 +114,12 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Lazy kernel spawn — MCP discovery served from `kernel.cache` when no kernel is running; a real tool call is what actually spawns one, so a session that never uses repld never pays for it
 - [x] Targeted channel push — a task's completion notifies the session that started it; ambient pushes stay broadcast
 - [x] Event log + `repld log` / `status` / `stop` / `restart` / `dashboard` — a headless kernel is observable and controllable from any terminal
+- [x] `repld gate` — human gates answerable on a kernel with no pane; the `awaiting_human` push carries the command
+- [x] Project bootstrap as a file — `repld_init.py` auto-detected in the cwd, so every kernel runs it, not just a hand-started one
+- [x] Project-venv binding — `bind.py` re-execs entry points under the project's interpreter; version-matched `adopt()` splices a venv onto a running kernel, a mismatched one is refused
+- [x] Systemd-transient-unit spawn — a headless kernel lands in the user manager with its own cgroup and journal, falling back to plain `Popen` on any failure
+- [x] Dashboard — web control panel with token-gated `GET /` and Bearer-only `POST /api`, Host-header allowlist, cross-session sidebar
+- [x] Cross-project gist links — `repld gist add` writes a committed `./gists/.links` manifest; `repld gist fetch` copies a GitHub gist in; `repld gist lint` checks both
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@watch("/path")` — poll-based file watcher → channel (stdlib only)
 - [ ] `@webhook("/path")` — stdlib asyncio HTTP server → channel

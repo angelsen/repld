@@ -29,11 +29,13 @@ browser.disconnect(port=9222)                      # unpin + close one Chrome in
 
 ### ready= parameter
 
-Stores a CSS selector or JS expression on the Tab. Used by `get()`, `open()`, `navigate()`, `reload()`, and session recovery after HMR.
+Stores a selector or a JS expression on the Tab. Used by `get()`, `open()`, `navigate()`, `reload()`, and session recovery after HMR. It's the one parameter that accepts either, so the shape decides:
 
-- CSS selectors (starts with `.`, `#`, `[`, `data-`) → `DOM.querySelector`, polled every 100ms
-- Everything else → `Runtime.evaluate`, must return truthy
-- Default (no `ready=`): waits for `document.readyState === 'complete'`
+- **Selector** → resolved and polled every 100ms. Anything starting with `.`, `#`, `[`, `data-`, `text=`, `role=` or `label=`, anything containing `:has-text(`, and any bare name (`main`, `my-app`) — the same set `click()` and `wait_for()` accept.
+- **JS expression** → `Runtime.evaluate`, must return truthy. Anything else, which in practice means it has a dot or a call in it (`window.ready`, `app.isLoaded()`).
+- **Default** (no `ready=`): waits for `document.readyState === 'complete'`.
+
+The bare-name case is the one worth knowing: `ready="main"` and `ready="my-app"` are ordinary CSS, and are treated as such.
 
 ## Async methods
 
@@ -147,6 +149,8 @@ All cookies for this tab via `Network.getCookies`.
 
 ## Sync query methods (DuckDB-backed)
 
+All four take `since=`, and on all four it is **epoch seconds** — pass `time.time()`. The three underlying CDP clocks (wall-time seconds, `Runtime.Timestamp` milliseconds, `Network.MonotonicTime` from an arbitrary origin) are converted for you.
+
 ### network
 
 ```python
@@ -228,22 +232,22 @@ Suppress patterns persist across kernel restarts.
 
 ## Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `tab.url` | `str` | Current URL (cached — use `tab.js("location.href")` for live) |
-| `tab.title` | `str` | Page title (cached) |
-| `tab.type` | `str` | `"page"`, `"iframe"`, `"service_worker"`, etc. |
-| `tab.target_id` | `str` | Short ID in `{port}:{6-hex}` format |
-| `tab.capture_bodies` | `bool` | Toggle Fetch body capture (True on get/open, False on watch) |
-| `tab.label` | `str` | Human-readable identifier |
+| Property             | Type   | Description                                                   |
+| -------------------- | ------ | ------------------------------------------------------------- |
+| `tab.url`            | `str`  | Current URL (cached — use `tab.js("location.href")` for live) |
+| `tab.title`          | `str`  | Page title (cached)                                           |
+| `tab.type`           | `str`  | `"page"`, `"iframe"`, `"service_worker"`, etc.                |
+| `tab.target_id`      | `str`  | Short ID in `{port}:{6-hex}` format                           |
+| `tab.capture_bodies` | `bool` | Toggle Fetch body capture (True on get/open, False on watch)  |
+| `tab.label`          | `str`  | Human-readable identifier                                     |
 
 ## Selectors
 
-| Pattern | Type | Focus-safe |
-|---------|------|-----------|
-| `.class`, `#id`, `[attr]` | CSS | Yes |
-| `[data-testid='name']` | CSS | Yes |
-| `text=Submit` | Text match | No |
-| `role=button[name="Save"]` | ARIA | No |
-| `label=Username` | Label | No |
-| `tag:has-text('OK')` | CSS + text | No |
+| Pattern                    | Type       | Focus-safe |
+| -------------------------- | ---------- | ---------- |
+| `.class`, `#id`, `[attr]`  | CSS        | Yes        |
+| `[data-testid='name']`     | CSS        | Yes        |
+| `text=Submit`              | Text match | No         |
+| `role=button[name="Save"]` | ARIA       | No         |
+| `label=Username`           | Label      | No         |
+| `tag:has-text('OK')`       | CSS + text | No         |

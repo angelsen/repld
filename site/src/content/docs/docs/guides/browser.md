@@ -128,7 +128,7 @@ adb forward tcp:9333 localabstract:chrome_devtools_remote
 ```
 
 ```python
-mobile = browser.connect(9333)
+mobile = await browser.connect(9333)
 tab = mobile.tabs[0]
 ```
 

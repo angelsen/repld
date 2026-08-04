@@ -7,14 +7,12 @@ Every kernel runs a small HTTP control panel alongside the socket — no setup, 
 
 ## Opening the dashboard
 
-The kernel prints the URL at boot:
-
-```
-[repld] pid=4821  socket=/run/user/1000/repld/projects/myapp-3f2a91c4/kernel.sock
-  dashboard: http://localhost:53021
+```bash
+repld dashboard           # resolve the port, read the token, open the browser
+repld dashboard --print   # print the authenticated URL instead
 ```
 
-The port is ephemeral by default (stable across restarts when possible) and also recorded in the kernel's lockfile (`dashboard_port` field) if you need to script against it — or just run `repld dashboard`, which resolves the port and opens it (`--print` to only print the URL). Open the URL in any browser — it's a plain page, no auth beyond what's described in [Security](#security) below.
+That is the intended route, because the page itself is authenticated — see [Security](#security). `repld dashboard` reads the API token out of the project's 0600 hint file and opens the URL with it attached; a bare `http://127.0.0.1:<port>/` answers 401. The port alone is printed by `repld status` and recorded in the kernel's lockfile (`dashboard_port` field) if you need to script against it. It's ephemeral by default, and stable across restarts when possible.
 
 ## Layout
 
@@ -47,7 +45,14 @@ Pick a tab from the dropdown to see its most recent captured console messages or
 
 ## Security
 
-The dashboard binds to `127.0.0.1` only. The `POST /api` endpoint (which the page's JS uses for every action) requires a random per-boot bearer token, embedded directly in the served HTML — nothing to configure. Requests are also checked against a loopback `Host` header allowlist (`127.0.0.1:<port>` / `localhost:<port>`), which blocks DNS-rebinding attacks where an external domain resolves to your machine and tries to ride the same-origin policy into the API.
+The dashboard binds to `127.0.0.1` only — but loopback is not a user boundary. Anything running as any user on the box can reach the port, and the panel enumerates every project cwd on the machine while its browser controls reach your logged-in Chrome. So both endpoints are gated by a random per-boot token, written to the project's 0600 hint file:
+
+- **`GET /`** accepts `?token=` (what `repld dashboard` opens with) or a `repld_token_<port>` cookie. The cookie is set on the way in, so a refresh survives the page dropping the query from the address bar. It's named per-port because cookies ignore the port and sibling dashboards would otherwise clobber each other's.
+- **`POST /api`** is **Bearer-only**. A cookie rides along on requests you didn't initiate, so it must never be sufficient by itself.
+
+The page needs the token inlined to call the API, which is exactly why serving it unauthenticated would hand the credential to every process on the machine.
+
+Requests are also checked against a loopback `Host` header allowlist (`127.0.0.1:<port>` / `localhost:<port>`), which blocks DNS-rebinding attacks where an external domain resolves to your machine and tries to ride the same-origin policy into the API. The sidebar's links to sibling dashboards carry each peer's own token, read from that project's hint file.
 
 ## What's next
 

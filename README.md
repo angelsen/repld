@@ -109,6 +109,8 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 | `browser_cdp` | Raw CDP passthrough. |
 | `browser_clear` | Reset captured network/console. |
 | `browser_detach` | Remove watch pattern, detach tabs. |
+| `browser_controls` | Discover a page's `window.controls` schema. |
+| `browser_invoke` | Invoke a control action, with the full observation pipeline. |
 
 Output from every cell spills to `$XDG_RUNTIME_DIR/repld/` — the inline response carries a head/tail preview plus the spill path. Use standard `Read`/`Grep` tools for full output.
 
@@ -116,12 +118,17 @@ Output from every cell spills to `$XDG_RUNTIME_DIR/repld/` — the inline respon
 
 ```python
 notify(content, **meta)              # channel push to the agent
-ask(prompt)                          # block on free-form human input
-confirm(prompt)                      # block on yes/no
-choose(prompt, options)              # block on pick-one
+await ask(prompt)                    # block on free-form human input
+await confirm(prompt)                # block on yes/no
+await choose(prompt, options)        # block on pick-one
 defer(coro, label=None)              # fire-and-forget, channel push on completion
 @every(seconds)                      # periodic ticker, fn.cancel() to stop
 ```
+
+A kernel you started with `repld` takes gate answers in its own pane, and a
+pinned browser tab takes them through its pill. The headless kernel the bridge
+spawns has neither, so it says so in the notification — `repld gate` lists
+what's pending and `repld gate answer <id> <value>` resolves it.
 
 ## Browser
 
@@ -168,13 +175,14 @@ app = await MyApp.connect()
 await app.accounts()
 ```
 
-Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (typed `_tool_*` functions), and link across projects (`repld gist add <name>`). See `repld help gists` for details.
+Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (typed `_tool_*` functions, with `Annotated[T, "..."]` for per-parameter descriptions), and link across projects (`repld gist add <name>`). `repld gist fetch <gist-url>` copies someone else's gist in, and `repld gist lint` checks all of it. See `repld help gists` for details.
 
 ## Scope
 
 `repld` executes arbitrary Python in your project environment. It is a **dev-time tool** — never a runtime dependency. The IPC socket is localhost-only with user-only permissions.
 
-Channel push requires Claude Code's `--channels` flag (research preview).
+Channel push is a research preview, so it takes a development flag:
+`claude --dangerously-load-development-channels server:repld`.
 
 ## License
 

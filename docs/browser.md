@@ -37,7 +37,7 @@ Project cwd
                  └─ Tab facade (user-facing API)
 ```
 
-- **Extra**: `repld[browser]` pulls `websockets` + `duckdb`. Base install stays stdlib-only.
+- **Extra**: `repld[browser]` pulls `websockets` + `duckdb` + `pillow`. Base install stays stdlib-only. All three are required and all three are imported eagerly — `png.py` pulls PIL at module scope for `Tab.screenshot`'s resize — so a two-of-three install reads as the extra being absent, not as a missing screenshot.
 - **Lazy import.** `browser` doesn't load CDP until first `browser.get(...)` / `browser.watch(...)`. No cost for repld users who never touch it.
 - **One WS per port.** Not one per tab. sessionId multiplexing keeps socket count bounded.
 - **Per-session DuckDB.** Each tab has its own in-memory DB. Cross-tab queries are a deliberate non-goal; if needed, the agent unions manually.
@@ -272,17 +272,31 @@ No args drops into interactive REPL (stdlib `code.InteractiveConsole` over IPC, 
 
 ## File layout
 
+Consumer-first — each module imports the ones below it:
+
 ```
 src/repld/browser/
-  __init__.py       — public `browser` namespace, lazy init
-  session.py        — BrowserSession (WS + multiplex)
-  tab.py            — Tab facade + Row dataclass
-  cdp.py            — CDPSession (event storage, dispatch)
-  capture.py        — Fetch.requestPaused handler
+  __init__.py       — re-exports, nothing else
+  pool.py           — BrowserPool over N Chrome instances + LazyBrowser descriptor
+  browser.py        — Browser, one Chrome instance
+  session.py        — BrowserSession (WS + sessionId multiplex)
+  cdp.py            — CDPSession (event storage, dispatch, per-target DuckDB)
+  tab.py            — Tab facade (JS/DOM)
+  tab_query.py      — Tab's query surface (network/console/sse/lifecycle)
+  row.py            — Row dataclass
+  observe.py        — post-mutation observation pipeline
+  capture.py        — Fetch.requestPaused handler + body-capture predicate
   har.py            — HAR view SQL + console view SQL
+  selector.py       — Playwright-style selector resolution
+  pin.py            — pill UI injection + label bar
+  png.py            — screenshot resize / token grid (pulls PIL)
+  target.py         — short-target-ID vocabulary + TabNotFoundError (leaf)
 ```
 
-~1000 LOC estimate, split roughly: session 200, cdp 250, tab 250, capture 150, har (mostly SQL) 250.
+`target.py` is the leaf everything above may import; `__init__.py` is
+re-exports only. Note what that means for tests: `BrowserPool` resolves
+`Browser` through `pool.py`'s namespace, not the package re-export, so
+patching `repld.browser.Browser` silently leaves the real class in play.
 
 ## Ported / improved / dropped — summary
 

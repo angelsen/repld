@@ -82,7 +82,20 @@ async def _tool_lookup_company(org_number: str) -> dict:
 
 Type hints and defaults become the JSON schema (`str`→string, `int`→integer, `float`→number, `bool`→boolean, `list`→array, `dict`→object; no annotation defaults to string; no default marks the param required). The first docstring line becomes the tool description. Tools appear in `tools/list` automatically — no exec round-trip needed. `repld gist new <name>` scaffolds this pattern.
 
-Legacy override: the older `__repld_tools__ = [...]` list + `_tool_*(args: dict)` convention still works for custom schemas, but prints a one-time deprecation warning per gist.
+Describe an individual parameter by wrapping its type in `Annotated`:
+
+```python
+from typing import Annotated
+
+async def _tool_lookup_company(
+    org_number: Annotated[str, "Nine-digit Norwegian organisation number"],
+    include_roles: Annotated[bool, "Also fetch board members"] = False,
+) -> dict: ...
+```
+
+:::caution[Removed in 0.2]
+The pre-0.1.0 `__repld_tools__ = [...]` list plus `_tool_*(args: dict)` convention is gone. It is now **ignored**, not warned about, so a gist still declaring one quietly loses its tools. Give each argument its own typed parameter, move the tool description to the docstring's first line, and put per-parameter descriptions in `Annotated`. `repld gist lint` is the only thing that will tell you.
+:::
 
 ## Cross-project linking
 
@@ -95,7 +108,28 @@ repld gist rm weather     # unlink
 repld gist rm --stale     # clean up broken links
 ```
 
-The `.links` manifest records absolute paths. Local gists always shadow linked ones of the same name.
+The `.links` manifest records absolute paths and is meant to be committed — stale entries are skipped at load rather than rewritten. Local gists always shadow linked ones of the same name.
+
+## Starting from someone else's gist
+
+`fetch` is `new`'s sibling, not `add`'s: it **copies** the `.py` files out of a GitHub gist into `./gists` (or `~/.repld/gists` with `--global`), stamping a `# source:` header.
+
+```bash
+repld gist fetch https://gist.github.com/someone/abc123
+repld gist fetch <url> --name weather --global
+```
+
+Nothing tracks the file afterwards, so `rm` — which only unlinks — is not how you undo it; delete the file. Only `gist.github.com` ids are accepted, and the fetched file's `__repld_deps__` is deliberately _not_ installed: this is code from a URL, and its dependency list shouldn't drive an install before you've read the file.
+
+## Linting
+
+```bash
+repld gist lint              # everything a kernel here would import
+repld gist lint --local      # just ./gists — usable as a per-project CI gate
+repld gist lint weather
+```
+
+Checks the docstring first line, documented return shapes, undeclared `__repld_deps__`, and the removed `__repld_tools__` API. Suppress a rule inline with `# gistlint: ignore=<rule>`.
 
 ## Conventions
 

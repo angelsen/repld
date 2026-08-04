@@ -27,10 +27,11 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 	<Section label="setup">
 		<div class="split">
 			<div>
-				<h2 class="display sm">Four commands.</h2>
+				<h2 class="display sm">Three commands.</h2>
 				<p class="body-text">
-					Install repld and scaffold the project. Start the workspace, then launch Claude with
-					channel support. That's the whole setup.
+					Install repld, register it with the client, then launch Claude with channel support.
+					Nothing is written into your project, and you don't start the workspace yourself — the
+					bridge spawns one the first time Claude uses it.
 				</p>
 			</div>
 			<div class="term" data-reveal>
@@ -41,15 +42,15 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 				<pre
 					class="term-body"><span class="dim">$</span> uv tool install repld-tool
 <span class="dim">$</span> cd your-project
-<span class="dim">$</span> repld init
-<span class="accent">✓</span> .mcp.json written
-<span class="accent">✓</span> CLAUDE.md block added
+<span class="dim">$</span> claude mcp add repld -- repld bridge
 
-<span class="dim">$</span> repld
-<span class="dim">[repld] pid=4821  socket=$XDG_RUNTIME_DIR/repld/projects/your-project-a1b2c3d4/kernel.sock</span>
+<span class="dim">$</span> claude --dangerously-load-development-channels server:repld
 
-<span class="dim"># in another terminal:</span>
-<span class="dim">$</span> claude --dangerously-load-development-channels server:repld</pre>
+<span class="dim"># the kernel starts itself; check on it from any terminal:</span>
+<span class="dim">$</span> repld status
+<span class="accent">●</span> kernel pid=4821  up 2m
+<span class="dim">  socket:    $XDG_RUNTIME_DIR/repld/projects/your-project-a1b2c3d4/kernel.sock</span>
+<span class="dim">  log:       repld log -f</span></pre>
 			</div>
 		</div>
 	</Section>
