@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from .row import size_str
 from .session import BrowserSession
 from .tab import Tab
+from .target import make_target
 
 # ---------------------------------------------------------------------------
 # Role filtering sets
@@ -236,8 +237,6 @@ async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[
     )
     if parent_cdp is None:
         return []
-
-    from . import make_target
 
     parent_tab = Tab(parent_cdp, parent_frame, tab._port)
     try:

@@ -26,6 +26,7 @@ from .png import _model_dims, _resize_png
 from . import selector as selector_mod
 from .selector import resolve as _resolve_selector
 from .tab_query import TabQueryMixin
+from .target import make_target
 
 __all__ = ["Tab", "BrowserJSError"]
 
@@ -102,8 +103,6 @@ class Tab(TabQueryMixin):
     @property
     def target_id(self) -> str:
         """Short target ID in '{port}:{6-char-hex}' format."""
-        from . import make_target
-
         return make_target(self._port, self._chrome_target_id)
 
     @property

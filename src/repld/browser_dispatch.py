@@ -136,7 +136,8 @@ class BrowserDispatchMixin:
         both walk the session/browser maps the loop mutates on every tab that
         opens or closes; `clear` also resets `_event_count` and empties
         `_inflight`, which settle reads from the loop. The snapshots inside
-        `browser/__init__.py` keep the *reads* from crashing wherever they are
+        `browser/browser.py` and `browser/pool.py` keep the *reads* from
+        crashing wherever they are
         called from, but a write to loop-owned state belongs on the loop, so
         these go there too.
 
@@ -321,7 +322,7 @@ class BrowserDispatchMixin:
     def _bh_navigate(self, browser, args):
         tab = self._get_tab(browser, args)
         if tab.type == "iframe" and not args.get("force"):
-            from .browser import make_target
+            from .browser.target import make_target
 
             parent_short = (
                 make_target(tab._port, tab.parent_frame_id)

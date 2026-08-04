@@ -143,7 +143,12 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
     )
 
     async def _pool_once() -> tuple[int, int]:
-        import repld.browser as mod
+        # Patched on `repld.browser.pool`, the module `BrowserPool.connect`
+        # actually resolves `Browser` through — not on the package `__init__`,
+        # which re-exports it. Patching the re-export left the real class in
+        # play and the spy never saw a call, which showed up as a genuine
+        # connect attempt to port 9999.
+        import repld.browser.pool as mod
 
         pool = BrowserPool()
         made: list[object] = []
