@@ -1,10 +1,19 @@
 """Phase 8: Gist resources — resources/list includes gists, resources/read returns API.
 
-Also the doc-surface guard. CLAUDE.md names keeping the four agent-facing doc
-surfaces in sync as an invariant ("Never let the two drift"), and it was the
-one named invariant with nothing enforcing it — `BROWSER_GUIDE` and
+Also the two doc-drift guards, which split by who wrote the doc rather than by
+what they check.
+
+`phase_8_doc_surfaces` covers the agent-facing surfaces in `help.py`. CLAUDE.md
+names keeping them in sync as an invariant ("Never let the two drift"), and it
+was the one named invariant with nothing enforcing it — `BROWSER_GUIDE` and
 `_TOPICS["browser"]` are two independently hand-written prose blocks covering
 the same API, so nothing but a reader would have caught the next divergence.
+
+`phase_8_site_signatures` covers the human-facing ones: the site's browser
+pages and README, which duplicate those same signatures a third time with
+nothing reading them. It asks a different question — not "does this name
+exist" but "is this call shaped right" — because that is the drift those files
+actually accumulated, and two of its three rules describe code that raises.
 """
 
 import ast
@@ -25,7 +34,17 @@ def _class_members(pkg: pathlib.Path, *specs: tuple[str, str]) -> set[str]:
     AST rather than import: the browser package needs the `browser` extra
     (duckdb/websockets/pillow), and a doc check has no business requiring it.
     """
-    out: set[str] = set()
+    return set(_member_kinds(pkg, *specs))
+
+
+def _member_kinds(pkg: pathlib.Path, *specs: tuple[str, str]) -> dict[str, str]:
+    """Member name → "async" | "sync" | "attr", read from source.
+
+    "attr" covers properties and plain assignments alike: what the doc check
+    downstream cares about is only whether writing `name(...)` is correct, and
+    both answer no. A `@property` wins over the `@name.setter` sharing its name.
+    """
+    out: dict[str, str] = {}
     for rel, cls in specs:
         tree = ast.parse((pkg / rel).read_text())
         for node in ast.walk(tree):
@@ -33,12 +52,40 @@ def _class_members(pkg: pathlib.Path, *specs: tuple[str, str]) -> set[str]:
                 continue
             for m in node.body:
                 if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    out.add(m.name)  # methods and properties alike
+                    decorators = {ast.unparse(d) for d in m.decorator_list}
+                    if any(
+                        d == "property" or d.endswith(("_property", ".setter"))
+                        for d in decorators
+                    ):
+                        kind = "attr"
+                    else:
+                        kind = (
+                            "async" if isinstance(m, ast.AsyncFunctionDef) else "sync"
+                        )
+                    # A property's setter is visited second and must not
+                    # downgrade it; nothing else in these classes collides.
+                    if out.get(m.name) != "attr":
+                        out[m.name] = kind
                 elif isinstance(m, ast.AnnAssign) and isinstance(m.target, ast.Name):
-                    out.add(m.target.id)
+                    out.setdefault(m.target.id, "attr")
                 elif isinstance(m, ast.Assign):
-                    out.update(t.id for t in m.targets if isinstance(t, ast.Name))
+                    for t in m.targets:
+                        if isinstance(t, ast.Name):
+                            out.setdefault(t.id, "attr")
     return out
+
+
+def _python_fences(text: str) -> list[str]:
+    """Lines inside ```python fences, which are the only runnable claims.
+
+    Prose says `tab.fetch()` to name a method; a fence says it to show a call,
+    and only the second one is wrong without an `await`.
+    """
+    return [
+        line
+        for block in re.findall(r"^```(?:python|py)\n(.*?)^```", text, re.M | re.S)
+        for line in block.splitlines()
+    ]
 
 
 def phase_8_doc_surfaces(_kernel: Kernel) -> None:
@@ -112,6 +159,108 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     )
     print(
         f"  ✓ all {sum(1 for m in tab if not m.startswith('_'))} public Tab methods documented on both surfaces"
+    )
+
+
+def phase_8_site_signatures(_kernel: Kernel) -> None:
+    """The hand-written docs call the browser API the way it is actually shaped.
+
+    `help.py` has `phase_8_doc_surfaces` above; the site's browser pages and
+    README have had nothing, and they duplicate the same signatures by hand.
+    That is where the whole 0.2 crop of drift landed — five `browser` lines
+    that raise rather than mislead (`patterns` is a property and the page
+    called it; `pages`/`detach`/`disconnect` are `async def` and the page
+    dropped the `await`), plus a `tab.screenshot` return type that had never
+    been right. `browser.patterns()` is the one that argues for a test: it is
+    listed as fixed in the 0.1.0 changelog, because it *was* fixed — in the
+    topics, which is the copy `help.py` owns. The site was written later, from
+    the pre-fix shape, and inherited it. Two hand-written copies of one API
+    drift back apart unless something reads both.
+
+    Three rules, all decidable from the AST — no kernel, no browser extra:
+    calling a property, awaiting a sync method, and calling an async one bare.
+    The last is the quiet one: it yields a coroutine and raises nothing, so a
+    reader gets no signal at all that the doc was wrong.
+
+    `docs/browser.md` is deliberately not scanned. It is a design spec that
+    keeps its pre-build draft on purpose and says so in its own header ("Where
+    this document and those disagree, those are right"), so its sync-shaped
+    `browser.watch(...)` is a record, not a claim. Nor are the marketing pages
+    under `site/src/pages/`: their snippets sit in JSX template literals rather
+    than fences, and they name methods illustratively — `production.astro` uses
+    a bare `browser.fetch()` as a table label for an auth mode, which is prose
+    wearing a code font, not a call anyone runs.
+    """
+    import repld.help as h
+
+    from harness import REPO
+
+    pkg = pathlib.Path(h.__file__).parent
+    kinds = {
+        "tab": _member_kinds(
+            pkg, ("browser/tab.py", "Tab"), ("browser/tab_query.py", "TabQueryMixin")
+        ),
+        "browser": _member_kinds(
+            pkg, ("browser/pool.py", "BrowserPool"), ("browser/pool.py", "LazyBrowser")
+        ),
+    }
+    assert_eq(
+        kinds["browser"].get("patterns"), "attr", "AST reads patterns as a property"
+    )
+    assert_eq(kinds["browser"].get("pages"), "async", "AST reads pages as async")
+    assert_eq(kinds["tab"].get("network"), "sync", "AST reads tab.network as sync")
+
+    docs = sorted((REPO / "site/src/content/docs").rglob("*.md")) + [REPO / "README.md"]
+    docs = [p for p in docs if p.is_file()]
+    if not docs:
+        # An sdist checkout has no site/. The README alone still exercises it.
+        print("  ⚠ no doc sources found — skipping site signature check")
+        return
+
+    # Only a bare `tab` / `browser` root. The lookbehind drops two things that
+    # look identical to a regex and are not: `repld.browser.get(...)`, where
+    # the `await` binds to the whole chain and never reaches our group, and
+    # `docs/browser.md`, a file path whose "attribute" is a suffix.
+    root = r"(?<![.\w/])"
+    # `await` is optional in the match so a bare async call is a *hit* to
+    # classify, not a miss to skip — that being the failure with no symptom.
+    call_re = re.compile(
+        rf"(await\s+)?{root}\b(tab|browser)\.([a-z_][a-z0-9_]*)\s*(\()?"
+    )
+    problems: list[str] = []
+    checked = 0
+    for path in docs:
+        rel = path.relative_to(REPO)
+        text = path.read_text()
+
+        # 1. No phantom API, over the whole file — a prose mention of a method
+        #    that was renamed away is just as wrong as a fenced one.
+        for obj, real in kinds.items():
+            for attr in sorted(
+                set(re.findall(rf"{root}\b{obj}\.([a-z_][a-z0-9_]*)", text))
+            ):
+                if attr not in real:
+                    problems.append(f"{rel}: {obj}.{attr} does not exist")
+
+        # 2/3. Shape rules, fenced Python only.
+        for line in _python_fences(text):
+            for awaited, obj, attr, called in call_re.findall(line):
+                kind = kinds[obj].get(attr)
+                if kind is None:
+                    continue  # already reported as phantom
+                checked += 1
+                where = f"{rel}: {line.strip()}"
+                if kind == "attr" and called:
+                    problems.append(f"{where}\n      → {obj}.{attr} is a property")
+                elif kind == "async" and called and not awaited:
+                    problems.append(f"{where}\n      → {obj}.{attr} is async")
+                elif kind == "sync" and awaited:
+                    problems.append(f"{where}\n      → {obj}.{attr} is not async")
+
+    assert_eq(problems, [], "hand-written docs match the browser API's real shape")
+    print(
+        f"  ✓ {len(docs)} doc file(s), {checked} tab.*/browser.* call(s): "
+        "no phantom API, no awaited-sync, no bare-async, no called-property"
     )
 
 
