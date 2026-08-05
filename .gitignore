@@ -14,11 +14,6 @@ wheels/
 *.local/
 .claude/specs/
 docs/*-brief.html
-
-# repld runtime state
-.pyrepl.lock
-.pyrepl.sock
-.pyrepl.dashboard
 network.db*
 
 # User content (gists are personal — examples/ has showcase patterns)
