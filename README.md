@@ -33,6 +33,10 @@ tails it, `repld status` shows what's running, and `repld stop` shuts it down.
 Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
 project directory and there's nothing to `.gitignore`.
 
+Coming from 0.1.x, that last part is new, and the files the old version wrote
+into your projects are still there — see
+[Upgrading to 0.2](https://angelsen.github.io/repld/docs/guides/upgrading/).
+
 For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` extra (`duckdb`, `websockets`, `pillow`) for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
 
 ## Quick example

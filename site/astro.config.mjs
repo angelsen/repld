@@ -62,6 +62,7 @@ export default defineConfig({
 						{ slug: 'docs/guides/controls' },
 						{ slug: 'docs/guides/gists' },
 						{ slug: 'docs/guides/dashboard' },
+						{ slug: 'docs/guides/upgrading' },
 					],
 				},
 				{
