@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.0] - 2026-08-05
+
 ### Upgrading from 0.1.x
 
 Four things to do, none of which repld can do for you. There is a prompt to paste into your agent, and the same list by hand, at <https://angelsen.github.io/repld/docs/guides/upgrading/>.
