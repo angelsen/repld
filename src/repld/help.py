@@ -96,8 +96,6 @@ _PLAYBOOK = (
     "Read repld://docs/playbook for the full methodology."
 )
 
-_REFERENCE = "Reference: `repld help <topic>` — topics: exec, browser, gists, gates\nRead repld://docs/guide for exec patterns and gist conventions. Read repld://docs/browser for the full browser API and internals.\nRead repld://docs/production when graduating gists to FastMCP/FastAPI."
-
 
 # ---------------------------------------------------------------------------
 # PLAYBOOK (repld://docs/playbook resource — workflow methodology)
@@ -992,7 +990,9 @@ def static_instructions() -> str:
     depends on kernel state — the browser model, the gist listing, and
     registered gist tools.
     """
-    return "\n\n".join([_EXEC_MODEL, _GISTS_MODEL, _deps_hint(), _PLAYBOOK, _REFERENCE])
+    return "\n\n".join(
+        [_EXEC_MODEL, _GISTS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
+    )
 
 
 def build_instructions() -> str:
@@ -1029,7 +1029,7 @@ def build_instructions() -> str:
 
     parts.append(_deps_hint())
     parts.append(_PLAYBOOK)
-    parts.append(_REFERENCE)
+    parts.append(_reference())
     return "\n\n".join(parts)
 
 
@@ -1367,7 +1367,52 @@ Emits awaiting_human channel while blocked.
 notify(content, **meta)
   One-shot channel push to all MCP sessions.
 """,
+    "migration": """\
+Why a repld project has no state files (0.1.x → 0.2).
+
+repld 0.2 writes nothing into a project directory. Files an older setup
+created are absent on purpose — none of these are missing, they are gone:
+
+  .pyrepl.lock/.sock/.dashboard  runtime state; now
+                                 $XDG_RUNTIME_DIR/repld/projects/<slug>/ as
+                                 kernel.lock/.sock/.dashboard. `repld status`
+                                 prints the live paths.
+  .mcp.json                      never written now. Register the server with
+                                 `claude mcp add repld -- repld bridge`.
+  CLAUDE.md repld:start block    gone; that content is the MCP `initialize`
+                                 instructions, composed fresh each session.
+  repl.py + --init               now ./repld_init.py, auto-detected and run by
+                                 every kernel, whoever started it.
+  __repld_tools__                removed in 0.2 and ignored, so a file still
+                                 declaring one has silently lost its tools.
+                                 `repld gist lint` is what reports it.
+
+Still in the project and yours to commit: ./gists/, ./gists/.links, ./.env,
+./repld_init.py.
+
+If you FIND a .pyrepl.* file, it is 0.1.x leftover, not something this version
+made. .pyrepl.lock names a pid that may still be running — check it with
+`ps -p <pid> -o pid,command` before signalling, since a stale lockfile can name
+a reused pid. .pyrepl.dashboard holds a dead dashboard's API token; it was only
+gitignored where `repld init` ran, so check `git ls-files | grep pyrepl`.
+Cleanup: https://angelsen.github.io/repld/docs/guides/upgrading/
+""",
 }
+
+
+def _reference() -> str:
+    """The always-loaded pointer block. Topic list derives from _TOPICS.
+
+    It was a literal listing four topics by hand, which is a second copy of
+    `sorted(_TOPICS)` in the one string every session loads — so adding a topic
+    silently published a list that omitted it.
+    """
+    return (
+        f"Reference: `repld help <topic>` — topics: {', '.join(sorted(_TOPICS))}\n"
+        "Read repld://docs/guide for exec patterns and gist conventions. "
+        "Read repld://docs/browser for the full browser API and internals.\n"
+        "Read repld://docs/production when graduating gists to FastMCP/FastAPI."
+    )
 
 
 # `== Builtins ==` below recaps _EXEC_MODEL's builtins — keep in sync.

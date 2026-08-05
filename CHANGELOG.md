@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`repld help migration`** — why a project has no `.pyrepl.*`, `.mcp.json`, `CLAUDE.md` block or `repl.py` any more, where each moved to, and what a `.pyrepl.*` you *do* find means (0.1.x leftover; the lockfile may name a live pid, the dashboard hint holds a dead API token). It answers a question about absence, which is the one an agent hits and the one no API reference covers. A topic rather than a `repld://docs/*` resource deliberately: a doc resource is permanent surface advertised in every session, and this expires with 0.1.x.
+
 ### Changed
 
 ### Fixed
