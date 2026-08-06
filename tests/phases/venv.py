@@ -330,6 +330,70 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
             importlib.metadata.distribution = orig_dist
         print("  ✓ _editable_path degrades on bad metadata instead of raising")
 
+        # --- the rebind must not silently drop the browser extra ---
+        # `uv run --with` builds a fresh environment from the spec it is given;
+        # the interpreter being left behind contributes nothing to it. So a
+        # repld installed *with* the extra used to re-exec into an environment
+        # that had none of it — no `browser` builtin, no browser MCP tools, and
+        # a `NameError` in a cell as the only symptom. The shape of the bug is
+        # the tell and is what this asserts against: it fired only in projects
+        # that have a `./.venv`, because only those rebind at all, so browser
+        # worked in some projects on a machine and not others for a reason
+        # nothing surfaced. Conditional on what we already have, so a repld
+        # installed without the extra doesn't start resolving duckdb by itself.
+        orig_has_extra = bind.has_browser_extra
+        try:
+            importlib.metadata.distribution = lambda _n: _FakeDist(
+                '{"dir_info": {"editable": true}, "url": "file:///home/x/repld"}'
+            )
+            for present, expected in [(True, "[browser]"), (False, "")]:
+                bind.has_browser_extra = lambda _p=present: _p
+                argv = bind.uv_run_argv(["bridge"])
+                assert argv is not None
+                assert_eq(
+                    argv[argv.index("--with-editable") + 1],
+                    f"/home/x/repld{expected}",
+                    f"editable rebind carries the extra: present={present}",
+                )
+
+                # The published-package branch is a separate string and was
+                # wrong in the same way.
+                def _not_found(_n):
+                    raise importlib.metadata.PackageNotFoundError("repld-tool")
+
+                importlib.metadata.distribution = _not_found
+                argv = bind.uv_run_argv(["bridge"])
+                assert argv is not None
+                assert_eq(
+                    argv[argv.index("--with") + 1],
+                    f"repld-tool{expected}",
+                    f"published rebind carries the extra: present={present}",
+                )
+                importlib.metadata.distribution = lambda _n: _FakeDist(
+                    '{"dir_info": {"editable": true}, "url": "file:///home/x/repld"}'
+                )
+            # And the real predicate answers from *this* interpreter rather
+            # than from a constant — the smoketest runs with the extra when
+            # Chrome-backed phase 6 does, and without it otherwise, so only
+            # its agreement with an actual import is assertable here.
+            bind.has_browser_extra = orig_has_extra
+            importable = True
+            try:
+                import duckdb as _d  # noqa: F401
+                import websockets as _w  # noqa: F401
+                from PIL import Image as _i  # noqa: F401
+            except ImportError:
+                importable = False
+            assert_eq(
+                bind.has_browser_extra(),
+                importable,
+                "has_browser_extra agrees with a real import of all three",
+            )
+        finally:
+            bind.has_browser_extra = orig_has_extra
+            importlib.metadata.distribution = orig_dist
+        print("  ✓ rebind carries the browser extra it already has, and only then")
+
         _systemd_spawn_argv(tmp)
         _systemd_spawn_live(tmp)
     finally:

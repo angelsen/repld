@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Binding a kernel to the project venv no longer takes the browser extra away.** `bind.rebind_exec` re-execs under `uv run --with-editable <repld>`, and `uv run` builds a fresh environment from the spec it is handed — the interpreter being left behind contributes nothing to it. So a repld installed *with* `[browser]` re-execed into an environment that had none of `duckdb`, `websockets` or `pillow`, and the kernel came up with no `browser` builtin and no browser MCP tools. The rebind now carries the extra when the process it is replacing already had it (`bind.has_browser_extra`), which is a rule about not *losing* a capability — a repld installed without the extra still doesn't resolve duckdb by itself. The tell was that browser worked in every project *without* a `./.venv` and in none of the projects with one, since only the latter rebind at all.
+- **A missing browser dependency says which one.** `kernel._inject_builtins` caught the `ImportError` and passed, so the failure surfaced much later and somewhere else — `NameError: name 'browser' is not defined` in a cell, or 21 tools simply absent from `tools/list`. Both read as "this kernel has no browser" and neither said why, which sends the reader to the browser stack instead of to the environment. It now names the module it couldn't import, which is the only thing at that point that knows.
+
 ### Removed
 
 ## [0.2.0] - 2026-08-05

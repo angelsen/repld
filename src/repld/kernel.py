@@ -1017,8 +1017,20 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         # themselves up anyway — the pill's staleness check removes it, and the
         # beforeunload guard with it, once Python stops heartbeating, which is
         # exactly what a stopped loop looks like from the page.
-    except ImportError:
-        pass  # repld[browser] not installed — no browser builtin
+    except ImportError as e:
+        # Not an error — most projects never install the extra. But swallowing
+        # it silently means the failure surfaces much later and somewhere else:
+        # `NameError: name 'browser' is not defined` in a cell, or 21 tools
+        # simply absent from tools/list. Both read as "this kernel has no
+        # browser" and neither says *why*, which sends the reader looking at
+        # the browser stack instead of at the environment. This is the only
+        # place that knows which module was missing, so it says so.
+        print(
+            f"repld: browser disabled — cannot import {e.name or e}. "
+            "Install the `browser` extra, or run `repld browser` instead of "
+            "`repld`.",
+            file=sys.stderr,
+        )
 
 
 def _start_services(

@@ -161,12 +161,50 @@ def adopt(venv: Path) -> Path | None:
     return sp
 
 
+def has_browser_extra() -> bool:
+    """Whether *this* interpreter can import the browser stack.
+
+    All three are load-bearing and imported eagerly, so the question is not
+    "which one" but "are they all here" — `browser/png.py` pulls in PIL at
+    module scope, and `kernel._inject_builtins` reads any one of them missing
+    as the whole extra being absent.
+
+    ``find_spec`` rather than an import: this runs on every bound start, and
+    importing duckdb to find out whether we could is most of the cost the extra
+    exists to avoid paying.
+    """
+    from importlib.util import find_spec
+
+    for mod in ("duckdb", "websockets", "PIL"):
+        try:
+            if find_spec(mod) is None:
+                return False
+        except (ImportError, ValueError):
+            return False
+    return True
+
+
 def uv_run_argv(argv: list[str]) -> list[str] | None:
     """The ``uv run`` command that relaunches ``repld <argv>`` under the
     project's interpreter, or None if uv isn't on PATH.
 
     Reuses ``relaunch._editable_path()`` so a local checkout keeps winning over
     the published package, exactly as it does for ``repld browser``.
+
+    **The browser extra is carried across the re-exec, or the rebind silently
+    takes it away.** ``uv run --with`` builds a fresh environment from the spec
+    it is given; the interpreter we are leaving does not contribute to it. So a
+    repld installed *with* the extra — the tool venv carrying duckdb,
+    websockets and PIL — re-execs into an environment that has none of them,
+    and the kernel comes up with no ``browser`` builtin, no browser MCP tools,
+    and nothing anywhere saying why. The observable shape of that bug is the
+    tell: browser worked in every project *without* a ``./.venv`` and in none
+    of the projects with one, since only the latter rebind at all.
+
+    Conditional on what we already have rather than unconditional, so a repld
+    installed without the extra doesn't start resolving duckdb behind the
+    user's back. The rule is that the re-exec must not *lose* a capability, not
+    that it should acquire one.
     """
     import shutil
 
@@ -175,8 +213,13 @@ def uv_run_argv(argv: list[str]) -> list[str] | None:
     uv = shutil.which("uv")
     if uv is None:
         return None
+    extra = "[browser]" if has_browser_extra() else ""
     path = _editable_path()
-    with_arg = ["--with-editable", path] if path else ["--with", "repld-tool"]
+    with_arg = (
+        ["--with-editable", f"{path}{extra}"]
+        if path
+        else ["--with", f"repld-tool{extra}"]
+    )
     return [uv, "run", *with_arg, "repld", *argv]
 
 
