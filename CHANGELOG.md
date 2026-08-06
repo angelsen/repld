@@ -8,16 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **`repld help migration`** — why a project has no `.pyrepl.*`, `.mcp.json`, `CLAUDE.md` block or `repl.py` any more, where each moved to, and what a `.pyrepl.*` you *do* find means (0.1.x leftover; the lockfile may name a live pid, the dashboard hint holds a dead API token). It answers a question about absence, which is the one an agent hits and the one no API reference covers. A topic rather than a `repld://docs/*` resource deliberately: a doc resource is permanent surface advertised in every session, and this expires with 0.1.x.
-
 ### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.1] - 2026-08-06
+
+### Added
+
+- **`repld help migration`** — why a project has no `.pyrepl.*`, `.mcp.json`, `CLAUDE.md` block or `repl.py` any more, where each moved to, and what a `.pyrepl.*` you *do* find means (0.1.x leftover; the lockfile may name a live pid, the dashboard hint holds a dead API token). It answers a question about absence, which is the one an agent hits and the one no API reference covers. A topic rather than a `repld://docs/*` resource deliberately: a doc resource is permanent surface advertised in every session, and this expires with 0.1.x.
 
 ### Fixed
 
 - **Binding a kernel to the project venv no longer takes the browser extra away.** `bind.rebind_exec` re-execs under `uv run --with-editable <repld>`, and `uv run` builds a fresh environment from the spec it is handed — the interpreter being left behind contributes nothing to it. So a repld installed *with* `[browser]` re-execed into an environment that had none of `duckdb`, `websockets` or `pillow`, and the kernel came up with no `browser` builtin and no browser MCP tools. The rebind now carries the extra when the process it is replacing already had it (`bind.has_browser_extra`), which is a rule about not *losing* a capability — a repld installed without the extra still doesn't resolve duckdb by itself. The tell was that browser worked in every project *without* a `./.venv` and in none of the projects with one, since only the latter rebind at all.
 - **A missing browser dependency says which one.** `kernel._inject_builtins` caught the `ImportError` and passed, so the failure surfaced much later and somewhere else — `NameError: name 'browser' is not defined` in a cell, or 21 tools simply absent from `tools/list`. Both read as "this kernel has no browser" and neither said why, which sends the reader to the browser stack instead of to the environment. It now names the module it couldn't import, which is the only thing at that point that knows.
 
-### Removed
 
 ## [0.2.0] - 2026-08-05
 
