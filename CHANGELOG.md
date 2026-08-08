@@ -10,13 +10,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.2.2] - 2026-08-08
+
+### Changed
+
 - **`defer()` accepts a zero-arg callable as well as a coroutine** — `defer(lambda: asyncio.gather(one(), two()))` — for constructs that need a running loop to *build*, not just to await. A sync cell (no top-level `await`) runs its body in a worker thread to keep the kernel's loop responsive, so `asyncio.gather()`/`create_task()`/`ensure_future()` called eagerly as a `defer()` argument had no loop to attach to and raised before `defer()` was ever entered. The callable form defers the call itself onto the kernel's loop, inside the scheduled task. Forgetting the parens on an async function (`defer(my_fn)`) is still the same friendly, synchronous `TypeError` naming the function — only a genuine zero-arg callable (a `lambda`, a plain function) is treated as a factory.
 
 ### Fixed
 
 - **The "no current event loop" hint pointed at `defer()` even when the cell was already using it.** The RuntimeError comes from building `asyncio.gather()`/`create_task()`/`ensure_future()` in a background thread — a sync cell has no top-level `await` and so runs off the kernel's loop — and the old hint text said "use defer() to schedule async work" regardless of whether `defer()` was the very call that failed. It now explains that these need a loop at *construction*, not just to await, and points at wrapping the call in an `async def` or, if deferring it, passing `defer()` a zero-arg callable (see Changed).
 
-### Removed
 
 ## [0.2.1] - 2026-08-06
 
