@@ -481,6 +481,40 @@ class Tab(TabQueryMixin):
                 ) from reattach_exc
             return await self._session.execute(method, params, timeout)
 
+    async def _ensure_front(self) -> None:
+        """Raise this tab if Chrome has it backgrounded, before dispatching input.
+
+        `click`/`tap`/`type_text`/`key` all ride `Input.dispatch*Event` —
+        the renderer's real input pipeline, which Chrome silently drops for
+        a tab whose window is occluded or backgrounded
+        (`document.visibilityState === "hidden"`): the CDP command still
+        acks, no exception is raised, and no handler on the page ever
+        fires. Resolving a selector doesn't hit this — `DOM.getContentQuads`
+        and `Runtime.evaluate` both work fine on a hidden tab, which is why
+        the failure looks like nothing happened rather than an error. Costs
+        one `Runtime.evaluate` round trip on every call and `Page.bringToFront`
+        only on the degraded path — the multi-window watch workflow this
+        kernel exists for means N-1 tabs are hidden at any given time, so
+        this can't be opt-in.
+        """
+        result = await self._exec(
+            "Runtime.evaluate",
+            {"expression": "document.visibilityState", "returnByValue": True},
+        )
+        if result.get("result", {}).get("value") == "hidden":
+            await self._exec("Page.bringToFront")
+
+    async def front(self) -> None:
+        """Bring this tab's window to the front (Page.bringToFront).
+
+        click()/tap()/type_text()/key() already do this automatically when
+        the tab is backgrounded — call this directly to raise a tab for its
+        own sake (e.g. before a screenshot a human is watching for), or to
+        avoid paying the visibility check on every call in a script that
+        knows it's about to do a lot of input against one tab.
+        """
+        await self._exec("Page.bringToFront")
+
     # ------------------------------------------------------------------
 
     async def js(
@@ -643,6 +677,7 @@ class Tab(TabQueryMixin):
 
         Selector: CSS, text=Label, role=button[name='OK'], or tag:has-text('...')
         """
+        await self._ensure_front()
         x, y = await self._element_center(selector)
 
         for event_type in ("mousePressed", "mouseReleased"):
@@ -670,6 +705,7 @@ class Tab(TabQueryMixin):
         Selects all existing content then types over it.
         Selector: CSS, text=Label, role=textbox, label=Name, or tag:has-text('...')
         """
+        await self._ensure_front()
         node_id, js_expr = await self._wait_for_node(selector)
 
         if node_id:
@@ -712,6 +748,7 @@ class Tab(TabQueryMixin):
 
     async def key(self, key: str) -> None:
         """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape")."""
+        await self._ensure_front()
         for event_type in ("keyDown", "keyUp"):
             await self._exec(
                 "Input.dispatchKeyEvent",
@@ -735,6 +772,7 @@ class Tab(TabQueryMixin):
         Uses Input.dispatchTouchEvent — triggers touchstart/touchend listeners
         that dispatchMouseEvent won't reach. Use for mobile Chrome via ADB.
         """
+        await self._ensure_front()
         if y is not None:
             x, y = float(selector_or_x), y
         else:
@@ -759,6 +797,7 @@ class Tab(TabQueryMixin):
         Dispatches touchStart → touchMove × steps → touchEnd.
         For scrolling on mobile Chrome via ADB.
         """
+        await self._ensure_front()
         await self._touch("touchStart", [{"x": x1, "y": y1}])
         delay = duration_ms / steps / 1000
         for i in range(1, steps + 1):

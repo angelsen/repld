@@ -482,6 +482,14 @@ Convention: add data-testid to your root layout component.
       3s timeout — raises TimeoutError if the page's touch handler blocks
       (common on complex apps like Messenger/React).
 
+  tab.front()                                                 → None
+      Bring this tab's window to the front (Page.bringToFront).
+      click/tap/type_text/key already call this automatically when Chrome
+      has the tab backgrounded — coordinate/key input silently does nothing
+      on a hidden tab otherwise (Chrome drops it, no error). Call directly
+      to raise a tab for its own sake, or to skip the per-call visibility
+      check in a script doing a lot of input against one tab.
+
   tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300)   → None
       Touch swipe: touchStart → touchMove × steps → touchEnd.
       For scrolling on mobile Chrome via ADB.
@@ -1152,6 +1160,7 @@ Tab (async unless noted):
   tab.tree()                                       → list[str]
   tab.click(selector, button=, click_count=)       → None (auto-waits 2s, mouse event)
   tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
+  tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → None (clears first, auto-waits)

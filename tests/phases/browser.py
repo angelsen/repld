@@ -327,6 +327,89 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     print("  ✓ reattach re-registers the label bar too (and only when labelled)")
 
 
+def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
+    """click/tap/type_text/key/swipe raise a backgrounded tab before dispatching.
+
+    No Chrome needed — and a live-Chrome version of this couldn't be made
+    deterministic anyway, since it depends on real window-manager occlusion.
+    The bug this guards: Chrome silently drops Input.dispatch*Event for a
+    tab whose renderer is backgrounded (document.visibilityState ===
+    "hidden") — the CDP command still acks, no exception, no handler on the
+    page ever fires. DOM reads (getContentQuads, querySelector) work fine on
+    a hidden tab, which is why it read as "click did nothing" rather than an
+    error, and why the multi-window watch workflow this kernel exists for —
+    N-1 tabs hidden at any time — hit it immediately. `_ensure_front` is the
+    guard; this asserts every input-dispatching entry point actually calls
+    it before dispatching, and that a visible tab is never needlessly raised.
+    """
+    from repld.browser.tab import Tab
+
+    class _FakeSession:
+        """CDPSession stand-in: records every command, answers Runtime.evaluate
+        with a fixed visibility so _ensure_front's branch is controllable."""
+
+        def __init__(self, visibility: str) -> None:
+            self.visibility = visibility
+            self.sent: list[str] = []
+
+        async def execute(
+            self, method: str, params: dict | None = None, timeout: float = 30
+        ) -> dict:
+            self.sent.append(method)
+            if method == "Runtime.evaluate":
+                return {"result": {"value": self.visibility}}
+            return {}
+
+    async def _center(*_a, **_kw) -> tuple[float, float]:
+        return (1.0, 2.0)
+
+    async def _node(*_a, **_kw) -> tuple[int, str]:
+        return (0, "null")
+
+    def _make_tab(visibility: str) -> tuple[Tab, "_FakeSession"]:
+        session = _FakeSession(visibility)
+        tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+        # Bypass selector resolution (DOM domain) — not what this test judges.
+        tab._element_center = _center  # type: ignore[method-assign]
+        tab._wait_for_node = _node  # type: ignore[method-assign]
+        return tab, session
+
+    async def _run(name: str, visibility: str):
+        tab, session = _make_tab(visibility)
+        calls = {
+            "click": lambda: tab.click("#x"),
+            "tap": lambda: tab.tap("#x"),
+            "type_text": lambda: tab.type_text("#x", "hi"),
+            "key": lambda: tab.key("Enter"),
+            "swipe": lambda: tab.swipe(0, 0, 10, 10, steps=1),
+        }
+        await calls[name]()
+        return session.sent
+
+    for name in ("click", "tap", "type_text", "key", "swipe"):
+        sent = asyncio.run(_run(name, "hidden"))
+        assert_true(
+            "Page.bringToFront" in sent,
+            f"{name}() raises a hidden tab before dispatching input (sent {sent!r})",
+        )
+        raise_idx = sent.index("Page.bringToFront")
+        first_dispatch = next(
+            (i for i, m in enumerate(sent) if m.startswith("Input.dispatch")), None
+        )
+        assert_true(
+            first_dispatch is None or raise_idx < first_dispatch,
+            f"{name}() raises before dispatching input, not after (sent {sent!r})",
+        )
+    print("  ✓ click/tap/type_text/key/swipe: raise a hidden tab before input")
+
+    visible_sent = asyncio.run(_run("click", "visible"))
+    assert_true(
+        "Page.bringToFront" not in visible_sent,
+        f"a visible tab is never raised (sent {visible_sent!r})",
+    )
+    print("  ✓ a visible tab isn't raised — the guard checks, doesn't always act")
+
+
 def phase_6_offloop_writes(_kernel: Kernel) -> None:
     """Loop-owned state is reached *through* the loop by callers not on it.
 
