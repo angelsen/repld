@@ -1113,6 +1113,9 @@ no_display(value) → value
 
 defer(coro, label=None) → task_id
   Fire-and-forget. Channel push on done. Visible to get_task/cancel.
+  coro can also be a zero-arg callable that builds the awaitable —
+  defer(lambda: asyncio.gather(a(), b())) — so gather()/create_task()
+  construct on the kernel's loop instead of a sync cell's own thread.
 
 every(seconds, label=, delay=0)(fn) → fn   periodic ticker; fn.cancel() stops
   delay= defers the first tick (default: tick now)
@@ -1465,6 +1468,14 @@ on that path for the full result.
 For intentionally long work, use defer():
 
   defer(download_all_invoices(), label="invoice sync")
+
+Fanning out with asyncio.gather()/create_task() inside defer() needs one
+more step: those reach for a running loop when *built*, not just when
+awaited, and a sync cell (no top-level await) runs in a worker thread with
+no loop of its own. Pass defer() a zero-arg callable instead of a
+pre-built awaitable, so the gather() call happens on the kernel's loop:
+
+  defer(lambda: asyncio.gather(one("a"), one("b"), return_exceptions=True))
 
 This returns the task_id immediately. The channel notification arrives
 when the coroutine completes (or fails).

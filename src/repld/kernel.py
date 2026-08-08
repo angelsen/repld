@@ -487,14 +487,29 @@ async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) 
             task["exception"] = type(exc).__name__
 
 
-async def _run_deferred(task_id: str, coro) -> None:
-    """Await a user-supplied coroutine within the task lifecycle.
+async def _run_deferred(task_id: str, thunk) -> None:
+    """Build and await a user-supplied awaitable within the task lifecycle.
 
-    Like _run_cell but skips compile/eval — just awaits the coroutine directly.
+    `thunk` is always a zero-arg callable — defer() wraps a coroutine object
+    passed directly as ``lambda: coro``, so this only has one code path.
+    Calling it here, inside a coroutine already scheduled on the kernel's
+    loop (`asyncio.run_coroutine_threadsafe`), is what lets a factory like
+    ``lambda: asyncio.gather(...)`` build its awaitable with a loop actually
+    running: `asyncio.gather()`/`create_task()`/`ensure_future()` all reach
+    for the *current thread's* loop at construction time, not just to await,
+    and a sync cell's body runs off-loop (`asyncio.to_thread`) to keep the
+    kernel responsive — so building one directly in the cell raises "no
+    current event loop" before defer() ever gets a look at it.
     """
     async with _task_scope(task_id) as task:
         try:
-            await coro
+            awaitable = thunk()
+            if not inspect.isawaitable(awaitable):
+                raise TypeError(
+                    "defer() factory must return an awaitable, got "
+                    f"{type(awaitable).__name__}"
+                )
+            await awaitable
         except asyncio.CancelledError:
             task["exception"] = "CancelledError"
         except BaseException as exc:
@@ -508,13 +523,32 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
     def defer(coro, label: str | None = None) -> str:
         """Schedule a coroutine as a tracked task. Returns task_id immediately.
 
+        `coro` is normally a coroutine object (`defer(my_async_fn())`). It
+        may also be a zero-arg callable that *builds* one —
+        `defer(lambda: asyncio.gather(one(), two()))` — for constructs that
+        need a running loop to construct, not just to await. A sync cell's
+        body runs in a worker thread with no event loop set, so calling
+        `asyncio.gather(...)` there eagerly (as a `defer()` argument) fails
+        before `defer()` is even entered; wrapping it in a zero-arg callable
+        defers the call itself onto the kernel's loop, where it belongs.
+
         The task is visible to get_task and cancel. On completion, a task_done
         channel notification is pushed.
         """
-        if not inspect.iscoroutine(coro):
+        if inspect.iscoroutine(coro):
+            thunk = lambda c=coro: c  # noqa: E731
+        elif inspect.iscoroutinefunction(coro):
             raise TypeError(
-                f"defer() expects a coroutine object, got {type(coro).__name__}. "
-                "Call it as: defer(my_async_fn())"
+                f"defer() expects a coroutine object, got the function "
+                f"{coro.__name__!r} itself. Call it as: defer({coro.__name__}())"
+            )
+        elif callable(coro):
+            thunk = coro
+        else:
+            raise TypeError(
+                "defer() expects a coroutine object (or a zero-arg callable "
+                f"that builds one), got {type(coro).__name__}. Call it as: "
+                "defer(my_async_fn()) or defer(lambda: asyncio.gather(...))"
             )
         # Inherit the calling cell's originating session so a background task
         # reports back to whoever asked for it. defer() from an @every body or
@@ -527,7 +561,7 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
             task["label"] = label
         src_label = label or "..."
         events.emit(CellStart(task_id, f"defer({src_label})", time.time()))
-        asyncio.run_coroutine_threadsafe(_run_deferred(task_id, coro), loop)
+        asyncio.run_coroutine_threadsafe(_run_deferred(task_id, thunk), loop)
         return task_id
 
     return defer

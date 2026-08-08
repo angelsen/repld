@@ -221,8 +221,16 @@ def _format_user_traceback(exc: BaseException) -> str:
             )
         elif "no current event loop" in msg or "no running event loop" in msg:
             formatted += (
-                "\nHint: this cell ran in a background thread "
-                "(no 'await' detected). Use defer() to schedule async work:\n"
-                "  defer(some_coroutine())\n"
+                "\nHint: this cell ran in a background thread (no top-level "
+                "'await' in the cell), so asyncio.gather()/create_task()/"
+                "ensure_future() had no loop to attach to — they reach for "
+                "one at construction, not just to await it. Build it inside "
+                "an async def instead:\n"
+                "  async def _run():\n"
+                "      return await asyncio.gather(a(), b())\n"
+                "  await _run()\n"
+                "or, if deferring it, pass defer() a zero-arg callable so it "
+                "builds on the kernel's loop rather than in this thread:\n"
+                "  defer(lambda: asyncio.gather(a(), b()))\n"
             )
     return formatted
