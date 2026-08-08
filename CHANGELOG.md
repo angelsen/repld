@@ -8,15 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **`tab.front()`** — brings a tab's window to the front (`Page.bringToFront`), for scripts that want to raise a tab explicitly.
-
 ### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.3] - 2026-08-08
+
+### Added
+
+- **`tab.front()`** — brings a tab's window to the front (`Page.bringToFront`), for scripts that want to raise a tab explicitly.
 
 ### Fixed
 
 - **`click`/`tap`/`type_text`/`key`/`swipe` silently did nothing on a backgrounded tab.** All five ride `Input.dispatch*Event`, which Chrome drops for a tab whose renderer is occluded or backgrounded (`document.visibilityState === "hidden"`) — the CDP command still acks, nothing raises, and no handler on the page fires. Selector resolution isn't affected (`DOM.getContentQuads`/`querySelector` work fine hidden), which is exactly what made it read as "click did nothing" rather than an error — the multi-window watch workflow this kernel exists for means N-1 tabs are hidden at any given time, so every coordinate/key input against a background tab was a coin flip that reported success either way. All five now check visibility first and call `Page.bringToFront` when hidden — one extra round trip always, the raise only on the degraded path.
 
-### Removed
 
 ## [0.2.2] - 2026-08-08
 
