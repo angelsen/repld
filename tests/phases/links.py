@@ -763,6 +763,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             shutil.rmtree(scope, ignore_errors=True)
 
         _registry_summary_already_here_check()
+        _linked_sibling_deps_check()
     finally:
         gists.registry = orig_registry
         g._linked.clear()
@@ -871,6 +872,40 @@ def _quiet(fn, argv: list[str]) -> int:
     """Run a gist subcommand with its stdout swallowed — usage blocks are noise."""
     with contextlib.redirect_stdout(io.StringIO()):
         return fn(argv)
+
+
+def _linked_sibling_deps_check() -> None:
+    """gist lint's deps rule recognizes a linked sibling (./gists/.links), not
+    just files in the linting gist's own directory.
+
+    Regression: `_sibling_gist_names` only globbed the linting file's own
+    directory, so a name only reachable through the manifest — exactly what
+    `repld gist add` produces — read as an undeclared PyPI package. The
+    real-world case: `triage.py`'s `from mcpclient import MCP`, with
+    mcpclient.py linked in from an entirely different project.
+    """
+    linked_proj = Path(tempfile.mkdtemp(prefix="repld-lint-linked-src-"))
+    proj = Path(tempfile.mkdtemp(prefix="repld-lint-linked-proj-"))
+    try:
+        (linked_proj / "mcpclient.py").write_text('"""A linked client."""\nVALUE = 1\n')
+        gd = proj / "gists"
+        gd.mkdir(parents=True)
+        (gd / "triage.py").write_text(
+            '"""Uses a linked gist."""\nfrom mcpclient import MCP\n'
+        )
+        g.write_links(gd, {"mcpclient": str(linked_proj / "mcpclient.py")})
+        deps_findings = [
+            f for f in gist_lint.lint_file(gd / "triage.py") if f.rule == "deps"
+        ]
+        assert_eq(
+            deps_findings,
+            [],
+            f"a linked sibling isn't an undeclared dep (got {deps_findings})",
+        )
+        print("  ✓ gist lint: a linked sibling (.links) isn't an undeclared dep")
+    finally:
+        shutil.rmtree(linked_proj, ignore_errors=True)
+        shutil.rmtree(proj, ignore_errors=True)
 
 
 def _registry_summary_already_here_check() -> None:

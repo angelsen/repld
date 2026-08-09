@@ -39,7 +39,7 @@ import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import gist_deps, gists
+from . import gist_deps, gist_links, gists
 
 _IGNORE_RE = re.compile(r"#\s*gistlint:\s*ignore=([\w,]+)")
 # __main__ isn't in stdlib_module_names but every process has one — importing
@@ -273,14 +273,32 @@ def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
 
 
 def _sibling_gist_names(path: Path) -> set[str]:
-    """Module names importable from the gist's own directory.
+    """Module names importable from the gist's own project: same-dir files
+    plus anything in its ./gists/.links manifest.
 
-    Deliberately *not* filtered through gists.is_public_gist_file(): that
-    predicate decides what gets listed and exposed as a gist, not what
-    resolves at import time. The directory is on sys.path either way, so
-    `from _helpers import x` works and is never a pip dep to declare.
+    Same-dir names are deliberately *not* filtered through
+    gists.is_public_gist_file(): that predicate decides what gets listed and
+    exposed as a gist, not what resolves at import time -- the directory is
+    on sys.path either way, so `from _helpers import x` works and is never a
+    pip dep to declare. Linked names come from the manifest directly
+    (`gist_links.read_links`), not the live `_linked` overlay a kernel
+    populates at boot -- lint is a standalone CLI invocation with no kernel
+    behind it, so nothing has necessarily loaded this project's links yet.
+    Without this, `triage.py`'s `from mcpclient import MCP` (mcpclient.py
+    linked from a different project) read as an undeclared PyPI dependency:
+    _check_deps's `siblings` set never had a name only reachable through
+    .links, and `mcpclient` isn't in _STDLIB either. A corrupt manifest
+    degrades to "no known linked names" rather than raising -- that failure
+    already has its own loud diagnostic elsewhere (`add`, kernel boot), and
+    under-reporting one file's siblings is a smaller cost than an unrelated
+    lint run crashing on it.
     """
-    return {p.stem for p in path.parent.glob("*.py")}
+    names = {p.stem for p in path.parent.glob("*.py")}
+    try:
+        names.update(gist_links.read_links(path.parent))
+    except ValueError:
+        pass
+    return names
 
 
 # Anything in here catches an ImportError, so an import wrapped in it is a
