@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.2.6] - 2026-08-10
+
+### Fixed
+
 - **`repld gist lint`'s `deps` rule flagged a linked sibling as an undeclared PyPI package.** It only checked the linting file's own directory for same-project siblings, never the `./gists/.links` manifest — so a gist importing a name that only resolves through `repld gist add` (exactly the mechanism the manifest exists for) read as a missing `__repld_deps__` declaration. `_sibling_gist_names` now also reads the manifest via `gist_links.read_links()`.
 
-### Removed
 
 ## [0.2.5] - 2026-08-09
 
