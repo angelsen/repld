@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`repld://gists/_registry` suggested `repld gist add <name>` for a name already resolvable in the current project.** The resource rendered a blanket "link one into the current project" line for every entry regardless of whether that name was already local, global, or linked — unlike `repld gist list`'s `linkable` section, which already excludes those. An entry already resolvable here is now marked `(already here)`, and the always-loaded instructions text says so.
+
 ### Removed
 
 ## [0.2.4] - 2026-08-09

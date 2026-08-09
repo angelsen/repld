@@ -761,6 +761,8 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             g._linked.update(orig_linked)
             sys.path[:] = orig_path
             shutil.rmtree(scope, ignore_errors=True)
+
+        _registry_summary_already_here_check()
     finally:
         gists.registry = orig_registry
         g._linked.clear()
@@ -869,3 +871,54 @@ def _quiet(fn, argv: list[str]) -> int:
     """Run a gist subcommand with its stdout swallowed — usage blocks are noise."""
     with contextlib.redirect_stdout(io.StringIO()):
         return fn(argv)
+
+
+def _registry_summary_already_here_check() -> None:
+    """`repld://gists/_registry` marks a name already resolvable here.
+
+    Regression: the resource used to render a blanket "repld gist add <name>"
+    for every registry entry, with no check against what this project could
+    already import — so a name registered from another project but already
+    present locally (or globally, or linked) read as something to link, and
+    the only place that surfaced otherwise was `add`'s own collision refusal,
+    after the fact.
+    """
+    orig_dirs = gists._installed_dirs
+    orig_registry = gists.registry
+    scope = Path(tempfile.mkdtemp(prefix="repld-registry-summary-"))
+    try:
+        sd = scope / "gists"
+        sd.mkdir()
+        (sd / "already_here.py").write_text('"""Already resolvable locally."""\n')
+        gists._installed_dirs = [sd]
+        gists.registry = lambda: {
+            "already_here": {
+                "path": "/somewhere/else/already_here.py",
+                "project": "/somewhere/else",
+                "last_used": "2026-01-01T00:00:00+00:00",
+                "description": "seen elsewhere too",
+            },
+            "elsewhere_only": {
+                "path": "/somewhere/else/elsewhere_only.py",
+                "project": "/somewhere/else",
+                "last_used": "2026-01-01T00:00:00+00:00",
+                "description": "genuinely not here",
+            },
+        }
+        summary = gists.registry_summary()
+        lines = {
+            ln.split()[0]: ln for ln in summary.splitlines() if ln.startswith("  ")
+        }
+        assert_true(
+            "(already here)" in lines["already_here"],
+            f"a locally-resolvable name is marked (got {lines['already_here']!r})",
+        )
+        assert_true(
+            "(already here)" not in lines["elsewhere_only"],
+            f"a genuinely-elsewhere name is not (got {lines['elsewhere_only']!r})",
+        )
+        print("  ✓ repld://gists/_registry marks a name already resolvable here")
+    finally:
+        gists._installed_dirs = orig_dirs
+        gists.registry = orig_registry
+        shutil.rmtree(scope, ignore_errors=True)

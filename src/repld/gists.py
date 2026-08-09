@@ -173,16 +173,28 @@ def registry() -> dict:
 
 
 def registry_summary() -> str:
-    """Render the cross-project registry as text, grouped by project (recent first)."""
+    """Render the cross-project registry as text, grouped by project (recent first).
+
+    A name already resolvable in *this* project — local, global, or already
+    linked — is marked ``(already here)`` rather than left to read as another
+    candidate for ``repld gist add``. `_iter_gist_files` is the same
+    local-or-linked check `gist_cmd`'s ``linkable`` section filters by
+    (`gist_cmd.py`'s ``here = set(local) | set(links)``); this resource had no
+    equivalent, so a name seen importable elsewhere kept suggesting `add`
+    for a project that already had it, and the collision was surfaced only by
+    `add`'s own refusal — after the fact rather than before.
+    """
     reg = registry()
     if not reg:
         return "(gist registry empty — import a gist in any project to populate it)"
+    here = {p.stem for p in _iter_gist_files(include_private=True)}
     by_project: dict[str, list[tuple[str, dict]]] = {}
     for name, entry in reg.items():
         by_project.setdefault(entry.get("project", "?"), []).append((name, entry))
     lines = [
         "Gist registry — every gist seen across projects.",
         "Link one into the current project: repld gist add <name>",
+        "(already here) means the name resolves in this project already — don't add it.",
         "",
     ]
     for project, entries in sorted(
@@ -193,9 +205,10 @@ def registry_summary() -> str:
         lines.append(project)
         for name, entry in sorted(entries, key=lambda x: x[0]):
             stale = "" if Path(entry.get("path", "")).is_file() else "  (stale)"
+            already = "  (already here)" if name in here else ""
             date = (entry.get("last_used", "") or "")[:10]
             desc = entry.get("description", "") or ""
-            lines.append(f"  {name:<22} {date}  {desc}{stale}")
+            lines.append(f"  {name:<22} {date}  {desc}{already}{stale}")
         lines.append("")
     return "\n".join(lines).rstrip()
 

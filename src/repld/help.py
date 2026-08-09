@@ -86,8 +86,10 @@ _GISTS_MODEL = (
     'use "." to depend on the gist\'s own project; use "path:vendor/lib" to '
     "add a local (non-pip-installable) directory to sys.path, relative to "
     "the project root. Kernel prompts to install missing PyPI ones at boot.\n"
-    "Read repld://gists/_registry to see gists written in other projects; the "
-    "user can link one in with `repld gist add <name>` (no copy)."
+    "Read repld://gists/_registry to see gists written in other projects — an "
+    "entry marked (already here) is already resolvable in this one, so skip "
+    "it; otherwise the user can link one in with `repld gist add <name>` "
+    "(no copy)."
 )
 
 _PLAYBOOK = (
@@ -1352,7 +1354,8 @@ Cross-project links:
   Every import is recorded in a central registry; `add` resolves a name to its
   path, follows same-dir sibling imports, and records absolute paths in a
   committed ./gists/.links manifest — no copy. Read repld://gists/_registry to
-  browse every gist seen across projects.
+  browse every gist seen across projects; a name marked (already here) is
+  already resolvable in this project and doesn't need `add`.
 
 Writing gists:
   Prefer async — use httpx.AsyncClient, async def methods, await tab.fetch().
