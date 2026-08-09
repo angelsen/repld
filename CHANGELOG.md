@@ -8,7 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`repld gist add` warns when a linked file imports `repld` at module level.** That makes the whole file kernel-only — importable only inside a repld kernel, never standalone or from a plain script — and nothing said so before: `gist lint`'s `deps` rule exempts `import repld` the same way it exempts stdlib, so there was no signal anywhere until a linked file surprised its new project. Informational only; doesn't refuse the link.
+
 ### Changed
+
+- `GUIDE`'s Conventions section and the `gists` help topic now note the module-level-`import repld` caveat directly, instead of leaving it implicit in `repld://docs/production`'s graduation-only framing.
 
 ### Fixed
 

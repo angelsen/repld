@@ -1356,6 +1356,10 @@ Cross-project links:
   committed ./gists/.links manifest — no copy. Read repld://gists/_registry to
   browse every gist seen across projects; a name marked (already here) is
   already resolvable in this project and doesn't need `add`.
+  A linked gist's own imports carry over too — one that does `import repld`
+  at module level only works inside a kernel, whatever project it's linked
+  into. `add` warns when it links a file shaped that way; `repld gist lint`
+  won't catch it on its own (`import repld` isn't flagged as a dependency).
 
 Writing gists:
   Prefer async — use httpx.AsyncClient, async def methods, await tab.fetch().
@@ -1716,6 +1720,11 @@ Template:
 Import kernel builtins via `import repld` at module top level. Access as
 repld.browser, repld.notify, repld.defer, repld.every, repld.no_display. Module-level import
 is auto-reload safe (attribute lookup on each call, not a frozen reference).
+Exception: if this gist might be linked into another project (repld gist add)
+and doesn't otherwise need a kernel to run, keep `import repld` local to the
+one function that needs it instead — a module-level import makes the whole
+file fail outside a kernel, even for a caller who only wanted the rest of it.
+`repld gist add` warns when it links a file shaped that way.
 
 Async by default. All methods async def, use await tab.fetch(). Async gists
 yield to the event loop — browser stays responsive, multiple gists can

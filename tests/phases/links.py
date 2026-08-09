@@ -764,6 +764,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
 
         _registry_summary_already_here_check()
         _linked_sibling_deps_check()
+        _add_link_repld_import_warning_check()
     finally:
         gists.registry = orig_registry
         g._linked.clear()
@@ -866,6 +867,54 @@ def _fetch_checks() -> None:
         Path.home = orig_home  # pyright: ignore[reportAttributeAccessIssue]
         os.chdir(cwd)
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _add_link_repld_import_warning_check() -> None:
+    """`repld gist add` warns when a linked file imports repld at module level.
+
+    The exact failure that made a real gist read as broken once linked
+    elsewhere: a module-level `import repld` used for one cosmetic call
+    (`no_display()`) made the whole file kernel-only, and nothing said so
+    until it was already linked into a different project. `add_link` now
+    checks the resolved set (name + siblings) and warns to stderr —
+    informational, doesn't refuse the link.
+    """
+    other = Path(tempfile.mkdtemp(prefix="repld-link-warn-src-"))
+    proj = Path(tempfile.mkdtemp(prefix="repld-link-warn-proj-"))
+    orig_registry = gists.registry
+    try:
+        (other / "bound.py").write_text(
+            '"""Module-level import."""\nimport repld\nVALUE = 1\n'
+        )
+        (other / "portable.py").write_text(
+            '"""Local guarded import."""\n'
+            "def f():\n"
+            "    import repld\n"
+            "    return repld.no_display(1)\n"
+        )
+        gists.registry = lambda: {
+            "bound": {"path": str(other / "bound.py"), "project": str(other)},
+            "portable": {"path": str(other / "portable.py"), "project": str(other)},
+        }
+        gd = proj / "gists"
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            g.add_link("bound", gd)
+        assert_true(
+            "imports repld at module level" in buf.getvalue(),
+            f"module-level import repld warned (got {buf.getvalue()!r})",
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            g.add_link("portable", gd)
+        assert_eq(buf.getvalue(), "", "function-local import repld: no warning")
+        print("  ✓ add_link warns on a linked file's module-level `import repld`")
+    finally:
+        gists.registry = orig_registry
+        shutil.rmtree(other, ignore_errors=True)
+        shutil.rmtree(proj, ignore_errors=True)
 
 
 def _quiet(fn, argv: list[str]) -> int:

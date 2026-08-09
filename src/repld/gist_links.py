@@ -167,6 +167,28 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
     return list(resolved.items())
 
 
+def _module_level_repld_import(path: Path) -> bool:
+    """Whether `path` imports repld at module top level (not inside a function).
+
+    `import repld` in wiring is expected and harmless as long as it stays
+    inside the function that needs it; a module-level one makes the *whole
+    file* fail to import outside a kernel, since repld isn't a plain
+    installable package there — the file just written into someone else's
+    project via `add_link` is exactly the moment that cost lands on a reader
+    who didn't put it there. Only `tree.body` (not `ast.walk`), so a guarded
+    or function-local import is correctly ignored.
+    """
+    tree = gists._parse(path)
+    if tree is None:
+        return False
+    for node in tree.body:
+        if isinstance(node, ast.Import) and any(a.name == "repld" for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and node.module == "repld":
+            return True
+    return False
+
+
 def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
     """Link `name` (and its siblings) into gists_dir's manifest.
 
@@ -200,6 +222,14 @@ def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
     for tname, tpath in targets:
         links[tname] = str(tpath.resolve())
     write_links(gists_dir, links)
+    for tname, tpath in targets:
+        if _module_level_repld_import(tpath):
+            print(
+                f"repld: '{tname}' imports repld at module level ({tpath}) — "
+                "it only works inside a kernel; if this gist should also run "
+                "standalone, move the import into the function that needs it",
+                file=sys.stderr,
+            )
     return targets
 
 
