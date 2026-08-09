@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import IO, Any, Literal, overload
@@ -237,6 +238,44 @@ def sweep_own_stale_files(
             if not entry.is_file() or now - entry.stat().st_mtime < max_age:
                 continue
             entry.unlink()
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
+def sweep_dead_project_dirs(projects_dir: Path) -> int:
+    """Reclaim a dead kernel's whole per-project directory under PROJECTS_DIR.
+
+    The third boot-time sweep rule described in paths.py's module docstring —
+    applied one level up from `sweep_dead_pid_files`, to the
+    ``PROJECTS_DIR/<slug>/`` directory itself rather than files inside it.
+
+    Only reclaims a directory whose ``kernel.lock`` exists *and* names a dead
+    pid — the same asymmetry `sweep_dead_pid_files` uses, in the same
+    direction. A directory with no lock yet may be another kernel mid-boot
+    (flock taken in `_claim_project`, lock not written until
+    `_write_lockfile` much later in `_start_services`); reclaiming it would
+    race that boot. A directory with no lock *ever* (a client resolved
+    `project_dir()` — `repld status`, `repld exec` — but no kernel started
+    there) is left alone too: there's nothing here to say it's abandoned
+    rather than simply unused, and it costs nothing to leave standing.
+    """
+    removed = 0
+    try:
+        entries = list(projects_dir.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        lock_path = entry / "kernel.lock"
+        if not lock_path.exists():
+            continue
+        if isinstance(read_lock(lock_path), dict):
+            continue  # pid alive
+        try:
+            shutil.rmtree(entry)
         except OSError:
             continue
         removed += 1

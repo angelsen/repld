@@ -487,6 +487,21 @@ async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) 
             task["exception"] = type(exc).__name__
 
 
+_RESULT_REPR_LIMIT = 2000  # get_task's "result" field — a preview, not a payload
+
+
+def _safe_repr(value: object) -> str:
+    """repr() a deferred task's result, bounded so a huge or unrepr-able value
+    can't take the task down (or blow up get_task's `json.dumps(snap)`)."""
+    try:
+        text = repr(value)
+    except Exception as exc:
+        return f"<repr() failed: {type(exc).__name__}>"
+    if len(text) > _RESULT_REPR_LIMIT:
+        text = text[:_RESULT_REPR_LIMIT] + f"… ({len(text)} chars total)"
+    return text
+
+
 async def _run_deferred(task_id: str, thunk) -> None:
     """Build and await a user-supplied awaitable within the task lifecycle.
 
@@ -500,7 +515,14 @@ async def _run_deferred(task_id: str, thunk) -> None:
     and a sync cell's body runs off-loop (`asyncio.to_thread`) to keep the
     kernel responsive — so building one directly in the cell raises "no
     current event loop" before defer() ever gets a look at it.
+
+    An `exec` cell's trailing expression gets `_`/`_N` plus a printed repr()
+    (`runtime.run_cell`); a deferred task has no cell number to bind, so it
+    gets the printed half instead (into the spill, and so into the
+    task_done push) plus a bounded repr in `task["result"]` for `get_task`.
     """
+    from . import runtime
+
     async with _task_scope(task_id) as task:
         try:
             awaitable = thunk()
@@ -509,7 +531,11 @@ async def _run_deferred(task_id: str, thunk) -> None:
                     "defer() factory must return an awaitable, got "
                     f"{type(awaitable).__name__}"
                 )
-            await awaitable
+            result, quiet = runtime.unwrap_display(await awaitable)
+            if result is not None:
+                task["result"] = _safe_repr(result)
+                if not quiet:
+                    runtime.print_display(result)
         except asyncio.CancelledError:
             task["exception"] = "CancelledError"
         except BaseException as exc:
@@ -966,6 +992,10 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     try:
         paths.ensure_runtime_dir()
         state.sweep_dead_pid_files(paths.RUNTIME_DIR)
+        # 2a-ii. Same idea, one level up: reclaim a dead kernel's whole
+        # PROJECTS_DIR/<slug>/ directory, not just the per-process scratch
+        # above — see state.sweep_dead_project_dirs' docstring.
+        state.sweep_dead_project_dirs(paths.PROJECTS_DIR)
     except Exception as e:
         print(f"repld: could not sweep stale runtime files: {e}", file=sys.stderr)
 

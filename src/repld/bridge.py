@@ -34,10 +34,12 @@ Two rules that fall out of running arbitrary user code:
 """
 
 import json
+import os
 import socket
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from . import (
@@ -82,6 +84,68 @@ BRIDGE_INIT_ID = "repld-bridge-init"
 # method repld does not implement; `resources/read` is here because the
 # intercept declines exactly the gist and browser URIs, which do need one.
 _NEEDS_KERNEL = frozenset({"tools/call", "resources/read"})
+
+
+def _ephemeral_socket_path() -> Path:
+    """A private, single-use socket path for `repld bridge --ephemeral`.
+
+    Deliberately outside PROJECTS_DIR: that tree is addressed by cwd
+    (`paths.project_dir`) precisely so a second bridge for the same project
+    attaches to the *same* kernel — the opposite of what --ephemeral
+    promises. A per-invocation subdirectory under RUNTIME_DIR, keyed on this
+    bridge's own pid plus a random suffix, guarantees no other bridge —
+    ephemeral or not — ever resolves to the same path, and the whole
+    directory is one `rmtree` for `_teardown_ephemeral` to remove on the way
+    out. That matters because neither `state.sweep_dead_pid_files` nor
+    `state.sweep_dead_project_dirs` would ever see it: the first only reaches
+    RUNTIME_DIR's flat `{pid}-…` files, the second only PROJECTS_DIR.
+
+    Two separate mkdir calls, not one `parents=True`: RUNTIME_DIR itself is
+    already 0700 (`ensure_runtime_dir`), but `mkdir(parents=True, mode=...)`
+    applies the mode only to the leaf it creates — the exact footgun
+    `ensure_runtime_dir`'s own docstring warns about — so an `ephemeral/`
+    parent brought into being implicitly would come out at umask default.
+    Each call here has an already-existing direct parent, so its `mode` is
+    the one that actually lands.
+    """
+    paths.ensure_runtime_dir()
+    root = paths.RUNTIME_DIR / "ephemeral"
+    root.mkdir(exist_ok=True, mode=0o700)
+    d = root / f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    d.mkdir(mode=0o700)
+    return d / "kernel.sock"
+
+
+def _teardown_ephemeral(sock_path: Path, pid: int | None) -> None:
+    """Kill the one-off kernel `--ephemeral` spawned, then remove its directory.
+
+    SIGTERM first, so `_shutdown`'s `@every`/`defer()` drain gets its usual
+    2s budget — the same courtesy `restart_kernel` extends the kernel it
+    replaces. SIGKILL only if it's still alive after `WAIT_STEPS` ticks: an
+    ephemeral kernel outliving the bridge that owns it is exactly the leak
+    this flag exists to prevent, so waiting indefinitely isn't an option the
+    way it is for a kernel meant to keep running for weeks.
+    """
+    import shutil
+    import signal
+
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pid = None
+        else:
+            for _ in range(WAIT_STEPS):
+                if not state.pid_alive(pid):
+                    break
+                time.sleep(WAIT_STEP_SECONDS)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+    shutil.rmtree(sock_path.parent, ignore_errors=True)
+
 
 _static_docs_cache: dict[str, str] | None = None
 
@@ -136,9 +200,13 @@ def _rid_of(line: str) -> object | None:
 
 
 class Bridge:
-    def __init__(self, socket_path: Path) -> None:
+    def __init__(self, socket_path: Path, *, ephemeral: bool = False) -> None:
         self.socket_path = socket_path
         self.lock_path = paths.lock_for(socket_path)
+        # ephemeral spawns eagerly in run() rather than lazily on first real
+        # tool call, and tears the kernel down (_teardown_ephemeral) instead
+        # of leaving it running when stdin closes. See run_bridge's --ephemeral.
+        self._ephemeral = ephemeral
         self._sock: socket.socket | None = None
         self._kernel_pid: int | None = None
         self._generation = 0
@@ -718,6 +786,16 @@ class Bridge:
         # _try_bridge_intercept), and the first message that actually needs a
         # kernel — a real tools/call, a gist/browser resources/read — reaches
         # _ensure_kernel() in _handle_client_line and spawns one then.
+        #
+        # --ephemeral is the one exception, on purpose: its whole point is a
+        # live kernel for exactly this session, not a cache-backed discovery
+        # answer that defers spawning to the first real tool call. Spawning
+        # here also means every method — including `initialize` itself —
+        # forwards to a real kernel instead of the static/cached fallback,
+        # since _dispatch_client_line only takes that path while self._sock
+        # is still None.
+        if self._ephemeral:
+            self._ensure_kernel()
         try:
             for line in sys.stdin:
                 if not line.endswith("\n"):
@@ -732,12 +810,15 @@ class Bridge:
         # those replies, and the reader thread writes them to stdout.
         self._drain_inflight()
         # The kernel keeps running — its state is meant to outlive the session.
+        # --ephemeral inverts that: it dies with the bridge that spawned it.
         sock = self._sock
         if sock is not None:
             try:
                 sock.close()
             except OSError:
                 pass
+        if self._ephemeral:
+            _teardown_ephemeral(self.socket_path, self._kernel_pid)
         return 0
 
 
@@ -745,6 +826,12 @@ _BRIDGE_USAGE = (
     "repld bridge — stdio MCP proxy (spawned by Claude Code, not run by hand)\n"
     "\n"
     "  repld bridge [--socket PATH]\n"
+    "  repld bridge --ephemeral\n"
+    "\n"
+    "  --ephemeral spawns a private, single-use kernel for this bridge alone,\n"
+    "  eagerly rather than on first tool call, and kills it when stdin closes\n"
+    "  instead of leaving it running. Mutually exclusive with --socket: its\n"
+    "  whole point is a path nothing else could already be attached to.\n"
     "\n"
     "  Register with: claude mcp add repld -- repld bridge\n"
 )
@@ -760,6 +847,16 @@ def run_bridge(argv: list[str]) -> int:
     if cli_args.wants_help(argv):
         print(_BRIDGE_USAGE)
         return 0
+    if "--ephemeral" in argv:
+        rest = [a for a in argv if a != "--ephemeral"]
+        # No resolve_socket_path here: --ephemeral generates its own path and
+        # ignores REPLD_SOCKET too, so a bare --socket left in argv falls
+        # through to check_args as an unknown flag — which is exactly the
+        # mutual-exclusivity refusal, for free rather than as a special case.
+        bad = cli_args.check_args("repld bridge", rest, _BRIDGE_USAGE, positionals=0)
+        if bad is not None:
+            return bad
+        return Bridge(_ephemeral_socket_path(), ephemeral=True).run()
     socket_path, rest = paths.resolve_socket_path(argv)
     bad = cli_args.check_args("repld bridge", rest, _BRIDGE_USAGE, positionals=0)
     if bad is not None:

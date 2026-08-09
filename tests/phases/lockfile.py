@@ -212,6 +212,63 @@ def phase_5_sweep(kernel: Kernel) -> None:
     print(f"  ✓ boot sweep: dropped dead pid {dead}'s files, kept the live kernel's")
 
 
+def phase_5_project_sweep(kernel: Kernel) -> None:
+    """A booting kernel reclaims a dead kernel's whole PROJECTS_DIR/<slug>/, too.
+
+    `phase_5_sweep` covers the flat `{pid}-*` files in RUNTIME_DIR;
+    `sweep_dead_pid_files` never reached the per-project directory sitting
+    one level up, so a SIGKILLed kernel's whole socket/lock/flock/dashboard/
+    events/cache set piled up under PROJECTS_DIR forever. Same shape as that
+    test: a synthetic dead-pid project dir, plus a lock-less one standing in
+    for a kernel mid-boot (flock taken, `kernel.lock` not written yet) —
+    which must be left alone, not swept as if it were abandoned.
+    """
+    import tempfile as _tmp
+
+    from repld import paths
+
+    dead = _a_dead_pid()
+    dead_dir = paths.PROJECTS_DIR / "sweeptest-deadbeef"
+    dead_dir.mkdir(parents=True, exist_ok=True)
+    (dead_dir / "kernel.lock").write_text(json.dumps({"pid": dead}))
+
+    no_lock_dir = paths.PROJECTS_DIR / "sweeptest-nolock"
+    no_lock_dir.mkdir(parents=True, exist_ok=True)
+
+    live_dir = paths.project_dir(kernel.cwd)
+    live_pid = json.loads(kernel.lock_path.read_text())["pid"]
+
+    tmp = Path(_tmp.mkdtemp(prefix="repld-projsweep-"))
+    try:
+        fresh = Kernel(tmp)
+        try:
+            assert_true(
+                not dead_dir.exists(), "dead kernel's whole project dir reclaimed"
+            )
+            assert_true(
+                no_lock_dir.exists(), "a lock-less dir (mid-boot lookalike) left alone"
+            )
+            assert_true(
+                live_dir.exists(), "the live kernel's own project dir untouched"
+            )
+            assert_eq(
+                json.loads(kernel.lock_path.read_text())["pid"],
+                live_pid,
+                "live kernel's lockfile intact",
+            )
+        finally:
+            fresh.stop()
+    finally:
+        shutil.rmtree(dead_dir, ignore_errors=True)
+        shutil.rmtree(no_lock_dir, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print(
+        "  ✓ boot sweep: dead kernel's whole project dir reclaimed, "
+        "lock-less + live dirs kept"
+    )
+
+
 def phase_5(kernel: Kernel) -> None:
     """A second kernel in the same cwd loses the flock and stands down."""
     before = json.loads(kernel.lock_path.read_text())

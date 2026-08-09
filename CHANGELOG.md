@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`repld bridge --ephemeral`** — a private, single-use kernel that spawns eagerly (before the first MCP message, not on first real tool call) and is killed, with its whole state directory reclaimed, the moment stdin closes. Runs in the same cwd as a normal bridge (`./gists`, `repld_init.py`, `.env`, `.venv` binding all resolve identically) but at a socket path outside `PROJECTS_DIR`, so it never attaches to — or is attached to by — anything else. Mutually exclusive with `--socket`.
+- **`get_task`'s `result` field** — a deferred task's awaited return value, previously thrown away outright, is now recoverable as a bounded repr after the fact (`defer()` has no cell number to bind `_`/`_N` to instead). The value also prints into the spill/task_done push the same way an exec cell's trailing expression does; `no_display()` suppresses the print but not the `get_task` recovery.
+- **The boot sweep reclaims a dead kernel's whole `PROJECTS_DIR/<slug>/` directory**, not just the flat `{pid}-*` files one level down that `sweep_dead_pid_files` already covered. A SIGKILLed kernel used to leave its socket/lock/flock/dashboard/events/cache set behind forever; `state.sweep_dead_project_dirs` reclaims it at the next boot, the same way and with the same conservatism (only a directory whose `kernel.lock` names a dead pid — never one with no lock at all, which may be another kernel mid-boot).
+
 ### Changed
 
 ### Fixed

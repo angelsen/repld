@@ -135,6 +135,11 @@ def new_task(origin: object = None) -> tuple[str, dict]:
     task: dict = {
         "done_event": threading.Event(),
         "exception": None,
+        # Bounded-repr'd, never the raw object: this dict feeds straight into
+        # get_task's `json.dumps(snap)`, and an arbitrary result (a DataFrame,
+        # a custom class) would break that RPC. Set only by `_run_deferred`;
+        # an `exec` cell's result goes to `_`/`_N` instead.
+        "result": None,
         "spill_file": None,
         "spill_path": None,
         "nudged": False,
@@ -284,6 +289,7 @@ def snapshot(task_id: str) -> dict | None:
         "spilled": task["spill_path"] is not None,
         "spill_path": task["spill_path"],
         "exception": task["exception"],
+        "result": task.get("result"),
         "done": task["done_event"].is_set(),
         "label": task.get("label"),
     }

@@ -32,6 +32,13 @@ driven by ``tasks._sweep_orphans``), which is the half boot-time sweeping can
 never cover for a process that stays up for weeks. Keep the prefix on anything
 new written here or neither rule will find it.
 
+A dead kernel's ``PROJECTS_DIR/<slug>/`` directory itself is a third case
+those two rules don't reach — they sweep files sitting flat in RUNTIME_DIR,
+never the per-project subdirectories one level up. ``state.sweep_dead_project_dirs``
+is that third rule: same boot-time pass, same liveness check via
+``state.read_lock``, applied to ``kernel.lock`` instead of a ``{pid}-…``
+filename.
+
 Without ``XDG_RUNTIME_DIR`` (macOS, most containers, any env-scrubbed spawn)
 the tree falls back to ``/tmp/repld-{uid}``. The uid suffix is load-bearing:
 ``/tmp`` is world-writable, so a shared unsuffixed name could be pre-created

@@ -216,5 +216,95 @@ def phase_7_defer(kernel: Kernel) -> None:
             "bad-factory label preserved",
         )
         print("  ✓ defer(lambda: non-awaitable): fails the task, not the kernel")
+
+        # Regression: the awaited result used to be thrown away outright — no
+        # task["result"] field existed, and only the exception path recorded
+        # anything. A coroutine that *returns* something must be recoverable
+        # from get_task after the fact, the same way it'd land in `_`/`_N`
+        # for an ordinary exec cell — and it should also print, into the
+        # spill and so into the task_done push, since defer has no cell
+        # number to bind instead.
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "async def _computes():\n"
+                        "    return {'answer': 42}\n"
+                        "tid = defer(_computes(), label='result-test')\n"
+                        "print(f'task_id={tid}')"
+                    ),
+                },
+            },
+            timeout=3.0,
+        )
+        content = resp["result"]["content"][0]["text"]
+        assert_true(
+            "task_id=" in content,
+            f"defer(returns value) returned task_id (got {content!r})",
+        )
+        task_id = content.split("task_id=")[1].strip()
+
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
+        assert_eq(notif["params"]["meta"]["error"], "0", "defer(returns value) success")
+        assert_true(
+            "{'answer': 42}" in notif["params"]["content"],
+            "deferred return value printed into the channel push "
+            f"(got {notif['params']['content']!r})",
+        )
+
+        resp = b.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": task_id}}
+        )
+        snap = resp["result"]["_meta"]
+        assert_true(
+            bool(snap.get("result")) and "42" in snap["result"],
+            f"get_task surfaces the deferred return value (got {snap.get('result')!r})",
+        )
+        print("  ✓ defer: return value surfaced via get_task and the channel push")
+
+        # no_display() is respected the same way it is for an exec cell's
+        # trailing expression: the value is still recoverable from
+        # get_task, but suppressed from the printed/pushed side.
+        resp = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "async def _quiet():\n"
+                        "    return no_display('shh')\n"
+                        "tid = defer(_quiet(), label='quiet-test')\n"
+                        "print(f'task_id={tid}')"
+                    ),
+                },
+            },
+            timeout=3.0,
+        )
+        content = resp["result"]["content"][0]["text"]
+        task_id = content.split("task_id=")[1].strip()
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="task_done", timeout=5.0
+        )
+        assert_true(
+            "shh" not in notif["params"]["content"],
+            f"no_display() suppresses the printed repr (got {notif['params']['content']!r})",
+        )
+        resp = b.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": task_id}}
+        )
+        snap = resp["result"]["_meta"]
+        assert_eq(
+            snap.get("result"),
+            "'shh'",
+            "get_task still recovers the no_display()-wrapped value",
+        )
+        print(
+            "  ✓ defer: no_display() suppresses the print, "
+            "get_task still recovers the value"
+        )
     finally:
         b.close()

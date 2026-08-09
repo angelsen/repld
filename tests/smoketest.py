@@ -40,7 +40,7 @@ from phases.defer import phase_7_defer
 from phases.every import phase_10_every
 from phases.gates import phase_17_gates
 from phases.gist_tools import phase_9_gist_tools
-from phases.headless import phase_15_headless
+from phases.headless import phase_15_ephemeral_bridge, phase_15_headless
 from phases.links import phase_12_gist_links
 from phases.lockfile import (
     phase_5,
@@ -49,6 +49,7 @@ from phases.lockfile import (
     phase_5_evict,
     phase_5_orphans,
     phase_5_permissions,
+    phase_5_project_sweep,
     phase_5_sweep,
     phase_5_zombie,
 )
@@ -77,6 +78,7 @@ PHASES = {
         phase_5_evict(k),
         phase_5_orphans(k),
         phase_5_sweep(k),
+        phase_5_project_sweep(k),
     ),
     6: lambda k: (
         phase_6_png_resize(k),
@@ -105,7 +107,7 @@ PHASES = {
     12: phase_12_gist_links,
     13: phase_13_sessions,
     14: phase_14_dashboard,
-    15: phase_15_headless,
+    15: lambda k: (phase_15_headless(k), phase_15_ephemeral_bridge(k)),
     16: phase_16_venv_binding,
     17: phase_17_gates,
 }

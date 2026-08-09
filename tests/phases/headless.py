@@ -577,6 +577,90 @@ def _log_renderer_covers_every_event() -> None:
     print(f"  ✓ repld log renders all {len(members)} event types")
 
 
+def phase_15_ephemeral_bridge(_kernel: Kernel) -> None:
+    """`repld bridge --ephemeral` spawns eagerly and dies with the bridge.
+
+    The default bridge is lazy (spawn on first real tool call) and leaves the
+    kernel running for the next session to attach to. `--ephemeral` inverts
+    both halves: the kernel is up before the first request — so even
+    `initialize` itself answers from a live process, not the cache/static
+    fallback `_try_bridge_intercept` would otherwise use — and its whole
+    directory is gone the moment stdin closes, rather than sitting around for
+    `state.sweep_dead_project_dirs` to find on some future boot.
+    """
+    from repld import paths, state
+
+    tmp = Path(tempfile.mkdtemp(prefix="repld-ephemeral-"))
+    ephemeral_root = paths.RUNTIME_DIR / "ephemeral"
+    before = set(ephemeral_root.iterdir()) if ephemeral_root.is_dir() else set()
+    # Only the socket/lock/flock/dashboard/events/cache set moves to a private
+    # path — spawn.spawn_headless spawns with cwd=os.getcwd() regardless of
+    # sock_path, so the kernel's *project* surface (./gists, repld_init.py,
+    # .env, .venv binding) must resolve exactly as it does for the persistent
+    # kernel. Proved with a real gist rather than just asserted from the spawn
+    # code, since "the socket moved" is exactly the kind of change that looks
+    # safe and silently isn't.
+    (tmp / "gists").mkdir()
+    (tmp / "gists" / "ephcheck.py").write_text(
+        '"""Ephemeral-bridge cwd/gist regression check."""\n\nVALUE = 42\n'
+    )
+    try:
+        b = Bridge(tmp, "--ephemeral")
+        pid = None
+        try:
+            resp = _handshake(b)
+            assert_eq(
+                resp["result"]["serverInfo"]["name"],
+                "repld",
+                "ephemeral bridge answers initialize from an already-live kernel",
+            )
+
+            after = set(ephemeral_root.iterdir()) if ephemeral_root.is_dir() else set()
+            new_dirs = after - before
+            assert_true(
+                len(new_dirs) == 1,
+                f"exactly one ephemeral dir created (got {new_dirs!r})",
+            )
+            ephemeral_dir = new_dirs.pop()
+            lock_path = ephemeral_dir / "kernel.lock"
+            assert_true(lock_path.exists(), "ephemeral kernel wrote its lockfile")
+            pid = json.loads(lock_path.read_text())["pid"]
+            assert_true(
+                state.pid_alive(pid), "ephemeral kernel is a real, running process"
+            )
+
+            out = _exec(b, "print('alive in the one-off kernel')")
+            assert_true(
+                "alive in the one-off kernel" in out["result"]["content"][0]["text"],
+                f"exec runs against the ephemeral kernel (got {out!r})",
+            )
+
+            out = _exec(b, "import ephcheck; print(ephcheck.VALUE)")
+            assert_true(
+                "42" in out["result"]["content"][0]["text"],
+                f"./gists resolves for the ephemeral kernel too (got {out!r})",
+            )
+        finally:
+            # Generous timeout: SIGKILLing the bridge mid-teardown would still
+            # leave the kernel dying (SIGTERM is sent before the wait loop
+            # that this timeout would interrupt), but there's no reason to
+            # race it in a test that isn't asserting on that edge.
+            b.close(timeout=10)
+
+        assert_true(pid is not None, "reached the point of recording the kernel's pid")
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and state.pid_alive(pid):
+            time.sleep(0.1)
+        assert_true(not state.pid_alive(pid), "ephemeral kernel died with its bridge")
+        assert_true(not ephemeral_dir.exists(), "ephemeral directory reclaimed on exit")
+        print(
+            "  ✓ repld bridge --ephemeral: spawned eagerly, "
+            "killed + reclaimed on stdin close"
+        )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def phase_15_headless(_kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-headless-"))
     try:

@@ -38,10 +38,10 @@ class Bridge:
     Writes requests to stdin, reads NDJSON messages off stdout into a queue.
     """
 
-    def __init__(self, cwd: Path):
+    def __init__(self, cwd: Path, *extra_args: str):
         env = os.environ.copy()
         self.proc = subprocess.Popen(
-            ["uv", "run", "--project", str(REPO), "repld", "bridge"],
+            ["uv", "run", "--project", str(REPO), "repld", "bridge", *extra_args],
             cwd=str(cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -131,14 +131,14 @@ class Bridge:
             self._stash_notification(msg)
         raise TimeoutError(f"no {method} notification (kind={kind}) within {timeout}s")
 
-    def close(self) -> None:
+    def close(self, timeout: float = 3) -> None:
         try:
             if self.proc.stdin is not None:
                 self.proc.stdin.close()
         except Exception:
             pass
         try:
-            self.proc.wait(timeout=3)
+            self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.proc.kill()
 

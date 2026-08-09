@@ -1124,6 +1124,10 @@ defer(coro, label=None) → task_id
   coro can also be a zero-arg callable that builds the awaitable —
   defer(lambda: asyncio.gather(a(), b())) — so gather()/create_task()
   construct on the kernel's loop instead of a sync cell's own thread.
+  A non-None return value is printed (into the push) and recoverable
+  afterward as get_task(task_id)["result"] (a bounded repr — there's no
+  cell number to bind _/_N to instead). no_display() suppresses the print
+  but not the get_task recovery, same as it does for an exec cell.
 
 every(seconds, label=, delay=0)(fn) → fn   periodic ticker; fn.cancel() stops
   delay= defers the first tick (default: tick now)

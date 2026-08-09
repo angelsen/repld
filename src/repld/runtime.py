@@ -48,6 +48,27 @@ def no_display(value: Any) -> Any:
     return _NoDisplay(value)
 
 
+def unwrap_display(result: Any) -> tuple[Any, bool]:
+    """Unwrap a `no_display()` wrapper, if `result` is one. Returns (value, quiet).
+
+    The one sanctioned way to inspect `_NoDisplay` from outside this module —
+    `defer()`'s deferred tasks have the same suppress-print-but-not-recovery
+    need as a cell's trailing expression, with no cell number to route
+    through `run_cell` for.
+    """
+    if isinstance(result, _NoDisplay):
+        return result.value, True
+    return result, False
+
+
+def print_display(result: Any) -> None:
+    """Print `result` the way a cell's auto-displayed trailing expression does."""
+    if isinstance(result, str) and "\n" in result:
+        print(result)
+    else:
+        print(repr(result))
+
+
 def _assign_target_names(stmts: list) -> set:
     """Collect top-level simple-assignment target names from a statement list.
 
@@ -157,14 +178,9 @@ async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
             await _eval(code, ns)
             _unwrap_assigned(ns, names)
         if tag in ("eval", "exec_eval") and result is not None:
-            quiet = isinstance(result, _NoDisplay)
-            if quiet:
-                result = result.value
+            result, quiet = unwrap_display(result)
             if not quiet:
-                if isinstance(result, str) and "\n" in result:
-                    print(result)
-                else:
-                    print(repr(result))
+                print_display(result)
             # Shift history: _ → __, __ → ___. Matches IPython convention.
             ns["___"] = ns.get("__")
             ns["__"] = ns.get("_")
