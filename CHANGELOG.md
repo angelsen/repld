@@ -8,9 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`Tab.close()`.** Closes the tab (`Target.closeTarget`); session cleanup follows from the resulting `Target.targetDestroyed` event, same as a user closing it. Previously the only escape hatch was `tab.cdp("Target.closeTarget", targetId=...)` with the raw 32-char Chrome target ID, not `tab.target_id`'s short form and not exposed publicly.
+
 ### Changed
 
 ### Fixed
+
+- **Selector resolution had no shadow-DOM fallback.** `text=`, `role=`, `label=`, and `:has-text` all built their candidate list via `document.querySelectorAll`, which never descends into a shadow root — so any selector against a web-component-heavy app (Chrome's own `chrome://extensions`/`chrome://settings` among them, built entirely in Lit/Polymer) silently matched nothing. `selector.py`'s candidate builders now run a shadow-piercing `querySelectorAll` (recurses through `el.shadowRoot`) instead; plain CSS selectors are unaffected — they still resolve via `DOM.querySelector`'s CDP fast path. `label=`'s `for=` resolution now also reads `lbl.getRootNode().getElementById(...)` instead of `document.getElementById(...)`, so a label/control pair inside the same shadow root still resolves.
 
 ### Removed
 

@@ -109,6 +109,40 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
 
 ## Browser
 
+- [x] **No public `Tab.close()`.** Added: `async def close(self) -> None` wraps
+  `Target.closeTarget({"targetId": self._chrome_target_id})`. Session cleanup follows from
+  the resulting `Target.targetDestroyed` event (already handled in `session.py`), so no
+  extra bookkeeping was needed. Documented in `BROWSER_GUIDE`, `_TOPICS["browser"]`, and the
+  site's browser reference. New `phase_6_tab_close` asserts against Chrome's own
+  `/json/list` rather than repld's session bookkeeping, since `detach()` alone leaves the
+  target open and a check against `browser.tabs` couldn't tell the two apart.
+- [x] **`selector.py` has no shadow-DOM fallback.** Fixed: `_deep_qsa()` (new, `selector.py`)
+  is a shadow-piercing `querySelectorAll` — a named JS function expression that recurses
+  through `el.shadowRoot` — swapped in for the plain `document.querySelectorAll` inside
+  all four custom-selector builders (`text=`, `role=`, `label=`, `:has-text`); plain CSS
+  selectors are untouched, still resolving via `DOM.querySelector`'s CDP fast path.
+  `label=`'s `for=` lookup also switched from `document.getElementById` to
+  `lbl.getRootNode().getElementById`, so a label/control pair inside the same shadow root
+  resolves too. New `phase_6_shadow_dom_selectors` nests the existing light-DOM selector
+  fixture two shadow roots deep. Verified live against the actual repro
+  (2026-08-10's `chrome://extensions`, `text=Reload` on a `<cr-icon-button aria-label
+  ="Reload">` with no visible text) via `mcp__repld__exec` and `browser_click` end to end.
+- [ ] **`browser.get()`'s attached-session fast path can read a stale `target_info` cache.**
+  `_get_by_glob` (`browser.py:293`) matches currently-attached sessions against
+  `cdp.target_info.get("url", "")` before falling through to the polling loop. That field
+  updates via the async `Target.targetInfoChanged` CDP event, which can lag a
+  `tab.navigate(url)` call by a couple hundred ms behind what `location.href` already
+  reports in-page — reproduced twice live (2026-08-10, same extension-dev gist session):
+  a tab that had just navigated via `tab.navigate()` and was confirmed loaded
+  (`await tab.js("location.href")` matched) still failed an immediate `browser.get(glob,
+  timeout=0)` for its own URL; a ~0.3s sleep after the navigate made it reliably findable.
+  `_get_by_id`/`_attach_racing` may have the same exposure — not checked. Deferred rather
+  than fixed blind: it's core event-ordering logic and, per the "Testing gaps" item below,
+  `browser/`'s reconnect/reattach paths are only exercised incidentally, so a fix here has
+  nothing to catch a regression. Candidate fix: on a `tab.navigate()` (or after any call
+  that changes a target's URL), await the actual `Target.targetInfoChanged` event for that
+  target instead of returning as soon as the page-level load signal is satisfied — makes
+  the cache change synchronous with the observable navigation instead of racing it.
 - [ ] `Tab._reattach()` auto-remap across a genuine target swap — currently (session 019) a
   destroyed-and-replaced target (cross-origin/site-isolation process swap) surfaces a clear error
   pointing at `browser_tabs` rather than silently recovering. Considered and deferred:

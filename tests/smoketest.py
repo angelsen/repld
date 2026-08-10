@@ -30,7 +30,9 @@ from phases.browser import (
     phase_6_png_resize,
     phase_6_ready_classification,
     phase_6_reattach_binding,
+    phase_6_shadow_dom_selectors,
     phase_6_since_time_base,
+    phase_6_tab_close,
     phase_6_tools_and_gists,
 )
 from phases.channels import phase_4, phase_4_push_kind_args, phase_4b_pregate
@@ -94,6 +96,8 @@ PHASES = {
         phase_6_tools_and_gists(k),
         phase_6(k),
         phase_6_label_and_reattach(k),
+        phase_6_tab_close(k),
+        phase_6_shadow_dom_selectors(k),
     ),
     7: phase_7_defer,
     8: lambda k: (

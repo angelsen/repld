@@ -10,6 +10,7 @@ behind for the next one to trip over.
 import asyncio
 import io
 import json
+import re
 import time
 import urllib.request
 
@@ -921,6 +922,112 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
     finally:
         # In `finally`, not after the assertions: a failure above used to leave
         # both tabs open, and repeated failing runs pile them up.
+        _close_marked_tabs()
+        b.close()
+
+
+def phase_6_tab_close(kernel: Kernel) -> None:
+    """Tab.close() actually closes the Chrome target, not just detaches it.
+
+    detach() (covered by phase_6 below) drops repld's session but leaves the
+    tab open in Chrome. close() goes further — verified against Chrome's own
+    /json/list rather than repld's own bookkeeping, which a bug under test
+    could satisfy by lying to itself.
+    """
+    if not _chrome_ready("phase 6 tab close"):
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        def _exec(code: str) -> str:
+            resp = b.call(
+                "tools/call",
+                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
+                timeout=30.0,
+            )
+            return resp["result"]["content"][0]["text"]
+
+        out = _exec(
+            f"_tc = await browser.open('data:text/html,<p>{_MARKER}-close</p>')\n"
+            "print('CHROME_ID=' + _tc._chrome_target_id)\n"
+            "await _tc.close()\n"
+        )
+        m = re.search(r"CHROME_ID=([0-9a-fA-F]+)", out)
+        assert_true(
+            m is not None, f"captured the closed tab's Chrome target id (got {out!r})"
+        )
+        assert m is not None
+        chrome_id = m.group(1)
+
+        with urllib.request.urlopen(f"{_CDP}/json/list", timeout=2) as r:
+            targets = json.load(r)
+        assert_true(
+            all(t.get("id") != chrome_id for t in targets),
+            f"target {chrome_id} no longer in Chrome's own target list",
+        )
+        print(
+            "  ✓ tab.close() removes the target from Chrome, "
+            "not just repld's bookkeeping"
+        )
+    finally:
+        _close_marked_tabs()
+        b.close()
+
+
+def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
+    """selector.py's text=/role=/label= forms pierce shadow DOM.
+
+    Reproduces the chrome://extensions bug (2026-08-10): Lit/Polymer WebUI
+    pages are built entirely of shadow roots, and the JS candidate builders in
+    selector.py only ever queried the light DOM. Reuses `_SEL_HTML`/`_SEL_CASES`
+    from the light-DOM ranking test above, nested two shadow roots deep so the
+    fix has to actually recurse rather than just peek one level down.
+    """
+    if not _chrome_ready("phase 6 shadow DOM selectors"):
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        def _exec(code: str) -> str:
+            resp = b.call(
+                "tools/call",
+                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
+                timeout=30.0,
+            )
+            return resp["result"]["content"][0]["text"]
+
+        build_js = (
+            "(function() {"
+            " var outer = document.createElement('div');"
+            " document.body.appendChild(outer);"
+            " var outerRoot = outer.attachShadow({mode: 'open'});"
+            " var inner = document.createElement('div');"
+            " outerRoot.appendChild(inner);"
+            " var innerRoot = inner.attachShadow({mode: 'open'});"
+            f" innerRoot.innerHTML = {json.dumps(_SEL_HTML)};"
+            " })()"
+        )
+        out = _exec(
+            f"_ts = await browser.open('data:text/html,<p>{_MARKER}-shadow</p>')\n"
+            f"await _ts.js({json.dumps(build_js)})\n"
+            "from repld.browser.selector import resolve as _rs\n"
+            f"for _s, _want in {_SEL_CASES!r}:\n"
+            "    _got = await _ts.js('(' + _rs(_s).js + ' || {}).id')\n"
+            "    print('SHSEL', _s, '->', _got, 'want', _want)\n"
+        )
+        for sel, want in _SEL_CASES:
+            assert_true(
+                f"SHSEL {sel} -> {want} want {want}" in out,
+                f"{sel} resolves through a nested shadow root (got {out!r})",
+            )
+        print(f"  ✓ all {len(_SEL_CASES)} selector forms pierce a nested shadow root")
+    finally:
         _close_marked_tabs()
         b.close()
 

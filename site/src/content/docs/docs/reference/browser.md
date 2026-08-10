@@ -100,6 +100,14 @@ await tab.reload() → None
 
 Both wait for the `ready` signal after page load.
 
+### close
+
+```python
+await tab.close() → None
+```
+
+Closes this tab (`Target.closeTarget`). Session cleanup follows from the resulting `Target.targetDestroyed` event, same as a user closing it.
+
 ### tree
 
 ```python

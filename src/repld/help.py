@@ -523,6 +523,10 @@ Convention: add data-testid to your root layout component.
   tab.reload()                                                → None
       Reload page.  Waits for ready signal after load.
 
+  tab.close()                                                 → None
+      Close this tab (Target.closeTarget).  Session cleanup follows from the
+      resulting Target.targetDestroyed event, same as a user closing it.
+
   tab.wait_for(selector, *, timeout=5.0)                      → None
       Wait for element to appear.  Polls every 100ms.
       Same selector syntax as click/type_text.
@@ -1176,6 +1180,7 @@ Tab (async unless noted):
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body, base64Encoded}
   tab.navigate(url)                                → None
   tab.reload()                                     → None
+  tab.close()                                      → None (Target.closeTarget)
   tab.controls()                                   → dict | None
   tab.invoke(control, action, args=)               → dict
   tab.screenshot(full_page=, path=)                → dict {path, source, model, scale, bytes}
