@@ -6,68 +6,6 @@
   `src/pages/open-graph/[...path].ts`) + Starlight `routeMiddleware` injection (docs/cards
   lack `og:image`). Terminal-noir bg + repld logo. Meta-tag plumbing already ships with a
   placeholder default in `SEO.astro`.
-- [x] Align TerminalHero breakpoint (640px) to the site-wide 560px convention (session 011).
-- [x] Deploy the reworked site (`make deploy`) + push `master` (session 010).
-- [x] **Mobile rendering pass** — horizontal overflow fixed (`overflow: hidden` on `.hero`,
-  `.sect`, `.editorial .hero`); FAB bottom-right nav with slide-up bottom sheet at ≤560px
-  replaces wrapping inline nav links. Verified landing + all 4 editorial pages + Starlight
-  docs at 390px (session 010).
-- [x] **Progression component** — extracted shared `Progression.astro` from landing + playbook
-  (timeline left-border, dot nodes, scroll-triggered glow). Replaces landing's disconnected
-  `phase-line` divs with the playbook's nicer continuous timeline (session 010).
-- [x] SEO infra — `SEO.astro` (OG/Twitter/canonical/theme-color), `robots.txt`,
-  `@astrojs/sitemap`, `SoftwareApplication` JSON-LD (session 009).
-- [x] Font/prefetch perf — preload only above-the-fold weights (9→3), prefetch
-  `viewport`→`hover`; cold LCP 2456→620ms on the local preview (session 009).
-- [x] No-flash heading/content reveal + targeted heading-font gate (session 009).
-
-## Code cleanup
-
-- [x] Split `browser/tab.py` (~1400 lines) — extract selector constants + resolution (~300 lines) and Row/Rows types + factory functions (~150 lines) into own modules. Tab class stays, drops to ~900 lines.
-- [x] `help.py` — gists topic in `_TOPICS` overlaps GUIDE's gist section despite the "four surfaces, no overlap" principle; trim one side.
-- [x] `help.py` — "Multi-tab gists" paragraph duplicated between BROWSER_GUIDE and GUIDE; removed from GUIDE, kept authoritative copy in BROWSER_GUIDE (session 010).
-- [x] Malformed `__repld_tools__` / `__repld_deps__` (non-literal expressions) fail `ast.literal_eval` and the tools/deps silently never appear (`gists.py` `_extract_tools` / `scan_deps`). Warn once on stderr at boot — not per `tools/list` scan, which would spam.
-
-## Kernel / exec display
-
-Found while debugging a `vps.py` gist double-print bug in bulletins-chat: methods that
-`print(out)` for immediate human-readable output *and* `return out` for programmatic use
-get their return value re-displayed by the auto-display hook — as an ugly single-line
-`repr()` with escaped `\n`s — whenever the call is the bare last expression in a cell (the
-exact pattern the gist's own usage docstring recommended). Root cause traced to
-`src/repld/runtime.py` (`run_cell()`, single choke point: `print(repr(result))` when
-`result is not None`).
-
-- [x] Multi-line `str` results now print verbatim instead of `repr()`-escaping
-  (`runtime.py:run_cell()` special-cases `isinstance(result, str) and "\n" in result`).
-- [x] Opt-out sentinel for auto-display — `no_display(value)` wraps a return value so the
-  cell-display hook skips the `print()` but still binds `_`/`_N` for programmatic use.
-  Injected into `__main__` and `repld` module alongside `notify`/`defer`/etc.
-  (`runtime._NoDisplay` + `runtime.no_display()`, kernel.py `_helpers`).
-- [x] `repld://gists/{name}` signature listing no longer renders `@property`/
-  `@cached_property` methods with call parens — `gists.py` `_format_class()` now inspects
-  `decorator_list` (via new `_decorator_names()`), skips `@x.setter`/`@x.deleter` (getter
-  already lists the name once), and `_format_function()` renders `.name -> ret` (no parens,
-  no args) for properties.
-
-## MCP tool bugs
-
-- [x] `browser_fetch` MCP tool failed to submit `application/x-www-form-urlencoded`
-  string bodies correctly. **Root cause found** (previously thought to be outside this
-  repo, in the MCP transport): `Tab.fetch()` (`browser/tab.py`) auto-set
-  `Content-Type: application/json` for dict bodies but set nothing for string bodies, so
-  the browser defaulted to `Content-Type: text/plain;charset=UTF-8` — form-decoding
-  servers then see an empty/invalid form. The bridge/ipc/dispatch path (`bridge.py`,
-  `ipc.py`, `protocol.py` `_bh_fetch`) is a byte-transparent passthrough and was never
-  the problem. Fixed: string bodies now default to
-  `Content-Type: application/x-www-form-urlencoded` (curl `-d` semantics); caller
-  `headers` still override, matched case-insensitively. Verified live: dict body →
-  `application/json`, string body → `application/x-www-form-urlencoded`, explicit
-  `headers` override wins in both cases (echo-server round-trip via a real kernel).
-  Also found + fixed in the same pass: the `browser_fetch` tool's `body` schema had
-  no declared `type`, so an MCP client could silently flatten a dict argument to a
-  JSON string instead of sending an object — now `["object", "string"]`. Swept all
-  other tool schemas in `protocol.py`; no other property is missing a `type`.
 
 ## Gist deps tooling
 
@@ -90,22 +28,6 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   pin, since fixed in `b6b2758e`). A static scan of installed `.so` files' `cpython-NNN`
   tags against the actually-running interpreter's version would catch this class of bug
   before it manifests as a confusing runtime import error for a compiled extension.
-- [x] `install_deps()` (`gist_deps.py:277-297`) resolved each install independently —
-  `uv pip install --target <_TOOL_DEPS_DIR> <newly-missing-only>` per call, never
-  re-solved against what's already sitting in the shared target dir. Hit this live
-  (termtap2 prototyping, 2026-07-20): `pydantic 2.13.4` + `pydantic-core 2.46.4`
-  (mutually compatible) were installed by one gist's deps; a later `fastmcp` install
-  resolved its own requirement graph in isolation and pulled `pydantic-core 2.47.0`
-  (satisfying fastmcp's constraint) while leaving the already-present `pydantic 2.13.4`
-  untouched (it already satisfied fastmcp's own `pydantic` requirement, so `uv` had no
-  reason to touch it) — cross-package version skew, `pydantic._ensure_pydantic_core_version()`
-  hard-fails on import. Not a one-off: any two independently-installed gists whose
-  transitive requirements shift over time could produce this, since `--target` installs
-  don't treat the target dir as a coherent environment to solve against. Fixed
-  (`fadcec24`): `install_deps()` now maintains `.repld-manifest.txt` under
-  `_TOOL_DEPS_DIR`, accumulating every requirement ever installed there, and re-resolves
-  the full set on each install instead of just the newly-missing package(s). Manually
-  reconciled the immediate pydantic/pydantic-core/fastmcp skew as part of the same pass.
 
 ## Browser
 
@@ -151,60 +73,6 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   (pinned to one immutable CDP target → "logically the same tab" across swaps), with more places
   to get subtly wrong (pin state, event bindings, DuckDB event history keyed by the old target
   id). Revisit if a real cross-origin swap actually bites in practice, not preemptively.
-- [x] `Tab.fetch()` corrupts binary responses — `browser/tab.py` `fetch()` always did
-  `await r.text()`, so any non-text payload (ZIP, PDF, image, protobuf) came back as
-  mangled mojibake instead of the actual bytes. Fixed: fetch as `arrayBuffer()`, try
-  `TextDecoder('utf-8', {fatal: true}).decode(bytes)` — on failure (invalid UTF-8 ⇒
-  binary), base64-encode instead (native `Uint8Array.prototype.toBase64()` when present,
-  chunked `btoa` fallback for older Chrome) and return `base64Encoded: true`, matching
-  the `{body, base64Encoded}` shape `tab.body()`/`Fetch.getResponseBody` already use.
-  Verified live: a binary favicon (ICO, 5430 bytes) round-tripped through the native
-  `toBase64()` path with `base64Encoded: true`; a JSON endpoint still auto-parses to a
-  dict with `base64Encoded: false` (session 011).
-- [x] Console error dedup — cross-tab duplicates within 2s collapsed into one push with count.
-  Separate 30s hint window shows `browser.suppress("...")` nudge after 3 occurrences (session 010).
-- [x] Console error suppress — `browser.suppress(substring)` mutes matching errors. Persists
-  across kernel restarts via `.pyrepl.dashboard` hint file (session 010).
-
-## Deprecations
-
-- [x] **Legacy gist tool API removed — in 0.2, not 0.3.** `__repld_tools__` and old-style
-  `_tool_*(args: dict)` handlers are gone. The plan was to hold them one more release; they
-  came out early because the three affected files were migrated first and a re-scan of all
-  70 registered gists found no other users, so the release cycle they were being given had
-  nothing left to protect.
-
-  Migration done: `playbook/gists/fiken.py` (4 tools), `playbook/gists/kontoplan.py` (2),
-  `learn-freecad/gists/freecad.py` (3). Inferred schemas verified equal to the hand-written
-  ones — parameter types and `required` sets matched on all 9 — and per-parameter
-  descriptions were carried over into `Annotated[T, "..."]`.
-
-  Two behaviours improved as a side effect, both of which the legacy path had been
-  suppressing: a tool taking a single `dict` argument now works (it was indistinguishable
-  from the old `handler(args)` shape and was silently skipped), and a file carrying both
-  conventions no longer has its typed functions hidden by the precedence rule.
-
-  `gist_lint`'s `legacy` rule stayed, reworded. It outlives the runtime support on purpose:
-  a stale declaration is no longer *warned* about at call time, it is simply ignored, so the
-  file quietly loses its tools — lint is now the only thing that says so. Its companion check
-  on the handler signature was dropped, because `_tool_x(payload: dict)` is ordinary correct
-  code now.
-
-
-## 0.2 release
-
-- [ ] **Cut 0.2.** Breaking, and the migration notes live in `CHANGELOG.md`'s `[Unreleased]`,
-  which `uv version --bump minor` promotes verbatim — so they are what users actually read.
-  Three things they must do, none of which repld can do for them: `claude mcp add repld --
-  repld bridge` per project (no more `.mcp.json`), `mv repl.py repld_init.py` (no more
-  `--init`), and migrate any gist still on `__repld_tools__` (none known, but re-scan).
-- [x] `httpx` was in repld's own `.venv` but not in `pyproject.toml`, and five gists in
-  `./gists` import it — so `basedpyright` went from 0 errors to 5 the moment anyone ran
-  `uv sync`, which prunes it. Added to the `dev` group rather than excluding `gists/` from
-  basedpyright, which would stop checking the code most likely to rot. Verified: `uv sync`
-  then `basedpyright` is 0 errors. Found by pruning it accidentally while testing whether the
-  self-referential `repld-tool[pretty,browser]` dev dep was load-bearing (it is — removing it
-  is 15 errors).
 
 ## Testing gaps
 
@@ -244,22 +112,9 @@ exact pattern the gist's own usage docstring recommended). Root cause traced to
   disagreeing (a self-contradicting state a real browser never produces on a fresh load), which
   silently corrupts the capture. Fall back to a fresh tab/reload if mismatched rather than
   proceeding on bad viewport data (session 011).
-- [x] PNG unfilter bug — `_resize_png` read filtered scanlines as raw pixel data; Chrome's
-  PNG encoder uses Sub/Up/Average/Paeth filters, so every resized screenshot was garbled.
-  Added standard unfilter pass before nearest-neighbor sampling (session 010).
-- [x] Viewport hint in `browser_screenshot` tool description — suggests
-  `Emulation.setDeviceMetricsOverride` at 1440×900 (desktop) or 390×844 (mobile) with
-  `deviceScaleFactor: 1` for crisp text (session 010).
 
 ## Features (from session 002 backlog)
 
-- [x] `tab.wait_for_idle()` — network-quiet without full observation pipeline (already implemented)
-- [x] `tab.scroll(selector, dy=0, dx=0)` — sugar over swipe for containers; resolves
-  selector to its center and swipes in the opposite direction (scrollBy semantics:
-  positive dy scrolls down, positive dx scrolls right). Verified the coordinate math
-  live (stubbed `swipe()` to capture args) — real touch-gesture scrolling doesn't
-  register reliably in this headless/CDP setup regardless, an environment quirk
-  unrelated to the new code (session 011).
 - [ ] Safari/iOS support — WebKit Inspector over usbmuxd (gist, not core)
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script
 - [ ] Vite plugin — auto-inject `data-testid` in dev mode (SvelteKit + Astro)
@@ -349,6 +204,5 @@ rather than an architectural one — the exact pattern already exists twice in t
   question, since phases 6 and 16 need a live Chrome and a usable systemd user manager
   respectively and both skip silently without them. A CI run that reports green having
   skipped them is worse than no CI.
-- [x] Docs/marketing site (Astro/Starlight) — landing + playbook + Starlight scaffold in `site/`
 - [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
