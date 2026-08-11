@@ -8,15 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **`Tab.pin(guard_unload=True)`.** `False` skips installing the `beforeunload` guard. The guard fires on ANY unload, same-origin included — found live: a pinned tab driven against a Vite dev server wedged mid-loop (`Page.navigate`/`Runtime.evaluate` both timing out at 30s) because the framework's own HMR full-page reload got stuck behind the guard's native "Leave site?" confirm dialog, which no CDP driver can dismiss. Indistinguishable from a genuinely hung tab from the caller's side. Existing callers are unaffected — defaults to the prior always-on behavior.
-
 ### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.9] - 2026-08-11
+
+### Added
+
+- **`Tab.pin(guard_unload=True)`.** `False` skips installing the `beforeunload` guard. The guard fires on ANY unload, same-origin included — found live: a pinned tab driven against a Vite dev server wedged mid-loop (`Page.navigate`/`Runtime.evaluate` both timing out at 30s) because the framework's own HMR full-page reload got stuck behind the guard's native "Leave site?" confirm dialog, which no CDP driver can dismiss. Indistinguishable from a genuinely hung tab from the caller's side. Existing callers are unaffected — defaults to the prior always-on behavior.
 
 ### Fixed
 
 - **`Tab.key("Enter")` / `key("Space")` didn't trigger native button/form activation.** `Input.dispatchKeyEvent` without `text` fires the DOM keydown/keyup but Chromium never runs the default action for a focused `<button>` — no click, no form submit. Indistinguishable from the key doing nothing. Now sends `text: "\r"` / `text: " "` for those two, matching a real keyboard; every other named key (`"Escape"`, `"Tab"`, `"ArrowDown"`, ...) is unaffected since it has no native default action. `"Space"` is also now accepted directly (previously only its real `KeyboardEvent.key` value, `" "`, would have worked at all). Also affects `type_text(..., press_enter=True)`, which calls `key("Enter")` internally.
 
-### Removed
 
 ## [0.2.8] - 2026-08-10
 
