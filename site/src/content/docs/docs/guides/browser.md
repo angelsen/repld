@@ -108,7 +108,19 @@ Guard a tab from accidental navigation:
 await tab.pin("admin session — don't close")
 ```
 
-This injects a floating pill UI with a `beforeunload` guard. Gates route human decisions through the pill:
+This injects a floating pill UI with a `beforeunload` guard.
+
+**Driving a live-reload dev server (Vite, Astro, etc.) instead of a hosted app? Pin with the guard off:**
+
+```python
+await tab.pin("dev server — repld integration", guard_unload=False)
+```
+
+The default guard's `beforeunload` handler fires on *any* unload, same-origin included, so it blocks the framework's own HMR full-page reload behind a native confirm dialog that no CDP driver can dismiss — every call against that tab then times out, indistinguishable from a genuinely hung page. This isn't a rare edge case: it's the default outcome of pinning a tab you're actively iterating against.
+
+Same-origin navigation self-heals — a reload re-injects the pill automatically — but a cross-origin navigation drops the pin entirely (pushed to the channel as `pin_lost`); call `pin()` again after landing on the new origin.
+
+Gates route human decisions through the pill:
 
 ```python
 ok = await tab.confirm("Delete all draft orders?")

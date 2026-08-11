@@ -304,12 +304,19 @@ _PIN_JS = r"""
   }, %CHECK_MS%);
 
   // ---- beforeunload guard ----
-  window.__repld_beforeunload = function(e) {
-    e.preventDefault();
-    e.returnValue = 'repld is using this tab. Leave anyway?';
-    return e.returnValue;
-  };
-  window.addEventListener('beforeunload', window.__repld_beforeunload);
+  // Opt-out via pin(guard_unload=False): this fires on ANY unload, same-
+  // origin included, so a caller actively driving a live-reloading dev
+  // server (Vite HMR etc.) would otherwise have every framework-initiated
+  // reload blocked behind this native confirm dialog — indistinguishable
+  // from a hung tab from the CDP side, since nothing can dismiss it.
+  if (%GUARD_UNLOAD%) {
+    window.__repld_beforeunload = function(e) {
+      e.preventDefault();
+      e.returnValue = 'repld is using this tab. Leave anyway?';
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', window.__repld_beforeunload);
+  }
 })();
 """
 

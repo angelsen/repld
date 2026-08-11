@@ -977,6 +977,63 @@ def phase_6_tab_close(kernel: Kernel) -> None:
         b.close()
 
 
+def phase_6_key_native_activation(kernel: Kernel) -> None:
+    """tab.key("Enter") / tab.key("Space") trigger native button activation.
+
+    Reported live (2026-08-11): Input.dispatchKeyEvent without `text` fires the
+    DOM keydown/keyup but Chromium never runs the native default action for a
+    focused <button> — no click, no form submit — indistinguishable from the
+    key doing nothing. Confirmed the fix needs `text: "\\r"` for Enter and
+    `text: " "` for Space; every other named key (Escape, Tab, ArrowDown, ...)
+    is unaffected since it has no native default action to trigger.
+    """
+    if not _chrome_ready("phase 6 key native activation"):
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        b.send("notifications/initialized", {}, notif=True)
+
+        def _exec(code: str) -> str:
+            resp = b.call(
+                "tools/call",
+                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
+                timeout=30.0,
+            )
+            return resp["result"]["content"][0]["text"]
+
+        html = (
+            f"<title>{_MARKER}</title>"
+            "<button id=b onclick=window.__clicks=(window.__clicks||0)+1>Go</button>"
+        )
+        out = _exec(
+            f"_tk = await browser.open('data:text/html,{html}')\n"
+            "await _tk.js('document.getElementById(\"b\").focus()')\n"
+            "await _tk.key('Enter')\n"
+            "print('ENTER', await _tk.js('window.__clicks || 0'))\n"
+            "await _tk.js('document.getElementById(\"b\").focus()')\n"
+            "await _tk.key('Space')\n"
+            "print('SPACE', await _tk.js('window.__clicks || 0'))\n"
+            "await _tk.js('document.getElementById(\"b\").focus()')\n"
+            "await _tk.key('Escape')\n"
+            "print('ESCAPE', await _tk.js('window.__clicks || 0'))\n"
+        )
+        assert_true(
+            "ENTER 1" in out, f"key('Enter') triggers native click (got {out!r})"
+        )
+        assert_true(
+            "SPACE 2" in out, f"key('Space') triggers native click (got {out!r})"
+        )
+        assert_true(
+            "ESCAPE 2" in out, f"key('Escape') doesn't spuriously click (got {out!r})"
+        )
+        print("  ✓ key('Enter')/key('Space') trigger native button activation")
+    finally:
+        _close_marked_tabs()
+        b.close()
+
+
 def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
     """selector.py's text=/role=/label= forms pierce shadow DOM.
 

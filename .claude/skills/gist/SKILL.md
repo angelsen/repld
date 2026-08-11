@@ -238,6 +238,8 @@ async def connect(cls) -> "AppName":
     return cls(tab)
 ```
 
+**Wrapping a local dev server (Vite, Astro, etc.) instead of a hosted app?** Pass `guard_unload=False`: `await tab.pin(reason, guard_unload=False)`. The default guard's `beforeunload` handler fires on any unload, same-origin included, so it blocks the framework's own HMR full-page reload behind a native confirm dialog nothing can dismiss — every CDP call against that tab then times out, indistinguishable from a genuinely hung page. `connect()` for a dev-server gist should default to `guard_unload=False`, not just offer it.
+
 For write operations that need human confirmation, use `self._tab.confirm()` or `self._tab.choose()` — these route the gate to the pill UI (amber pulsing dot, prompt + buttons) while also showing in the terminal. First resolution wins.
 
 ```python

@@ -38,6 +38,14 @@ _HEARTBEAT_INTERVAL_S = 5
 _HEARTBEAT_MAX_MISSES = 3
 _HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
 
+# Tab.key()'s named-key handling. Every other supported name (Enter, Escape,
+# Tab, ArrowDown, ...) already equals its own KeyboardEvent.code and needs no
+# `text` — Space is the one name whose real .key (" ") and .code ("Space")
+# diverge from each other and from the friendly name callers actually type.
+_KEY_ALIASES = {"Space": " "}
+_KEY_CODE = {" ": "Space"}
+_KEY_TEXT = {"Enter": "\r", " ": " "}
+
 # Grace period at the end of `_reattach`, after the ready signal is satisfied.
 # The re-attach re-enables this session's CDP domains through
 # `CDPSession._enable_domains`, which sends every `*.enable` with `send_nowait`
@@ -221,14 +229,31 @@ class Tab(TabQueryMixin):
     # Pin API
     # ------------------------------------------------------------------
 
-    async def pin(self, reason: str = "") -> None:
-        """Inject pill + beforeunload guard + heartbeat. Idempotent."""
+    async def pin(self, reason: str = "", guard_unload: bool = True) -> None:
+        """Inject pill + heartbeat, and (unless `guard_unload=False`) a
+        beforeunload guard. Idempotent.
+
+        `guard_unload` defaults True — pin()'s original, always-on
+        behavior — for every existing caller protecting a long-lived
+        interactive session from accidental tab close. Set it False for a
+        tab you're actively driving against a live-reloading dev server:
+        the guard's `beforeunload` handler fires on ANY unload, same-origin
+        included, so it blocks a framework's own HMR full-page reload
+        (Vite, etc.) behind a native "Leave site?" confirm dialog that a
+        CDP driver can't dismiss on its own — indistinguishable from a
+        hung tab from the caller's side (found live: a pinned tab wedged
+        mid dev-loop, `Page.navigate`/`Runtime.evaluate` both timing out,
+        while the exact same page was instant unpinned).
+        Only settable on the first `pin()` call — a reason-only re-pin
+        (already pinned, no state to change) doesn't revisit it.
+        """
         session = self._session
         if not session._pinned:
             session._pinned = True  # claim before the awaits below yield
             try:
                 session._pin_origin = await self.js("location.origin")
                 session._pin_reason = reason
+                session._pin_guard_unload = guard_unload
                 await self._inject_pin()
                 session._heartbeat_task = asyncio.create_task(
                     self._heartbeat_loop(), name="repld-pill-heartbeat"
@@ -244,8 +269,10 @@ class Tab(TabQueryMixin):
         """Set up the binding + inject the pill JS + re-apply the reason label."""
         session = self._session
         await self._setup_binding()
-        js = _PIN_JS.replace("%STALE_MS%", str(_HEARTBEAT_STALE_MS)).replace(
-            "%CHECK_MS%", str(_HEARTBEAT_INTERVAL_S * 1000)
+        js = (
+            _PIN_JS.replace("%STALE_MS%", str(_HEARTBEAT_STALE_MS))
+            .replace("%CHECK_MS%", str(_HEARTBEAT_INTERVAL_S * 1000))
+            .replace("%GUARD_UNLOAD%", "true" if session._pin_guard_unload else "false")
         )
         await self.js(js)
         if session._pin_reason:
@@ -278,6 +305,7 @@ class Tab(TabQueryMixin):
             session._pinned = False
             session._pin_reason = ""
             session._pin_origin = ""
+            session._pin_guard_unload = True
 
     async def _heartbeat_loop(self) -> None:
         """Beat every 5s. Re-inject on same-origin reload; unpin on cross-origin."""
@@ -320,6 +348,7 @@ class Tab(TabQueryMixin):
         session._heartbeat_task = None
         session._pin_reason = ""
         session._pin_origin = ""
+        session._pin_guard_unload = True
 
     async def _setup_binding(self) -> None:
         """Register the gate-callback CDP binding on this session.
@@ -747,13 +776,25 @@ class Tab(TabQueryMixin):
             await self.key("Enter")
 
     async def key(self, key: str) -> None:
-        """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape")."""
+        """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape", "Space").
+
+        `key` is a KeyboardEvent.key value ("Space" is accepted as a friendly
+        alias for its real value, " ").
+        """
         await self._ensure_front()
+        key = _KEY_ALIASES.get(key, key)
+        code = _KEY_CODE.get(key, key)
+        text = _KEY_TEXT.get(key)
         for event_type in ("keyDown", "keyUp"):
-            await self._exec(
-                "Input.dispatchKeyEvent",
-                {"type": event_type, "key": key, "code": key},
-            )
+            params: dict[str, str] = {"type": event_type, "key": key, "code": code}
+            # Chromium's native button/checkbox/form activation for Enter and
+            # Space only fires when the keyDown event also carries the
+            # produced character in `text` — verified live: without it, the
+            # DOM keydown/keyup still dispatch but no click ever follows,
+            # indistinguishable from the key doing nothing.
+            if event_type == "keyDown" and text:
+                params["text"] = text
+            await self._exec("Input.dispatchKeyEvent", params)
 
     async def _touch(
         self, type: str, touch_points: list[dict], timeout: float = 3

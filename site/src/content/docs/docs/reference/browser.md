@@ -81,7 +81,10 @@ resolves `selector` to its center and swipes the opposite direction
 await tab.key(key) → None
 ```
 
-Dispatch a keyDown+keyUp pair for a named key (e.g. `"Enter"`, `"Escape"`).
+Dispatch a keyDown+keyUp pair for a named key (e.g. `"Enter"`, `"Escape"`,
+`"Space"`). `"Enter"` and `"Space"` carry the produced character so Chromium's
+native button/form activation fires — without it, the DOM keydown/keyup still
+dispatch but a focused button silently doesn't click.
 
 ### fetch
 
@@ -134,7 +137,7 @@ await tab.wait_for_idle(*, timeout=5.0, quiet=0.5) → int  # settle ms
 ### pin / unpin / gates
 
 ```python
-await tab.pin(reason='') → None
+await tab.pin(reason='', guard_unload=True) → None  # guard_unload=False for live-reload dev servers
 await tab.unpin() → None
 await tab.confirm(prompt) → bool
 await tab.choose(prompt, options) → str

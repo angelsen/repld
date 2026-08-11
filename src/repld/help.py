@@ -476,7 +476,10 @@ Convention: add data-testid to your root layout component.
       press_enter sends an Enter key after the text.
 
   tab.key(key)                                               → None
-      Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape").
+      Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape",
+      "Space"). Enter and Space carry the produced character so Chromium's
+      native button/form activation fires, not just the DOM keydown/keyup —
+      without it a focused button silently doesn't click.
 
   tab.tap(selector_or_x, y=None)                             → None
       Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
@@ -548,8 +551,13 @@ Convention: add data-testid to your root layout component.
 
 === Pin + gate bridge ===
 
-  tab.pin(reason='')                → None
+  tab.pin(reason='', guard_unload=True)  → None
       Inject floating pill UI + beforeunload guard.  Idempotent.
+      guard_unload=False skips the beforeunload guard — for a tab you're
+      actively driving against a live-reloading dev server, since the
+      guard fires on ANY unload (same-origin included) and blocks a
+      framework's own HMR reload behind a native confirm dialog no CDP
+      driver can dismiss, indistinguishable from a hung tab.
       Pill shows green dot when connected, amber when awaiting input.
       Prevents accidental tab close.
 
@@ -1174,7 +1182,7 @@ Tab (async unless noted):
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → None (clears first, auto-waits)
-  tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter")
+  tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter"/"Space" trigger native button activation)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body, base64Encoded}
@@ -1188,7 +1196,7 @@ Tab (async unless noted):
   tab.cdp(method, **params)                        → dict
 
 Tab — pin + gate bridge (see repld://docs/browser for pill lifecycle + heartbeat detail):
-  tab.pin(reason="")                 → None  inject pill + beforeunload guard; idempotent
+  tab.pin(reason="", guard_unload=True)  → None  inject pill + guard (guard_unload=False for dev-loop tabs); idempotent
   tab.unpin()                        → None  remove pill + guard
   tab.confirm(prompt, **kw)          → bool  gate routed to pill UI
   tab.choose(prompt, options, **kw)  → str   gate routed to pill UI
@@ -1740,7 +1748,10 @@ Pattern: try browser.get() → except RuntimeError → browser.open() + wait_for
 
 tab.pin(reason) in connect(). Injects a floating pill UI + beforeunload
 guard. Prevents accidental tab close. The pill also serves as a gate
-surface for confirm/choose prompts.
+surface for confirm/choose prompts. Pass guard_unload=False for a tab
+driven against a live-reloading dev server — the guard fires on any
+unload, same-origin included, so it otherwise blocks the framework's own
+HMR reload behind a native confirm dialog nothing can dismiss.
 
 Gate write operations. Anything that mutates state should call
 tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears

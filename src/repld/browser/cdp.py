@@ -382,6 +382,7 @@ class CDPSession:
         self._pinned: bool = False
         self._pin_reason: str = ""
         self._pin_origin: str = ""
+        self._pin_guard_unload: bool = True
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._label_text: str | None = None
         self._label_color: str | None = None
