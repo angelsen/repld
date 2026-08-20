@@ -8,9 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Playwright locator calls accepted as selectors** — `getByRole('button', { name: 'OK' })`, `getByTestId('x')`, `getByText`/`getByLabel`/`getByPlaceholder`/`getByAltText`/`getByTitle`/`locator('#id')` — so the strict-mode ambiguity error's own `aka getBy…` suggestions paste back in as-is. Simple single-call forms only; chains error with guidance. Semantics mirror Playwright's `locatorUtils` builders (case-insensitive by default, `exact: true` honored).
+- **`placeholder=` and `testid=` selector forms** — both existed in the engine, now one translation each away.
+- **`viewport=` on `browser_open`** (`"1440x900"`) and **`Tab.set_viewport(width, height)`** — fixed viewport at `deviceScaleFactor: 1`, so screenshot coordinates are page pixels; replaces the manual `Emulation.setDeviceMetricsOverride` dance.
+
 ### Changed
 
+- **`browser_request` caps cookie and long header values by default** — the cookie jar and bearer tokens dominated every request dump (~150 lines of JWT per capture). Noise control, not redaction: cookie *names* stay visible, values over the cap show a head + `…(+N chars — full=true for the rest)`, and `full=true` (or `tab.request(id)` in exec) returns everything verbatim — repld's contract that the agent works with the user's real sessions is unchanged.
+
 ### Fixed
+
+- **Clicks scroll the target into view first (`DOM.scrollIntoViewIfNeeded`).** Quads are viewport coordinates, so an element below a scroll fold — the page's or a scrollable listbox's — reported a center outside its container's clip, and the dispatched click landed on whatever was actually at that point. Found live on an Atlaskit Replace-status modal: selecting an option below the react-select menu's fold passed the visibility check (clipping isn't visibility), clicked the modal's blanket, and closed the dialog — reported as "the dialog closed without confirm". Fixes every below-the-fold click, not just menus.
+- **`select_option` waits for a just-opened menu to stop moving** before clicking the option: Popper repositions the listbox after first paint, and rAF-scale stability passes inside that window. The option's center is sampled 120 ms apart until it settles (1.5 s bound).
+- **`select_option` verification reads what the widget renders.** The verify step checked only the resolved field element's `value`/`textContent`; react-select renders the choice into a sibling inside the control — and puts `role=combobox` on the *input itself*, so a `closest()` walk self-matches. Verification now walks up to the value container, so a landed selection verifies and a closed-dialog no-op honestly reports "(selection not verified)".
+- `type_text(sel, "")` clears reliably — guarded by a test: zero keystrokes leave the value unchanged, which is exactly the signature the verify-and-fallback path reads as "controlled input swallowed it", so the native setter writes the empty string. (The pre-engine bug: select-all-then-type-nothing left the old value selected but intact.)
 
 ### Removed
 

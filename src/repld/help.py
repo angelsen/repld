@@ -519,6 +519,12 @@ Convention: add data-testid to your root layout component.
       3s timeout — raises TimeoutError if the page's touch handler blocks
       (common on complex apps like Messenger/React).
 
+  tab.set_viewport(width, height)                             → None
+      Emulate a fixed viewport at deviceScaleFactor 1
+      (Emulation.setDeviceMetricsOverride), so screenshot coordinates are
+      page pixels with no multiplier math.  browser_open's viewport= param
+      calls this on open.  Use a fresh tab per distinct size.
+
   tab.front()                                                 → None
       Bring this tab's window to the front (Page.bringToFront).
       click/tap/type_text/key already call this automatically when Chrome
@@ -791,8 +797,14 @@ Same syntax across click, tap, type_text, select_option, wait_for:
   text=Submit                                         exact text match
   role=button[name="Save"]                            ARIA role + accessible name
   label=Username                                      input by label
+  placeholder=Search or create                        input by placeholder
+  testid=workflow.add-status                          data-testid shorthand
   button:has-text('OK')                               CSS + text filter
   aria-ref=e12                                        ref from tab.tree() / browser_tree
+  getByRole('button', { name: 'OK' })                 Playwright locator call — what the
+                                                      strict-mode error suggests, pasteable
+                                                      as-is (also getByTestId/getByText/
+                                                      getByLabel/getByPlaceholder/locator)
 
 Resolution runs through a vendored build of Playwright's InjectedScript
 engine, evaluated once per document in an isolated world (main world on the
@@ -1215,6 +1227,7 @@ Tab (async unless noted):
   tab.tree(mode="aria")                            → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree)
   tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
+  tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
   tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
@@ -1293,8 +1306,11 @@ Selectors (click/tap/type_text/select_option):
   text=Submit                            exact text match
   role=button[name="Save"]              ARIA role + accessible name (accname)
   label=Username                        input by label
+  placeholder=Search                    input by placeholder
+  testid=x                              data-testid shorthand
   button:has-text('OK')                 CSS + text filter
   aria-ref=e12                          ref from tab.tree() (dies on next snapshot/navigation)
+  getByRole('button', { name: 'OK' })   Playwright locator call — ambiguity-error suggestions paste as-is
 
   All forms resolve through the vendored Playwright engine (isolated world,
   once per document) and pierce open shadow roots. Strict: >1 match with no

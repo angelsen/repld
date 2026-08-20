@@ -135,6 +135,14 @@ await tab.screenshot(*, full_page=False, path=None) → dict
 
 Always writes a PNG — to `path` if given, otherwise a 0600 file under `$XDG_RUNTIME_DIR/repld/`. Returns `{path, source: {width, height}, model: {width, height}, scale, bytes}`. The image is resized to the vision API's token grid; when `scale < 1`, multiply coordinates by `1/scale` to map back to page pixels.
 
+### set_viewport
+
+```python
+await tab.set_viewport(width, height) → None
+```
+
+Emulate a fixed viewport at `deviceScaleFactor: 1` (`Emulation.setDeviceMetricsOverride`), so screenshot coordinates are page pixels with no multiplier math. `browser_open`'s `viewport="1440x900"` parameter calls this on open. Use a fresh tab per distinct size — re-overriding an already-overridden tab can leave `clientWidth` and `innerWidth` disagreeing.
+
 ### wait_for / wait_for_idle
 
 ```python
@@ -280,8 +288,11 @@ Suppress patterns persist across kernel restarts.
 | `text=Submit`              | Exact text match                |
 | `role=button[name="Save"]` | ARIA role + accessible name     |
 | `label=Username`           | Input by label                  |
+| `placeholder=Search`       | Input by placeholder            |
+| `testid=x`                 | `data-testid` shorthand         |
 | `tag:has-text('OK')`       | CSS + text filter               |
 | `aria-ref=e12`             | Ref from `tab.tree()` snapshot  |
+| `getByRole('button', { name: 'OK' })` | Playwright locator call — strict-error suggestions paste as-is (also `getByTestId`/`getByText`/`getByLabel`/`getByPlaceholder`/`locator`) |
 
 Every form resolves through a vendored build of Playwright's `InjectedScript` engine, evaluated once per document in an isolated world, and pierces open shadow roots. `role=` computes real implicit ARIA roles and accessible names (the W3C accname algorithm), so labels, `alt` text and `aria-labelledby` all resolve; hidden elements are excluded from `role=` matches.
 

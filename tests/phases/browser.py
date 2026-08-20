@@ -518,6 +518,32 @@ def phase_6_selector_translation(_kernel: Kernel) -> None:
         ("text=Pågår", 'internal:text="Pågår"s'),
         ("role=button[name='Pågår status.']", 'role=button[name="Pågår status."s]'),
         ("label=Fødselsdato", 'internal:label="Fødselsdato"s'),
+        (
+            "placeholder=Search or create",
+            'internal:attr=[placeholder="Search or create"s]',
+        ),
+        (
+            "testid=toolbar.add-status",
+            'internal:testid=[data-testid="toolbar.add-status"s]',
+        ),
+        # Playwright locator calls, so the strict error's own `aka getBy…`
+        # suggestions are pasteable back in. Mirrors locatorUtils.ts: default
+        # is case-insensitive (`i`), exact: true flips to `s`.
+        ("getByTestId('x.y')", 'internal:testid=[data-testid="x.y"s]'),
+        (
+            "getByRole('button', { name: 'Add status' })",
+            'role=button[name="Add status"i]',
+        ),
+        (
+            "getByRole('button', { name: 'Add', exact: true })",
+            'role=button[name="Add"s]',
+        ),
+        ("getByRole('navigation')", "role=navigation"),
+        ("getByText('Pågår')", 'internal:text="Pågår"i'),
+        ("getByLabel('Username')", 'internal:label="Username"i'),
+        ("getByPlaceholder('Search')", 'internal:attr=[placeholder="Search"i]'),
+        ('getByText("He said \\"hi\\"")', 'internal:text="He said \\"hi\\""i'),
+        ("locator('#demo-select')", "css=#demo-select"),
     ]
     for repld_form, engine_form in cases:
         assert_eq(translate(repld_form), engine_form, f"translate({repld_form!r})")
@@ -540,7 +566,64 @@ def phase_6_selector_translation(_kernel: Kernel) -> None:
         fb, ['internal:text="Save"s', 'css=[aria-label="Save"]'], "text= retry form"
     )
     assert_eq(translate_fallbacks("#x"), ["css=#x"], "plain CSS has no retry form")
-    print(f"  ✓ selector translation: {len(cases)} forms + has-text + retries")
+
+    # A chained/complex locator call errors with guidance instead of falling
+    # through to css= and failing as nonsense.
+    try:
+        translate("getByRole('button').filter({ hasText: 'x' })")
+        raise AssertionError("chained locator must not translate silently")
+    except ValueError as exc:
+        assert_true("simple quoted-argument" in str(exc), "chain error explains itself")
+    print(f"  ✓ selector translation: {len(cases)} forms + has-text + retries + getBy")
+
+
+def phase_6_request_compaction(_kernel: Kernel) -> None:
+    """browser_request's default view caps cookie and long header values.
+
+    Noise control, not redaction — repld's contract is the agent working with
+    the user's real sessions, so full=true (and tab.request() in exec) return
+    everything. What the cap removes is the ~150-line cookie/JWT block that
+    dominated every request dump. Pure function, no kernel or Chrome.
+    """
+    import json as _json
+
+    from repld.browser_dispatch import _compact_credentials
+
+    jwt = "e" * 900
+    entry = {
+        "request": {
+            "headers": {
+                "Cookie": f"tenant.session.token={jwt}; theme=dark",
+                "Authorization": "Bearer " + "t" * 500,
+                "Accept": "application/json",
+            },
+            "cookies": [{"name": "tenant.session.token", "value": jwt}],
+        },
+        "response": {"headers": {"content-type": "text/html"}},
+    }
+    out = _compact_credentials(entry)
+    dumped = _json.dumps(out)
+    assert_true(jwt not in dumped, "long cookie value capped")
+    assert_true("t" * 200 not in dumped, "long bearer token capped")
+    assert_true(
+        "tenant.session.token=" in out["request"]["headers"]["Cookie"],
+        "cookie *names* stay visible",
+    )
+    assert_true(
+        "theme=dark" in out["request"]["headers"]["Cookie"],
+        "short cookie values untouched",
+    )
+    assert_eq(
+        out["request"]["headers"]["Accept"],
+        "application/json",
+        "ordinary headers untouched",
+    )
+    assert_true("full=true" in dumped, "the cap says how to get the rest")
+    assert_true(
+        jwt in entry["request"]["headers"]["Cookie"],
+        "the original entry is never mutated (tab.request() stays full)",
+    )
+    print("  ✓ browser_request compaction: names kept, values capped, original intact")
 
 
 def phase_6_injected_source_provenance(_kernel: Kernel) -> None:
@@ -1914,7 +1997,28 @@ def phase_6_react_controlled_input(kernel: Kernel) -> None:
             "STATE styrbord" in out,
             f"the app's own state saw the text (got {out!r})",
         )
-        print("  ✓ controlled input: fallback fires, app state gets the value")
+        # Clearing is the same fallback path in miniature: typing "" dispatches
+        # zero keystrokes, so the value is unchanged — the exact signature the
+        # verify step reads as "controlled input swallowed it" — and the
+        # native-setter fallback writes the empty string. This was a bug worth
+        # its own guard pre-engine: selectAll-then-type-nothing left the old
+        # value selected but intact.
+        resp = h.tool("browser_type", {"target": tid, "selector": "#ri", "text": ""})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('CLEARED', repr(await _t.js(\"document.getElementById('ri').value\")),"
+            " repr(await _t.js('window.appState')))"
+        )
+        assert_true(
+            "CLEARED '' ''" in out,
+            f"type_text('') clears the field and the app state (got {out!r})",
+        )
+        assert_true(
+            "fallback" in first,
+            f"and the receipt says the fallback did it (got {first!r})",
+        )
+        print("  ✓ controlled input: fallback fires, app state follows, clear works")
     finally:
         h.close()
 
@@ -1925,14 +2029,23 @@ def phase_6_select_option(kernel: Kernel) -> None:
         return
     h = _BridgeHarness(kernel)
     try:
+        # The custom half is react-select-shaped on purpose: the chosen value
+        # renders into a sibling inside the [role=combobox] container, never
+        # into any input's .value — which is exactly what the verify step has
+        # to read, or a visibly-landed selection reports "not verified".
         tid = h.open_tab(
             '<select id=sel onchange="window.picked=this.value">'
             "<option>Norway</option><option>Sweden</option></select>"
+            "<div role=combobox>"
             "<button id=dd onclick=\"document.getElementById('lb')"
             ".style.display='block'\">Choose city</button>"
+            "<span id=val></span>"
+            "</div>"
             "<div id=lb role=listbox style=display:none>"
-            '<div role=option onclick="window.city=this.textContent">Oslo</div>'
-            '<div role=option onclick="window.city=this.textContent">Bergen</div>'
+            '<div role=option onclick="window.city=this.textContent;'
+            "document.getElementById('val').textContent=this.textContent\">Oslo</div>"
+            '<div role=option onclick="window.city=this.textContent;'
+            "document.getElementById('val').textContent=this.textContent\">Bergen</div>"
             "</div>"
         )
         resp = h.tool(
@@ -1959,6 +2072,10 @@ def phase_6_select_option(kernel: Kernel) -> None:
         assert_true(
             first.startswith('selected "Bergen"'),
             f"custom listbox receipt (got {first!r})",
+        )
+        assert_true(
+            "not verified" not in first,
+            f"a value rendered in the combobox container verifies (got {first!r})",
         )
         out = h.exec(
             f"_t = await browser.get({tid!r})\n"
@@ -2068,5 +2185,43 @@ def phase_6_engine_reinjection(kernel: Kernel) -> None:
         print(
             "  ✓ engine reinjection: per document (navigate) and per session (reattach)"
         )
+    finally:
+        h.close()
+
+
+def phase_6_viewport_param(kernel: Kernel) -> None:
+    """browser_open's viewport= pins the page to WxH at deviceScaleFactor 1.
+
+    Without it, every measurement and screenshot needed the manual
+    Emulation.setDeviceMetricsOverride dance, and forgetting it meant
+    coordinate-multiplier math against a scaled capture.
+    """
+    if not _chrome_ready("phase 6 viewport param"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        url = f"data:text/html,<p>{_MARKER}-viewport</p>"
+        resp = h.tool("browser_open", {"url": url, "viewport": "1234x777"})
+        text = resp["result"]["content"][0]["text"]
+        m = re.search(r"target: (\S+)", text)
+        assert_true(
+            m is not None, f"open with viewport returns a target ({text[:120]!r})"
+        )
+        tid = m.group(1)  # type: ignore[union-attr]
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "_w = await _t.js('innerWidth'); _h = await _t.js('innerHeight')\n"
+            "_dpr = await _t.js('devicePixelRatio')\n"
+            # Chrome reports the emulated height off by a pixel and the ratio
+            # with float wobble (1.0000000149…) — assert what matters: the
+            # requested size within a pixel, at effectively scale 1.
+            "print('VP-OK', _w == 1234 and abs(_h - 777) <= 1"
+            " and abs(_dpr - 1) < 1e-3)"
+        )
+        assert_true(
+            "VP-OK True" in out,
+            f"viewport pinned to ~1234x777 at scale 1 (got {out!r})",
+        )
+        print("  ✓ browser_open viewport=: fixed size, scale 1, no multiplier math")
     finally:
         h.close()

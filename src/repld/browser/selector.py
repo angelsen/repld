@@ -43,7 +43,20 @@ _ROLE_CSS: dict[str, str] = {
 # identifiers. Anchored and dot-free, so a real expression (`window.ready`,
 # `app.isLoaded`) still reads as JS.
 _BARE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
-_SELECTOR_PREFIXES = (".", "#", "[", "data-", "text=", "role=", "label=", "aria-ref=")
+_SELECTOR_PREFIXES = (
+    ".",
+    "#",
+    "[",
+    "data-",
+    "text=",
+    "role=",
+    "label=",
+    "aria-ref=",
+    "placeholder=",
+    "testid=",
+    "getBy",
+    "locator(",
+)
 
 
 def looks_like_selector(s: str) -> bool:
@@ -80,6 +93,59 @@ def _js_regex_escape(text: str) -> str:
 
 _ROLE_RE = re.compile(r'^role=(\w+)(?:\[name([*^]?=)["\']?(.+?)["\']?\])?$')
 _HAS_TEXT_RE = re.compile(r"^(.+?):has-text\(['\"](.+?)['\"]\)$")
+
+# Playwright locator syntax, accepted as *input* so the strict-mode error's own
+# suggestions (`aka getByTestId('x')`) are pasteable back into click/type.
+# Mirrors packages/isomorphic/locatorUtils.ts' getBy*Selector builders — only
+# the simple single-call forms; chains (`.filter()`, `>>`) error with guidance
+# rather than falling through to css= and failing as nonsense.
+_GETBY_RE = re.compile(
+    r"^(getByRole|getByTestId|getByText|getByLabel|getByPlaceholder"
+    r"|getByAltText|getByTitle|locator)\s*\((.*)\)\s*$",
+    re.S,
+)
+_GETBY_ARGS_RE = re.compile(
+    r"""^\s*(['"])(?P<v>(?:\\.|(?!\1).)*)\1\s*(?:,\s*\{(?P<opts>.*)\}\s*)?$""",
+    re.S,
+)
+_GETBY_NAME_RE = re.compile(r"""name\s*:\s*(['"])(?P<v>(?:\\.|(?!\1).)*)\1""")
+_GETBY_EXACT_RE = re.compile(r"exact\s*:\s*true")
+
+
+def _unescape(v: str) -> str:
+    return re.sub(r"\\(.)", r"\1", v)
+
+
+def _translate_getby(fn: str, args: str) -> list[str]:
+    m = _GETBY_ARGS_RE.match(args)
+    if m is None:
+        raise ValueError(
+            f"cannot parse {fn}({args!r}) — only the simple quoted-argument "
+            "forms are supported (no chaining, no regex/variable arguments)"
+        )
+    value = _unescape(m.group("v"))
+    opts = m.group("opts") or ""
+    exact = bool(_GETBY_EXACT_RE.search(opts))
+    if fn == "locator":
+        return translate_fallbacks(value)
+    if fn == "getByTestId":
+        return [f"internal:testid=[data-testid={_text_body(value, exact=True)}]"]
+    if fn == "getByRole":
+        name_m = _GETBY_NAME_RE.search(opts)
+        if name_m is None:
+            return [f"role={value}"]
+        name = _unescape(name_m.group("v"))
+        return [f"role={value}[name={_text_body(name, exact=exact)}]"]
+    if fn == "getByText":
+        return [f"internal:text={_text_body(value, exact=exact)}"]
+    if fn == "getByLabel":
+        return [f"internal:label={_text_body(value, exact=exact)}"]
+    attr = {
+        "getByPlaceholder": "placeholder",
+        "getByAltText": "alt",
+        "getByTitle": "title",
+    }[fn]
+    return [f"internal:attr=[{attr}={_text_body(value, exact=exact)}]"]
 
 
 def translate(selector: str) -> str:
@@ -122,6 +188,16 @@ def translate_fallbacks(selector: str) -> list[str]:
 
     if selector.startswith("label="):
         return [f"internal:label={_text_body(selector[6:], exact=True)}"]
+
+    if selector.startswith("placeholder="):
+        return [f"internal:attr=[placeholder={_text_body(selector[12:], exact=True)}]"]
+
+    if selector.startswith("testid="):
+        return [f"internal:testid=[data-testid={_text_body(selector[7:], exact=True)}]"]
+
+    m = _GETBY_RE.match(selector)
+    if m:
+        return _translate_getby(m.group(1), m.group(2))
 
     m = _HAS_TEXT_RE.match(selector)
     if m:

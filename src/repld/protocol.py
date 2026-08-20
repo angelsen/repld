@@ -43,8 +43,10 @@ _TARGET_PARAM = {"type": "string", "description": _TARGET_DESC}
 _SELECTOR_PARAM = {
     "type": "string",
     "description": (
-        "CSS, text=Label, role=button[name='OK'], label=Name, "
-        "tag:has-text('...'), or aria-ref=e12 from browser_tree"
+        "CSS, text=Label, role=button[name='OK'], label=Name, placeholder=Hint, "
+        "testid=x, tag:has-text('...'), aria-ref=e12 from browser_tree, or a "
+        "Playwright locator call as suggested by ambiguity errors "
+        "(getByRole('button', {name: 'OK'}), getByTestId('x'), ...)"
     ),
 }
 
@@ -148,13 +150,17 @@ TOOLS = [
         "description": (
             "Inspect a captured request by request_id. Returns full HAR entry "
             "with request/response headers, postData, auth scheme, timing — "
-            "everything except the response body (use browser_body for that)."
+            "everything except the response body (use browser_body for that). "
+            "Cookie and long header values are truncated by default (noise, "
+            "not secrecy — they dominate every dump); pass full=true, or use "
+            "tab.request(id) in exec, for the verbatim values."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
                 "request_id": {"type": "string"},
+                "full": {"type": "boolean", "default": False},
             },
             "required": ["target", "request_id"],
         },
@@ -196,12 +202,18 @@ TOOLS = [
         "name": "browser_open",
         "description": (
             "Open new tab and navigate. "
-            "Returns observation with target: header for the new tab ID."
+            "Returns observation with target: header for the new tab ID. "
+            "viewport='1440x900' emulates a fixed viewport at scale 1, so "
+            "screenshot coordinates are page pixels with no multiplier math."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
+                "viewport": {
+                    "type": "string",
+                    "description": "Fixed viewport as 'WIDTHxHEIGHT', e.g. '1440x900'",
+                },
             },
             "required": ["url"],
         },

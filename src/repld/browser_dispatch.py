@@ -42,6 +42,46 @@ _SETTLE_DEFAULT_S = 3.0
 _POST_TYPE_DEBOUNCE_S = 0.3
 
 
+# Noise control, not redaction — repld's contract is that the agent works with
+# the user's real sessions, so nothing is hidden: `full=true` (or tab.request()
+# in exec) returns everything. What this trims is the cookie jar and bearer
+# tokens dominating every request dump — ~150 lines of JWT per capture that
+# nobody reads inline and every transcript keeps.
+_HEADER_VALUE_CAP = 120
+_COOKIE_VALUE_CAP = 24
+
+
+def _cap(value, limit: int):
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return f"{value[:limit]}…(+{len(value) - limit} chars — full=true for the rest)"
+
+
+def _compact_credentials(entry: dict) -> dict:
+    out = json.loads(json.dumps(entry, default=str))  # deep copy, wire-shaped
+    for side in ("request", "response"):
+        part = out.get(side)
+        if not isinstance(part, dict):
+            continue
+        headers = part.get("headers")
+        if isinstance(headers, dict):
+            for k, v in headers.items():
+                if k.lower() in ("cookie", "set-cookie") and isinstance(v, str):
+                    headers[k] = "; ".join(
+                        f"{n}={_cap(val, _COOKIE_VALUE_CAP)}" if val else pair
+                        for pair in v.split("; ")
+                        for n, _, val in (pair.partition("="),)
+                    )
+                else:
+                    headers[k] = _cap(v, _HEADER_VALUE_CAP)
+        cookies = part.get("cookies")
+        if isinstance(cookies, list):
+            for c in cookies:
+                if isinstance(c, dict) and "value" in c:
+                    c["value"] = _cap(c["value"], _COOKIE_VALUE_CAP)
+    return out
+
+
 async def route_detach(browser, target, port) -> str | None:
     """Shared target/port detach routing (MCP tool + dashboard RPC).
 
@@ -246,7 +286,10 @@ class BrowserDispatchMixin:
 
     def _bh_request(self, browser, args):
         tab = self._get_tab(browser, args)
-        return tab.request(args["request_id"])
+        entry = tab.request(args["request_id"])
+        if args.get("full"):
+            return entry
+        return _compact_credentials(entry)
 
     def _bh_body(self, browser, args):
         tab = self._get_tab(browser, args)
@@ -350,6 +393,9 @@ class BrowserDispatchMixin:
         from .browser.observe import PreObservation, post_observe
 
         tab = self._run_async(browser.open(args["url"]))
+        if args.get("viewport"):
+            w, _, h = str(args["viewport"]).lower().partition("x")
+            self._run_async(tab.set_viewport(int(w), int(h)))
         session = self._session_for(browser, tab)
         key = tab.target_id
         pre = PreObservation(iframe_children=[], snapshots={key: 0})

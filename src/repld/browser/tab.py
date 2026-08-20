@@ -552,6 +552,21 @@ class Tab(TabQueryMixin):
         if result.get("result", {}).get("value") == "hidden":
             await self._exec("Page.bringToFront")
 
+    async def set_viewport(self, width: int, height: int) -> None:
+        """Emulate a fixed viewport (Emulation.setDeviceMetricsOverride).
+
+        The manual pre-screenshot dance, wrapped: without a fixed viewport,
+        screenshot coordinates scale with the window and every measurement
+        needs the 1/scale multiplier. deviceScaleFactor pinned to 1 so page
+        pixels are screenshot pixels. Use a fresh tab per distinct size —
+        re-overriding an already-overridden tab can leave clientWidth and
+        innerWidth disagreeing (see the mobile-viewport note in the docs).
+        """
+        await self._exec(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
+        )
+
     async def front(self) -> None:
         """Bring this tab's window to the front (Page.bringToFront).
 
@@ -649,13 +664,27 @@ class Tab(TabQueryMixin):
     async def _element_center_of(
         self, el: inject.ResolvedElement, selector: str
     ) -> tuple[float, float]:
-        """Center point of a resolved element handle.
+        """Center point of a resolved element handle, scrolled into view first.
+
+        The scroll is load-bearing, not a nicety: quads are viewport
+        coordinates, and an element below a scroll fold — the page's or a
+        scrollable listbox's — reports a center outside its container's clip,
+        where a dispatched click lands on whatever is *actually* there. Found
+        live: an option below a react-select menu's fold passed the visibility
+        check (Playwright's isElementVisible doesn't test clipping), and the
+        click at its unscrolled center hit an Atlaskit modal's blanket,
+        closing the dialog. Best-effort — a detached or unscrollable node just
+        falls through to the hit test, which reports what's real.
 
         DOM.getContentQuads returns no quads for a zero-area element; the
         bounding-rect fallback keeps the single-hidden-match case (an
         off-screen real control behind a styled proxy) addressable, matching
         the resolve policy that a lone invisible match is still the target.
         """
+        try:
+            await self._exec("DOM.scrollIntoViewIfNeeded", {"objectId": el.object_id})
+        except RuntimeError:
+            pass
         quads = await self._exec("DOM.getContentQuads", {"objectId": el.object_id})
         qs = quads.get("quads") or []
         if qs:
@@ -902,17 +931,51 @@ class Tab(TabQueryMixin):
         await inject.check_actionable(
             self, opt_el, ("visible", "stable"), selector=opt_label
         )
+        # A just-opened menu is still moving: Popper repositions the listbox
+        # after first paint, and the engine's stable check (1 rAF at Chromium's
+        # stableRafCount) passes *inside* that window — the click then lands at
+        # the pre-reposition point, which on a small modal is outside the
+        # dialog, on the blanket, closing it. Found live on an Atlaskit
+        # Replace-status modal: the identical click succeeds once the menu has
+        # settled. rAF-scale sampling can't see a reposition that happens a few
+        # frames later, so sample the option's center 120 ms apart until it
+        # stops moving.
+        loop = asyncio.get_running_loop()
+        prev: tuple[float, float] | None = None
+        deadline = loop.time() + 1.5
+        while True:
+            pos = await self._element_center_of(opt_el, opt_label)
+            if (
+                prev is not None
+                and abs(pos[0] - prev[0]) < 1
+                and abs(pos[1] - prev[1]) < 1
+            ):
+                break
+            if loop.time() >= deadline:
+                break
+            prev = pos
+            await asyncio.sleep(0.12)
         await self._click_element(opt_el, selector=opt_label)
 
-        # Best-effort: the field (or its re-rendered value) should now carry
-        # the option text. try/except because the click may have replaced the
-        # field element outright, which detaches our handle — not a failure.
+        # Verify against what the widget *renders*, not the resolved element:
+        # react-select never stores the choice in input.value — it renders it
+        # into a sibling inside the control. `closest` includes the element
+        # itself, and react-select puts role=combobox on the *input*, so a
+        # self-match walks up two levels instead (input-container →
+        # value-container, the node that holds the single-value text).
+        # try/except because the click may have replaced the field element
+        # outright, which detaches our handle — not a failure.
         verified = False
         try:
             v = await inject.call_engine(
                 self,
-                "function(el, opt) { const t = (el.value || '') + ' ' +"
-                " (el.textContent || ''); return t.includes(opt); }",
+                "function(el, opt) {"
+                " let root = el.closest('[role=\"combobox\"]');"
+                " if (!root || root === el)"
+                "   root = el.parentElement"
+                "     ? (el.parentElement.parentElement || el.parentElement) : el;"
+                " const t = (el.value || '') + ' ' + (root.textContent || '');"
+                " return t.includes(opt); }",
                 [{"objectId": el.object_id}, {"value": option}],
             )
             verified = bool(v.get("result", {}).get("value"))
