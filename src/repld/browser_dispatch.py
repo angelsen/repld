@@ -44,9 +44,8 @@ _POST_TYPE_DEBOUNCE_S = 0.3
 
 # Noise control, not redaction — repld's contract is that the agent works with
 # the user's real sessions, so nothing is hidden: `full=true` (or tab.request()
-# in exec) returns everything. What this trims is the cookie jar and bearer
-# tokens dominating every request dump — ~150 lines of JWT per capture that
-# nobody reads inline and every transcript keeps.
+# in exec) returns everything. The cap only trims the cookie jar and bearer
+# tokens that otherwise dominate every request dump.
 _HEADER_VALUE_CAP = 120
 _COOKIE_VALUE_CAP = 24
 

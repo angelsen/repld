@@ -334,10 +334,9 @@ class Bridge:
             return True
 
         if method == "ping":
-            # A liveness probe deserves a real answer, and answering it is
-            # exactly as honest with no kernel as with one — the bridge is the
-            # thing being pinged. Must not fall through: anything the intercept
-            # declines that isn't in _NEEDS_KERNEL is answered -32601.
+            # Answered here, not by a kernel — the bridge is the thing being
+            # pinged. Must not fall through: anything the intercept declines
+            # that isn't in _NEEDS_KERNEL is answered -32601.
             self._to_client(_response(rid, {}))
             return True
 

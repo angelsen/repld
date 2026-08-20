@@ -555,12 +555,9 @@ class Tab(TabQueryMixin):
     async def set_viewport(self, width: int, height: int) -> None:
         """Emulate a fixed viewport (Emulation.setDeviceMetricsOverride).
 
-        The manual pre-screenshot dance, wrapped: without a fixed viewport,
-        screenshot coordinates scale with the window and every measurement
-        needs the 1/scale multiplier. deviceScaleFactor pinned to 1 so page
-        pixels are screenshot pixels. Use a fresh tab per distinct size —
-        re-overriding an already-overridden tab can leave clientWidth and
-        innerWidth disagreeing (see the mobile-viewport note in the docs).
+        deviceScaleFactor pinned to 1 so page pixels are screenshot pixels.
+        Use a fresh tab per distinct size — re-overriding an already-
+        overridden tab can leave clientWidth and innerWidth disagreeing.
         """
         await self._exec(
             "Emulation.setDeviceMetricsOverride",
@@ -666,20 +663,16 @@ class Tab(TabQueryMixin):
     ) -> tuple[float, float]:
         """Center point of a resolved element handle, scrolled into view first.
 
-        The scroll is load-bearing, not a nicety: quads are viewport
-        coordinates, and an element below a scroll fold — the page's or a
-        scrollable listbox's — reports a center outside its container's clip,
-        where a dispatched click lands on whatever is *actually* there. Found
-        live: an option below a react-select menu's fold passed the visibility
-        check (Playwright's isElementVisible doesn't test clipping), and the
-        click at its unscrolled center hit an Atlaskit modal's blanket,
-        closing the dialog. Best-effort — a detached or unscrollable node just
-        falls through to the hit test, which reports what's real.
+        The scroll is load-bearing: quads are viewport coordinates and
+        clipping isn't visibility, so an element below a scroll fold (the
+        page's or a scrollable listbox's) passes the visible check while its
+        center lies outside the clip — a click there hits whatever is
+        actually at that point. Best-effort: a detached or unscrollable node
+        falls through to the hit test.
 
         DOM.getContentQuads returns no quads for a zero-area element; the
-        bounding-rect fallback keeps the single-hidden-match case (an
-        off-screen real control behind a styled proxy) addressable, matching
-        the resolve policy that a lone invisible match is still the target.
+        bounding-rect fallback keeps a lone hidden match (an off-screen real
+        control behind a styled proxy) addressable, per the resolve policy.
         """
         try:
             await self._exec("DOM.scrollIntoViewIfNeeded", {"objectId": el.object_id})
@@ -729,18 +722,13 @@ class Tab(TabQueryMixin):
         """Coordinate resolution + hit receipt + dispatch for a resolved element.
 
         The hit test runs *before* dispatch — the click's own handlers may
-        re-render the DOM, so "what will this land on" is the honest answer.
-        When the point lands on something unrelated to the target, a plain
-        left-click switches to `element.click()` instead of dispatching at the
-        coordinates: the coordinate path is worse than a no-op there (on a
-        drag/pan layer it can start a drag), while a DOM click reaches the
-        resolved element the way assistive tech does. Found live: a workflow
-        editor's accessible button list sits under its SVG diagram, so the
-        visible, resolvable button was never coordinate-clickable. The DOM
-        click is isTrusted=false — an app that insists on trusted events will
-        ignore it, which is why the receipt names the path taken. Modified
-        clicks (right/double) have no element.click() equivalent, so they keep
-        the coordinate dispatch plus the warning.
+        re-render the DOM. When the point lands on something unrelated, a
+        plain left-click switches to `element.click()`: dispatching at the
+        coordinates can start a drag on a pan layer, while a DOM click
+        reaches the resolved element the way assistive tech does. It is
+        isTrusted=false, so the receipt names the path taken. Modified clicks
+        (right/double) have no element.click() equivalent and keep the
+        coordinate dispatch plus the warning.
         """
         x, y = await self._element_center_of(el, selector)
         data = await inject.hit_receipt(self, el, x, y)
@@ -932,14 +920,9 @@ class Tab(TabQueryMixin):
             self, opt_el, ("visible", "stable"), selector=opt_label
         )
         # A just-opened menu is still moving: Popper repositions the listbox
-        # after first paint, and the engine's stable check (1 rAF at Chromium's
-        # stableRafCount) passes *inside* that window — the click then lands at
-        # the pre-reposition point, which on a small modal is outside the
-        # dialog, on the blanket, closing it. Found live on an Atlaskit
-        # Replace-status modal: the identical click succeeds once the menu has
-        # settled. rAF-scale sampling can't see a reposition that happens a few
-        # frames later, so sample the option's center 120 ms apart until it
-        # stops moving.
+        # after first paint, and the engine's 1-rAF stable check passes inside
+        # that window — a click at the pre-reposition point lands outside the
+        # menu. Sample the option's center 120 ms apart until it stops moving.
         loop = asyncio.get_running_loop()
         prev: tuple[float, float] | None = None
         deadline = loop.time() + 1.5
@@ -957,14 +940,11 @@ class Tab(TabQueryMixin):
             await asyncio.sleep(0.12)
         await self._click_element(opt_el, selector=opt_label)
 
-        # Verify against what the widget *renders*, not the resolved element:
-        # react-select never stores the choice in input.value — it renders it
-        # into a sibling inside the control. `closest` includes the element
-        # itself, and react-select puts role=combobox on the *input*, so a
-        # self-match walks up two levels instead (input-container →
-        # value-container, the node that holds the single-value text).
-        # try/except because the click may have replaced the field element
-        # outright, which detaches our handle — not a failure.
+        # Verify what the widget *renders*: react-select never stores the
+        # choice in input.value and puts role=combobox on the input itself, so
+        # a `closest` self-match walks up two levels to the value container
+        # instead. try/except: the click may have replaced the field element
+        # outright, detaching our handle — not a failure.
         verified = False
         try:
             v = await inject.call_engine(

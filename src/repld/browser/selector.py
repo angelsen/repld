@@ -69,12 +69,9 @@ def looks_like_selector(s: str) -> bool:
 
 
 def _q(text: str) -> str:
-    # ensure_ascii=False is load-bearing, everywhere this module quotes user
-    # text: json.dumps' default emits å-style escapes, and the engine's
-    # selector parser reads those as six literal characters — so every
-    # selector carrying a non-ASCII name (`text=Pågår`, a Norwegian label)
-    # matched nothing. Found live on a real page; the raw engine matched what
-    # the translated selector missed.
+    # ensure_ascii=False is load-bearing: the engine's selector parser reads
+    # json.dumps' default \u-escapes as literal characters, so `text=Pågår`
+    # would match nothing.
     return json.dumps(text, ensure_ascii=False)
 
 
@@ -164,9 +161,8 @@ def translate_fallbacks(selector: str) -> list[str]:
     if selector.startswith("text="):
         text = selector[5:]
         # internal:text, not the public text= engine: only the internal one
-        # accepts the `"…"s` exact-case-sensitive body, which is what matches
-        # the legacy `===` semantics (verified live — the public engine parses
-        # `text="Save"s` as the literal string `"Save"s` and matches nothing).
+        # accepts the `"…"s` exact body — the public engine parses
+        # `text="Save"s` as the literal string `"Save"s` and matches nothing.
         return [
             f"internal:text={_text_body(text, exact=True)}",
             f"css=[aria-label={_q(text)}]",
