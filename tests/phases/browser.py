@@ -2311,8 +2311,9 @@ def phase_6_observation_diff(kernel: Kernel) -> None:
 
 def phase_6_hover_and_drag(kernel: Kernel) -> None:
     """browser_hover parks the pointer (hover-revealed UI enters the diff and
-    stays clickable); browser_drag presses, moves with buttons=1, releases —
-    including a drop zone that only mounts once the drag starts."""
+    stays clickable, and a presentational reveal falls back to the dom: line);
+    browser_drag presses, moves with buttons=1, releases — micro-stepping out
+    of a small origin, and re-resolving a drop zone that mounts on dragstart."""
     if not _chrome_ready("phase 6 hover and drag"):
         return
     h = _BridgeHarness(kernel)
@@ -2332,6 +2333,12 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             'width:60px;height:60px;background:green"></div>'
             '<div id=src2 style="position:absolute;left:20px;top:220px;'
             'width:40px;height:40px;background:red"></div>'
+            '<div id=port style="position:absolute;left:400px;top:120px;'
+            'width:10px;height:10px;background:black"></div>'
+            '<div id=pdst style="position:absolute;left:400px;top:220px;'
+            'width:40px;height:40px;background:gray"></div>'
+            '<div id=jsrev style="position:absolute;left:400px;top:20px;'
+            'width:60px;height:30px;background:orange"></div>'
             "<script>"
             "let down=0,moves=0;"
             "document.getElementById('src').addEventListener('mousedown',()=>{down=1});"
@@ -2347,7 +2354,44 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             "width:60px;height:60px;background:yellow';"
             "z.addEventListener('mouseup',()=>{window.dropped2=1});"
             "document.body.appendChild(z)});"
+            # A 10px port with a dnd slop threshold: the first move after
+            # mousedown must land inside the port AND >=1.5px away to arm —
+            # a first move outside disarms for good. The failure browser_drag
+            # shipped with: distance/steps px on step one exits the origin.
+            "let pd=null,armed=false;"
+            "document.getElementById('port').addEventListener('mousedown',e=>{"
+            "pd={x:e.clientX,y:e.clientY};armed=false;window.slopFail=0});"
+            "document.addEventListener('mousemove',e=>{if(!pd||armed)return;"
+            "const r=document.getElementById('port').getBoundingClientRect();"
+            "const inside=e.clientX>=r.left&&e.clientX<=r.right"
+            "&&e.clientY>=r.top&&e.clientY<=r.bottom;"
+            "if(inside){if(Math.hypot(e.clientX-pd.x,e.clientY-pd.y)>=1.5)armed=true}"
+            "else{window.slopFail=1;pd=null}});"
+            "document.addEventListener('mouseup',e=>{if(pd&&armed){"
+            "const d=document.getElementById('pdst').getBoundingClientRect();"
+            "window.edge=(e.clientX>=d.left&&e.clientX<=d.right"
+            "&&e.clientY>=d.top&&e.clientY<=d.bottom)?1:0}pd=null});"
+            # Presentational reveal: mounts three empty divs — invisible to
+            # the AX tree, so only the dom: fallback line can report it.
+            "document.getElementById('jsrev').addEventListener('mouseenter',()=>{"
+            "for(let i=0;i<3;i++){document.body.appendChild("
+            "document.createElement('div'))}});"
             "</script>"
+        )
+
+        # Coordinate hover first, while the pointer is still parked at the
+        # tab's origin: (430,35) is jsrev's center, and the reveal it
+        # triggers is AX-invisible — both quirks in one call.
+        resp = h.tool("browser_hover", {"target": tid, "selector": "430,35"})
+        text = resp["result"]["content"][0]["text"]
+        first = text.splitlines()[0]
+        assert_true(
+            first.startswith("hovering: (430,35)"),
+            f"coordinate hover receipt (got {first!r})",
+        )
+        assert_true(
+            "changes: none in the AX tree — dom: +3" in text,
+            f"AX-silent reveal falls back to the dom: line (got {text[:400]!r})",
         )
 
         resp = h.tool("browser_hover", {"target": tid, "selector": "#trig"})
@@ -2403,8 +2447,26 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             "DROP2 1" in out,
             f"a drop zone that mounts on dragstart is reachable (got {out!r})",
         )
+
+        resp = h.tool("browser_drag", {"target": tid, "from": "#port", "to": "#pdst"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("dragged:"),
+            f"small-origin drag receipt (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('EDGE', await _t.js('window.edge'),"
+            " 'SLOP', await _t.js('window.slopFail'))"
+        )
+        assert_true(
+            "EDGE 1 SLOP 0" in out,
+            f"micro-steps arm a 10px origin's slop threshold before leaving it"
+            f" (got {out!r})",
+        )
         print(
-            "  ✓ hover parks + reveals; drag is atomic, paced, and resolves mid-gesture"
+            "  ✓ hover parks + reveals (dom: fallback, x,y form); drag is atomic,"
+            " paced, micro-stepped, and resolves mid-gesture"
         )
     finally:
         h.close()

@@ -478,6 +478,9 @@ class PreObservation:
     # diff rather than reporting a fresh document as all-appeared.
     tree_sigs: dict[str, TreeSig] | None = None
     url: str = ""
+    # True when the engine's MutationObserver was armed — post_observe reads
+    # it back to catch presentational reveals the AX diff can't see.
+    dom_watch: bool = False
 
 
 def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
@@ -515,6 +518,8 @@ async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
     like. Best-effort: a page the AX domain chokes on still gets its mutation
     observed, just without the changes section.
     """
+    from . import inject
+
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
     tree_sigs: dict[str, TreeSig] | None = {}
@@ -529,6 +534,7 @@ async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
         snapshots=_snapshot_max_ids(all_tabs),
         tree_sigs=tree_sigs,
         url=tab.url,
+        dom_watch=await inject.start_dom_watch(tab),
     )
 
 
@@ -703,6 +709,20 @@ def tree_diff_lines(
     return [header] + ["  " + d for d in detail]
 
 
+def _dom_delta_line(rec: dict) -> str | None:
+    """The AX-silent fallback line — presentational nodes came or went."""
+    added = rec.get("added") or 0
+    removed = rec.get("removed") or 0
+    if not added and not removed:
+        return None
+    counts = Counter(rec.get("samples") or [])
+    sample = ", ".join(f"{s} ×{n}" if n > 1 else s for s, n in counts.most_common(4))
+    line = f"changes: none in the AX tree — dom: +{added} −{removed} elements"
+    if sample:
+        line += f" ({sample})"
+    return line
+
+
 # ---------------------------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------------------------
@@ -793,10 +813,17 @@ async def post_observe(
     # Diff needs a pre signature *and* the same document — after a navigation
     # the whole tree is new, and reporting it as a few hundred appearances
     # would bury the one section that exists to be short.
+    from . import inject
+
+    dom_rec = await inject.read_dom_watch(tab) if pre.dom_watch else None
     changes: list[str] | None = None
     if pre.tree_sigs is not None:
         if tab.url == pre.url:
             changes = tree_diff_lines(pre.tree_sigs, post_sigs, tab.target_id)
+            if not changes and dom_rec:
+                line = _dom_delta_line(dom_rec)
+                if line:
+                    changes = [line]
         else:
             changes = ["changes: (page navigated — tree replaced)"]
 

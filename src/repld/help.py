@@ -66,9 +66,10 @@ _BROWSER_MODEL = (
     "native setter for framework-controlled inputs. browser_select drives "
     "dropdowns (native <select> or custom listbox; an aria-autocomplete field "
     "gets the option typed in as a filter, reaching virtualized lists). "
-    "browser_hover parks the pointer on an element (hover-revealed UI stays "
-    "up); browser_drag runs press→moves→release atomically in one call "
-    "(selectors or 'x,y' endpoints). "
+    "browser_hover parks the pointer on an element — selector or 'x,y' "
+    "(hover-revealed UI stays up); browser_drag runs press→moves→release "
+    "atomically in one call (selectors or 'x,y' endpoints, micro-stepped "
+    "out of small origins). "
     "browser_tree default is an aria snapshot with [ref=eN] handles — reuse as "
     "aria-ref=eN selectors until the next snapshot or navigation; mode='ax' is "
     "the raw CDP tree. "
@@ -515,17 +516,22 @@ Convention: add data-testid to your root layout component.
       A miss lists the visible options' accessible names.
 
   tab.hover(selector)                                        → Receipt
-      Move the mouse over an element and leave it parked there — :hover
-      styling and mouseenter-revealed UI (menus, toolbars, tooltips) stay up
-      for a following click, and the observation's changes: section reports
-      what the hover revealed.  Strict resolution + visible/stable wait like
-      click.
+      Move the mouse over an element — or an (x, y) / 'x,y' point — and
+      leave it parked there: :hover styling and mouseenter-revealed UI
+      (menus, toolbars, tooltips) stay up for a following click, and the
+      observation's changes: section reports what the hover revealed.
+      The selector form resolves strictly + waits visible/stable like
+      click.  Coordinates are the route to visual-only targets whose
+      accessible proxy sits elsewhere (SVG diagram nodes): hover has no
+      element.click()-style fallback, so a proxy hover parks on the proxy.
 
   tab.drag(source, to, *, steps=12, duration_ms=400)         → Receipt
       Mouse drag in one call: press on source, paced mouseMoved events with
       the button held, release on to.  Endpoints are selectors (strictly
-      resolved, scrolled into view) or (x, y) tuples / 'x,y' strings.  A
-      drop target that only appears once the drag starts is re-resolved
+      resolved, scrolled into view) or (x, y) tuples / 'x,y' strings.  The
+      first moves are 2px micro-steps, so a small origin (a 10px SVG port)
+      arms its drag-slop threshold before the pointer leaves it.  A drop
+      target that only appears once the drag starts is re-resolved
       mid-gesture.  Covers pointer/mouse-event drag (SVG editors, sliders,
       drag libraries); native HTML5 draggable=true DnD rides a different
       browser pipeline these events don't start — an observation saying
@@ -935,7 +941,9 @@ MCP browser tools (browser_click, browser_type, browser_navigate, etc.) run
   the full observation pipeline: pre_observe → mutate → settle → post_observe.
   They automatically wait for network idle and return a changes: section (an
   AX-tree diff of what the mutation made appear/disappear/change state —
-  "changes: none" means the page visibly ignored the action) + tree +
+  "changes: none" means the page visibly ignored the action; a
+  presentational reveal the AX tree can't see falls back to a
+  "dom: +N −M elements" line from a MutationObserver) + tree +
   network delta + console delta.  This means each MCP call returns only
   after the page is stable — the next call's auto-wait (2s) rarely fires
   because the element is already in the DOM.
@@ -1269,7 +1277,7 @@ Tab (async unless noted):
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
   tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
-  tab.hover(selector)                              → Receipt (park the pointer on an element; hover-revealed UI stays up)
+  tab.hover(selector)                              → Receipt (park the pointer on an element or 'x,y' point; hover-revealed UI stays up)
   tab.drag(source, to, steps=, duration_ms=)       → Receipt (press→paced moves→release in one call; endpoints are selectors or (x,y)/'x,y')
   tab.key(key)                                     → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
   tab.keys(keys, delay_ms=)                        → None (sequence of presses in one call)

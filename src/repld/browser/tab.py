@@ -822,21 +822,30 @@ class Tab(TabQueryMixin):
             el, selector=selector, button=button, click_count=click_count
         )
 
-    async def hover(self, selector: str) -> Receipt:
-        """Move the mouse over an element and leave it there.
+    async def hover(self, selector: "str | tuple[float, float]") -> Receipt:
+        """Move the mouse over an element — or an (x, y) / 'x,y' point — and
+        leave it there.
 
-        Strictly resolved like click(). The pointer stays parked on the
-        element after the call, so :hover styling and mouseenter-revealed UI
-        (menus, toolbars, tooltips) remain up for a following click — and the
-        observation's `changes:` section reports what the hover revealed.
+        The selector form resolves strictly like click(). The coordinate form
+        is for visual-only targets whose accessible proxy sits elsewhere
+        (SVG diagram nodes with an off-canvas aria twin) — there is no
+        element.click()-style fallback for hover, so coordinates are the only
+        route to those. Either way the pointer stays parked after the call,
+        so :hover styling and mouseenter-revealed UI (menus, toolbars,
+        tooltips) remain up for a following click — and the observation's
+        `changes:` section reports what the hover revealed.
         """
         await self._ensure_front()
-        el = await inject.resolve_element(self, selector)
-        await inject.check_actionable(
-            self, el, ("visible", "stable"), selector=selector
-        )
-        x, y = await self._element_center_of(el, selector)
-        receipt = await self._receipt_for(el, x, y, verb="hovering")
+        pt = self._parse_point(selector)
+        if pt is not None:
+            x, y = pt
+            receipt = Receipt(line=f"hovering: ({x:.0f},{y:.0f})")
+        else:
+            sel = selector if isinstance(selector, str) else str(selector)
+            el = await inject.resolve_element(self, sel)
+            await inject.check_actionable(self, el, ("visible", "stable"), selector=sel)
+            x, y = await self._element_center_of(el, sel)
+            receipt = await self._receipt_for(el, x, y, verb="hovering")
         await self._exec(
             "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
         )
@@ -933,26 +942,43 @@ class Tab(TabQueryMixin):
         # From here the button is down — never leave the page mid-drag: the
         # release in `finally` fires at the last point the pointer reached.
         cur_x, cur_y = x1, y1
+
+        async def _move(mx: float, my: float) -> None:
+            nonlocal cur_x, cur_y
+            cur_x, cur_y = mx, my
+            await self._exec(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": mx, "y": my, "buttons": 1},
+            )
+
         try:
             if deferred_target:
                 # Cross the typical dragstart threshold so drag-revealed drop
-                # zones mount, then resolve the selector for real.
-                cur_x, cur_y = x1 + 4, y1 + 4
-                await self._exec(
-                    "Input.dispatchMouseEvent",
-                    {"type": "mouseMoved", "x": cur_x, "y": cur_y, "buttons": 1},
-                )
+                # zones mount, then resolve the selector for real. Two 2 px
+                # diagonal steps, not one 4 px jump — same small-origin rule
+                # as the micro-steps below.
+                for d in (2.0, 4.0):
+                    await _move(x1 + d, y1 + d)
+                    await asyncio.sleep(0.03)
                 x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to)
+            else:
+                # Micro-steps first: a first move of distance/steps px exits a
+                # small origin (a 10 px SVG port) before the app's drag-slop
+                # threshold arms, and the whole gesture reads as a stray
+                # click. 2 px increments stay inside anything big enough to
+                # press; three of them cross any typical slop threshold.
+                dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+                for d in (2.0, 4.0, 6.0):
+                    if d >= dist:
+                        break
+                    await _move(x1 + (x2 - x1) * d / dist, y1 + (y2 - y1) * d / dist)
+                    await asyncio.sleep(0.03)
 
             delay = duration_ms / max(steps, 1) / 1000
+            sx, sy = cur_x, cur_y
             for i in range(1, steps + 1):
                 frac = i / steps
-                cur_x = x1 + (x2 - x1) * frac
-                cur_y = y1 + (y2 - y1) * frac
-                await self._exec(
-                    "Input.dispatchMouseEvent",
-                    {"type": "mouseMoved", "x": cur_x, "y": cur_y, "buttons": 1},
-                )
+                await _move(sx + (x2 - sx) * frac, sy + (y2 - sy) * frac)
                 await asyncio.sleep(delay)
 
             drop_note = ""

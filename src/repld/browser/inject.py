@@ -511,6 +511,69 @@ async def list_option_names(tab: "Tab", limit: int = 20) -> list[str]:
     return result.get("result", {}).get("value") or []
 
 
+# Observation DOM watch. The AX diff misses purely presentational reveals
+# (SVG ports mounting on hover render no AX nodes), so pre_observe arms a
+# MutationObserver and post_observe reads it back when the AX diff came up
+# empty. Lives on this world's globalThis: in the utility-world tier the page
+# can't see or tamper with it, and it dies with the document — a navigation
+# between arm and read simply reads back null.
+_DOM_WATCH_START = """
+function() {
+  const w = globalThis;
+  if (w.__repld_domwatch) { try { w.__repld_domwatch.mo.disconnect(); } catch (e) {} }
+  const rec = { added: 0, removed: 0, samples: [] };
+  const desc = n => {
+    const t = n.getAttribute && n.getAttribute('data-testid');
+    if (t) return '[data-testid=' + t + ']';
+    if (n.id) return '#' + n.id;
+    return '<' + (n.tagName || '?').toLowerCase() + '>';
+  };
+  const mo = new MutationObserver(muts => {
+    for (const m of muts) {
+      for (const n of m.addedNodes) if (n.nodeType === 1) {
+        rec.added += 1 + (n.querySelectorAll ? n.querySelectorAll('*').length : 0);
+        if (rec.samples.length < 8) rec.samples.push(desc(n));
+      }
+      for (const n of m.removedNodes) if (n.nodeType === 1)
+        rec.removed += 1 + (n.querySelectorAll ? n.querySelectorAll('*').length : 0);
+    }
+  });
+  mo.observe(this.document.documentElement, { childList: true, subtree: true });
+  w.__repld_domwatch = { mo, rec };
+}
+"""
+
+_DOM_WATCH_READ = """
+function() {
+  const w = globalThis;
+  const dw = w.__repld_domwatch;
+  if (!dw) return null;
+  try { dw.mo.disconnect(); } catch (e) {}
+  w.__repld_domwatch = null;
+  return dw.rec;
+}
+"""
+
+
+async def start_dom_watch(tab: "Tab") -> bool:
+    """Arm the observation DOM watch. False when the engine can't inject."""
+    try:
+        result = await call_engine(tab, _DOM_WATCH_START, [])
+    except Exception:
+        return False
+    return "exceptionDetails" not in result
+
+
+async def read_dom_watch(tab: "Tab") -> dict | None:
+    """{added, removed, samples} recorded since start_dom_watch, or None."""
+    try:
+        result = await call_engine(tab, _DOM_WATCH_READ, [])
+    except Exception:
+        return None
+    value = result.get("result", {}).get("value")
+    return value if isinstance(value, dict) else None
+
+
 async def describe_element(tab: "Tab", el: ResolvedElement) -> tuple[str, str]:
     """(preview, generated selector) for receipts and error digests."""
     result = await call_engine(

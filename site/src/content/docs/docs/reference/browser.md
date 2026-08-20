@@ -77,7 +77,7 @@ Select an option in a dropdown. Native `<select>`: finds the option by label (el
 await tab.hover(selector) → Receipt
 ```
 
-Move the mouse over an element and leave it parked there. `:hover` styling and mouseenter-revealed UI (menus, toolbars, tooltips) stay up for a following `click`, and an MCP observation's `changes:` section reports what the hover revealed. Strict resolution + visible/stable wait like `click`.
+Move the mouse over an element — or an `(x, y)` / `'x,y'` point — and leave it parked there. `:hover` styling and mouseenter-revealed UI (menus, toolbars, tooltips) stay up for a following `click`, and an MCP observation's `changes:` section reports what the hover revealed. The selector form resolves strictly + waits visible/stable like `click`. Coordinates are the route to visual-only targets whose accessible proxy sits elsewhere (SVG diagram nodes): hover has no `element.click()`-style fallback, so hovering the proxy parks on the proxy.
 
 ### drag
 
@@ -85,7 +85,7 @@ Move the mouse over an element and leave it parked there. `:hover` styling and m
 await tab.drag(source, to, *, steps=12, duration_ms=400) → Receipt
 ```
 
-Mouse drag in one call: press on `source`, paced `mouseMoved` events with the button held (`buttons=1`), release on `to`. Endpoints are selectors (strictly resolved, scrolled into view) or `(x, y)` tuples / `'x,y'` strings. A drop target that only appears once the drag starts is handled: if `to` doesn't resolve up front, the drag begins and the selector is re-resolved mid-gesture. Covers pointer/mouse-event drag (SVG editors, sliders, drag libraries); native HTML5 `draggable=true` DnD rides a separate browser pipeline these events don't start — an observation saying `changes: none` after dragging one is the tell. The `Receipt` names both endpoints and warns if the drop point was occluded.
+Mouse drag in one call: press on `source`, paced `mouseMoved` events with the button held (`buttons=1`), release on `to`. Endpoints are selectors (strictly resolved, scrolled into view) or `(x, y)` tuples / `'x,y'` strings. The first moves are 2 px micro-steps, so a small origin (a 10 px SVG port) arms its drag-slop threshold before the pointer leaves it — a plain `distance/steps` first jump exits the origin and the whole gesture reads as a stray click. A drop target that only appears once the drag starts is handled: if `to` doesn't resolve up front, the drag begins and the selector is re-resolved mid-gesture. Covers pointer/mouse-event drag (SVG editors, sliders, drag libraries); native HTML5 `draggable=true` DnD rides a separate browser pipeline these events don't start — an observation saying `changes: none` after dragging one is the tell. The `Receipt` names both endpoints and warns if the drop point was occluded.
 
 ### tap / swipe / scroll
 

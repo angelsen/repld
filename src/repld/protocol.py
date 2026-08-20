@@ -368,13 +368,18 @@ TOOLS = [
             "leave the pointer parked on it — hover-revealed UI (menus, "
             "toolbars, tooltips) stays up for a following browser_click, and "
             "the observation's changes: section reports what the hover "
-            "revealed. Returns receipt + observation."
+            "revealed. Also takes 'x,y' page coordinates, for visual-only "
+            "targets whose accessible proxy sits elsewhere (SVG diagram "
+            "nodes). Returns receipt + observation."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
-                "selector": _SELECTOR_PARAM,
+                "selector": {
+                    "type": "string",
+                    "description": "Element selector, or 'x,y' page coordinates",
+                },
             },
             "required": ["target", "selector"],
         },
