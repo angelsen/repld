@@ -362,6 +362,63 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_hover",
+        "description": (
+            "Hover an element, strictly resolved like browser_click, and "
+            "leave the pointer parked on it — hover-revealed UI (menus, "
+            "toolbars, tooltips) stays up for a following browser_click, and "
+            "the observation's changes: section reports what the hover "
+            "revealed. Returns receipt + observation."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "selector": _SELECTOR_PARAM,
+            },
+            "required": ["target", "selector"],
+        },
+    },
+    {
+        "name": "browser_drag",
+        "description": (
+            "Mouse drag in a single call: press, paced moves with the button "
+            "held, release — gesture state can't survive being split across "
+            "calls. Endpoints are selectors (strictly resolved) or 'x,y' "
+            "coordinates. A drop target that only appears once the drag "
+            "starts is re-resolved mid-gesture. Covers pointer/mouse-event "
+            "drag (SVG editors, sliders, drag libraries); native HTML5 "
+            "draggable DnD rides a different browser pipeline — an "
+            "observation saying 'changes: none' after dragging one is the "
+            "tell. Returns receipt + observation."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "from": {
+                    "type": "string",
+                    "description": "Drag origin: selector or 'x,y'",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Drop point: selector or 'x,y'",
+                },
+                "steps": {
+                    "type": "integer",
+                    "default": 12,
+                    "description": "Intermediate move events",
+                },
+                "duration_ms": {
+                    "type": "integer",
+                    "default": 400,
+                    "description": "Total move time across the steps",
+                },
+            },
+            "required": ["target", "from", "to"],
+        },
+    },
+    {
         "name": "browser_console",
         "description": "Query captured console messages for a tab (console.log, errors, exceptions).",
         "inputSchema": {
@@ -494,6 +551,8 @@ _TOOL_ANNOTATIONS = {
     "browser_click": {"openWorldHint": True},
     "browser_type": {"openWorldHint": True},
     "browser_select": {"openWorldHint": True},
+    "browser_hover": {"openWorldHint": True},
+    "browser_drag": {"openWorldHint": True},
     "browser_invoke": {"openWorldHint": True},
 }
 

@@ -346,7 +346,7 @@ class BrowserDispatchMixin:
         tab = self._get_tab(browser, args)
         session = self._session_for(browser, tab)
         if args.get("mode") == "ax":
-            lines, _ = self._run_async(compose_tree(tab, session))
+            lines, _, _ = self._run_async(compose_tree(tab, session))
         else:
             lines, _ = self._run_async(compose_aria_tree(tab, session))
         return "\n".join(lines)
@@ -451,6 +451,37 @@ class BrowserDispatchMixin:
         )
         return f"{captured['receipt']}\n\n{obs}"
 
+    def _bh_hover(self, browser, args):
+        tab = self._get_tab(browser, args)
+        captured: dict = {}
+
+        def mutate():
+            captured["receipt"] = self._run_async(tab.hover(args["selector"]))
+
+        obs = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        )
+        return f"{captured['receipt']}\n\n{obs}"
+
+    def _bh_drag(self, browser, args):
+        tab = self._get_tab(browser, args)
+        captured: dict = {}
+
+        def mutate():
+            captured["receipt"] = self._run_async(
+                tab.drag(
+                    args["from"],
+                    args["to"],
+                    steps=int(args.get("steps", 12)),
+                    duration_ms=int(args.get("duration_ms", 400)),
+                )
+            )
+
+        obs = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        )
+        return f"{captured['receipt']}\n\n{obs}"
+
     def _bh_select(self, browser, args):
         tab = self._get_tab(browser, args)
         captured: dict = {}
@@ -486,6 +517,8 @@ class BrowserDispatchMixin:
         "browser_click": _bh_click,
         "browser_type": _bh_type,
         "browser_select": _bh_select,
+        "browser_hover": _bh_hover,
+        "browser_drag": _bh_drag,
         "browser_controls": _bh_controls,
         "browser_invoke": _bh_invoke,
     }

@@ -47,6 +47,7 @@ await browser.detach()    # detach everything
 
 Every mutation — `click`, `type_text`, `navigate` — **settles** before returning, then reports what changed:
 
+- **Changes** — an AX-tree diff of the mutation itself: what appeared, disappeared, or changed state (`+ button 'port' ×8`, `~ button 'Save' [disabled] → [none]`). `changes: none` means the page visibly ignored the action.
 - **Accessibility tree** — the page's semantic structure
 - **Network delta** — requests fired since the last observation
 - **Console delta** — log messages and errors

@@ -64,12 +64,17 @@ _BROWSER_MODEL = (
     "waits for visible/enabled/stable; click/type return a receipt line naming "
     "what was actually hit. type verifies the value landed, falling back to the "
     "native setter for framework-controlled inputs. browser_select drives "
-    "dropdowns (native <select> or custom listbox). "
+    "dropdowns (native <select> or custom listbox; an aria-autocomplete field "
+    "gets the option typed in as a filter, reaching virtualized lists). "
+    "browser_hover parks the pointer on an element (hover-revealed UI stays "
+    "up); browser_drag runs press→moves→release atomically in one call "
+    "(selectors or 'x,y' endpoints). "
     "browser_tree default is an aria snapshot with [ref=eN] handles — reuse as "
     "aria-ref=eN selectors until the next snapshot or navigation; mode='ax' is "
     "the raw CDP tree. "
-    "Mutations (click/type/select/navigate/key/open) settle then return "
-    "receipt + tree + network delta + console delta. "
+    "Mutations (click/type/select/hover/drag/navigate/key/open) settle then "
+    "return receipt + a changes: AX-diff (what appeared/disappeared/changed "
+    "state) + tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
     "get()/open() capture request/response bodies; watch() attaches lightweight. "
     "Read workflow: network → request → body. "
@@ -504,7 +509,28 @@ Convention: add data-testid to your root layout component.
       label (else value), sets it via the prototype setter + input/change
       events.  Custom widgets (react-select-style): clicks the field, waits
       for a role=option matching the name (exact, then substring), clicks
-      it.  A miss lists the visible options' accessible names.
+      it.  When the click focuses an element declaring aria-autocomplete,
+      the option text is typed in first and resolution runs against the
+      filtered listbox — reaches options a virtualized list hasn't rendered.
+      A miss lists the visible options' accessible names.
+
+  tab.hover(selector)                                        → Receipt
+      Move the mouse over an element and leave it parked there — :hover
+      styling and mouseenter-revealed UI (menus, toolbars, tooltips) stay up
+      for a following click, and the observation's changes: section reports
+      what the hover revealed.  Strict resolution + visible/stable wait like
+      click.
+
+  tab.drag(source, to, *, steps=12, duration_ms=400)         → Receipt
+      Mouse drag in one call: press on source, paced mouseMoved events with
+      the button held, release on to.  Endpoints are selectors (strictly
+      resolved, scrolled into view) or (x, y) tuples / 'x,y' strings.  A
+      drop target that only appears once the drag starts is re-resolved
+      mid-gesture.  Covers pointer/mouse-event drag (SVG editors, sliders,
+      drag libraries); native HTML5 draggable=true DnD rides a different
+      browser pipeline these events don't start — an observation saying
+      "changes: none" after dragging one is the tell.  The Receipt names
+      both endpoints and warns if the drop point was occluded.
 
   tab.key(key)                                               → None
       Dispatch one key press: named keys ("Enter", "Backspace", "ArrowLeft",
@@ -798,7 +824,7 @@ Suppress filter (opt-in):
 
 == Selectors ==
 
-Same syntax across click, tap, type_text, select_option, wait_for:
+Same syntax across click, tap, type_text, select_option, hover, drag, wait_for:
 
   .css-class, #id, [attr], tag                        CSS
   [data-testid='name']                                CSS (recommended for own code)
@@ -907,10 +933,12 @@ wait_for_idle() and the MCP observation pipeline use the same settle logic:
 
 MCP browser tools (browser_click, browser_type, browser_navigate, etc.) run
   the full observation pipeline: pre_observe → mutate → settle → post_observe.
-  They automatically wait for network idle and return tree + network delta +
-  console delta.  This means each MCP call returns only after the page is
-  stable — the next call's auto-wait (2s) rarely fires because the element
-  is already in the DOM.
+  They automatically wait for network idle and return a changes: section (an
+  AX-tree diff of what the mutation made appear/disappear/change state —
+  "changes: none" means the page visibly ignored the action) + tree +
+  network delta + console delta.  This means each MCP call returns only
+  after the page is stable — the next call's auto-wait (2s) rarely fires
+  because the element is already in the DOM.
 
 exec-based mutations (calling tab.click(), tab.type_text() etc. in Python code)
   do NOT auto-settle.  The method returns as soon as the CDP command completes.
@@ -1240,7 +1268,9 @@ Tab (async unless noted):
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
-  tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; a miss lists the options)
+  tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
+  tab.hover(selector)                              → Receipt (park the pointer on an element; hover-revealed UI stays up)
+  tab.drag(source, to, steps=, duration_ms=)       → Receipt (press→paced moves→release in one call; endpoints are selectors or (x,y)/'x,y')
   tab.key(key)                                     → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
   tab.keys(keys, delay_ms=)                        → None (sequence of presses in one call)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
@@ -1309,7 +1339,7 @@ Browser:
   (HMR/navigation) it re-attaches and waits again. navigate() and reload()
   also wait for it. Convention: add data-testid to your root layout component.
 
-Selectors (click/tap/type_text/select_option):
+Selectors (click/tap/type_text/select_option/hover/drag):
   .css-class, #id, [attr], tag           CSS
   [data-testid='name']                   CSS (recommended for own code)
   text=Submit                            exact text match

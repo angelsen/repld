@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import pathlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -821,6 +822,168 @@ class Tab(TabQueryMixin):
             el, selector=selector, button=button, click_count=click_count
         )
 
+    async def hover(self, selector: str) -> Receipt:
+        """Move the mouse over an element and leave it there.
+
+        Strictly resolved like click(). The pointer stays parked on the
+        element after the call, so :hover styling and mouseenter-revealed UI
+        (menus, toolbars, tooltips) remain up for a following click — and the
+        observation's `changes:` section reports what the hover revealed.
+        """
+        await self._ensure_front()
+        el = await inject.resolve_element(self, selector)
+        await inject.check_actionable(
+            self, el, ("visible", "stable"), selector=selector
+        )
+        x, y = await self._element_center_of(el, selector)
+        receipt = await self._receipt_for(el, x, y, verb="hovering")
+        await self._exec(
+            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
+        )
+        return receipt
+
+    @staticmethod
+    def _parse_point(spec: Any) -> tuple[float, float] | None:
+        """(x, y) from an 'x,y' string or a 2-tuple; None means selector."""
+        if isinstance(spec, (tuple, list)) and len(spec) == 2:
+            return float(spec[0]), float(spec[1])
+        if isinstance(spec, str):
+            m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*", spec)
+            if m:
+                return float(m.group(1)), float(m.group(2))
+        return None
+
+    async def _resolve_drag_point(
+        self, spec: Any, *, timeout: float | None = None
+    ) -> tuple[float, float, "inject.ResolvedElement | None", str]:
+        """(x, y, element-or-None, description) for a drag endpoint."""
+        pt = self._parse_point(spec)
+        if pt is not None:
+            return pt[0], pt[1], None, f"({pt[0]:.0f},{pt[1]:.0f})"
+        kw = {} if timeout is None else {"timeout": timeout}
+        el = await inject.resolve_element(self, spec, **kw)
+        await inject.check_actionable(
+            self, el, ("visible", "stable"), selector=spec, **kw
+        )
+        x, y = await self._element_center_of(el, spec)
+        preview, sel = await inject.describe_element(self, el)
+        desc = " — ".join(p for p in (preview, sel) if p)
+        return x, y, el, desc or str(spec)
+
+    async def drag(
+        self,
+        source: "str | tuple[float, float]",
+        to: "str | tuple[float, float]",
+        *,
+        steps: int = 12,
+        duration_ms: int = 400,
+    ) -> Receipt:
+        """Mouse drag from *source* to *to* — press, paced moves, release,
+        atomically in one call. Endpoints are selectors or (x, y) / 'x,y'.
+
+        Gesture state (an app's mousemove tracking) cannot survive being
+        split across separate calls, so the whole sequence is one method.
+        Dispatches real mouse events (buttons=1 held through the moves) —
+        covers pointer/mouse-event drag (SVG editors, drag libraries, sliders);
+        native HTML5 draggable=true DnD rides a separate browser pipeline
+        these events don't start, so a `changes: none` observation after
+        dragging one is the tell.
+
+        A drop target that only appears once the drag starts (drop zones) is
+        handled: if *to* doesn't resolve up front, the drag begins and the
+        selector is re-resolved mid-gesture.
+        """
+        await self._ensure_front()
+        x1, y1, src_el, src_desc = await self._resolve_drag_point(source)
+        if src_el is not None:
+            data = await inject.hit_receipt(self, src_el, x1, y1)
+            if data.get("hit") is not None and not data.get("related", True):
+                h = data["hit"]
+                hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+                push_kind(
+                    f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
+                    "browser_warning",
+                    target=self.target_id,
+                )
+
+        # Resolve the drop point before pressing when it already exists —
+        # a wrong-direction first nudge matters at 6 px drag scale.
+        deferred_target = False
+        try:
+            x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to, timeout=0.5)
+        except RuntimeError:
+            deferred_target = True
+            x2 = y2 = 0.0
+            tgt_el, tgt_desc = None, str(to)
+
+        await self._exec(
+            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x1, "y": y1}
+        )
+        await self._exec(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": x1,
+                "y": y1,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+        )
+        # From here the button is down — never leave the page mid-drag: the
+        # release in `finally` fires at the last point the pointer reached.
+        cur_x, cur_y = x1, y1
+        try:
+            if deferred_target:
+                # Cross the typical dragstart threshold so drag-revealed drop
+                # zones mount, then resolve the selector for real.
+                cur_x, cur_y = x1 + 4, y1 + 4
+                await self._exec(
+                    "Input.dispatchMouseEvent",
+                    {"type": "mouseMoved", "x": cur_x, "y": cur_y, "buttons": 1},
+                )
+                x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to)
+
+            delay = duration_ms / max(steps, 1) / 1000
+            for i in range(1, steps + 1):
+                frac = i / steps
+                cur_x = x1 + (x2 - x1) * frac
+                cur_y = y1 + (y2 - y1) * frac
+                await self._exec(
+                    "Input.dispatchMouseEvent",
+                    {"type": "mouseMoved", "x": cur_x, "y": cur_y, "buttons": 1},
+                )
+                await asyncio.sleep(delay)
+
+            drop_note = ""
+            warning = False
+            if tgt_el is not None:
+                data = await inject.hit_receipt(self, tgt_el, x2, y2)
+                if data.get("hit") is not None and not data.get("related", True):
+                    h = data["hit"]
+                    hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+                    drop_note = f" — warning: drop point hits {hdesc}"
+                    warning = True
+        finally:
+            await self._exec(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": cur_x,
+                    "y": cur_y,
+                    "button": "left",
+                    "buttons": 0,
+                    "clickCount": 1,
+                },
+            )
+        return Receipt(
+            line=(
+                f"dragged: {src_desc} ({x1:.0f},{y1:.0f}) → "
+                f"({x2:.0f},{y2:.0f}) {tgt_desc}{drop_note}"
+            ),
+            warning=warning,
+        )
+
     async def type_text(
         self,
         selector: str,
@@ -852,17 +1015,7 @@ class Tab(TabQueryMixin):
         )
 
         before = await inject.read_value(self, el)
-        for char in text:
-            for event_type in ("keyDown", "keyUp"):
-                await self._exec(
-                    "Input.dispatchKeyEvent",
-                    {
-                        "type": event_type,
-                        "text": char if event_type == "keyDown" else "",
-                    },
-                )
-            if delay_ms > 0:
-                await asyncio.sleep(delay_ms / 1000)
+        await self._type_chars(text, delay_ms=delay_ms)
 
         after = await inject.read_value(self, el)
         if after == text:
@@ -890,14 +1043,32 @@ class Tab(TabQueryMixin):
             await self.key("Enter")
         return receipt
 
+    async def _type_chars(self, text: str, *, delay_ms: int = 0) -> None:
+        """Key events into whatever holds focus — the shared core of
+        type_text and select_option's type-to-filter."""
+        for char in text:
+            for event_type in ("keyDown", "keyUp"):
+                await self._exec(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": event_type,
+                        "text": char if event_type == "keyDown" else "",
+                    },
+                )
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+
     async def select_option(self, selector: str, option: str) -> Receipt:
         """Select *option* in a dropdown — native <select> or custom listbox.
 
         Native <select>: finds the option by label (else value) and sets it
         through the prototype setter + input/change events. Custom widgets
         (react-select-style): clicks the field, waits for a role=option
-        matching *option* (exact, then substring), clicks it. A miss lists
-        the visible options' accessible names.
+        matching *option* (exact, then substring), clicks it. When the click
+        focuses an element declaring aria-autocomplete, *option* is typed
+        into it first and resolution runs against the filtered listbox —
+        which is what reaches an option a virtualized list hasn't rendered.
+        A miss lists the visible options' accessible names.
         """
         await self._ensure_front()
         el = await inject.resolve_element(self, selector)
@@ -920,6 +1091,25 @@ class Tab(TabQueryMixin):
             return Receipt(line=f'selected "{option}" in {tdesc}')
 
         await self._click_element(el, selector=selector)
+
+        # Type-to-filter. aria-autocomplete on the freshly-focused element is
+        # the widget's own declaration that typing narrows the listbox; going
+        # through the filter is the only route to an option a virtualized
+        # list keeps below its render window, where waiting can never make it
+        # appear. The keystrokes go to document.activeElement regardless, so
+        # the focused element is also the right one to ask.
+        filtered = False
+        ac = await inject.call_engine(
+            self,
+            "function() { const a = this.document.activeElement;"
+            " const ac = a && a.getAttribute && a.getAttribute('aria-autocomplete');"
+            " return !!ac && ac !== 'none'; }",
+            [],
+        )
+        if ac.get("result", {}).get("value"):
+            await self._type_chars(option)
+            filtered = True
+
         opt_label = f"option {option!r}"
         opt_selectors = [
             f"role=option[name={selector_mod._text_body(option, exact=True)}]",
@@ -933,13 +1123,14 @@ class Tab(TabQueryMixin):
             raise
         except RuntimeError as exc:
             names = await inject.list_option_names(self)
+            via = " and typing it into the filter" if filtered else ""
             if names:
                 raise RuntimeError(
-                    f"{opt_label} not found after opening {tdesc}"
+                    f"{opt_label} not found after opening {tdesc}{via}"
                     f" — visible options: {names}"
                 ) from exc
             raise RuntimeError(
-                f"{opt_label} not found — no listbox opened after clicking {tdesc}"
+                f"{opt_label} not found — no listbox opened after clicking {tdesc}{via}"
             ) from exc
         await inject.check_actionable(
             self, opt_el, ("visible", "stable"), selector=opt_label
@@ -986,7 +1177,8 @@ class Tab(TabQueryMixin):
             verified = bool(v.get("result", {}).get("value"))
         except Exception:
             pass
-        suffix = "" if verified else " (selection not verified)"
+        suffix = " (typed to filter)" if filtered else ""
+        suffix += "" if verified else " (selection not verified)"
         return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
 
     async def key(self, key: str) -> None:

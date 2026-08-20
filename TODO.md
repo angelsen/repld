@@ -37,24 +37,24 @@ The organizing thesis: Playwright serves a script author iterating until green;
 repld's caller is an agent that pays per round-trip and is blind between calls.
 Ranked by leverage:
 
-- [ ] **AX-tree diff in observations.** `post_observe` already holds the pre and
-  post trees — emit appeared/disappeared/renamed/state-changed nodes as a few
-  lines above the full tree ("8 `port` buttons appeared, `Update workflow`
-  enabled"). This is the screenshot round-trip eliminated. Deliberately the
-  *AX* tree, not an aria snapshot: per-mutation snapshots would invalidate
-  `aria-ref`s (the reason observations kept AX in 0.3.0).
-- [ ] **Atomic gestures: `browser_drag(from, to)` + `browser_hover(sel)`.**
-  Hover→press→paced-moves→release inside one call with per-step hit
-  verification — gesture state cannot survive being split across MCP round
-  trips (a 6px SVG port-drag proved unwinnable as discrete calls). `swipe` is
-  the touch precedent; this is its mouse sibling, with a Receipt. `hover`
-  composes with the AX diff above to report what the hover revealed (verify
-  whether hover-only UI reaches the AX tree; DOM-mutation fallback if not).
-- [ ] **Type-to-filter in `select_option`.** When the field declares
-  `aria-autocomplete`, type the option text and resolve against the filtered
-  listbox — reaches any option in a virtualized list (confirmed miss:
-  "Eskalert" below the render window of Jira's Replace-status picker; the
-  option-miss digest listed only the first 20 global statuses).
+- [x] **AX-tree diff in observations** — shipped in 0.3.3: `pre_observe`
+  snapshots the renderer's own AX traversal, `post_observe` leads with a
+  `changes:` section (`+`/`-`/`~`, aggregated, capped at 12 lines);
+  suppressed across navigation and on `browser_open`. Hover-only UI does
+  reach the AX tree (verified live — CSS-revealed menus enter on display
+  flip), so no DOM-mutation fallback was needed.
+- [x] **Atomic gestures: `browser_drag(from, to)` + `browser_hover(sel)`** —
+  shipped in 0.3.3. Drag is press → paced `buttons=1` moves → release-in-
+  finally, endpoints selectors or `x,y`, with a deferred mid-gesture
+  re-resolve for drop zones that mount on dragstart; hit verification runs
+  at source (pre-press) and drop point (pre-release), not per waypoint —
+  nothing at the intermediate points changes what the receipt should say.
+  Native HTML5 `draggable` DnD is out of scope (separate pipeline —
+  `Input.dispatchDragEvent` + `setInterceptDrags`, if it ever comes up).
+- [x] **Type-to-filter in `select_option`** — shipped in 0.3.3: when the
+  opening click focuses an element declaring `aria-autocomplete`, the option
+  text is typed as a filter before resolving; receipt says
+  `(typed to filter)`.
 - [x] **`Tab.keys([...])` sequence form** — shipped alongside the VK-code fix
   (Backspace/arrows edited nothing without `windowsVirtualKeyCode`) and
   Ctrl/Alt/Shift/Cmd combos in `key()`.

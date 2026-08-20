@@ -69,7 +69,23 @@ Focus element, select-all, type character-by-character, then **verify the value 
 await tab.select_option(selector, option) → Receipt
 ```
 
-Select an option in a dropdown. Native `<select>`: finds the option by label (else value) and sets it via the prototype setter + `input`/`change` events. Custom widgets (react-select-style): clicks the field, waits for a `role=option` matching the name (exact, then substring), clicks it. A miss lists the visible options' accessible names.
+Select an option in a dropdown. Native `<select>`: finds the option by label (else value) and sets it via the prototype setter + `input`/`change` events. Custom widgets (react-select-style): clicks the field, waits for a `role=option` matching the name (exact, then substring), clicks it. When the click focuses an element declaring `aria-autocomplete`, the option text is typed in first and resolution runs against the filtered listbox — which is what reaches an option a virtualized list hasn't rendered. A miss lists the visible options' accessible names.
+
+### hover
+
+```python
+await tab.hover(selector) → Receipt
+```
+
+Move the mouse over an element and leave it parked there. `:hover` styling and mouseenter-revealed UI (menus, toolbars, tooltips) stay up for a following `click`, and an MCP observation's `changes:` section reports what the hover revealed. Strict resolution + visible/stable wait like `click`.
+
+### drag
+
+```python
+await tab.drag(source, to, *, steps=12, duration_ms=400) → Receipt
+```
+
+Mouse drag in one call: press on `source`, paced `mouseMoved` events with the button held (`buttons=1`), release on `to`. Endpoints are selectors (strictly resolved, scrolled into view) or `(x, y)` tuples / `'x,y'` strings. A drop target that only appears once the drag starts is handled: if `to` doesn't resolve up front, the drag begins and the selector is re-resolved mid-gesture. Covers pointer/mouse-event drag (SVG editors, sliders, drag libraries); native HTML5 `draggable=true` DnD rides a separate browser pipeline these events don't start — an observation saying `changes: none` after dragging one is the tell. The `Receipt` names both endpoints and warns if the drop point was occluded.
 
 ### tap / swipe / scroll
 

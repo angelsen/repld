@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -98,6 +99,11 @@ def _node_props(node: dict) -> str:
     return (" [" + ", ".join(props) + "]") if props else ""
 
 
+# A tree signature: (role, name, props) multiset over the same nodes the
+# renderer emits, used by the observation diff.
+TreeSig = Counter
+
+
 def _build_lines(
     nodes_by_id: dict[str, dict],
     children_map: dict[str, list[str]],
@@ -105,6 +111,7 @@ def _build_lines(
     depth: int,
     max_depth: int,
     lines: list[str],
+    sig: TreeSig,
 ) -> None:
     if depth > max_depth:
         return
@@ -115,7 +122,9 @@ def _build_lines(
     if role in SKIP_ROLES:
         # Still recurse through skipped roles
         for child_id in children_map.get(node_id, []):
-            _build_lines(nodes_by_id, children_map, child_id, depth, max_depth, lines)
+            _build_lines(
+                nodes_by_id, children_map, child_id, depth, max_depth, lines, sig
+            )
         return
 
     name = _node_name(node)
@@ -126,24 +135,31 @@ def _build_lines(
         label += f" {name!r}"
     label += props
     lines.append(label)
+    sig[(role, name, props)] += 1
 
     if role in LEAF_ROLES:
         return
 
     for child_id in children_map.get(node_id, []):
-        _build_lines(nodes_by_id, children_map, child_id, depth + 1, max_depth, lines)
+        _build_lines(
+            nodes_by_id, children_map, child_id, depth + 1, max_depth, lines, sig
+        )
 
 
-async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
+async def build_tree_sig(tab: "Tab", max_depth: int = 6) -> tuple[list[str], TreeSig]:
     """Compact accessibility tree from CDP Accessibility.getFullAXTree.
 
-    Returns list of indented text lines.
+    Returns (indented text lines, signature multiset). The signature counts
+    exactly the nodes the lines render — same roles, same depth cap — so a
+    diff of two signatures describes what a reader of the two trees would see
+    change.
     """
     result = await tab._exec("Accessibility.getFullAXTree", {})
 
+    sig: TreeSig = Counter()
     nodes = result.get("nodes", [])
     if not nodes:
-        return ["(empty tree)"]
+        return ["(empty tree)"], sig
 
     nodes_by_id: dict[str, dict] = {n["nodeId"]: n for n in nodes}
     children_map: dict[str, list[str]] = {}
@@ -161,9 +177,14 @@ async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
 
     lines: list[str] = []
     for root_id in root_ids:
-        _build_lines(nodes_by_id, children_map, root_id, 0, max_depth, lines)
+        _build_lines(nodes_by_id, children_map, root_id, 0, max_depth, lines, sig)
 
-    return lines or ["(empty tree)"]
+    return lines or ["(empty tree)"], sig
+
+
+async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
+    lines, _ = await build_tree_sig(tab, max_depth)
+    return lines
 
 
 async def build_aria_tree(tab: "Tab") -> list[str]:
@@ -339,25 +360,29 @@ async def compose_tree(
     tab: "Tab",
     session: "BrowserSession",
     max_depth: int = 8,
-) -> tuple[list[str], list["Tab"]]:
+) -> tuple[list[str], list["Tab"], dict[str, TreeSig]]:
     """Build accessibility tree with iframe children inlined.
 
-    Returns (lines, iframe_child_tabs).
+    Returns (lines, iframe_child_tabs, signatures keyed by target_id).
     """
 
     # Get base tree
-    lines = await build_tree(tab, max_depth=max_depth)
+    lines, sig = await build_tree_sig(tab, max_depth=max_depth)
+    sigs: dict[str, TreeSig] = {tab.target_id: sig}
     iframe_children = await _discover_iframe_children(tab, session)
 
     if not iframe_children:
-        return lines, []
+        return lines, [], sigs
 
     child_trees: dict[str, list[str]] = {}
     for child in iframe_children:
-        child_trees[child.target_id] = await build_tree(child, max_depth=max_depth - 2)
+        child_lines, child_sig = await build_tree_sig(child, max_depth=max_depth - 2)
+        child_trees[child.target_id] = child_lines
+        sigs[child.target_id] = child_sig
     return (
         _inline_iframe_lines(lines, iframe_children, child_trees),
         iframe_children,
+        sigs,
     )
 
 
@@ -428,6 +453,9 @@ class Observation:
     tree: list[str]
     network: list[NetworkEntry]
     console: list[str]
+    # None → no diff available (browser_open, or the page navigated);
+    # [] → diff computed, nothing changed.
+    changes: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +473,11 @@ class PreObservation:
     # These were two separate fields until the cutoff moved to `events`; they
     # only ever held the same values, in both construction sites.
     snapshots: dict[str, int] = field(default_factory=dict)
+    # target_id → AX-tree signature for the observation diff. None (the
+    # browser_open path constructs PreObservation directly) suppresses the
+    # diff rather than reporting a fresh document as all-appeared.
+    tree_sigs: dict[str, TreeSig] | None = None
+    url: str = ""
 
 
 def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
@@ -475,12 +508,27 @@ def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
 
 
 async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
-    """Capture state before a mutation. Fast — no blocking."""
+    """Capture state before a mutation.
+
+    The signature capture fetches the same AX trees post_observe will — same
+    depths (compose_tree's 8, children at 6) — so the diff compares like with
+    like. Best-effort: a page the AX domain chokes on still gets its mutation
+    observed, just without the changes section.
+    """
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
+    tree_sigs: dict[str, TreeSig] | None = {}
+    try:
+        _, tree_sigs[tab.target_id] = await build_tree_sig(tab, max_depth=8)
+        for child in iframe_children:
+            _, tree_sigs[child.target_id] = await build_tree_sig(child, max_depth=6)
+    except Exception:
+        tree_sigs = None
     return PreObservation(
         iframe_children=iframe_children,
         snapshots=_snapshot_max_ids(all_tabs),
+        tree_sigs=tree_sigs,
+        url=tab.url,
     )
 
 
@@ -564,6 +612,98 @@ def console_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Tree diff
+# ---------------------------------------------------------------------------
+
+_DIFF_MAX_LINES = 12
+
+
+def _diff_one(pre: TreeSig, post: TreeSig) -> tuple[Counter, Counter, list[tuple]]:
+    """(appeared, gone, changed) between two signatures.
+
+    An entry removed and added under the same (role, name) with different
+    props is a state change, not a departure plus an arrival — that pairing
+    is what turns "− button 'Save' [disabled] / + button 'Save'" into
+    "~ button 'Save' [disabled] → enabled".
+    """
+    added = post - pre
+    removed = pre - post
+    changed: list[tuple] = []
+    removed_by_rn: dict[tuple[str, str], list[tuple[str, int]]] = {}
+    for (role, name, props), cnt in removed.items():
+        removed_by_rn.setdefault((role, name), []).append((props, cnt))
+    for key in list(added):
+        role, name, new_props = key
+        buckets = removed_by_rn.get((role, name))
+        if not buckets:
+            continue
+        old_props, old_cnt = buckets[0]
+        n = min(added[key], old_cnt)
+        changed.append((role, name, old_props, new_props, n))
+        added[key] -= n
+        removed[(role, name, old_props)] -= n
+        if old_cnt - n:
+            buckets[0] = (old_props, old_cnt - n)
+        else:
+            buckets.pop(0)
+            if not buckets:
+                del removed_by_rn[(role, name)]
+    return +added, +removed, changed
+
+
+def _entry_str(role: str, name: str, props: str) -> str:
+    label = role
+    if name:
+        label += f" {name!r}"
+    return label + props
+
+
+def tree_diff_lines(
+    pre_sigs: dict[str, TreeSig],
+    post_sigs: dict[str, TreeSig],
+    main_target: str,
+) -> list[str]:
+    """Render the appeared/gone/changed summary, main tab first.
+
+    An iframe present on only one side reads as its whole tree
+    appearing/disappearing, which is accurate: the frame itself came or went.
+    """
+    detail: list[str] = []
+    totals = [0, 0, 0]
+    targets = [main_target] + [t for t in post_sigs if t != main_target]
+    targets += [t for t in pre_sigs if t not in post_sigs]
+    for target in targets:
+        added, removed, changed = _diff_one(
+            pre_sigs.get(target) or Counter(), post_sigs.get(target) or Counter()
+        )
+        totals[0] += sum(added.values())
+        totals[1] += sum(removed.values())
+        totals[2] += sum(n for *_, n in changed)
+        prefix = "" if target == main_target else f"{target}  "
+        for (role, name, props), cnt in sorted(added.items(), key=lambda kv: -kv[1]):
+            mult = f" ×{cnt}" if cnt > 1 else ""
+            detail.append(f"+ {prefix}{_entry_str(role, name, props)}{mult}")
+        for role, name, old, new, n in changed:
+            mult = f" ×{n}" if n > 1 else ""
+            old_s = old.strip() or "[none]"
+            new_s = new.strip() or "[none]"
+            detail.append(
+                f"~ {prefix}{_entry_str(role, name, '')} {old_s} → {new_s}{mult}"
+            )
+        for (role, name, props), cnt in sorted(removed.items(), key=lambda kv: -kv[1]):
+            mult = f" ×{cnt}" if cnt > 1 else ""
+            detail.append(f"- {prefix}{_entry_str(role, name, props)}{mult}")
+
+    if not detail:
+        return []
+    header = f"changes: {totals[0]} appeared, {totals[1]} gone, {totals[2]} changed"
+    if len(detail) > _DIFF_MAX_LINES:
+        hidden = len(detail) - _DIFF_MAX_LINES
+        detail = detail[:_DIFF_MAX_LINES] + [f"… +{hidden} more (full tree below)"]
+    return [header] + ["  " + d for d in detail]
+
+
+# ---------------------------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------------------------
 
@@ -575,6 +715,14 @@ def format_observation(obs: Observation) -> str:
     # Header
     parts.append(f"url: {obs.url} (settled in {obs.settle_ms}ms)")
     parts.append("")
+
+    # Changes — what this mutation did to the AX tree, before the full tree.
+    if obs.changes is not None:
+        if obs.changes:
+            parts.extend(obs.changes)
+        else:
+            parts.append("changes: none (AX tree unchanged)")
+        parts.append("")
 
     # Tree
     tree_count = len(obs.tree)
@@ -640,7 +788,17 @@ async def post_observe(
 
     # Build composed tree — re-discovers iframes, which may differ from
     # pre.iframe_children if the mutation added/removed one.
-    tree_lines, fresh_iframes = await compose_tree(tab, session)
+    tree_lines, fresh_iframes, post_sigs = await compose_tree(tab, session)
+
+    # Diff needs a pre signature *and* the same document — after a navigation
+    # the whole tree is new, and reporting it as a few hundred appearances
+    # would bury the one section that exists to be short.
+    changes: list[str] | None = None
+    if pre.tree_sigs is not None:
+        if tab.url == pre.url:
+            changes = tree_diff_lines(pre.tree_sigs, post_sigs, tab.target_id)
+        else:
+            changes = ["changes: (page navigated — tree replaced)"]
 
     # A mutation can spawn a brand-new iframe (e.g. an OAuth popup frame)
     # that wasn't in pre.iframe_children and so never got a quiet-period
@@ -675,6 +833,7 @@ async def post_observe(
         tree=tree_lines,
         network=net_entries,
         console=console_lines,
+        changes=changes,
     )
 
     text = format_observation(obs)

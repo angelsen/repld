@@ -1465,6 +1465,8 @@ def phase_6(kernel: Kernel) -> None:
             "browser_click",
             "browser_type",
             "browser_select",
+            "browser_hover",
+            "browser_drag",
             "browser_console",
             "browser_screenshot",
             "browser_cdp",
@@ -2248,5 +2250,216 @@ def phase_6_viewport_param(kernel: Kernel) -> None:
             f"viewport pinned to ~1234x777 at scale 1 (got {out!r})",
         )
         print("  ✓ browser_open viewport=: fixed size, scale 1, no multiplier math")
+    finally:
+        h.close()
+
+
+def phase_6_observation_diff(kernel: Kernel) -> None:
+    """Mutation observations carry a changes: AX-diff — appeared/gone/state —
+    and suppress it across a navigation, where the whole tree is new."""
+    if not _chrome_ready("phase 6 observation diff"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            '<button id=go onclick="this.disabled=true;'
+            "document.getElementById('bye').remove();"
+            "for(let i=0;i<3;i++){const b=document.createElement('button');"
+            "b.textContent='port';document.body.appendChild(b)}\">Go</button>"
+            "<a href='x' id=bye>Bye</a>"
+            "<button id=noop>Noop</button>"
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        text = resp["result"]["content"][0]["text"]
+        assert_true(
+            "changes: 3 appeared, 1 gone, 1 changed" in text,
+            f"diff header counts the mutation (got {text[:400]!r})",
+        )
+        assert_true(
+            "+ button 'port' ×3" in text,
+            f"identical arrivals aggregate with a multiplier (got {text[:400]!r})",
+        )
+        assert_true(
+            "- link 'Bye'" in text,
+            f"the removed link reads as gone (got {text[:400]!r})",
+        )
+        assert_true(
+            "~ button 'Go' [none] → [disabled]" in text,
+            f"same-name prop flip reads as a state change (got {text[:400]!r})",
+        )
+
+        resp = h.tool("browser_click", {"target": tid, "selector": "#noop"})
+        text = resp["result"]["content"][0]["text"]
+        assert_true(
+            "changes: none" in text,
+            f"an inert click says the tree didn't move (got {text[:300]!r})",
+        )
+
+        resp = h.tool(
+            "browser_navigate",
+            {"target": tid, "url": f"data:text/html,<p>{_MARKER}-nav</p>"},
+        )
+        text = resp["result"]["content"][0]["text"]
+        assert_true(
+            "changes: (page navigated" in text,
+            f"a navigation suppresses the diff instead of dumping it (got {text[:300]!r})",
+        )
+        print("  ✓ observation diff: appeared ×N, gone, state change, none, navigation")
+    finally:
+        h.close()
+
+
+def phase_6_hover_and_drag(kernel: Kernel) -> None:
+    """browser_hover parks the pointer (hover-revealed UI enters the diff and
+    stays clickable); browser_drag presses, moves with buttons=1, releases —
+    including a drop zone that only mounts once the drag starts."""
+    if not _chrome_ready("phase 6 hover and drag"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        # No literal '#' anywhere in the markup: everything past one is the
+        # data: URL's fragment, and the page silently truncates there —
+        # attribute selectors and named colors instead.
+        tid = h.open_tab(
+            "<style>div[id=menu]{display:none}"
+            "div[id=zone]:hover div[id=menu]{display:block}</style>"
+            "<div id=zone><button id=trig>Trigger</button>"
+            "<div id=menu><button onclick='window.picked=1'>Reveal</button></div>"
+            "</div>"
+            '<div id=src style="position:absolute;left:20px;top:120px;'
+            'width:40px;height:40px;background:blue"></div>'
+            '<div id=dst style="position:absolute;left:220px;top:120px;'
+            'width:60px;height:60px;background:green"></div>'
+            '<div id=src2 style="position:absolute;left:20px;top:220px;'
+            'width:40px;height:40px;background:red"></div>'
+            "<script>"
+            "let down=0,moves=0;"
+            "document.getElementById('src').addEventListener('mousedown',()=>{down=1});"
+            "document.addEventListener('mousemove',e=>{if(down&&e.buttons===1)moves++});"
+            "document.addEventListener('mouseup',e=>{if(down){"
+            "window.moveCount=moves;"
+            "const d=document.getElementById('dst').getBoundingClientRect();"
+            "window.dropped=e.clientX>=d.left&&e.clientX<=d.right"
+            "&&e.clientY>=d.top&&e.clientY<=d.bottom;down=0}});"
+            "document.getElementById('src2').addEventListener('mousedown',()=>{"
+            "const z=document.createElement('div');z.id='dz';"
+            "z.style.cssText='position:absolute;left:220px;top:220px;"
+            "width:60px;height:60px;background:yellow';"
+            "z.addEventListener('mouseup',()=>{window.dropped2=1});"
+            "document.body.appendChild(z)});"
+            "</script>"
+        )
+
+        resp = h.tool("browser_hover", {"target": tid, "selector": "#trig"})
+        text = resp["result"]["content"][0]["text"]
+        first = text.splitlines()[0]
+        assert_true(first.startswith("hovering:"), f"hover receipt (got {first!r})")
+        assert_true(
+            "+ button 'Reveal'" in text,
+            f"the diff reports what the hover revealed (got {text[:400]!r})",
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "text=Reveal"})
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('PICKED', await _t.js('window.picked'))"
+        )
+        assert_true(
+            "PICKED 1" in out,
+            f"hover-revealed UI stayed up for the click (got {out!r})",
+        )
+
+        resp = h.tool("browser_drag", {"target": tid, "from": "#src", "to": "#dst"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("dragged:") and "warning" not in first,
+            f"drag receipt names both endpoints cleanly (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('DROP', await _t.js('window.dropped'),"
+            " await _t.js('window.moveCount'))"
+        )
+        assert_true(
+            "DROP True" in out,
+            f"the release landed inside the drop target (got {out!r})",
+        )
+        moves = int(out.split("DROP True", 1)[1].split()[0])
+        assert_true(
+            moves >= 10,
+            f"the gesture was paced moves with buttons=1, not a teleport ({moves})",
+        )
+
+        resp = h.tool("browser_drag", {"target": tid, "from": "#src2", "to": "#dz"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("dragged:"),
+            f"deferred-target drag receipt (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('DROP2', await _t.js('window.dropped2'))"
+        )
+        assert_true(
+            "DROP2 1" in out,
+            f"a drop zone that mounts on dragstart is reachable (got {out!r})",
+        )
+        print(
+            "  ✓ hover parks + reveals; drag is atomic, paced, and resolves mid-gesture"
+        )
+    finally:
+        h.close()
+
+
+def phase_6_select_type_filter(kernel: Kernel) -> None:
+    """select_option types into an aria-autocomplete field so an option below
+    a virtualized list's render window becomes reachable."""
+    if not _chrome_ready("phase 6 select type-filter"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        # 30 statuses, list renders only the first 5 matching the filter —
+        # the Jira Replace-status shape, where "Eskalert" sits below the
+        # render window until the filter narrows it in.
+        tid = h.open_tab(
+            "<div role=combobox>"
+            "<input id=cb aria-autocomplete=list oninput='filt(this.value)'"
+            " onfocus='filt(this.value)'>"
+            "<span id=vv></span></div>"
+            "<div id=lb role=listbox></div>"
+            "<script>"
+            "const ALL=[...Array(30)].map((_,i)=>'Status'+i).concat(['Eskalert']);"
+            "function filt(q){const lb=document.getElementById('lb');"
+            "lb.innerHTML='';"
+            "ALL.filter(o=>o.toLowerCase().includes(q.toLowerCase())).slice(0,5)"
+            ".forEach(o=>{const d=document.createElement('div');"
+            "d.setAttribute('role','option');d.textContent=o;"
+            "d.onclick=()=>{window.chosen=o;"
+            "document.getElementById('vv').textContent=o};"
+            "lb.appendChild(d)})}"
+            "</script>"
+        )
+        resp = h.tool(
+            "browser_select",
+            {"target": tid, "selector": "#cb", "option": "Eskalert"},
+        )
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith('selected "Eskalert"'),
+            f"the below-the-fold option was reached (got {first!r})",
+        )
+        assert_true(
+            "(typed to filter)" in first,
+            f"the receipt says the filter path did it (got {first!r})",
+        )
+        assert_true(
+            "not verified" not in first,
+            f"the rendered value verifies (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('CHOSEN', await _t.js('window.chosen'))"
+        )
+        assert_true("CHOSEN Eskalert" in out, f"the option click landed (got {out!r})")
+        print("  ✓ select_option: aria-autocomplete filter reaches virtualized options")
     finally:
         h.close()
