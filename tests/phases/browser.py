@@ -1340,6 +1340,31 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
             "ESCAPE 2" in out, f"key('Escape') doesn't spuriously click (got {out!r})"
         )
         print("  ✓ key('Enter')/key('Space') trigger native button activation")
+
+        # Editing keys dispatch on windowsVirtualKeyCode, not the key/code
+        # strings: without it Backspace fired keydown/keyup but deleted
+        # nothing and arrows never moved the caret. Modifier combos ride the
+        # modifiers bitmask ("Ctrl+A" select-all), and keys([...]) chains a
+        # whole flow in one call.
+        out = _exec(
+            f"_te = await browser.open('data:text/html,<title>{_MARKER}</title>"
+            "<input id=i value=abcdef>')\n"
+            'await _te.js(\'const el = document.getElementById("i");'
+            " el.focus(); el.setSelectionRange(6, 6)')\n"
+            "await _te.key('Backspace')\n"
+            "print('BKSP', await _te.js('document.getElementById(\"i\").value'))\n"
+            "await _te.key('ArrowLeft')\n"
+            "print('CARET', await _te.js('document.getElementById(\"i\").selectionStart'))\n"
+            "await _te.keys(['Ctrl+A', 'Backspace'])\n"
+            "print('CLEARED', repr(await _te.js('document.getElementById(\"i\").value')))\n"
+            "await _te.keys(['x', 'y', 'z'])\n"
+            "print('TYPED', await _te.js('document.getElementById(\"i\").value'))\n"
+        )
+        assert_true("BKSP abcde" in out, f"Backspace deletes (got {out!r})")
+        assert_true("CARET 4" in out, f"ArrowLeft moves the caret (got {out!r})")
+        assert_true("CLEARED ''" in out, f"Ctrl+A then Backspace clears (got {out!r})")
+        assert_true("TYPED xyz" in out, f"keys() types characters (got {out!r})")
+        print("  ✓ Backspace/arrows edit, Ctrl+A selects, keys() sequences")
     finally:
         _close_marked_tabs()
         b.close()

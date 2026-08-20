@@ -221,8 +221,11 @@ TOOLS = [
     {
         "name": "browser_key",
         "description": (
-            "Send a key press (Enter, Escape, Tab, ArrowDown, etc). "
-            "Returns observation (tree + network + console delta after settle)."
+            "Send key presses. Named keys (Enter, Escape, Backspace, "
+            "ArrowDown), printable characters, and Ctrl/Alt/Shift/Cmd combos "
+            "('Ctrl+A', 'Shift+Tab'). Pass keys=[...] for a whole sequence in "
+            "one call. Returns observation (tree + network + console delta "
+            "after settle)."
         ),
         "inputSchema": {
             "type": "object",
@@ -230,10 +233,15 @@ TOOLS = [
                 "target": _TARGET_PARAM,
                 "key": {
                     "type": "string",
-                    "description": "Key name: Enter, Escape, Tab, ArrowDown, etc.",
+                    "description": "One key or combo: Enter, Backspace, Ctrl+A, ...",
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Sequence of keys/combos, pressed in order",
                 },
             },
-            "required": ["target", "key"],
+            "required": ["target"],
         },
     },
     {

@@ -8,9 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-### Changed
+- **`Tab.keys([...])` + `browser_key keys=[...]`** — a whole keyboard flow (`["Ctrl+A", "Backspace", "ArrowDown", "Enter"]`) in one call instead of one round trip per keypress; `delay_ms` between presses for apps that debounce.
+- **Modifier combos in `key()`** — `"Ctrl+A"`, `"Shift+Tab"`, `"Cmd+C"` (Ctrl/Control, Alt, Shift, Cmd/Meta; a trailing `+` is the plus key), and single printable characters.
 
 ### Fixed
+
+- **Editing keys did nothing.** `key("Backspace")` fired keydown/keyup but deleted nothing; arrows never moved the caret. Chromium's editing actions dispatch on `windowsVirtualKeyCode`, which repld never sent — only Enter/Space worked, and only because 0.2.9 gave them `text`. Named keys and printable characters now carry their VK code (subset of Playwright's USKeyboardLayout).
+
+### Changed
 
 ### Removed
 

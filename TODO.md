@@ -31,6 +31,37 @@
 
 ## Browser
 
+### Agent-first input/observation frontier (from the 0.3.x Jira torture tests)
+
+The organizing thesis: Playwright serves a script author iterating until green;
+repld's caller is an agent that pays per round-trip and is blind between calls.
+Ranked by leverage:
+
+- [ ] **AX-tree diff in observations.** `post_observe` already holds the pre and
+  post trees — emit appeared/disappeared/renamed/state-changed nodes as a few
+  lines above the full tree ("8 `port` buttons appeared, `Update workflow`
+  enabled"). This is the screenshot round-trip eliminated. Deliberately the
+  *AX* tree, not an aria snapshot: per-mutation snapshots would invalidate
+  `aria-ref`s (the reason observations kept AX in 0.3.0).
+- [ ] **Atomic gestures: `browser_drag(from, to)` + `browser_hover(sel)`.**
+  Hover→press→paced-moves→release inside one call with per-step hit
+  verification — gesture state cannot survive being split across MCP round
+  trips (a 6px SVG port-drag proved unwinnable as discrete calls). `swipe` is
+  the touch precedent; this is its mouse sibling, with a Receipt. `hover`
+  composes with the AX diff above to report what the hover revealed (verify
+  whether hover-only UI reaches the AX tree; DOM-mutation fallback if not).
+- [ ] **Type-to-filter in `select_option`.** When the field declares
+  `aria-autocomplete`, type the option text and resolve against the filtered
+  listbox — reaches any option in a virtualized list (confirmed miss:
+  "Eskalert" below the render window of Jira's Replace-status picker; the
+  option-miss digest listed only the first 20 global statuses).
+- [x] **`Tab.keys([...])` sequence form** — shipped alongside the VK-code fix
+  (Backspace/arrows edited nothing without `windowsVirtualKeyCode`) and
+  Ctrl/Alt/Shift/Cmd combos in `key()`.
+
+Untested torture-test classics once these land: iframes, file upload,
+infinite scroll.
+
 - [x] **No public `Tab.close()`.** Added: `async def close(self) -> None` wraps
   `Target.closeTarget({"targetId": self._chrome_target_id})`. Session cleanup follows from
   the resulting `Target.targetDestroyed` event (already handled in `session.py`), so no

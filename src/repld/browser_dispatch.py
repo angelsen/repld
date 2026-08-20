@@ -410,11 +410,14 @@ class BrowserDispatchMixin:
 
     def _bh_key(self, browser, args):
         tab = self._get_tab(browser, args)
+        if args.get("keys"):
+            mutate = lambda: self._run_async(tab.keys(list(args["keys"])))  # noqa: E731
+        elif args.get("key"):
+            mutate = lambda: self._run_async(tab.key(args["key"]))  # noqa: E731
+        else:
+            raise ValueError("browser_key needs 'key' or 'keys'")
         return self._observed_mutation(
-            browser,
-            tab,
-            lambda: self._run_async(tab.key(args["key"])),
-            timeout=_SETTLE_INTERACTION_S,
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
         )
 
     def _bh_click(self, browser, args):

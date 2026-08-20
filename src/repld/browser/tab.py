@@ -39,13 +39,38 @@ _HEARTBEAT_INTERVAL_S = 5
 _HEARTBEAT_MAX_MISSES = 3
 _HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
 
-# Tab.key()'s named-key handling. Every other supported name (Enter, Escape,
-# Tab, ArrowDown, ...) already equals its own KeyboardEvent.code and needs no
-# `text` — Space is the one name whose real .key (" ") and .code ("Space")
-# diverge from each other and from the friendly name callers actually type.
+# Tab.key()'s named-key handling. Space is the one name whose real .key (" ")
+# and .code ("Space") diverge from each other and from the friendly name
+# callers actually type.
 _KEY_ALIASES = {"Space": " "}
 _KEY_CODE = {" ": "Space"}
+# Enter/Space must carry the produced character or Chromium's native
+# button/form activation never fires — the DOM keydown/keyup still dispatch.
 _KEY_TEXT = {"Enter": "\r", " ": " "}
+# Chromium's *editing* actions dispatch on windowsVirtualKeyCode, not the
+# key/code strings: without it, Backspace fires keydown/keyup but deletes
+# nothing and arrows never move the caret. Subset of Playwright's
+# USKeyboardLayout; letters/digits are computed from the character.
+_KEY_VK = {
+    "Backspace": 8,
+    "Tab": 9,
+    "Enter": 13,
+    "Escape": 27,
+    " ": 32,
+    "PageUp": 33,
+    "PageDown": 34,
+    "End": 35,
+    "Home": 36,
+    "ArrowLeft": 37,
+    "ArrowUp": 38,
+    "ArrowRight": 39,
+    "ArrowDown": 40,
+    "Insert": 45,
+    "Delete": 46,
+    **{f"F{i}": 111 + i for i in range(1, 13)},
+}
+# CDP Input.dispatchKeyEvent modifiers bitmask.
+_MODIFIER_BITS = {"Alt": 1, "Control": 2, "Ctrl": 2, "Meta": 4, "Cmd": 4, "Shift": 8}
 
 # Grace period at the end of `_reattach`, after the ready signal is satisfied.
 # The re-attach re-enables this session's CDP domains through
@@ -965,22 +990,75 @@ class Tab(TabQueryMixin):
         return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
 
     async def key(self, key: str) -> None:
-        """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape", "Space").
+        """Dispatch one key press — a named key, a printable character, or a
+        modifier combo.
 
-        `key` is a KeyboardEvent.key value ("Space" is accepted as a friendly
-        alias for its real value, " ").
+        Accepts KeyboardEvent.key names ("Enter", "Backspace", "ArrowLeft",
+        "F5", "Space" as an alias for " "), single printable characters ("a"),
+        and "+"-joined combos with Ctrl/Control, Alt, Shift, Cmd/Meta
+        modifiers ("Ctrl+A", "Shift+Tab"). A trailing "+" is the plus key
+        itself ("Ctrl++").
         """
         await self._ensure_front()
+        await self._dispatch_key(key)
+
+    async def keys(self, keys: list[str], *, delay_ms: int = 0) -> None:
+        """Dispatch a sequence of key()/combo presses in one call.
+
+        One round trip for a keyboard navigation flow ("Ctrl+A", then
+        "Backspace", then arrows) instead of one per keypress. delay_ms adds a
+        pause between presses for apps that debounce key handling.
+        """
+        await self._ensure_front()
+        for k in keys:
+            await self._dispatch_key(k)
+            if delay_ms:
+                await asyncio.sleep(delay_ms / 1000)
+
+    async def _dispatch_key(self, spec: str) -> None:
+        if spec.endswith("+"):
+            # "Ctrl++" / bare "+": the key is a literal plus.
+            key = "+"
+            mod_part = spec[:-1].rstrip("+")
+            mods = mod_part.split("+") if mod_part else []
+        else:
+            *mods, key = spec.split("+")
+        modifiers = 0
+        for m in mods:
+            bit = _MODIFIER_BITS.get(m)
+            if bit is None:
+                raise ValueError(
+                    f"unknown modifier {m!r} in {spec!r} — use Ctrl/Alt/Shift/Cmd"
+                )
+            modifiers |= bit
+
         key = _KEY_ALIASES.get(key, key)
         code = _KEY_CODE.get(key, key)
+        vk = _KEY_VK.get(key)
+        if len(key) == 1:
+            ch = key.upper()
+            if ch.isalpha():
+                code = f"Key{ch}"
+            elif ch.isdigit():
+                code = f"Digit{ch}"
+            if vk is None and (ch.isalpha() or ch.isdigit()):
+                vk = ord(ch)
         text = _KEY_TEXT.get(key)
+        # A printable key produces its character — unless Ctrl/Alt/Meta is
+        # held, where the browser runs the shortcut instead of inserting text.
+        if text is None and len(key) == 1 and not (modifiers & 0b111):
+            text = key
+
         for event_type in ("keyDown", "keyUp"):
-            params: dict[str, str] = {"type": event_type, "key": key, "code": code}
-            # Chromium's native button/checkbox/form activation for Enter and
-            # Space only fires when the keyDown event also carries the
-            # produced character in `text` — verified live: without it, the
-            # DOM keydown/keyup still dispatch but no click ever follows,
-            # indistinguishable from the key doing nothing.
+            params: dict[str, Any] = {
+                "type": event_type,
+                "key": key,
+                "code": code,
+                "modifiers": modifiers,
+            }
+            if vk is not None:
+                params["windowsVirtualKeyCode"] = vk
+                params["nativeVirtualKeyCode"] = vk
             if event_type == "keyDown" and text:
                 params["text"] = text
             await self._exec("Input.dispatchKeyEvent", params)

@@ -507,10 +507,18 @@ Convention: add data-testid to your root layout component.
       it.  A miss lists the visible options' accessible names.
 
   tab.key(key)                                               → None
-      Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape",
-      "Space"). Enter and Space carry the produced character so Chromium's
-      native button/form activation fires, not just the DOM keydown/keyup —
-      without it a focused button silently doesn't click.
+      Dispatch one key press: named keys ("Enter", "Backspace", "ArrowLeft",
+      "F5", "Space"), printable characters ("a"), and Ctrl/Alt/Shift/Cmd
+      combos ("Ctrl+A", "Shift+Tab"; trailing "+" is the plus key).  Carries
+      the virtual key code, so editing actions actually happen — Backspace
+      deletes, arrows move the caret — and Enter/Space carry their character
+      so native button/form activation fires.
+
+  tab.keys(keys, *, delay_ms=0)                              → None
+      A sequence of key()/combo presses in one call — one round trip for a
+      keyboard flow ("Ctrl+A", "Backspace", "ArrowDown", "Enter") instead of
+      one per keypress.  delay_ms pauses between presses for apps that
+      debounce key handling.
 
   tab.tap(selector_or_x, y=None)                             → Receipt
       Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
@@ -1233,7 +1241,8 @@ Tab (async unless noted):
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
   tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; a miss lists the options)
-  tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter"/"Space" trigger native button activation)
+  tab.key(key)                                     → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
+  tab.keys(keys, delay_ms=)                        → None (sequence of presses in one call)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
   tab.fetch(url, method=, body=, headers=)         → {status, ok, body, base64Encoded}

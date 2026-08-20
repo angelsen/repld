@@ -83,16 +83,16 @@ Touch events for mobile Chrome via ADB. `scroll()` is sugar over `swipe()` —
 resolves `selector` to its center and swipes the opposite direction
 (scrollBy semantics: positive `dy` scrolls down, positive `dx` scrolls right).
 
-### key
+### key / keys
 
 ```python
 await tab.key(key) → None
+await tab.keys(keys, *, delay_ms=0) → None
 ```
 
-Dispatch a keyDown+keyUp pair for a named key (e.g. `"Enter"`, `"Escape"`,
-`"Space"`). `"Enter"` and `"Space"` carry the produced character so Chromium's
-native button/form activation fires — without it, the DOM keydown/keyup still
-dispatch but a focused button silently doesn't click.
+`key()` dispatches one press: named keys (`"Enter"`, `"Backspace"`, `"ArrowLeft"`, `"F5"`, `"Space"`), printable characters (`"a"`), and modifier combos (`"Ctrl+A"`, `"Shift+Tab"`; a trailing `+` is the plus key). Events carry the Windows virtual key code, so Chromium's editing actions actually run — Backspace deletes, arrows move the caret — and Enter/Space carry their produced character so native button/form activation fires.
+
+`keys()` presses a whole sequence in one call — one round trip for a keyboard flow instead of one per keypress — with `delay_ms` between presses for apps that debounce.
 
 ### fetch
 
