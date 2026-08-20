@@ -512,9 +512,18 @@ def phase_6_selector_translation(_kernel: Kernel) -> None:
         ("label=Username", 'internal:label="Username"s'),
         ("aria-ref=f2e5", "aria-ref=f2e5"),
         ('text=He said "hi"', 'internal:text="He said \\"hi\\""s'),
+        # Non-ASCII must pass through verbatim: json.dumps' default \u-escapes
+        # read as literal characters to the engine's selector parser, so
+        # `text=Pågår` matched nothing on a real Norwegian page.
+        ("text=Pågår", 'internal:text="Pågår"s'),
+        ("role=button[name='Pågår status.']", 'role=button[name="Pågår status."s]'),
+        ("label=Fødselsdato", 'internal:label="Fødselsdato"s'),
     ]
     for repld_form, engine_form in cases:
         assert_eq(translate(repld_form), engine_form, f"translate({repld_form!r})")
+    for repld_form in ("text=Pågår", "button:has-text('Pågår')", "aria-ref=e1"):
+        for form in translate_fallbacks(repld_form):
+            assert_true("\\u" not in form, f"no \\u escapes in any form (got {form!r})")
 
     # :has-text distributes over every comma alternative of the role expansion.
     ht = translate("button:has-text('OK')")
@@ -1790,17 +1799,38 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
             " d.style.cssText = 'position:fixed;inset:0';"
             ' document.body.appendChild(d)")'
         )
+        # Occluded left-click: the coordinate path would hit the overlay (or
+        # worse, start a drag on a pan layer), so it switches to
+        # element.click() — the receipt names the path and the interceptor,
+        # and the click actually lands. Found live: an accessible button list
+        # rendered under an SVG diagram was resolvable but never
+        # coordinate-clickable.
         resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
         first = resp["result"]["content"][0]["text"].splitlines()[0]
         assert_true(
-            first.startswith("warning:") and "ov" in first and "not" in first,
-            f"an intercepted click warns, naming the interceptor (got {first!r})",
+            first.startswith("clicked via element.click():")
+            and "ov" in first
+            and "occluded" in first,
+            f"an occluded click falls back to element.click() (got {first!r})",
         )
         out = h.exec(
             f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
         )
-        assert_true("HIT 1" in out, "the overlaid click dispatched but didn't land")
-        print("  ✓ click receipts: named target, and interception warns in-call")
+        assert_true("HIT 2" in out, f"and the fallback click landed (got {out!r})")
+        # Modified clicks have no element.click() equivalent — they keep the
+        # coordinate dispatch and the warning.
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "_r = await _t.click('#tgt', button='right')\n"
+            "print('RECEIPT', _r, '| warning', _r.warning)"
+        )
+        assert_true(
+            "RECEIPT warning:" in out and "| warning True" in out,
+            f"a modified occluded click still warns (got {out!r})",
+        )
+        print(
+            "  ✓ click receipts: named target; occlusion falls back to element.click()"
+        )
     finally:
         h.close()
 

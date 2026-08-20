@@ -476,6 +476,8 @@ _TOOL_ANNOTATIONS = {
     "browser_select": {"openWorldHint": True},
     "browser_invoke": {"openWorldHint": True},
 }
+
+
 def _apply_annotations() -> None:
     for tool in TOOLS:
         ann = _TOOL_ANNOTATIONS.get(tool["name"])

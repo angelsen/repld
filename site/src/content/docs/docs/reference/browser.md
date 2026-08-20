@@ -53,7 +53,7 @@ Evaluate JavaScript with REPL semantics. Top-level `await` works. Promise result
 await tab.click(selector, *, button='left', click_count=1) → Receipt
 ```
 
-Mouse click via `Input.dispatchMouseEvent`. Produces `isTrusted=true` events. Auto-waits up to 2s for the element, then for it to be visible, enabled and stable. Resolution is **strict**: a selector matching more than one element (with no single visible winner) raises with a candidate digest instead of guessing. The returned `Receipt` names what the click actually hit — `clicked: <button id="save">Save</button> — #save (412,133)` — and warns when an overlay intercepts the point (the click still dispatches).
+Mouse click via `Input.dispatchMouseEvent`. Produces `isTrusted=true` events. Auto-waits up to 2s for the element, then for it to be visible, enabled and stable. Resolution is **strict**: a selector matching more than one element (with no single visible winner) raises with a candidate digest instead of guessing. The returned `Receipt` names what the click actually hit — `clicked: <button id="save">Save</button> — #save (412,133)`. When an unrelated element intercepts the point, a plain left-click switches to `element.click()` on the resolved target (a coordinate dispatch there can start a drag on a pan layer; the DOM click reaches the target the way assistive tech does — `isTrusted=false`, and the receipt says which path was taken). Modified clicks (right/double) keep the coordinate dispatch plus a warning.
 
 ### type_text
 

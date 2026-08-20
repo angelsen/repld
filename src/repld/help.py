@@ -482,8 +482,12 @@ Convention: add data-testid to your root layout component.
       then for visible/enabled/stable (actionability).  Strict resolution:
       a selector matching >1 element with no single visible winner raises
       with a candidate digest instead of guessing.  The Receipt names what
-      the click actually hit ("clicked: <button…> — #save (412,133)"), and
-      warns when an overlay intercepts the point (still dispatches).
+      the click actually hit ("clicked: <button…> — #save (412,133)").  When
+      an unrelated element intercepts the point, a plain left-click switches
+      to element.click() on the resolved target (the coordinate path can
+      start a drag on a pan layer; the DOM click reaches it the way
+      assistive tech does — isTrusted=false, and the receipt says so);
+      modified clicks keep the coordinate dispatch plus a warning.
 
   tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
       Focus element, select-all existing content, type character-by-character

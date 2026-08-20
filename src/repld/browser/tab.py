@@ -697,13 +697,50 @@ class Tab(TabQueryMixin):
         button: str = "left",
         click_count: int = 1,
     ) -> Receipt:
-        """Coordinate resolution + hit receipt + mouse dispatch for a resolved
-        element. The receipt is taken *before* dispatch — the click's own
-        handlers may re-render the DOM, so "what will this land on" is the
-        honest answer; the dispatch still happens either way (observe and
-        report, never refuse)."""
+        """Coordinate resolution + hit receipt + dispatch for a resolved element.
+
+        The hit test runs *before* dispatch — the click's own handlers may
+        re-render the DOM, so "what will this land on" is the honest answer.
+        When the point lands on something unrelated to the target, a plain
+        left-click switches to `element.click()` instead of dispatching at the
+        coordinates: the coordinate path is worse than a no-op there (on a
+        drag/pan layer it can start a drag), while a DOM click reaches the
+        resolved element the way assistive tech does. Found live: a workflow
+        editor's accessible button list sits under its SVG diagram, so the
+        visible, resolvable button was never coordinate-clickable. The DOM
+        click is isTrusted=false — an app that insists on trusted events will
+        ignore it, which is why the receipt names the path taken. Modified
+        clicks (right/double) have no element.click() equivalent, so they keep
+        the coordinate dispatch plus the warning.
+        """
         x, y = await self._element_center_of(el, selector)
-        receipt = await self._receipt_for(el, x, y, verb="clicked")
+        data = await inject.hit_receipt(self, el, x, y)
+        t = data.get("target") or {}
+        hit = data.get("hit")
+        tdesc = " — ".join(p for p in (t.get("preview"), t.get("sel")) if p)
+
+        if hit is not None and not data.get("related", True):
+            hdesc = " — ".join(p for p in (hit.get("preview"), hit.get("sel")) if p)
+            if button == "left" and click_count == 1:
+                await inject.call_engine(
+                    self, "function(el) { el.click(); }", [{"objectId": el.object_id}]
+                )
+                return Receipt(
+                    line=(
+                        f"clicked via element.click(): {tdesc} — point "
+                        f"({x:.0f},{y:.0f}) occluded by {hdesc}"
+                    )
+                )
+            receipt = Receipt(
+                line=f"warning: clicked at ({x:.0f},{y:.0f}) hits {hdesc}, not {tdesc}",
+                warning=True,
+            )
+        else:
+            line = f"clicked: {tdesc} ({x:.0f},{y:.0f})"
+            if el.note:
+                line += f" [{el.note}]"
+            receipt = Receipt(line=line)
+
         for event_type in ("mousePressed", "mouseReleased"):
             await self._exec(
                 "Input.dispatchMouseEvent",

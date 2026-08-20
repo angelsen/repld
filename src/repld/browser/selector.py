@@ -55,11 +55,21 @@ def looks_like_selector(s: str) -> bool:
     return bool(_BARE_NAME.match(s))
 
 
+def _q(text: str) -> str:
+    # ensure_ascii=False is load-bearing, everywhere this module quotes user
+    # text: json.dumps' default emits å-style escapes, and the engine's
+    # selector parser reads those as six literal characters — so every
+    # selector carrying a non-ASCII name (`text=Pågår`, a Norwegian label)
+    # matched nothing. Found live on a real page; the raw engine matched what
+    # the translated selector missed.
+    return json.dumps(text, ensure_ascii=False)
+
+
 def _text_body(text: str, exact: bool) -> str:
     # Port of escapeForTextSelector (packages/isomorphic/stringUtils.ts):
     # JSON-quoted, `s` = case-sensitive exact (whitespace-normalized),
     # `i` = case-insensitive substring.
-    return json.dumps(text) + ("s" if exact else "i")
+    return _q(text) + ("s" if exact else "i")
 
 
 def _js_regex_escape(text: str) -> str:
@@ -93,7 +103,7 @@ def translate_fallbacks(selector: str) -> list[str]:
         # `text="Save"s` as the literal string `"Save"s` and matches nothing).
         return [
             f"internal:text={_text_body(text, exact=True)}",
-            f"css=[aria-label={json.dumps(text)}]",
+            f"css=[aria-label={_q(text)}]",
         ]
 
     m = _ROLE_RE.match(selector)
@@ -117,7 +127,7 @@ def translate_fallbacks(selector: str) -> list[str]:
     if m:
         base, text = m.group(1), m.group(2)
         expanded = _ROLE_CSS.get(base, base)
-        t = json.dumps(text)
+        t = _q(text)
         # :has-text() binds to one compound selector, so it is applied to each
         # comma alternative of the role expansion, not to the list as a whole.
         alts = [alt.strip() for alt in expanded.split(",")]

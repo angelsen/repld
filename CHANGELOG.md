@@ -12,6 +12,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Non-ASCII selectors matched nothing.** Selector translation quoted user text with `json.dumps`' default `\u`-escaping, which the engine's selector parser reads as literal characters — `text=Pågår`, `label=Fødselsdato`, and any role name with a non-ASCII character silently missed while the aria snapshot listed the element. Found field-testing 0.3.0 against a Norwegian Jira workflow editor. Now `ensure_ascii=False` everywhere the translation layer quotes text (`text=`, `label=`, role names, `:has-text`, `select_option` options).
+- **Occluded left-clicks now land.** When the pre-dispatch hit test finds an unrelated element at the click point, a plain left-click switches to `element.click()` on the resolved target instead of dispatching coordinates into the interceptor — the coordinate path was worse than a no-op (on a drag/pan layer it can start a drag), while the DOM click reaches the target the way assistive tech does. Found live: a workflow editor's accessible button list renders under its SVG diagram, so the resolvable buttons were never coordinate-clickable. The receipt names the path (`clicked via element.click(): … — point occluded by …`; `isTrusted=false`, so an app that requires trusted events will ignore it and the receipt makes that diagnosable). Modified clicks (right/double) keep the coordinate dispatch plus the warning.
+
 ### Removed
 
 ## [0.3.0] - 2026-08-20
