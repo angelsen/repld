@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.3.0] - 2026-08-20
+
+### Added
+
 - **Vendored Playwright's `InjectedScript` engine** (Apache-2.0, see THIRD_PARTY_LICENSES.md) as `browser/injected_source.py`, built in-repo from a pinned microsoft/playwright commit via `make injected` (node/esbuild at dev time only). Injected lazily once per document into an isolated utility world (main world on the few targets that refuse one; a loud `EngineUnavailable` if neither injects), re-instantiated automatically across navigation and reattach.
 - **Strict selector resolution.** A selector matching more than one element with no single visible winner now errors with a candidate digest (preview + generated selector for up to 10 candidates) instead of silently picking the first — wrong-element clicks become impossible rather than diagnosable. A lone match is still used visible or not, and a hidden-vs-visible pair still resolves to the visible one, now announced in the receipt (`[2 matches, 1 visible]`).
 - **Click/type receipts.** `Tab.click`/`tap`/`type_text`/`select_option` return a `Receipt` naming what the action actually hit (`clicked: <button id="save">Save</button> — #save (412,133)`), with a warning when an overlay intercepts the point — surfaced as the first line of the `browser_click`/`browser_type`/`browser_select` observation.
