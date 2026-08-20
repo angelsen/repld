@@ -1,3 +1,16 @@
 {
-  "outputStyle": "Invariant comments"
+  "outputStyle": "Invariant comments",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-narration-comments.sh"
+          }
+        ]
+      }
+    ]
+  }
 }

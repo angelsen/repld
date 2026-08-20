@@ -46,7 +46,10 @@ Gotchas the wrapper enforces: clean working tree before `version --bump`; only
 the target version in `dist/` before publish (it blocks on leftovers from a
 prior release). Verify with the simple index (fast) — the JSON API lags:
 `curl -s https://pypi.org/simple/repld-tool/ | grep X.Y.Z`. CHANGELOG covers
-*packaged* changes only — `gists/` is not in the wheel.
+*packaged* changes only — `gists/` is not in the wheel. The docs site is a
+separate pipeline nothing else prompts: if `site/src/content/docs/**` or
+README changed since `gh-pages`' last deploy, finish the release with
+`make deploy`.
 
 ## Testing
 
