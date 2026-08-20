@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.3.3] - 2026-08-21
+
+### Added
+
 - **AX-tree diff in observations.** Every observed mutation now leads with a `changes:` section — what the action made appear, disappear, or change state (`+ button 'port' ×3`, `- link 'Bye'`, `~ button 'Save' [disabled] → [none]`), aggregated with multipliers and capped at 12 lines. `pre_observe` snapshots the same AX traversal the tree renderer walks (same roles, same depth), so the diff describes exactly what a reader of the two trees would see change; `changes: none` means the page visibly ignored the action. Suppressed across a navigation (the whole tree is new) and on `browser_open` (no pre state). This is the screenshot round-trip eliminated: "did that click do anything" is answered in the same call.
 - **`browser_drag` / `Tab.drag(source, to, steps=, duration_ms=)`** — press, paced `mouseMoved` events with `buttons=1` held, release, atomically in one call; gesture state can't survive being split across MCP round trips (a 6 px SVG port-drag proved unwinnable as discrete calls). Endpoints are selectors (strictly resolved, scrolled into view) or `(x, y)` / `'x,y'`. A drop zone that only mounts on dragstart is handled: an unresolvable `to` defers past the press and re-resolves mid-gesture. The release always fires (`finally`, at the last point reached), so an error never leaves the page mid-drag. Receipt names both endpoints and warns on an occluded drop point.
 - **`browser_hover` / `Tab.hover(selector)`** — park the pointer on an element and leave it there: `:hover` styling and mouseenter-revealed UI stay up for a following click, and the `changes:` diff reports what the hover revealed.
@@ -19,9 +29,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Editing keys did nothing.** `key("Backspace")` fired keydown/keyup but deleted nothing; arrows never moved the caret. Chromium's editing actions dispatch on `windowsVirtualKeyCode`, which repld never sent — only Enter/Space worked, and only because 0.2.9 gave them `text`. Named keys and printable characters now carry their VK code (subset of Playwright's USKeyboardLayout).
 
-### Changed
-
-### Removed
 
 ## [0.3.2] - 2026-08-20
 
