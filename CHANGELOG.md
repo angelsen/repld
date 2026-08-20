@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.3.4] - 2026-08-21
+
+### Added
+
 - **Hover takes `'x,y'` coordinates** — same endpoint form as `browser_drag`. The route to visual-only targets whose accessible proxy sits elsewhere (an SVG diagram node with an off-canvas aria twin): hover has no `element.click()`-style fallback, so the proxy's coordinates were previously unreachable.
 - **`dom:` fallback line in observations.** The AX diff is blind to purely presentational reveals (SVG ports mounting on hover render no AX nodes), so a "changes: none" read as the action having failed when it visibly worked. `pre_observe` now arms a MutationObserver in the engine's world; when the AX diff comes up empty but elements were added/removed, the observation says `changes: none in the AX tree — dom: +17 −0 elements ([data-testid=…] ×8, …)` instead.
 
@@ -15,9 +25,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`browser_drag`'s first step exited small origins.** The first move was `distance/steps` px (~27 px on a typical drag), which left a 10 px SVG port before the app's drag-slop threshold armed — the gesture read as a stray click, and port edge-draws failed from dead center while whole-node drags worked. The first moves are now 2 px micro-steps (the deferred-target nudge included), accelerating only after the origin has had its chance to arm. Found live against Jira's workflow editor; standard dnd-threshold behavior Playwright also lacks on tiny handles.
 
-### Changed
-
-### Removed
 
 ## [0.3.3] - 2026-08-21
 
