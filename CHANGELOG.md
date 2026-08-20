@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.3.2] - 2026-08-20
+
+### Added
+
 - **Playwright locator calls accepted as selectors** — `getByRole('button', { name: 'OK' })`, `getByTestId('x')`, `getByText`/`getByLabel`/`getByPlaceholder`/`getByAltText`/`getByTitle`/`locator('#id')` — so the strict-mode ambiguity error's own `aka getBy…` suggestions paste back in as-is. Simple single-call forms only; chains error with guidance. Semantics mirror Playwright's `locatorUtils` builders (case-insensitive by default, `exact: true` honored).
 - **`placeholder=` and `testid=` selector forms** — both existed in the engine, now one translation each away.
 - **`viewport=` on `browser_open`** (`"1440x900"`) and **`Tab.set_viewport(width, height)`** — fixed viewport at `deviceScaleFactor: 1`, so screenshot coordinates are page pixels; replaces the manual `Emulation.setDeviceMetricsOverride` dance.
@@ -23,7 +33,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`select_option` verification reads what the widget renders.** The verify step checked only the resolved field element's `value`/`textContent`; react-select renders the choice into a sibling inside the control — and puts `role=combobox` on the *input itself*, so a `closest()` walk self-matches. Verification now walks up to the value container, so a landed selection verifies and a closed-dialog no-op honestly reports "(selection not verified)".
 - `type_text(sel, "")` clears reliably — guarded by a test: zero keystrokes leave the value unchanged, which is exactly the signature the verify-and-fallback path reads as "controlled input swallowed it", so the native setter writes the empty string. (The pre-engine bug: select-all-then-type-nothing left the old value selected but intact.)
 
-### Removed
 
 ## [0.3.1] - 2026-08-20
 
