@@ -188,6 +188,11 @@ def _json_dumps_safe(data: Any) -> str:
 
 _CONTROLS_PREFIX = "__controls__"
 
+# Per-session sequence for the injected engine's frameSeq option: it prefixes
+# every aria-ref (f<seq>eN), so refs from different sessions (a tab and its
+# OOPIF iframe children) never collide in a composed snapshot.
+_frame_seq_counter = iter(range(1, 1 << 30))
+
 
 def _check_controls_observation(params: dict, target_id: str) -> None:
     """Detect __controls__ console.debug messages and push as channel notifications."""
@@ -387,6 +392,14 @@ class CDPSession:
         self._label_text: str | None = None
         self._label_color: str | None = None
         self._label_script_id: str | None = None
+
+        # Injected-engine handle (inject.EngineHandle) — lives here for the
+        # same reason as pin/label state, and is *cache*, not registration:
+        # per-document (executionContextsCleared drops it) and per-session
+        # (_reattach_core drops it — the objectId dies with its sessionId).
+        self._injected: Any | None = None
+        self._injected_lock = asyncio.Lock()
+        self._frame_seq: int = next(_frame_seq_counter)
 
     def _setup_schema(self) -> None:
         """Create events table, indexes, and HAR views."""
@@ -589,6 +602,12 @@ class CDPSession:
                         self._binding_handler(self, params),
                         name=f"repld-binding-{params.get('name', '?')}",
                     )
+
+            if method == "Runtime.executionContextsCleared":
+                # Navigation replaced the document; the injected engine (and
+                # every aria-ref inside it) died with the old context. Plain
+                # attribute reset — inject.ensure_engine re-instantiates lazily.
+                self._injected = None
 
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id)

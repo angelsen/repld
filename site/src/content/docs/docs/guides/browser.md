@@ -88,17 +88,18 @@ This is the bridge between browser-as-explorer and browser-as-API-client.
 
 ## Selectors
 
-All interaction methods (`click`, `type_text`, `tap`, `wait_for`) share the same selector syntax:
+All interaction methods (`click`, `type_text`, `select_option`, `tap`, `wait_for`) share the same selector syntax:
 
 | Pattern | Type | Notes |
 |---------|------|-------|
-| `.class`, `#id`, `[attr]` | CSS | Pure CDP, no JS eval, no focus steal |
+| `.class`, `#id`, `[attr]` | CSS | |
 | `[data-testid='name']` | CSS | Recommended for own code |
-| `text=Submit` | Text | Visible text match |
-| `role=button[name="Save"]` | ARIA | Role + accessible name |
+| `text=Submit` | Text | Exact text match |
+| `role=button[name="Save"]` | ARIA | Real accessible-name computation (accname) |
 | `label=Username` | Label | Input by associated label |
+| `aria-ref=e12` | Snapshot ref | From `tab.tree()` — valid until the next snapshot or navigation |
 
-CSS selectors use `DOM.querySelector` — no JavaScript runs in the page. Custom selectors (`text=`, `role=`, `label=`) use `Runtime.evaluate`, which can trigger focus changes.
+Selectors resolve through Playwright's injected engine (vendored, evaluated once per document in an isolated world) and pierce open shadow roots. Resolution is **strict**: a selector matching several elements with no single visible winner fails with a candidate list instead of silently picking one — and every `click`/`type_text` returns a receipt naming what it actually hit, so a misdirected action is visible in the same call rather than after a screenshot.
 
 ## Pin and gate
 

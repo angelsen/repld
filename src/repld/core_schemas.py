@@ -13,15 +13,32 @@ on the entry keeps adding a fifth doc to one edit instead of three across three
 modules. It is stripped before the dict goes on the wire (`wire()`).
 """
 
-# The MCP revision every repld process advertises. Here rather than in
-# `protocol.py` because three of them answer `initialize` and only one can
-# import it: the kernel (`protocol._initialize`), the bridge when no kernel has
-# ever run in this project (`bridge._try_bridge_intercept`), and `repld exec`,
-# which handshakes over the socket itself. Importing `protocol.py` from the
-# other two would drag in browser_dispatch/help/kernel_context/tasks for one
-# string, so the alternative is a hand-synced copy in each — a drift no test
-# can see, since every side would still be internally consistent.
-PROTOCOL_VERSION = "2024-11-05"
+# The MCP revisions repld speaks. Here rather than in `protocol.py` because
+# three parties answer `initialize` and only one can import it: the kernel
+# (`protocol._initialize`), the bridge when no kernel has ever run in this
+# project (`bridge._try_bridge_intercept`), and `repld exec`, which handshakes
+# over the socket itself. Importing `protocol.py` from the other two would drag
+# in browser_dispatch/help/kernel_context/tasks for one string, so the
+# alternative is a hand-synced copy in each — a drift no test can see, since
+# every side would still be internally consistent.
+#
+# 2025-06-18 is the ceiling on purpose: 2025-11-25 adds nothing repld serves
+# (icons, URL elicitation, experimental tasks), and 2026-07-28 removes the
+# `initialize` handshake outright — adopting it is a bridge rearchitecture,
+# not a version bump. Everything repld uses from 2025-06-18 (tool annotations,
+# structuredContent/outputSchema, resource templates) is additive, which is
+# what makes serving the older revisions from the same code correct.
+PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
+
+
+def negotiate_version(requested) -> str:
+    """The spec's negotiation rule (lifecycle.mdx): echo the client's requested
+    version when we support it, otherwise answer our latest and let the client
+    decide whether to proceed. Never echo an *unknown* string back — that would
+    promise a revision nobody implements."""
+    return requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
+
 
 # What `initialize` negotiates, from either side of the socket. Shared for the
 # same reason the tool schemas are: the bridge answers `initialize` itself when
@@ -57,6 +74,7 @@ CORE_TOOLS = [
             },
             "required": ["code"],
         },
+        "annotations": {"openWorldHint": True},
     },
     {
         "name": "get_task",
@@ -69,6 +87,41 @@ CORE_TOOLS = [
             "properties": {"task_id": {"type": "string"}},
             "required": ["task_id"],
         },
+        # Declaring outputSchema commits `_get_task` to sending
+        # structuredContent conforming to it on every success — the shape is
+        # tasks.snapshot(), so a field added there must be added here.
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "text": {
+                    "type": "string",
+                    "description": "head+tail preview of the task's output",
+                },
+                "truncated": {"type": "boolean"},
+                "spilled": {"type": "boolean"},
+                "spill_path": {"type": ["string", "null"]},
+                "exception": {"type": ["string", "null"]},
+                "result": {
+                    "type": ["string", "null"],
+                    "description": "bounded repr of the awaited value, when one exists",
+                },
+                "done": {"type": "boolean"},
+                "label": {"type": ["string", "null"]},
+            },
+            "required": [
+                "task_id",
+                "text",
+                "truncated",
+                "spilled",
+                "spill_path",
+                "exception",
+                "result",
+                "done",
+                "label",
+            ],
+        },
+        "annotations": {"readOnlyHint": True},
     },
     {
         "name": "cancel",
@@ -82,6 +135,7 @@ CORE_TOOLS = [
             "properties": {"task_id": {"type": "string"}},
             "required": ["task_id"],
         },
+        "annotations": {"idempotentHint": True},
     },
 ]
 
@@ -139,6 +193,22 @@ REGISTRY_RESOURCE = {
 # Every resource both sides advertise unconditionally. What the bridge serves
 # as its cold fallback, and what the kernel builds its live list on top of.
 STATIC_RESOURCES = [*DOC_RESOURCES, REGISTRY_RESOURCE]
+
+# `resources/templates/list` has the same two authors as everything else here.
+# Loaded gists are still enumerated concretely in `resources/list` (a client
+# that never expands templates keeps working); the template is what tells a
+# cold session the URI *shape* exists before any kernel has listed a gist.
+RESOURCE_TEMPLATES = [
+    {
+        "uriTemplate": "repld://gists/{name}",
+        "name": "gist-api",
+        "description": (
+            "Introspected API of a loaded gist: constructor signatures, "
+            "methods, docstrings. `name` is the gist's module name."
+        ),
+        "mimeType": "text/plain",
+    }
+]
 
 
 def wire(resources: list[dict]) -> list[dict]:

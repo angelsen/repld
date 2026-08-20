@@ -299,11 +299,14 @@ class BrowserDispatchMixin:
         return browser.browser_for(tab.target_id)._session
 
     def _bh_tree(self, browser, args):
-        from .browser.observe import compose_tree
+        from .browser.observe import compose_aria_tree, compose_tree
 
         tab = self._get_tab(browser, args)
         session = self._session_for(browser, tab)
-        lines, _ = self._run_async(compose_tree(tab, session))
+        if args.get("mode") == "ax":
+            lines, _ = self._run_async(compose_tree(tab, session))
+        else:
+            lines, _ = self._run_async(compose_aria_tree(tab, session))
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -371,18 +374,22 @@ class BrowserDispatchMixin:
 
     def _bh_click(self, browser, args):
         tab = self._get_tab(browser, args)
-        return self._observed_mutation(
-            browser,
-            tab,
-            lambda: self._run_async(tab.click(args["selector"])),
-            timeout=_SETTLE_INTERACTION_S,
+        captured: dict = {}
+
+        def mutate():
+            captured["receipt"] = self._run_async(tab.click(args["selector"]))
+
+        obs = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
         )
+        return f"{captured['receipt']}\n\n{obs}"
 
     def _bh_type(self, browser, args):
         tab = self._get_tab(browser, args)
+        captured: dict = {}
 
         def mutate():
-            self._run_async(
+            captured["receipt"] = self._run_async(
                 tab.type_text(
                     args["selector"],
                     args["text"],
@@ -391,9 +398,24 @@ class BrowserDispatchMixin:
             )
             self._run_async(asyncio.sleep(_POST_TYPE_DEBOUNCE_S))
 
-        return self._observed_mutation(
+        obs = self._observed_mutation(
             browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
         )
+        return f"{captured['receipt']}\n\n{obs}"
+
+    def _bh_select(self, browser, args):
+        tab = self._get_tab(browser, args)
+        captured: dict = {}
+
+        def mutate():
+            captured["receipt"] = self._run_async(
+                tab.select_option(args["selector"], args["option"])
+            )
+
+        obs = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        )
+        return f"{captured['receipt']}\n\n{obs}"
 
     _BROWSER_DISPATCH = {
         "browser_watch": _bh_watch,
@@ -415,6 +437,7 @@ class BrowserDispatchMixin:
         "browser_key": _bh_key,
         "browser_click": _bh_click,
         "browser_type": _bh_type,
+        "browser_select": _bh_select,
         "browser_controls": _bh_controls,
         "browser_invoke": _bh_invoke,
     }

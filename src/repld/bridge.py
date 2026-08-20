@@ -277,13 +277,15 @@ class Bridge:
                 _response(
                     rid,
                     {
-                        # What the last kernel actually advertised, when we
-                        # have it. Same value in practice — _load_cache drops a
-                        # cache from another repld version — but the recorded
-                        # answer beats a re-derived one if that gate ever loosens.
-                        "protocolVersion": cache["protocolVersion"]
-                        if cache
-                        else core_schemas.PROTOCOL_VERSION,
+                        # Negotiated per-client, never read from the cache: the
+                        # spec's rule is echo-what-they-asked-for-if-supported,
+                        # and a cached kernel answer was negotiated with *that*
+                        # session's client, not this one. (The cache is
+                        # version-gated to this repld build anyway, so the two
+                        # sides can't disagree about what's supported.)
+                        "protocolVersion": core_schemas.negotiate_version(
+                            (msg.get("params") or {}).get("protocolVersion")
+                        ),
                         "capabilities": core_schemas.CAPABILITIES,
                         "serverInfo": {
                             "name": "repld",
@@ -326,7 +328,17 @@ class Bridge:
             return True
 
         if method == "resources/templates/list":
-            self._to_client(_response(rid, {"resourceTemplates": []}))
+            self._to_client(
+                _response(rid, {"resourceTemplates": core_schemas.RESOURCE_TEMPLATES})
+            )
+            return True
+
+        if method == "ping":
+            # A liveness probe deserves a real answer, and answering it is
+            # exactly as honest with no kernel as with one — the bridge is the
+            # thing being pinged. Must not fall through: anything the intercept
+            # declines that isn't in _NEEDS_KERNEL is answered -32601.
+            self._to_client(_response(rid, {}))
             return True
 
         if method == "resources/read":

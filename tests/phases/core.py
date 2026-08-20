@@ -21,6 +21,14 @@ def phase_3(kernel: Kernel) -> None:
             "claude/channel" in result["capabilities"]["experimental"],
             "initialize.capabilities advertises claude/channel",
         )
+        # The spec's negotiation rule: echo a supported requested version. A
+        # server that always answers its own latest tells a 2024-11-05 client
+        # to disconnect for no reason.
+        assert_eq(
+            result["protocolVersion"],
+            "2024-11-05",
+            "a supported requested version is echoed, not overridden",
+        )
         # Drift guard, paired with the kernel-less assertion in phase 15: both
         # sides of the socket answer `initialize`, and a capability declared in
         # only one of them is silently absent from half the sessions.
@@ -30,6 +38,26 @@ def phase_3(kernel: Kernel) -> None:
             "live kernel negotiates exactly core_schemas.CAPABILITIES",
         )
         print("  ✓ initialize")
+
+        # The rest of negotiate_version is pure: unknown or absent versions get
+        # our latest rather than an echo of a string nobody implements.
+        assert_eq(
+            core_schemas.negotiate_version("2099-01-01"),
+            core_schemas.PROTOCOL_VERSION,
+            "unknown requested version → our latest",
+        )
+        assert_eq(
+            core_schemas.negotiate_version(None),
+            core_schemas.PROTOCOL_VERSION,
+            "absent requested version → our latest",
+        )
+        for v in core_schemas.SUPPORTED_VERSIONS:
+            assert_eq(core_schemas.negotiate_version(v), v, f"{v} echoes")
+        print("  ✓ version negotiation: echo supported, latest otherwise")
+
+        resp = b.call("ping", {})
+        assert_eq(resp["result"], {}, "ping answered with an empty result")
+        print("  ✓ ping")
 
         b.send("notifications/initialized", {}, notif=True)
         print("  ✓ notifications/initialized sent")
@@ -88,6 +116,18 @@ def phase_3(kernel: Kernel) -> None:
             "step 2" in snap["text"],
             f"get_task captured all output (got {snap['text']!r})",
         )
+        # get_task declares an outputSchema, which commits every success to a
+        # conforming structuredContent (2025-06-18); the text block mirrors it.
+        assert_eq(
+            resp["result"]["structuredContent"],
+            snap,
+            "get_task carries structuredContent matching its snapshot",
+        )
+        gt_schema = next(t for t in core_schemas.CORE_TOOLS if t["name"] == "get_task")[
+            "outputSchema"
+        ]
+        missing = set(gt_schema["required"]) - set(snap)
+        assert_eq(missing, set(), "snapshot carries every field outputSchema requires")
         print(f"  ✓ get_task: done, output {snap['text'].strip()!r}")
 
         # Unknown task_id → JSON-RPC error, not a hollow success

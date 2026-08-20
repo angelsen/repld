@@ -2,14 +2,15 @@
 
 Wraps CDPSession with JS eval, DOM interaction, and CDP passthrough.
 Row/Rows types and the DuckDB-backed query methods (network/console/sse/
-lifecycle/body/request) live in tab_query.py; selector resolution lives in
-selector.py.
+lifecycle/body/request) live in tab_query.py; selector translation lives in
+selector.py and resolution in inject.py (the vendored engine).
 """
 
 import asyncio
 import base64
 import json
 import pathlib
+from dataclasses import dataclass
 from typing import Any
 
 from .. import bg
@@ -23,12 +24,12 @@ from .pin import (
     label_script,
 )
 from .png import _model_dims, _resize_png
+from . import inject
 from . import selector as selector_mod
-from .selector import resolve as _resolve_selector
 from .tab_query import TabQueryMixin
 from .target import make_target
 
-__all__ = ["Tab", "BrowserJSError"]
+__all__ = ["Tab", "BrowserJSError", "Receipt"]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
 # heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
@@ -69,6 +70,26 @@ def _format_stack_trace(stack_trace: dict | None) -> str:
         col = frame.get("columnNumber", 0) + 1
         lines.append(f"    at {name} ({url}:{line}:{col})")
     return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class Receipt:
+    """What an input action actually did — returned by click/tap/type_text/
+    select_option so a misdirected action is visible in the same call.
+
+    `line` is the rendered one-liner (also what str()/repr() show, so a cell
+    or observation prints it directly); `warning` is True when the action
+    landed somewhere unrelated to the resolved target.
+    """
+
+    line: str
+    warning: bool = False
+
+    def __str__(self) -> str:
+        return self.line
+
+    def __repr__(self) -> str:
+        return self.line
 
 
 class BrowserJSError(Exception):
@@ -440,42 +461,40 @@ class Tab(TabQueryMixin):
 
         Classification comes from `selector.looks_like_selector`, not from a
         second opinion held here. This used to test
-        `startswith((".", "#", "[", "data-"))`, which disagreed with
-        `selector.resolve` — the module that owns the question, and that
-        `_wait_for_node` two methods down already defers to — about every bare
-        tag and custom element. `ready="main"` and `ready="my-app"` took the JS
-        branch, evaluated as bare identifiers, came back as a ReferenceError
-        whose `result.value` is simply absent, and polled silently for the full
-        timeout while `ready="#app"` worked. Going through `resolve` also means
-        `text=`, `role=`, `label=` and `:has-text()` work here for free.
+        `startswith((".", "#", "[", "data-"))`, which disagreed with the
+        selector module — the owner of the question — about every bare tag and
+        custom element. `ready="main"` and `ready="my-app"` took the JS branch,
+        evaluated as bare identifiers, came back as a ReferenceError whose
+        `result.value` is simply absent, and polled silently for the full
+        timeout while `ready="#app"` worked. The selector branch polls
+        `inject.selector_exists` — existence only, never strictness: a ready
+        signal that matched three nodes has still fired.
         """
-        if selector_mod.looks_like_selector(ready):
-            # Poll via Runtime.evaluate — a DOM.getDocument nodeId goes stale
-            # when the document is replaced mid-load, silently never matching.
-            expr = f"!!({selector_mod.resolve(ready).js})"
-            failure = f"Ready signal not found after re-attach: {ready}"
-        else:
-            expr = ready
-            failure = f"Ready signal not satisfied after re-attach: {ready}"
+        is_selector = selector_mod.looks_like_selector(ready)
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
-            result = await self._session.execute(
-                "Runtime.evaluate",
-                {"expression": expr, "returnByValue": True},
-            )
-            # A raising expression is reported, not polled. Nothing inspected
-            # `exceptionDetails` before, so a typo'd or unsupported signal was
-            # indistinguishable from one that simply hadn't fired yet: the same
-            # full-timeout wait, then a message saying the page never became
-            # ready. A ReferenceError on the first evaluation will still be one
-            # on the hundredth.
-            if "exceptionDetails" in result:
-                desc = result["exceptionDetails"].get("text", "evaluation failed")
-                raise RuntimeError(f"Ready signal {ready!r} raised: {desc}")
-            if result.get("result", {}).get("value"):
-                return
+            if is_selector:
+                if await inject.selector_exists(self, ready):
+                    return
+            else:
+                result = await self._session.execute(
+                    "Runtime.evaluate",
+                    {"expression": ready, "returnByValue": True},
+                )
+                # A raising expression is reported, not polled. Nothing
+                # inspected `exceptionDetails` before, so a typo'd signal was
+                # indistinguishable from one that hadn't fired yet: the same
+                # full-timeout wait, then a message saying the page never
+                # became ready. A ReferenceError on the first evaluation will
+                # still be one on the hundredth.
+                if "exceptionDetails" in result:
+                    desc = result["exceptionDetails"].get("text", "evaluation failed")
+                    raise RuntimeError(f"Ready signal {ready!r} raised: {desc}")
+                if result.get("result", {}).get("value"):
+                    return
             await asyncio.sleep(0.1)
-        raise RuntimeError(failure)
+        verb = "not found" if is_selector else "not satisfied"
+        raise RuntimeError(f"Ready signal {verb} after re-attach: {ready}")
 
     async def _exec(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -619,44 +638,6 @@ class Tab(TabQueryMixin):
             raise BrowserJSError(text, stack, url, line)
         return result.get("result", {})
 
-    async def _wait_for_node(
-        self, selector: str, timeout: float = 2.0
-    ) -> tuple[int, str]:
-        """Auto-wait for an element. Returns (nodeId, js_expr).
-
-        CSS selectors use DOM.querySelector (no JS eval, no focus steal).
-        Custom selectors use Runtime.evaluate.  nodeId is 0 for the JS path.
-        """
-        resolved = _resolve_selector(selector)
-        deadline = asyncio.get_running_loop().time() + timeout
-
-        while True:
-            if resolved.css is not None:
-                # Fetch root fresh each iteration — a cached nodeId goes stale
-                # when the document is replaced mid-wait (navigation, HMR
-                # reload), silently never matching.
-                doc = await self._exec("DOM.getDocument")
-                root_id = doc["root"]["nodeId"]
-                result = await self._exec(
-                    "DOM.querySelector", {"nodeId": root_id, "selector": resolved.css}
-                )
-                node_id = result.get("nodeId", 0)
-                if node_id:
-                    return node_id, resolved.js
-            else:
-                result = await self._exec(
-                    "Runtime.evaluate",
-                    {
-                        "expression": f"!!({resolved.js})",
-                        "returnByValue": True,
-                    },
-                )
-                if result.get("result", {}).get("value"):
-                    return 0, resolved.js
-            if asyncio.get_running_loop().time() >= deadline:
-                raise RuntimeError(f"Element not found: {selector}")
-            await asyncio.sleep(0.1)
-
     @staticmethod
     def _quad_center(quads: list) -> tuple[float, float]:
         """Center point from DOM.getContentQuads result."""
@@ -665,50 +646,64 @@ class Tab(TabQueryMixin):
         ys = [quad[i] for i in range(1, 8, 2)]
         return sum(xs) / 4, sum(ys) / 4
 
-    async def _element_center(self, selector: str) -> tuple[float, float]:
-        """Resolve selector to (x, y) center coordinates. Auto-waits up to 2s.
+    async def _element_center_of(
+        self, el: inject.ResolvedElement, selector: str
+    ) -> tuple[float, float]:
+        """Center point of a resolved element handle.
 
-        CSS selectors: DOM.querySelector → DOM.getContentQuads (no JS).
-        Custom selectors: Runtime.evaluate → getBoundingClientRect (JS).
+        DOM.getContentQuads returns no quads for a zero-area element; the
+        bounding-rect fallback keeps the single-hidden-match case (an
+        off-screen real control behind a styled proxy) addressable, matching
+        the resolve policy that a lone invisible match is still the target.
         """
-        node_id, js_expr = await self._wait_for_node(selector)
-        if node_id:
-            quads = await self._exec("DOM.getContentQuads", {"nodeId": node_id})
-            return self._quad_center(quads["quads"])
-        coords = await self._exec(
-            "Runtime.evaluate",
-            {
-                "expression": f"""
-(function() {{
-    const el = {js_expr};
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    return {{x: r.left + r.width/2, y: r.top + r.height/2}};
-}})()
-""",
-                "returnByValue": True,
-            },
+        quads = await self._exec("DOM.getContentQuads", {"objectId": el.object_id})
+        qs = quads.get("quads") or []
+        if qs:
+            return self._quad_center(qs)
+        result = await inject.call_engine(
+            self,
+            "function(el) { const r = el.getBoundingClientRect();"
+            " return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }",
+            [{"objectId": el.object_id}],
         )
-        result = coords.get("result", {})
-        if result.get("value") is None:
+        pos = result.get("result", {}).get("value")
+        if pos is None:
             raise RuntimeError(f"Element not found: {selector}")
-        pos = result["value"]
         return pos["x"], pos["y"]
 
-    async def click(
+    async def _receipt_for(
+        self, el: inject.ResolvedElement, x: float, y: float, *, verb: str
+    ) -> Receipt:
+        data = await inject.hit_receipt(self, el, x, y)
+        t = data.get("target") or {}
+        h = data.get("hit")
+        tdesc = " — ".join(p for p in (t.get("preview"), t.get("sel")) if p)
+        if data.get("related", True) or h is None:
+            line = f"{verb}: {tdesc} ({x:.0f},{y:.0f})"
+            if el.note:
+                line += f" [{el.note}]"
+            return Receipt(line=line)
+        hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+        return Receipt(
+            line=f"warning: {verb} at ({x:.0f},{y:.0f}) hits {hdesc}, not {tdesc}",
+            warning=True,
+        )
+
+    async def _click_element(
         self,
-        selector: str,
+        el: inject.ResolvedElement,
         *,
+        selector: str,
         button: str = "left",
         click_count: int = 1,
-    ) -> None:
-        """Click an element. Auto-waits up to 2s for the element to appear.
-
-        Selector: CSS, text=Label, role=button[name='OK'], or tag:has-text('...')
-        """
-        await self._ensure_front()
-        x, y = await self._element_center(selector)
-
+    ) -> Receipt:
+        """Coordinate resolution + hit receipt + mouse dispatch for a resolved
+        element. The receipt is taken *before* dispatch — the click's own
+        handlers may re-render the DOM, so "what will this land on" is the
+        honest answer; the dispatch still happens either way (observe and
+        report, never refuse)."""
+        x, y = await self._element_center_of(el, selector)
+        receipt = await self._receipt_for(el, x, y, verb="clicked")
         for event_type in ("mousePressed", "mouseReleased"):
             await self._exec(
                 "Input.dispatchMouseEvent",
@@ -720,6 +715,32 @@ class Tab(TabQueryMixin):
                     "clickCount": click_count,
                 },
             )
+        return receipt
+
+    async def click(
+        self,
+        selector: str,
+        *,
+        button: str = "left",
+        click_count: int = 1,
+    ) -> Receipt:
+        """Click an element. Auto-waits up to 2s, strictly resolved.
+
+        Selector: CSS, text=Label, role=button[name='OK'], label=Name,
+        tag:has-text('...'), or aria-ref=e12 from browser_tree. A selector
+        matching more than one element (with no single visible winner) raises
+        with a candidate digest instead of guessing. Waits for the element to
+        be visible, enabled and stable, and returns a Receipt naming what the
+        click actually hit.
+        """
+        await self._ensure_front()
+        el = await inject.resolve_element(self, selector)
+        await inject.check_actionable(
+            self, el, ("visible", "enabled", "stable"), selector=selector
+        )
+        return await self._click_element(
+            el, selector=selector, button=button, click_count=click_count
+        )
 
     async def type_text(
         self,
@@ -728,38 +749,30 @@ class Tab(TabQueryMixin):
         *,
         delay_ms: int = 0,
         press_enter: bool = False,
-    ) -> None:
-        """Clear field and type text. Auto-waits up to 2s for the element.
+    ) -> Receipt:
+        """Clear field and type text. Auto-waits up to 2s, strictly resolved.
 
-        Selects all existing content then types over it.
-        Selector: CSS, text=Label, role=textbox, label=Name, or tag:has-text('...')
+        Selects all existing content, types over it via key events, then
+        *verifies the value landed*. If the keystrokes changed nothing — the
+        signature of a framework-controlled input swallowing them — it falls
+        back to setting the value through the native prototype setter plus
+        bubbled input/change events, and re-verifies. The Receipt says which
+        path the text took.
         """
         await self._ensure_front()
-        node_id, js_expr = await self._wait_for_node(selector)
+        el = await inject.resolve_element(self, selector)
+        await inject.check_actionable(
+            self, el, ("visible", "enabled", "editable", "stable"), selector=selector
+        )
+        await self._exec("DOM.focus", {"objectId": el.object_id})
+        await inject.call_engine(
+            self,
+            "function(el) { if (el.select) el.select();"
+            " else el.ownerDocument.execCommand('selectAll'); }",
+            [{"objectId": el.object_id}],
+        )
 
-        if node_id:
-            await self._exec("DOM.focus", {"nodeId": node_id})
-            # Select all existing content so first keystroke replaces it
-            await self._exec(
-                "Runtime.evaluate",
-                {
-                    "expression": "document.execCommand('selectAll')",
-                    "returnByValue": True,
-                },
-            )
-        else:
-            await self._exec(
-                "Runtime.evaluate",
-                {
-                    "expression": (
-                        f"(function() {{ const el = {js_expr};"
-                        f" if (el) {{ el.focus(); if (el.select) el.select(); }} }})()"
-                    ),
-                    "returnByValue": True,
-                },
-            )
-
-        # Type new text via key events
+        before = await inject.read_value(self, el)
         for char in text:
             for event_type in ("keyDown", "keyUp"):
                 await self._exec(
@@ -772,8 +785,104 @@ class Tab(TabQueryMixin):
             if delay_ms > 0:
                 await asyncio.sleep(delay_ms / 1000)
 
+        after = await inject.read_value(self, el)
+        if after == text:
+            note = "value verified"
+        elif after == before:
+            # Keystrokes changed nothing — a controlled input reverted them.
+            # `after != before but != text` is deliberately NOT this branch:
+            # a masking/formatting field transformed the input legitimately,
+            # and overwriting it with the raw text would undo the widget.
+            await inject.set_value_native(self, el, text)
+            final = await inject.read_value(self, el)
+            note = (
+                "value verified via native-setter fallback"
+                if final == text
+                else f"value not verified (got {final!r})"
+            )
+        else:
+            note = f"value transformed to {after!r}"
+
+        preview, sel = await inject.describe_element(self, el)
+        tdesc = " — ".join(p for p in (preview, sel) if p)
+        receipt = Receipt(line=f"typed into {tdesc} ({note})")
+
         if press_enter:
             await self.key("Enter")
+        return receipt
+
+    async def select_option(self, selector: str, option: str) -> Receipt:
+        """Select *option* in a dropdown — native <select> or custom listbox.
+
+        Native <select>: finds the option by label (else value) and sets it
+        through the prototype setter + input/change events. Custom widgets
+        (react-select-style): clicks the field, waits for a role=option
+        matching *option* (exact, then substring), clicks it. A miss lists
+        the visible options' accessible names.
+        """
+        await self._ensure_front()
+        el = await inject.resolve_element(self, selector)
+        await inject.check_actionable(
+            self, el, ("visible", "enabled", "stable"), selector=selector
+        )
+        tag_r = await inject.call_engine(
+            self, "function(el) { return el.tagName; }", [{"objectId": el.object_id}]
+        )
+        preview, sel = await inject.describe_element(self, el)
+        tdesc = " — ".join(p for p in (preview, sel) if p)
+
+        if tag_r.get("result", {}).get("value") == "SELECT":
+            v = await inject.select_native(self, el, option)
+            if not v.get("ok"):
+                raise RuntimeError(
+                    f"option {option!r} not found in {tdesc}"
+                    f" — options: {v.get('options')}"
+                )
+            return Receipt(line=f'selected "{option}" in {tdesc}')
+
+        await self._click_element(el, selector=selector)
+        opt_label = f"option {option!r}"
+        opt_selectors = [
+            f"role=option[name={selector_mod._text_body(option, exact=True)}]",
+            f"role=option[name*={selector_mod._text_body(option, exact=True)}]",
+        ]
+        try:
+            opt_el = await inject.resolve_engine_selectors(
+                self, opt_selectors, opt_label
+            )
+        except inject.AmbiguousSelectorError:
+            raise
+        except RuntimeError as exc:
+            names = await inject.list_option_names(self)
+            if names:
+                raise RuntimeError(
+                    f"{opt_label} not found after opening {tdesc}"
+                    f" — visible options: {names}"
+                ) from exc
+            raise RuntimeError(
+                f"{opt_label} not found — no listbox opened after clicking {tdesc}"
+            ) from exc
+        await inject.check_actionable(
+            self, opt_el, ("visible", "stable"), selector=opt_label
+        )
+        await self._click_element(opt_el, selector=opt_label)
+
+        # Best-effort: the field (or its re-rendered value) should now carry
+        # the option text. try/except because the click may have replaced the
+        # field element outright, which detaches our handle — not a failure.
+        verified = False
+        try:
+            v = await inject.call_engine(
+                self,
+                "function(el, opt) { const t = (el.value || '') + ' ' +"
+                " (el.textContent || ''); return t.includes(opt); }",
+                [{"objectId": el.object_id}, {"value": option}],
+            )
+            verified = bool(v.get("result", {}).get("value"))
+        except Exception:
+            pass
+        suffix = "" if verified else " (selection not verified)"
+        return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
 
     async def key(self, key: str) -> None:
         """Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape", "Space").
@@ -807,21 +916,32 @@ class Tab(TabQueryMixin):
             timeout=timeout,
         )
 
-    async def tap(self, selector_or_x, y: float | None = None) -> None:
+    async def tap(self, selector_or_x, y: float | None = None) -> Receipt:
         """Touch tap. Accepts a selector or (x, y) coordinates.
 
         Uses Input.dispatchTouchEvent — triggers touchstart/touchend listeners
         that dispatchMouseEvent won't reach. Use for mobile Chrome via ADB.
+        The selector form resolves strictly, waits for visible/stable, and
+        returns a Receipt like click(); the raw-coordinate form has no target
+        element to check, so its receipt is just the point.
         """
         await self._ensure_front()
         if y is not None:
             x, y = float(selector_or_x), y
+            receipt = Receipt(line=f"tapped ({x:.0f},{y:.0f})")
         else:
-            x, y = await self._element_center(selector_or_x)
+            selector = selector_or_x
+            el = await inject.resolve_element(self, selector)
+            await inject.check_actionable(
+                self, el, ("visible", "stable"), selector=selector
+            )
+            x, y = await self._element_center_of(el, selector)
+            receipt = await self._receipt_for(el, x, y, verb="tapped")
 
         tp = [{"x": x, "y": y}]
         await self._touch("touchStart", tp)
         await self._touch("touchEnd", [])
+        return receipt
 
     async def swipe(
         self,
@@ -864,17 +984,23 @@ class Tab(TabQueryMixin):
         the opposite direction (scrollBy semantics: positive dy scrolls down,
         positive dx scrolls right). For scrolling on mobile Chrome via ADB.
         """
-        cx, cy = await self._element_center(selector)
+        el = await inject.resolve_element(self, selector)
+        cx, cy = await self._element_center_of(el, selector)
         await self.swipe(cx, cy, cx - dx, cy - dy, steps=steps, duration_ms=duration_ms)
 
-    async def tree(self) -> list[str]:
-        """Compact accessibility tree as text lines.
+    async def tree(self, mode: str = "aria") -> list[str]:
+        """Accessibility snapshot as text lines. Standalone read — no settle.
 
-        Standalone read — no settle, no observation bundle.
+        mode="aria" (default): Playwright ariaSnapshot with [ref=…] handles,
+        usable as aria-ref=<ref> selectors in click/type until the next
+        snapshot or navigation. mode="ax": the raw CDP accessibility tree
+        (pierces same-process iframes, no refs).
         """
-        from .observe import build_tree
+        from .observe import build_aria_tree, build_tree
 
-        return await build_tree(self)
+        if mode == "ax":
+            return await build_tree(self)
+        return await build_aria_tree(self)
 
     async def fetch(
         self,
@@ -952,10 +1078,16 @@ class Tab(TabQueryMixin):
         """Wait for an element matching *selector* to appear in the DOM.
 
         Uses the same selector syntax as click/type_text (CSS, text=, role=,
-        label=, :has-text).  Polls every 0.1s up to *timeout* seconds.
-        Raises RuntimeError if the element never appears.
+        label=, :has-text). Existence only — no strictness or visibility, so
+        it can watch for elements a later click would still have to
+        disambiguate. Polls every 0.1s up to *timeout* seconds. Raises
+        RuntimeError if the element never appears.
         """
-        await self._wait_for_node(selector, timeout=timeout)
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not await inject.selector_exists(self, selector):
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"Element not found: {selector}")
+            await asyncio.sleep(0.1)
 
     async def wait_for_idle(self, *, timeout: float = 5.0, quiet: float = 0.5) -> int:
         """Wait for network idle. Returns settle time in ms."""

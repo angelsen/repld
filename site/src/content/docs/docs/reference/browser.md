@@ -50,23 +50,31 @@ Evaluate JavaScript with REPL semantics. Top-level `await` works. Promise result
 ### click
 
 ```python
-await tab.click(selector, *, button='left', click_count=1) → None
+await tab.click(selector, *, button='left', click_count=1) → Receipt
 ```
 
-Mouse click via `Input.dispatchMouseEvent`. Auto-waits up to 2s. Produces `isTrusted=true` events.
+Mouse click via `Input.dispatchMouseEvent`. Produces `isTrusted=true` events. Auto-waits up to 2s for the element, then for it to be visible, enabled and stable. Resolution is **strict**: a selector matching more than one element (with no single visible winner) raises with a candidate digest instead of guessing. The returned `Receipt` names what the click actually hit — `clicked: <button id="save">Save</button> — #save (412,133)` — and warns when an overlay intercepts the point (the click still dispatches).
 
 ### type_text
 
 ```python
-await tab.type_text(selector, text, *, delay_ms=0, press_enter=False) → None
+await tab.type_text(selector, text, *, delay_ms=0, press_enter=False) → Receipt
 ```
 
-Focus element, select-all, type character-by-character. Auto-waits up to 2s.
+Focus element, select-all, type character-by-character, then **verify the value landed**. If the keystrokes changed nothing — the signature of a framework-controlled input reverting them — it falls back to the native prototype value setter plus bubbled `input`/`change` events and re-verifies. The `Receipt` says which path the text took. Auto-waits + strict resolution like `click`.
+
+### select_option
+
+```python
+await tab.select_option(selector, option) → Receipt
+```
+
+Select an option in a dropdown. Native `<select>`: finds the option by label (else value) and sets it via the prototype setter + `input`/`change` events. Custom widgets (react-select-style): clicks the field, waits for a `role=option` matching the name (exact, then substring), clicks it. A miss lists the visible options' accessible names.
 
 ### tap / swipe / scroll
 
 ```python
-await tab.tap(selector_or_x, y=None) → None
+await tab.tap(selector_or_x, y=None) → Receipt
 await tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300) → None
 await tab.scroll(selector, dy=0, dx=0, *, steps=10, duration_ms=300) → None
 ```
@@ -114,10 +122,10 @@ Closes this tab (`Target.closeTarget`). Session cleanup follows from the resulti
 ### tree
 
 ```python
-await tab.tree() → list[str]
+await tab.tree(mode="aria") → list[str]
 ```
 
-Compact accessibility tree as text lines. Crosses iframes.
+Accessibility snapshot as text lines. Crosses iframes. The default `aria` mode is Playwright's LLM-oriented snapshot with `[ref=eN]` handles — each ref is usable as an `aria-ref=eN` selector in `click`/`type_text` until the next snapshot, navigation, or reattach. `mode="ax"` returns the raw CDP accessibility tree (pierces same-process iframes, no refs).
 
 ### screenshot
 
@@ -265,11 +273,18 @@ Suppress patterns persist across kernel restarts.
 
 ## Selectors
 
-| Pattern                    | Type       | Focus-safe |
-| -------------------------- | ---------- | ---------- |
-| `.class`, `#id`, `[attr]`  | CSS        | Yes        |
-| `[data-testid='name']`     | CSS        | Yes        |
-| `text=Submit`              | Text match | No         |
-| `role=button[name="Save"]` | ARIA       | No         |
-| `label=Username`           | Label      | No         |
-| `tag:has-text('OK')`       | CSS + text | No         |
+| Pattern                    | Type                            |
+| -------------------------- | ------------------------------- |
+| `.class`, `#id`, `[attr]`  | CSS                             |
+| `[data-testid='name']`     | CSS                             |
+| `text=Submit`              | Exact text match                |
+| `role=button[name="Save"]` | ARIA role + accessible name     |
+| `label=Username`           | Input by label                  |
+| `tag:has-text('OK')`       | CSS + text filter               |
+| `aria-ref=e12`             | Ref from `tab.tree()` snapshot  |
+
+Every form resolves through a vendored build of Playwright's `InjectedScript` engine, evaluated once per document in an isolated world, and pierces open shadow roots. `role=` computes real implicit ARIA roles and accessible names (the W3C accname algorithm), so labels, `alt` text and `aria-labelledby` all resolve; hidden elements are excluded from `role=` matches.
+
+Resolution is strict: zero matches auto-waits then errors; one match is used, visible or not (a lone off-screen control behind a styled proxy is still the target); multiple matches are filtered by visibility, and unless exactly one visible element remains the call raises with a candidate digest — a preview and generated selector for each — so a wrong-element click is impossible rather than diagnosable. Input methods then wait for the element to be visible, enabled and stable before dispatching.
+
+`aria-ref=` refs come from the last `tab.tree()` / `browser_tree` snapshot and die on the next snapshot, navigation, or reattach; a dead ref errors immediately with a fresh-snapshot hint rather than polling.

@@ -337,11 +337,16 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         )
         print("  ✓ repld://gists/_registry listed + readable")
 
-        # resources/templates/list returns empty (template was removed)
+        # resources/templates/list advertises the gist URI shape — what tells a
+        # client the pattern exists before any concrete gist has been listed.
         resp = b.call("resources/templates/list")
         templates = resp["result"]["resourceTemplates"]
-        assert_eq(templates, [], "resources/templates/list returns empty list")
-        print("  ✓ resources/templates/list: []")
+        assert_eq(
+            [t["uriTemplate"] for t in templates],
+            ["repld://gists/{name}"],
+            "resources/templates/list advertises the gist template",
+        )
+        print("  ✓ resources/templates/list: repld://gists/{name}")
 
         # resources/read for the gist
         resp = b.call(

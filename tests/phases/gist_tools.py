@@ -136,12 +136,20 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         content = resp["result"]["content"][0]["text"]
         result = json.loads(content)
         assert_eq(result["greeting"], "hello world", "gist tool response")
+        # A dict return rides as structuredContent alongside the text block —
+        # same data, so a client on either protocol revision reads the same
+        # answer.
+        assert_eq(
+            resp["result"]["structuredContent"],
+            result,
+            "dict return carried as structuredContent too",
+        )
         # Verify no spill metadata — gist tools bypass spill pipeline
         assert_true(
             "_meta" not in resp["result"],
             f"gist tool has no _meta (got {list(resp['result'].keys())})",
         )
-        print(f"  ✓ gist tool call: {content!r} (no spill)")
+        print(f"  ✓ gist tool call: {content!r} (no spill, structured)")
 
         # Auto-reload: edit the handler, re-call → fresh result
         time.sleep(0.01)  # ensure mtime changes

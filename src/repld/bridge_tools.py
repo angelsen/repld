@@ -83,6 +83,7 @@ BRIDGE_TOOLS: dict[str, dict] = {
                 "auto-reload."
             ),
             "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"destructiveHint": True, "idempotentHint": True},
         },
         "handler": _restart,
     },

@@ -166,6 +166,80 @@ async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
     return lines or ["(empty tree)"]
 
 
+async def build_aria_tree(tab: "Tab") -> list[str]:
+    """Playwright ariaSnapshot ('ai' mode) — YAML lines with [ref=…] handles.
+
+    Refs are usable as `aria-ref=<ref>` selectors in click/type until the next
+    snapshot, navigation, or reattach. Falls back to the AX tree when the
+    engine can't inject on this page (the AX tree needs no in-page JS).
+    """
+    from . import inject
+
+    try:
+        text = await inject.aria_snapshot(tab)
+    except inject.EngineUnavailable:
+        return [
+            "(selector engine unavailable on this page — AX tree instead)"
+        ] + await build_tree(tab)
+    return text.splitlines() or ["(empty tree)"]
+
+
+async def compose_aria_tree(
+    tab: "Tab", session: "BrowserSession"
+) -> tuple[list[str], list["Tab"]]:
+    """build_aria_tree with OOPIF iframe children inlined, compose_tree-style.
+
+    Each child session's engine carries its own frameSeq, so child refs render
+    as f<seq>eN and never collide with the parent's; the `→ <target_id>`
+    annotation says which target to pass when acting on a child's ref.
+    """
+    lines = await build_aria_tree(tab)
+    iframe_children = await _discover_iframe_children(tab, session)
+    if not iframe_children:
+        return lines, []
+
+    child_trees: dict[str, list[str]] = {}
+    for child in iframe_children:
+        child_trees[child.target_id] = await build_aria_tree(child)
+    return (
+        _inline_iframe_lines(lines, iframe_children, child_trees),
+        iframe_children,
+    )
+
+
+def _inline_iframe_lines(
+    lines: list[str],
+    iframe_children: list["Tab"],
+    child_trees: dict[str, list[str]],
+) -> list[str]:
+    """Insert child tree lines under iframe lines with a → target_id marker.
+
+    parentFrameId already guarantees these are this tab's children; pairing a
+    specific iframe line with a specific child is best-effort document order.
+    """
+    result_lines: list[str] = []
+    used: set[str] = set()
+    for line in lines:
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        if stripped.lower().lstrip("- ").startswith("iframe"):
+            matched_child: "Tab | None" = None
+            for child in iframe_children:
+                if child.target_id not in used:
+                    matched_child = child
+                    break
+            if matched_child is not None:
+                ctid = matched_child.target_id
+                used.add(ctid)
+                result_lines.append(f"{line} → {ctid}")
+                child_indent = indent + "  "
+                for child_line in child_trees.get(ctid, []):
+                    result_lines.append(child_indent + child_line)
+                continue
+        result_lines.append(line)
+    return result_lines
+
+
 # ---------------------------------------------------------------------------
 # Iframe discovery + composed tree
 # ---------------------------------------------------------------------------
@@ -278,43 +352,13 @@ async def compose_tree(
     if not iframe_children:
         return lines, []
 
-    # Get trees for all children
     child_trees: dict[str, list[str]] = {}
     for child in iframe_children:
-        child_lines = await build_tree(child, max_depth=max_depth - 2)
-        child_trees[child.target_id] = child_lines
-
-    # Inline child trees under Iframe nodes in the base tree
-    # We annotate Iframe lines with → target_id and insert child lines after
-    result_lines: list[str] = []
-    used: set[str] = set()
-    for line in lines:
-        stripped = line.lstrip()
-        indent = line[: len(line) - len(stripped)]
-
-        if stripped.lower().startswith("iframe"):
-            # Assign next unmatched child (parentFrameId already
-            # guarantees correct children; order is best-effort)
-            matched_child: "Tab | None" = None
-            for child in iframe_children:
-                if child.target_id not in used:
-                    matched_child = child
-                    break
-
-            if matched_child is not None:
-                ctid = matched_child.target_id
-                used.add(ctid)
-                # Annotate the Iframe line
-                result_lines.append(f"{line} → {ctid}")
-                # Insert child tree lines with extra indent
-                child_indent = indent + "  "
-                for child_line in child_trees.get(ctid, []):
-                    result_lines.append(child_indent + child_line)
-                continue
-
-        result_lines.append(line)
-
-    return result_lines, iframe_children
+        child_trees[child.target_id] = await build_tree(child, max_depth=max_depth - 2)
+    return (
+        _inline_iframe_lines(lines, iframe_children, child_trees),
+        iframe_children,
+    )
 
 
 # ---------------------------------------------------------------------------

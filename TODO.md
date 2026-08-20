@@ -113,6 +113,22 @@
   silently corrupts the capture. Fall back to a fresh tab/reload if mismatched rather than
   proceeding on bad viewport data (session 011).
 
+## MCP elicitation for human gates
+
+- [ ] Map `ask()`/`confirm()`/`choose()` onto MCP `elicitation/create` (2025-06-18): the three
+  form schemas fit exactly (StringSchema / BooleanSchema / single-select EnumSchema), and
+  Claude Code renders elicitation as a prompt to the *human*, so the gates-are-not-tools
+  invariant survives. Blocked on real bridge work: the bridge only ever forwards
+  kernel→client **notifications**; a kernel-initiated *request* would get its client
+  response mis-registered in `_inflight` and forwarded to the kernel as a fresh request
+  (`bridge._dispatch_client_line`). Needs: (1) `_read_kernel` distinguishing kernel-origin
+  requests (method + id) from responses, (2) a kernel-origin id set the response router
+  checks before `_inflight`, (3) gate site (`gates._gate`) emitting the request only when
+  the client declared the `elicitation` capability, falling back to today's
+  `awaiting_human` channel push otherwise (and always for ambient gates with no origin
+  session). First-wins with the pane/pill/CLI routes via the existing `resolve_gate` race.
+  Deliberately split out of the 2025-06-18 upgrade (0.3.0) to keep the bridge diff isolated.
+
 ## Features (from session 002 backlog)
 
 - [ ] Safari/iOS support — WebKit Inspector over usbmuxd (gist, not core)

@@ -59,8 +59,17 @@ _BROWSER_MODEL = (
     "Browser model: "
     "Watch by URL pattern. Short target IDs (9222:a1b2c3). "
     "Multi-browser: browser.connect(port) adds Chrome instances; target IDs route by port prefix. "
-    "Mutations (click/type/navigate/key/open) settle then return "
-    "tree + network delta + console delta. "
+    "Selectors resolve strictly (Playwright engine): >1 match with no single "
+    "visible winner errors with a candidate list instead of guessing; input "
+    "waits for visible/enabled/stable; click/type return a receipt line naming "
+    "what was actually hit. type verifies the value landed, falling back to the "
+    "native setter for framework-controlled inputs. browser_select drives "
+    "dropdowns (native <select> or custom listbox). "
+    "browser_tree default is an aria snapshot with [ref=eN] handles — reuse as "
+    "aria-ref=eN selectors until the next snapshot or navigation; mode='ax' is "
+    "the raw CDP tree. "
+    "Mutations (click/type/select/navigate/key/open) settle then return "
+    "receipt + tree + network delta + console delta. "
     "Tree crosses iframes. Network separates API calls from assets. "
     "get()/open() capture request/response bodies; watch() attaches lightweight. "
     "Read workflow: network → request → body. "
@@ -447,11 +456,13 @@ ready= stores a CSS selector or JS expression on the Tab.  It's used by:
 
 Selectors use the same classification as click/type_text: '.', '#', '[',
 'data-', a bare tag or custom-element name ('main', 'my-app'), and the
-custom forms (text=, role=, label=, :has-text) are polled via
-document.querySelector every 100ms, 10s timeout.  Anything else — anything
-with a dot or an operator in it — is evaluated as a JS expression via
-Runtime.evaluate, polled the same way, and must return truthy.  An
-expression that *raises* is reported immediately rather than polled out.
+custom forms (text=, role=, label=, :has-text, aria-ref=) are polled as an
+existence check through the selector engine every 100ms, 10s timeout —
+existence only, never strictness: a ready signal that matched three nodes
+has still fired.  Anything else — anything with a dot or an operator in
+it — is evaluated as a JS expression via Runtime.evaluate, polled the same
+way, and must return truthy.  An expression that *raises* is reported
+immediately rather than polled out.
 
 Default (no ready=): waits for document.readyState === 'complete'.
 
@@ -465,15 +476,31 @@ Convention: add data-testid to your root layout component.
       user_gesture=True makes isTrusted=true on events.
       Raises BrowserJSError on JS exceptions (with preserved stack trace).
 
-  tab.click(selector, *, button='left', click_count=1)       → None
+  tab.click(selector, *, button='left', click_count=1)       → Receipt
       Mouse click via Input.dispatchMouseEvent (mousePressed + mouseReleased).
-      Produces isTrusted=true events.  Auto-waits up to 2s for the element.
+      Produces isTrusted=true events.  Auto-waits up to 2s for the element,
+      then for visible/enabled/stable (actionability).  Strict resolution:
+      a selector matching >1 element with no single visible winner raises
+      with a candidate digest instead of guessing.  The Receipt names what
+      the click actually hit ("clicked: <button…> — #save (412,133)"), and
+      warns when an overlay intercepts the point (still dispatches).
 
-  tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → None
+  tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
       Focus element, select-all existing content, type character-by-character
-      via Input.dispatchKeyEvent.  Auto-waits up to 2s.
+      via Input.dispatchKeyEvent.  Auto-waits + actionability like click.
+      Verifies the value landed; if the keystrokes changed nothing (a
+      framework-controlled input reverting them), falls back to the native
+      prototype value setter + bubbled input/change events and re-verifies —
+      the Receipt says which path the text took.
       delay_ms adds a pause between keystrokes (in milliseconds).
-      press_enter sends an Enter key after the text.
+      press_enter sends an Enter key after the text (after verification).
+
+  tab.select_option(selector, option)                        → Receipt
+      Select an option in a dropdown.  Native <select>: finds the option by
+      label (else value), sets it via the prototype setter + input/change
+      events.  Custom widgets (react-select-style): clicks the field, waits
+      for a role=option matching the name (exact, then substring), clicks
+      it.  A miss lists the visible options' accessible names.
 
   tab.key(key)                                               → None
       Dispatch a keyDown+keyUp pair for a named key (e.g. "Enter", "Escape",
@@ -481,9 +508,10 @@ Convention: add data-testid to your root layout component.
       native button/form activation fires, not just the DOM keydown/keyup —
       without it a focused button silently doesn't click.
 
-  tab.tap(selector_or_x, y=None)                             → None
+  tab.tap(selector_or_x, y=None)                             → Receipt
       Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
-      Accepts a selector string OR (x, y) coordinates.
+      Accepts a selector string OR (x, y) coordinates.  The selector form
+      resolves strictly and waits for visible/stable like click.
       3s timeout — raises TimeoutError if the page's touch handler blocks
       (common on complex apps like Messenger/React).
 
@@ -505,8 +533,12 @@ Convention: add data-testid to your root layout component.
       (scrollBy semantics: positive dy scrolls down, positive dx scrolls
       right). Auto-waits up to 2s for the element.
 
-  tab.tree()                                                  → list[str]
-      Compact accessibility tree as text lines.  Crosses iframes — discovers
+  tab.tree(mode='aria')                                       → list[str]
+      Accessibility snapshot as text lines.  mode='aria' (default): Playwright
+      ariaSnapshot with [ref=eN] handles, reusable as aria-ref=eN selectors
+      in click/type_text until the next snapshot, navigation, or reattach.
+      mode='ax': the raw CDP accessibility tree (pierces same-process
+      iframes, no refs).  Crosses OOPIF iframes either way — discovers
       attached iframe children by matching parentFrameId, inlines their trees.
       Standalone read (no settle, no observation pipeline).
 
@@ -748,49 +780,50 @@ Suppress filter (opt-in):
 
 == Selectors ==
 
-Same syntax across click, tap, type_text, wait_for:
+Same syntax across click, tap, type_text, select_option, wait_for:
 
-  .css-class, #id, [attr], tag                        CSS (pure CDP, no focus steal)
+  .css-class, #id, [attr], tag                        CSS
   [data-testid='name']                                CSS (recommended for own code)
-  text=Submit                                         visible text match (JS eval)
-  role=button[name="Save"]                            ARIA role + name (JS eval)
-  label=Username                                      input by label (JS eval)
-  button:has-text('OK')                               CSS + text filter (JS eval)
+  text=Submit                                         exact text match
+  role=button[name="Save"]                            ARIA role + accessible name
+  label=Username                                      input by label
+  button:has-text('OK')                               CSS + text filter
+  aria-ref=e12                                        ref from tab.tree() / browser_tree
 
-CSS vs JS path:
-  Plain CSS selectors use DOM.querySelector + DOM.getContentQuads for coordinate
-  resolution — pure CDP, no JavaScript eval, no focus steal.  This means typing
-  into a field found by CSS won't dismiss a dropdown or blur another element.
+Resolution runs through a vendored build of Playwright's InjectedScript
+engine, evaluated once per document in an isolated world (main world on the
+few pages that refuse one — same semantics, no tamper isolation).  Every form
+pierces open shadow roots.  role= computes real implicit ARIA roles and
+accessible names (W3C accname), so labels, alt text, and aria-labelledby all
+resolve; hidden elements are excluded from role= matches.
 
-  Custom selectors (text=, role=, label=, :has-text) use Runtime.evaluate to
-  find the element and getBoundingClientRect() for coordinates.  This runs JS
-  in the page, which *can* trigger focus changes.
-
-  For your own code, prefer [data-testid='name'] to keep keyboard/focus intact.
-
-role= expansions:
-  role=button  → button, [role="button"], input[type="button"], input[type="submit"]
-  role=link    → a[href], [role="link"]
-  role=textbox → input:not([type]), input[type="text"], ..., textarea, [role="textbox"]
-  (and checkbox, radio, heading, listitem, tab, tabpanel, option, combobox)
+Strict resolution:
+  0 matches   → auto-wait (poll 100ms, 2s), then "Element not found"
+  1 match     → used, visible or not (apps keep real controls off-screen
+                behind styled proxies — a lone invisible match is the target)
+  >1 matches  → filtered by visibility; exactly one visible wins (the receipt
+                notes "N matches, 1 visible"); otherwise the call raises with
+                a candidate digest (preview + generated selector for each),
+                so a wrong-element click is impossible rather than diagnosable.
 
 role= name operators:
-  role=button[name="Save"]     exact match (textContent, aria-label, title, value, labels)
+  role=button[name="Save"]     exact accessible-name match (case-sensitive)
   role=button[name*="Save"]    contains
   role=button[name^="Save"]    starts with
 
-text= matching: finds visible elements (offsetWidth > 0) where textContent or
-  aria-label matches exactly.  Returns shortest match (avoids matching a parent
-  container that also contains the text).
+text= matching: exact (whitespace-normalized) text content, with an exact
+  aria-label match as fallback when the text form matches nothing.
 
-label= resolution: finds <label> by text, then resolves to the input via
-  htmlFor attribute or querySelector within the label element.
+aria-ref= lifetime: refs come from the last tab.tree() / browser_tree aria
+  snapshot and die on the next snapshot, navigation, or reattach — a dead ref
+  errors telling you to take a fresh snapshot, it never polls.
 
-Auto-wait: all selectors auto-wait up to 2s (click/type_text) or the specified
-  timeout (wait_for), polling every 100ms.  Under MCP tools the previous
-  mutation already settled the page (network idle + tree rebuilt), so the 2s
-  poll is just a safety net for DOM that lags behind network quiet (lazy
-  renders, setTimeout callbacks).  For first interactions or known-slow
+Auto-wait: selectors auto-wait up to 2s (click/type_text) or the specified
+  timeout (wait_for), polling every 100ms, then actionability waits for
+  visible/enabled/stable (rAF-based) before dispatching.  Under MCP tools the
+  previous mutation already settled the page (network idle + tree rebuilt), so
+  the 2s poll is just a safety net for DOM that lags behind network quiet
+  (lazy renders, setTimeout callbacks).  For first interactions or known-slow
   elements, call wait_for(selector, timeout=10) before click/type_text.
 
 == Internals ==
@@ -1175,13 +1208,14 @@ Channel kinds:
     "browser": """\
 Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=)      → any
-  tab.tree()                                       → list[str]
-  tab.click(selector, button=, click_count=)       → None (auto-waits 2s, mouse event)
-  tab.tap(selector_or_x, y=)                       → None (touch event, 3s timeout)
+  tab.tree(mode="aria")                            → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree)
+  tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
+  tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
-  tab.type_text(selector, text, delay_ms=, press_enter=)  → None (clears first, auto-waits)
+  tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
+  tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; a miss lists the options)
   tab.key(key)                                     → None (keyDown+keyUp, e.g. "Enter"/"Space" trigger native button activation)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
@@ -1242,23 +1276,26 @@ Browser:
 
   ready= takes a selector or a JS expression, classified exactly as
   click/type_text classify theirs: '.', '#', '[', 'data-', a bare tag or
-  custom-element name, and text=/role=/label=/:has-text → polled via
-  document.querySelector; anything else is evaluated as a JS expression and
-  must return truthy (one that raises is reported, not polled out). Tab waits
-  for the signal before returning; on session loss (HMR/navigation) it
-  re-attaches and waits again. navigate() and reload() also wait for it.
-  Convention: add data-testid to your root layout component.
+  custom-element name, and text=/role=/label=/:has-text/aria-ref= → polled as
+  an engine existence check (never strictness); anything else is evaluated as
+  a JS expression and must return truthy (one that raises is reported, not
+  polled out). Tab waits for the signal before returning; on session loss
+  (HMR/navigation) it re-attaches and waits again. navigate() and reload()
+  also wait for it. Convention: add data-testid to your root layout component.
 
-Selectors (click/tap/type_text):
-  .css-class, #id, [attr], tag           CSS (no focus steal — pure CDP path)
-  [data-testid='name']                   CSS (no focus steal — recommended for own code)
-  text=Submit                            visible text match (JS eval)
-  role=button[name="Save"]              ARIA role + name (JS eval)
-  label=Username                        input by label (JS eval)
-  button:has-text('OK')                 CSS + text filter (JS eval)
+Selectors (click/tap/type_text/select_option):
+  .css-class, #id, [attr], tag           CSS
+  [data-testid='name']                   CSS (recommended for own code)
+  text=Submit                            exact text match
+  role=button[name="Save"]              ARIA role + accessible name (accname)
+  label=Username                        input by label
+  button:has-text('OK')                 CSS + text filter
+  aria-ref=e12                          ref from tab.tree() (dies on next snapshot/navigation)
 
-  CSS selectors use DOM.querySelector + DOM.getContentQuads (no JS eval, no focus steal).
-  Custom selectors (text=, role=, label=, :has-text) use Runtime.evaluate.
+  All forms resolve through the vendored Playwright engine (isolated world,
+  once per document) and pierce open shadow roots. Strict: >1 match with no
+  single visible winner errors with a candidate digest; a lone match is used
+  visible or not; input then waits for visible/enabled/stable.
 
 Touch vs mouse:
   tab.click()  — Input.dispatchMouseEvent (works everywhere)

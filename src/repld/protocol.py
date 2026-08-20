@@ -15,8 +15,10 @@ from .core_schemas import (
     CORE_TOOLS,
     DOC_HELP_ATTRS,
     PROTOCOL_VERSION,
+    RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
     error as _error,
+    negotiate_version as _negotiate_version,
     response as _response,
     wire as _wire,
 )
@@ -37,6 +39,14 @@ _TARGET_DESC = "Chrome target_id from browser_tabs"
 # both say something the shared text can't ("detach one tab", "omit to clear
 # all"), which is the distinction worth preserving over the uniformity.
 _TARGET_PARAM = {"type": "string", "description": _TARGET_DESC}
+
+_SELECTOR_PARAM = {
+    "type": "string",
+    "description": (
+        "CSS, text=Label, role=button[name='OK'], label=Name, "
+        "tag:has-text('...'), or aria-ref=e12 from browser_tree"
+    ),
+}
 
 TOOLS = [
     *CORE_TOOLS,
@@ -217,13 +227,23 @@ TOOLS = [
     {
         "name": "browser_tree",
         "description": (
-            "Get the page's accessibility tree as compact text. "
-            "Crosses iframe boundaries for attached child targets."
+            "Accessibility snapshot of the page. Default mode 'aria': "
+            "LLM-oriented snapshot with [ref=eN] handles — use them as "
+            "aria-ref=eN selectors in browser_click/browser_type; refs stay "
+            "valid until the next snapshot, navigation, or reattach. "
+            "Mode 'ax': raw CDP accessibility tree (pierces same-process "
+            "iframes, no refs). Crosses iframe boundaries for attached "
+            "child targets either way."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
+                "mode": {
+                    "type": "string",
+                    "enum": ["aria", "ax"],
+                    "default": "aria",
+                },
             },
             "required": ["target"],
         },
@@ -263,17 +283,18 @@ TOOLS = [
     {
         "name": "browser_click",
         "description": (
-            "Click element. Auto-waits 2s. "
-            "Returns observation (tree + network + console delta after settle)."
+            "Click element, strictly resolved: a selector matching more than "
+            "one element (with no single visible winner) errors with a "
+            "candidate list instead of guessing. Auto-waits 2s for presence, "
+            "then for visible/enabled/stable. Returns a receipt line naming "
+            "what the click actually hit, plus the observation (tree + "
+            "network + console delta after settle)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
-                "selector": {
-                    "type": "string",
-                    "description": "CSS, text=Label, role=button[name='OK'], label=Name, or tag:has-text('...')",
-                },
+                "selector": _SELECTOR_PARAM,
             },
             "required": ["target", "selector"],
         },
@@ -281,18 +302,43 @@ TOOLS = [
     {
         "name": "browser_type",
         "description": (
-            "Clear field and type text. Auto-waits 2s. "
-            "Returns observation (tree + network + console delta after settle)."
+            "Clear field and type text, strictly resolved like browser_click. "
+            "Verifies the value landed; if the keystrokes changed nothing "
+            "(framework-controlled input), falls back to the native value "
+            "setter + input/change events and re-verifies. Returns a receipt "
+            "line saying which path the text took, plus the observation."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
-                "selector": {"type": "string"},
+                "selector": _SELECTOR_PARAM,
                 "text": {"type": "string"},
                 "press_enter": {"type": "boolean", "default": False},
             },
             "required": ["target", "selector", "text"],
+        },
+    },
+    {
+        "name": "browser_select",
+        "description": (
+            "Select an option in a dropdown — native <select> (set via the "
+            "prototype setter + input/change events) or a custom widget "
+            "(react-select-style: clicks the field, waits for a role=option "
+            "matching the name, clicks it). A miss lists the visible "
+            "options' accessible names. Returns receipt + observation."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "selector": _SELECTOR_PARAM,
+                "option": {
+                    "type": "string",
+                    "description": "Option label (native <select> also tries value)",
+                },
+            },
+            "required": ["target", "selector", "option"],
         },
     },
     {
@@ -396,6 +442,49 @@ TOOLS = [
     },
 ]
 
+# MCP tool annotations (2025-03-26), applied by name so the classification
+# reads as one table. Hints only — clients use readOnlyHint for permission
+# ergonomics, openWorldHint marks tools that reach the live web rather than
+# repld's own state. Core tools carry theirs inline in core_schemas.CORE_TOOLS
+# (those dicts are shared with the bridge and must not be mutated here);
+# bridge_tools.SCHEMAS carry theirs inline for the same reason.
+_TOOL_ANNOTATIONS = {
+    # DuckDB/store reads and page reads — no mutation anywhere.
+    "browser_tabs": {"readOnlyHint": True},
+    "browser_pages": {"readOnlyHint": True},
+    "browser_network": {"readOnlyHint": True},
+    "browser_request": {"readOnlyHint": True},
+    "browser_body": {"readOnlyHint": True},
+    "browser_console": {"readOnlyHint": True},
+    "browser_tree": {"readOnlyHint": True},
+    "browser_controls": {"readOnlyHint": True},
+    "browser_screenshot": {"readOnlyHint": True},
+    # repld-side attachment state, freely repeatable, never destructive.
+    "browser_watch": {"destructiveHint": False, "idempotentHint": True},
+    "browser_detach": {"destructiveHint": False, "idempotentHint": True},
+    # Deletes captured history.
+    "browser_clear": {"idempotentHint": True},
+    # Drive the live page — external, arbitrary web state.
+    "browser_js": {"openWorldHint": True},
+    "browser_fetch": {"openWorldHint": True},
+    "browser_cdp": {"openWorldHint": True},
+    "browser_navigate": {"openWorldHint": True},
+    "browser_open": {"openWorldHint": True},
+    "browser_key": {"openWorldHint": True},
+    "browser_click": {"openWorldHint": True},
+    "browser_type": {"openWorldHint": True},
+    "browser_select": {"openWorldHint": True},
+    "browser_invoke": {"openWorldHint": True},
+}
+def _apply_annotations() -> None:
+    for tool in TOOLS:
+        ann = _TOOL_ANNOTATIONS.get(tool["name"])
+        if ann is not None:
+            tool["annotations"] = ann
+
+
+_apply_annotations()
+
 _BROWSER_RESOURCES = [
     {
         "uri": "repld://browser/tabs",
@@ -443,10 +532,12 @@ class Dispatcher(BrowserDispatchMixin):
         method = req.get("method")
         rid = req.get("id")
         if method == "initialize":
-            return self._initialize(rid)
+            return self._initialize(rid, req.get("params", {}))
         if method == "notifications/initialized":
             session.set_initialized()
             return None
+        if method == "ping":
+            return _response(rid, {})
         if method == "tools/list":
             return self._tools_list(rid)
         if method == "tools/call":
@@ -454,7 +545,7 @@ class Dispatcher(BrowserDispatchMixin):
         if method == "resources/list":
             return self._resources_list(rid)
         if method == "resources/templates/list":
-            return _response(rid, {"resourceTemplates": []})
+            return _response(rid, {"resourceTemplates": RESOURCE_TEMPLATES})
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
         # Human gates. Deliberately JSON-RPC methods and *not* MCP tools: they
@@ -501,11 +592,11 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, f"gate {gate_id} was already answered")
         return _response(rid, {"gate_id": gate_id, "value": value})
 
-    def _initialize(self, rid) -> dict:
+    def _initialize(self, rid, params: dict) -> dict:
         return _response(
             rid,
             {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": _negotiate_version(params.get("protocolVersion")),
                 "capabilities": CAPABILITIES,
                 "serverInfo": {
                     "name": "repld",
@@ -606,10 +697,14 @@ class Dispatcher(BrowserDispatchMixin):
         snap = self.ctx.snapshot(tid)
         if snap is None:
             return _error(rid, -32602, f"unknown task_id: {tid}")
+        # get_task declares an outputSchema (core_schemas.CORE_TOOLS), which
+        # commits every success result to a conforming structuredContent; the
+        # text block mirrors it, as the spec asks for pre-2025-06-18 clients.
         return _response(
             rid,
             {
                 "content": [{"type": "text", "text": json.dumps(snap, indent=2)}],
+                "structuredContent": snap,
                 "_meta": snap,
             },
         )
@@ -650,9 +745,17 @@ class Dispatcher(BrowserDispatchMixin):
             result = handler(**args)
             if inspect.iscoroutine(result):
                 result = self._run_async(result)
+            body: dict = {}
             if not isinstance(result, str):
+                # Dict returns ride as structuredContent too — no outputSchema
+                # (nothing to infer one from), which the spec allows; only
+                # objects qualify, since structuredContent is object-typed in
+                # 2025-06-18. The text block stays the canonical fallback.
+                if isinstance(result, dict):
+                    body["structuredContent"] = result
                 result = json.dumps(result, indent=2)
-            return _response(rid, {"content": [{"type": "text", "text": result}]})
+            body["content"] = [{"type": "text", "text": result}]
+            return _response(rid, body)
         except Exception as exc:
             return _error(rid, -32000, f"{name}: {exc}")
 

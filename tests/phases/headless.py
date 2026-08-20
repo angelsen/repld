@@ -250,16 +250,22 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
         )
         print("  ✓ tools/list + resources/read(docs) served from cache, no spawn")
 
-        # A method no kernel of ours implements must not cost one. `ping` is
-        # standard MCP and clients send it unprompted, so the old fall-through
-        # to _ensure_kernel meant a liveness probe silently spawned a kernel
-        # and paid the full 5s spawn-and-wait to be told "method not found".
+        # Neither a liveness probe nor a genuinely unknown method may cost a
+        # kernel. `ping` gets a real `{}` from the bridge itself (the bridge is
+        # the thing being pinged); the unknown method keeps the -32601 guard —
+        # the old fall-through to _ensure_kernel meant either one silently
+        # spawned a kernel and paid the full 5s spawn-and-wait.
         resp = b.call("ping", {}, timeout=10)
+        assert_eq(resp["result"], {}, "ping answered {} by the bridge, no kernel")
+        assert_true(not lock_path_for(tmp).exists(), "ping did not spawn a kernel")
+        resp = b.call("prompts/list", {}, timeout=10)
         assert_eq(
             resp["error"]["code"], -32601, "unknown method answered by the bridge"
         )
-        assert_true(not lock_path_for(tmp).exists(), "ping did not spawn a kernel")
-        print("  ✓ unknown method answered without spawning a kernel")
+        assert_true(
+            not lock_path_for(tmp).exists(), "unknown method did not spawn a kernel"
+        )
+        print("  ✓ ping + unknown method answered without spawning a kernel")
 
         resp = _exec(b, "print('post-cache spawn')", timeout=40)
         assert_true(

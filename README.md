@@ -195,4 +195,4 @@ Channel push is a research preview, so it takes a development flag:
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The browser extra vendors Playwright's injected-script engine (Apache-2.0) — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

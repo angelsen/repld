@@ -27,11 +27,16 @@ _TEST_URL = f"data:text/html,<title>{_MARKER}</title><p>{_MARKER}</p>"
 # Selector-ranking fixture. Attribute values are deliberately unquoted (valid
 # HTML5 while they contain no spaces) so the markup survives being nested three
 # quoting levels deep — Python source → exec cell → JS string literal.
-# The hidden member of each pair comes first in document order.
+# The hidden member of each pair comes first in document order. The first
+# label's *input* is hidden along with it (a hidden duplicate form section):
+# accessible names come from the label association whether or not the label is
+# rendered, so a visible input under a hidden label is a genuine second match
+# — strict resolution would rightly call that ambiguous rather than rank it.
 _SEL_HTML = (
     "<button id=hb style=display:none>Save</button>"
     "<button id=vb>Save</button>"
-    "<label id=l1 for=i1 style=display:none>Name</label><input id=i1>"
+    "<label id=l1 for=i1 style=display:none>Name</label>"
+    "<input id=i1 style=display:none>"
     "<label id=l2 for=i2>Name</label><input id=i2>"
 )
 _SEL_CASES = [
@@ -268,6 +273,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
             self._label_text = label
             self._label_color = "#3b82f6"
             self._label_script_id = "dead-identifier"
+            self._injected = "stale-engine-handle"
             self.sent: list[str] = []
 
         async def _enable_domains(self) -> None:
@@ -327,6 +333,243 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     )
     print("  ✓ reattach re-registers the label bar too (and only when labelled)")
 
+    # The injected-engine handle is session-scoped the same way, but as cache
+    # rather than registration: its objectId died with the old sessionId, so
+    # _reattach_core drops it and the next selector call re-instantiates.
+    assert_true(
+        unlabelled._injected is None,
+        "reattach invalidates the injected-engine handle",
+    )
+    print("  ✓ reattach drops the stale injected-engine handle")
+
+
+class _EngineFakeSession:
+    """CDPSession stand-in that answers the injected-engine protocol.
+
+    Canned per-method responses; Runtime.callFunctionOn is answered by matching
+    a distinctive substring of the functionDeclaration, so each engine call
+    gets a shaped result without a page. Enough for click/tap/type_text to run
+    end to end over a fake, which is what the kernel-less tests need.
+    """
+
+    def __init__(self, visibility: str = "visible", isolated_world: bool = True):
+        self.visibility = visibility
+        self.isolated_world = isolated_world
+        self.bootstrap_evals = 0
+        self.fail_call_fn_once: str | None = None  # error text to raise once
+        self.fail_bootstrap = False
+        self.sent: list[str] = []
+        self.target_info = {"url": "fake://page", "targetId": "abcdef0123456789"}
+        self._injected = None
+        self._injected_lock = asyncio.Lock()
+        self._frame_seq = 1
+
+    async def execute(
+        self, method: str, params: dict | None = None, timeout: float = 30
+    ) -> dict:
+        self.sent.append(method)
+        params = params or {}
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"id": "frame-1"}}}
+        if method == "Page.createIsolatedWorld":
+            if not self.isolated_world:
+                raise RuntimeError("Cannot create isolated world on this target")
+            return {"executionContextId": 7}
+        if method == "Runtime.evaluate":
+            if params.get("expression") == "document.visibilityState":
+                return {"result": {"value": self.visibility}}
+            # The engine bootstrap is the only other evaluate on these paths.
+            self.bootstrap_evals += 1
+            if self.fail_bootstrap:
+                raise RuntimeError("evaluate refused on this target")
+            return {"result": {"objectId": f"engine-{self.bootstrap_evals}"}}
+        if method == "Runtime.callFunctionOn":
+            if self.fail_call_fn_once:
+                msg, self.fail_call_fn_once = self.fail_call_fn_once, None
+                raise RuntimeError(msg)
+            fn = params.get("functionDeclaration", "")
+            if "strictModeViolationError" in fn:
+                return {"result": {"objectId": "el-1"}}  # resolve → one match
+            if "__repld_note" in fn:
+                return {"result": {"value": 0}}
+            if "checkElementStates" in fn:
+                return {"result": {}}  # every state passes
+            if "elementFromPoint" in fn:
+                return {
+                    "result": {
+                        "value": {
+                            "related": True,
+                            "target": {"preview": "<button>", "sel": "#x"},
+                            "hit": None,
+                        }
+                    }
+                }
+            return {"result": {"value": ""}}
+        if method == "DOM.getContentQuads":
+            return {"quads": [[0.0, 0.0, 2.0, 0.0, 2.0, 4.0, 0.0, 4.0]]}
+        return {}
+
+
+def phase_6_engine_world_tiers(_kernel: Kernel) -> None:
+    """Injection tiers: isolated world, then main world, then a loud error.
+
+    No Chrome — the fake session answers the engine's CDP protocol. The clean
+    break means there is no legacy selector path left: when the utility world
+    is refused the same bundle evaluates in the main world (identical
+    semantics, no tamper isolation), and only when that fails too does the
+    action error — never a silent downgrade to something weaker.
+    """
+    from repld.browser import inject
+    from repld.browser.tab import Tab
+
+    # Tier 1: isolated world.
+    session = _EngineFakeSession()
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    handle = asyncio.run(inject.ensure_engine(tab))
+    assert_eq(handle.world, "utility", "isolated world grants → utility tier")
+    assert_true(
+        "Page.createIsolatedWorld" in session.sent,
+        "tier 1 goes through Page.createIsolatedWorld",
+    )
+
+    # Tier 2: isolated world refused → same engine, main world.
+    session = _EngineFakeSession(isolated_world=False)
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    handle = asyncio.run(inject.ensure_engine(tab))
+    assert_eq(handle.world, "main", "createIsolatedWorld refusal → main-world tier")
+    assert_true(
+        session.bootstrap_evals == 1,
+        "the bundle still evaluates (main world, no contextId)",
+    )
+    print("  ✓ engine tiers: utility world first, main world when refused")
+
+    # Both tiers dead → EngineUnavailable propagates from the action.
+    session = _EngineFakeSession(isolated_world=False)
+    session.fail_bootstrap = True
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    try:
+        asyncio.run(tab.click("#x"))
+        raise AssertionError("click on an uninjectable page must raise")
+    except inject.EngineUnavailable as exc:
+        assert_true(
+            "tab.js()" in str(exc),
+            f"the error names the escape hatches (got {exc})",
+        )
+    print("  ✓ both tiers failing is a loud EngineUnavailable, not a fallback")
+
+
+def phase_6_stale_context_retry(_kernel: Kernel) -> None:
+    """A stale engine handle re-ensures and retries exactly once.
+
+    No Chrome. Navigation kills the engine's execution context; when the
+    executionContextsCleared event hasn't landed yet, the next call fails with
+    a stale-context CDP error. call_engine must invalidate, re-instantiate,
+    and retry once — the same retry-once shape as Tab._exec.
+    """
+    from repld.browser import inject
+    from repld.browser.tab import Tab
+
+    session = _EngineFakeSession()
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    asyncio.run(inject.ensure_engine(tab))
+    assert_eq(session.bootstrap_evals, 1, "engine bootstrapped once")
+
+    session.fail_call_fn_once = "Cannot find context with specified id"
+    result = asyncio.run(inject.call_engine(tab, "function() { return 1; }", []))
+    assert_eq(session.bootstrap_evals, 2, "stale context → engine re-instantiated")
+    assert_true("result" in result, "and the retried call succeeded")
+
+    # A non-stale error propagates without a re-ensure.
+    session.fail_call_fn_once = "Some other CDP failure"
+    try:
+        asyncio.run(inject.call_engine(tab, "function() { return 1; }", []))
+        raise AssertionError("non-stale errors must propagate")
+    except RuntimeError as exc:
+        assert_true("Some other CDP failure" in str(exc), "verbatim propagation")
+    assert_eq(session.bootstrap_evals, 2, "and no needless re-instantiation")
+    print("  ✓ stale-context calls re-ensure the engine and retry exactly once")
+
+
+def phase_6_selector_translation(_kernel: Kernel) -> None:
+    """translate()/translate_fallbacks(): repld grammar → engine selectors.
+
+    Pure functions, no kernel or Chrome. The `internal:` spellings are load-
+    bearing: the public text= engine parses `"Save"s` as a literal string and
+    matches nothing, and there is no public label engine at all — both
+    verified against a live engine before this table was written.
+    """
+    from repld.browser.selector import translate, translate_fallbacks
+
+    cases = [
+        ("#app .btn", "css=#app .btn"),
+        ("main", "css=main"),
+        ("text=Save", 'internal:text="Save"s'),
+        ("role=button", "role=button"),
+        ('role=button[name="Update workflow"]', 'role=button[name="Update workflow"s]'),
+        ("role=option[name*=Nor]", 'role=option[name*="Nor"s]'),
+        ("role=link[name^=Home]", "role=link[name=/^Home/]"),
+        ("role=link[name^=A+B]", "role=link[name=/^A\\+B/]"),
+        ("label=Username", 'internal:label="Username"s'),
+        ("aria-ref=f2e5", "aria-ref=f2e5"),
+        ('text=He said "hi"', 'internal:text="He said \\"hi\\""s'),
+    ]
+    for repld_form, engine_form in cases:
+        assert_eq(translate(repld_form), engine_form, f"translate({repld_form!r})")
+
+    # :has-text distributes over every comma alternative of the role expansion.
+    ht = translate("button:has-text('OK')")
+    assert_true(
+        ht.startswith("css=")
+        and 'button:has-text("OK")' in ht
+        and '[role="button"]:has-text("OK")' in ht,
+        f"role expansion distributes :has-text (got {ht!r})",
+    )
+
+    # Retry forms widen, in order: text= falls back to exact aria-label.
+    fb = translate_fallbacks("text=Save")
+    assert_eq(
+        fb, ['internal:text="Save"s', 'css=[aria-label="Save"]'], "text= retry form"
+    )
+    assert_eq(translate_fallbacks("#x"), ["css=#x"], "plain CSS has no retry form")
+    print(f"  ✓ selector translation: {len(cases)} forms + has-text + retries")
+
+
+def phase_6_injected_source_provenance(_kernel: Kernel) -> None:
+    """The vendored bundle carries its license, pin, and no node leakage.
+
+    No kernel or Chrome. injected_source.py is generated (make injected) —
+    this guards the properties a regeneration must preserve: the Apache-2.0
+    header the license requires, a COMMIT that matches the build script's pin
+    (a drifted pin means the bundle and its recorded provenance disagree),
+    and a browser-only bundle (a require() of a node builtin would throw at
+    injection time on every page).
+    """
+    import re as _re
+    from pathlib import Path
+
+    from repld.browser import injected_source
+
+    assert_true(
+        "Apache License" in (injected_source.__doc__ or ""),
+        "generated module carries the Apache-2.0 header",
+    )
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "build_injected.py"
+    ).read_text()
+    m = _re.search(r'PLAYWRIGHT_COMMIT = "([0-9a-f]{40})"', script)
+    assert_true(m is not None, "build script declares a full-hash pin")
+    assert_eq(
+        injected_source.COMMIT,
+        m.group(1),  # type: ignore[union-attr]
+        "bundle COMMIT matches the build script's pin",
+    )
+    src = injected_source.SOURCE
+    assert_true(len(src) > 100_000, "bundle is the real engine, not a stub")
+    assert_true("InjectedScript" in src, "bundle exports InjectedScript")
+    for builtin in ('require("fs")', "require('fs')", 'require("path")'):
+        assert_true(builtin not in src, f"no node builtin leakage: {builtin}")
+    print("  ✓ injected_source: Apache header, pin agreement, browser-only bundle")
+
 
 def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
     """click/tap/type_text/key/swipe raise a backgrounded tab before dispatching.
@@ -345,34 +588,9 @@ def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
     """
     from repld.browser.tab import Tab
 
-    class _FakeSession:
-        """CDPSession stand-in: records every command, answers Runtime.evaluate
-        with a fixed visibility so _ensure_front's branch is controllable."""
-
-        def __init__(self, visibility: str) -> None:
-            self.visibility = visibility
-            self.sent: list[str] = []
-
-        async def execute(
-            self, method: str, params: dict | None = None, timeout: float = 30
-        ) -> dict:
-            self.sent.append(method)
-            if method == "Runtime.evaluate":
-                return {"result": {"value": self.visibility}}
-            return {}
-
-    async def _center(*_a, **_kw) -> tuple[float, float]:
-        return (1.0, 2.0)
-
-    async def _node(*_a, **_kw) -> tuple[int, str]:
-        return (0, "null")
-
-    def _make_tab(visibility: str) -> tuple[Tab, "_FakeSession"]:
-        session = _FakeSession(visibility)
+    def _make_tab(visibility: str) -> tuple[Tab, "_EngineFakeSession"]:
+        session = _EngineFakeSession(visibility=visibility)
         tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
-        # Bypass selector resolution (DOM domain) — not what this test judges.
-        tab._element_center = _center  # type: ignore[method-assign]
-        tab._wait_for_node = _node  # type: ignore[method-assign]
         return tab, session
 
     async def _run(name: str, visibility: str):
@@ -897,19 +1115,20 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         )
         print("  ✓ ready-selector poll survives mid-wait navigation")
 
-        # Every custom selector form ranks visible matches over hidden ones.
-        # `text=` was the only one that considered visibility at all, so
-        # `text=Save` skipped the hidden button while `role=button[name="Save"]`
-        # returned it and the click landed on nothing. Each pair below puts the
-        # hidden match *first* in document order, so a form that ignores
-        # visibility picks the wrong one.
+        # Every custom selector form ranks visible matches over hidden ones —
+        # each pair in _SEL_HTML puts the hidden match *first* in document
+        # order, so a resolution that ignores visibility picks the wrong one.
+        # Under the engine this is the strictness policy's ranking half:
+        # multiple matches with exactly one visible resolve to it.
         out = _exec(
             f"_t4 = await browser.open('data:text/html,<p>{_MARKER}-sel</p>')\n"
             f"await _t4.js({json.dumps(f'document.body.innerHTML = {json.dumps(_SEL_HTML)}')})\n"
-            "from repld.browser.selector import resolve as _rs\n"
+            "from repld.browser import inject as _inj\n"
             f"for _s, _want in {_SEL_CASES!r}:\n"
-            "    _got = await _t4.js('(' + _rs(_s).js + ' || {}).id')\n"
-            "    print('SEL', _s, '->', _got, 'want', _want)\n"
+            "    _el = await _inj.resolve_element(_t4, _s)\n"
+            "    _r = await _inj.call_engine(_t4, 'function(el){return el.id;}',"
+            " [{'objectId': _el.object_id}])\n"
+            "    print('SEL', _s, '->', _r['result']['value'], 'want', _want)\n"
         )
         for sel, want in _SEL_CASES:
             assert_true(
@@ -1035,13 +1254,14 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
 
 
 def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
-    """selector.py's text=/role=/label= forms pierce shadow DOM.
+    """The engine's selector forms pierce shadow DOM, ranked visible-first.
 
     Reproduces the chrome://extensions bug (2026-08-10): Lit/Polymer WebUI
-    pages are built entirely of shadow roots, and the JS candidate builders in
-    selector.py only ever queried the light DOM. Reuses `_SEL_HTML`/`_SEL_CASES`
-    from the light-DOM ranking test above, nested two shadow roots deep so the
-    fix has to actually recurse rather than just peek one level down.
+    pages are built entirely of shadow roots. Reuses `_SEL_HTML`/`_SEL_CASES`
+    from the light-DOM ranking test, nested two shadow roots deep so the
+    resolution has to actually recurse rather than just peek one level down —
+    the engine's css/role/text engines pierce open shadow roots natively, and
+    this is the check that keeps that true across bundle bumps.
     """
     if not _chrome_ready("phase 6 shadow DOM selectors"):
         return
@@ -1073,9 +1293,12 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
         out = _exec(
             f"_ts = await browser.open('data:text/html,<p>{_MARKER}-shadow</p>')\n"
             f"await _ts.js({json.dumps(build_js)})\n"
-            "from repld.browser.selector import resolve as _rs\n"
+            "from repld.browser import inject as _inj\n"
             f"for _s, _want in {_SEL_CASES!r}:\n"
-            "    _got = await _ts.js('(' + _rs(_s).js + ' || {}).id')\n"
+            "    _el = await _inj.resolve_element(_ts, _s)\n"
+            "    _r = await _inj.call_engine(_ts, 'function(el){return el.id;}',"
+            " [{'objectId': _el.object_id}])\n"
+            "    _got = _r['result']['value']\n"
             "    print('SHSEL', _s, '->', _got, 'want', _want)\n"
         )
         for sel, want in _SEL_CASES:
@@ -1124,6 +1347,7 @@ def phase_6(kernel: Kernel) -> None:
             "browser_body",
             "browser_click",
             "browser_type",
+            "browser_select",
             "browser_console",
             "browser_screenshot",
             "browser_cdp",
@@ -1306,7 +1530,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
     halves asserted together are the point: bare names must read as selectors
     *and* real expressions must still read as JS.
     """
-    from repld.browser.selector import looks_like_selector, resolve
+    from repld.browser.selector import looks_like_selector, translate
 
     selectors = [
         ".app-root",
@@ -1320,6 +1544,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "role=button[name='Save']",
         "label=Username",
         "button:has-text('OK')",
+        "aria-ref=e12",
     ]
     expressions = [
         "window.__ready",
@@ -1333,11 +1558,10 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
     wrong = [e for e in expressions if looks_like_selector(e)]
     assert_eq(wrong, [], "JS expressions still read as JS, not as selectors")
 
-    # And what a selector resolves to is querySelector-shaped, so the
-    # `!!(...)` the ready poll wraps it in is a truthiness test on a node.
-    assert_true(
-        "querySelector" in resolve("main").js,
-        f"a bare tag resolves through querySelector (got {resolve('main').js!r})",
+    # And a bare tag translates as CSS for the engine, so the existence poll
+    # queries it rather than evaluating it as an identifier.
+    assert_eq(
+        translate("main"), "css=main", "a bare tag translates to a css engine query"
     )
     print(
         f"  ✓ ready= classification: {len(selectors)} selector forms, "
@@ -1457,3 +1681,362 @@ def phase_6_since_time_base(_kernel: Kernel) -> None:
     finally:
         session.cleanup()
     print("  ✓ since= is epoch seconds across network/console/sse/lifecycle")
+
+
+class _BridgeHarness:
+    """Initialize-and-exec boilerplate shared by the engine's Chrome tests."""
+
+    def __init__(self, kernel: Kernel) -> None:
+        self.b = Bridge(kernel.cwd)
+        self.b.call("initialize", {"protocolVersion": "2024-11-05"})
+        self.b.send("notifications/initialized", {}, notif=True)
+
+    def exec(self, code: str, timeout: float = 20) -> str:
+        resp = self.b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": code, "timeout": timeout}},
+            timeout=timeout + 10,
+        )
+        return resp["result"]["content"][0]["text"]
+
+    def tool(self, name: str, args: dict, timeout: float = 30) -> dict:
+        """Raw response — callers pick result or error by what they assert."""
+        return self.b.call(
+            "tools/call", {"name": name, "arguments": args}, timeout=timeout
+        )
+
+    def open_tab(self, html: str) -> str:
+        """browser_open a data: URL (marker appended), return its target id."""
+        url = f"data:text/html,{html}<i>{_MARKER}</i>"
+        resp = self.tool("browser_open", {"url": url})
+        text = resp["result"]["content"][0]["text"]
+        m = re.search(r"target: (\S+)", text)
+        assert m, f"browser_open observation carries no target ({text[:200]!r})"
+        return m.group(1)
+
+    def close(self) -> None:
+        _close_marked_tabs()
+        self.b.close()
+
+
+def phase_6_strict_violation(kernel: Kernel) -> None:
+    """Ambiguous selectors error with a candidate digest; ranked cases still pass.
+
+    The first half is the Jira-session failure mode: two visible "Save"
+    buttons used to be resolved silently (first match wins), and the misclick
+    cost a screenshot round-trip to notice. The second half is the compat
+    guard on the strictness policy: a hidden+visible pair is *not* ambiguous —
+    visibility ranks, and the receipt carries the "[2 matches, 1 visible]"
+    note instead of an error.
+    """
+    if not _chrome_ready("phase 6 strict violation"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab("<button id=s1>Save</button><button id=s2>Save</button>")
+        resp = h.tool("browser_click", {"target": tid, "selector": "text=Save"})
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "resolved to 2 elements" in msg and "s1" in msg and "s2" in msg,
+            f"two visible matches error with both candidates (got {msg[:200]!r})",
+        )
+        print("  ✓ ambiguous selector fails loudly with a candidate digest")
+
+        tid = h.open_tab(_SEL_HTML)
+        resp = h.tool("browser_click", {"target": tid, "selector": "text=Save"})
+        text = resp["result"]["content"][0]["text"]
+        first = text.splitlines()[0]
+        assert_true(
+            first.startswith("clicked:") and "vb" in first,
+            f"hidden+visible pair resolves to the visible one (got {first!r})",
+        )
+        assert_true(
+            "[2 matches, 1 visible]" in first,
+            f"and the receipt says the ranking happened (got {first!r})",
+        )
+        print("  ✓ visible-over-hidden ranking survives, announced in the receipt")
+    finally:
+        h.close()
+
+
+def phase_6_click_receipt(kernel: Kernel) -> None:
+    """Every click reports what it hit; an intercepted click warns, same call.
+
+    The receipt is taken pre-dispatch (the click's own handlers may re-render
+    the DOM) and the intercepted click still dispatches — repld observes and
+    reports, it does not refuse.
+    """
+    if not _chrome_ready("phase 6 click receipt"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            '<button id=tgt onclick="window.hit=(window.hit||0)+1">Buy</button>'
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("clicked:") and "tgt" in first,
+            f"receipt names the element hit (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
+        )
+        assert_true("HIT 1" in out, f"and the click actually landed (got {out!r})")
+
+        h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "await _t.js(\"const d = document.createElement('div'); d.id = 'ov';"
+            " d.style.cssText = 'position:fixed;inset:0';"
+            ' document.body.appendChild(d)")'
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("warning:") and "ov" in first and "not" in first,
+            f"an intercepted click warns, naming the interceptor (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
+        )
+        assert_true("HIT 1" in out, "the overlaid click dispatched but didn't land")
+        print("  ✓ click receipts: named target, and interception warns in-call")
+    finally:
+        h.close()
+
+
+def phase_6_actionability(kernel: Kernel) -> None:
+    """Input waits for visible/enabled/stable — and fails naming the miss.
+
+    A disabled control errors inside the bounded wait instead of clicking a
+    dead element; a control enabled 500 ms later is waited for and clicked.
+    """
+    if not _chrome_ready("phase 6 actionability"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            "<button id=dead disabled>Go</button>"
+            '<button id=slow disabled onclick="window.went=1">Go slow</button>'
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#dead"})
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "not enabled" in msg,
+            f"a disabled control errors naming the missing state (got {msg!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            'await _t.js("setTimeout(() =>'
+            " document.getElementById('slow').disabled = false, 500)\")\n"
+            "_r = await _t.click('#slow')\n"
+            "print('RECEIPT', _r)\n"
+            "print('WENT', await _t.js('window.went'))"
+        )
+        assert_true(
+            "RECEIPT clicked:" in out and "WENT 1" in out,
+            f"a 500ms-delayed enable is waited out and clicked (got {out!r})",
+        )
+        print("  ✓ actionability: disabled fails loudly, delayed-enable is waited for")
+    finally:
+        h.close()
+
+
+def phase_6_react_controlled_input(kernel: Kernel) -> None:
+    """type_text lands text in a framework-controlled input via the fallback.
+
+    The fixture hand-rolls react-dom's behavior: trusted input events are
+    reverted (the app owns the value), synthetic ones accepted into app state.
+    Raw keystrokes therefore change nothing — the signature type_text detects
+    before switching to the native-setter + synthetic-events path, which works
+    cross-world because instance-level descriptor patches don't cross worlds.
+    """
+    if not _chrome_ready("phase 6 react controlled input"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        fixture = (
+            "<input id=ri><script>"
+            "const el = document.getElementById('ri');"
+            "window.appState = '';"
+            "const desc = Object.getOwnPropertyDescriptor("
+            "HTMLInputElement.prototype, 'value');"
+            "el.addEventListener('input', (e) => {"
+            " if (e.isTrusted) desc.set.call(el, window.appState);"
+            " else window.appState = el.value; });"
+            "</script>"
+        )
+        tid = h.open_tab(fixture)
+        resp = h.tool(
+            "browser_type",
+            {"target": tid, "selector": "#ri", "text": "styrbord"},
+        )
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            "native-setter fallback" in first,
+            f"receipt says the fallback path was taken (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('STATE', await _t.js('window.appState'))"
+        )
+        assert_true(
+            "STATE styrbord" in out,
+            f"the app's own state saw the text (got {out!r})",
+        )
+        print("  ✓ controlled input: fallback fires, app state gets the value")
+    finally:
+        h.close()
+
+
+def phase_6_select_option(kernel: Kernel) -> None:
+    """browser_select drives native <select> and custom listboxes; a miss lists options."""
+    if not _chrome_ready("phase 6 select option"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            '<select id=sel onchange="window.picked=this.value">'
+            "<option>Norway</option><option>Sweden</option></select>"
+            "<button id=dd onclick=\"document.getElementById('lb')"
+            ".style.display='block'\">Choose city</button>"
+            "<div id=lb role=listbox style=display:none>"
+            '<div role=option onclick="window.city=this.textContent">Oslo</div>'
+            '<div role=option onclick="window.city=this.textContent">Bergen</div>'
+            "</div>"
+        )
+        resp = h.tool(
+            "browser_select", {"target": tid, "selector": "#sel", "option": "Sweden"}
+        )
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith('selected "Sweden"'),
+            f"native select receipt (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('PICKED', await _t.js('window.picked'))"
+        )
+        assert_true(
+            "PICKED Sweden" in out,
+            f"native select fired change into the app (got {out!r})",
+        )
+
+        resp = h.tool(
+            "browser_select", {"target": tid, "selector": "#dd", "option": "Bergen"}
+        )
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith('selected "Bergen"'),
+            f"custom listbox receipt (got {first!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('CITY', await _t.js('window.city'))"
+        )
+        assert_true("CITY Bergen" in out, f"the option click landed (got {out!r})")
+
+        resp = h.tool(
+            "browser_select",
+            {"target": tid, "selector": "#dd", "option": "Trondheim"},
+        )
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "Oslo" in msg and "Bergen" in msg,
+            f"a miss lists the visible options (got {msg[:200]!r})",
+        )
+        print("  ✓ select_option: native, custom listbox, and an actionable miss")
+    finally:
+        h.close()
+
+
+def phase_6_aria_ref_roundtrip(kernel: Kernel) -> None:
+    """browser_tree refs act as selectors, die on navigation with a hint, and
+    mode='ax' keeps the ref-less CDP tree."""
+    if not _chrome_ready("phase 6 aria-ref roundtrip"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab('<button id=cm onclick="window.hit=1">Click me</button>')
+        resp = h.tool("browser_tree", {"target": tid})
+        tree = resp["result"]["content"][0]["text"]
+        m = re.search(r'button "Click me" \[ref=(f\d+e\d+)\]', tree)
+        assert_true(m is not None, f"aria snapshot carries a button ref ({tree!r})")
+        ref = m.group(1)  # type: ignore[union-attr]
+
+        resp = h.tool("browser_click", {"target": tid, "selector": f"aria-ref={ref}"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(first.startswith("clicked:"), f"ref click resolves (got {first!r})")
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
+        )
+        assert_true("HIT 1" in out, f"the ref click landed (got {out!r})")
+
+        h.tool(
+            "browser_navigate",
+            {"target": tid, "url": f"data:text/html,<p>{_MARKER}-next</p>"},
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": f"aria-ref={ref}"})
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "fresh snapshot" in msg,
+            f"a dead ref explains itself instead of a bare miss (got {msg!r})",
+        )
+
+        resp = h.tool("browser_tree", {"target": tid, "mode": "ax"})
+        ax = resp["result"]["content"][0]["text"]
+        assert_true(
+            "[ref=" not in ax,
+            f"mode='ax' keeps the ref-less CDP tree (got {ax[:200]!r})",
+        )
+        print("  ✓ aria-ref roundtrip: click by ref, dead-ref hint, ax mode intact")
+    finally:
+        h.close()
+
+
+def phase_6_engine_reinjection(kernel: Kernel) -> None:
+    """The engine re-instantiates per document and per session.
+
+    Navigation destroys the execution context (a fresh handle appears on the
+    next resolve); a reattach kills the objectId with its sessionId, so
+    `_reattach_core` must drop the cache — this drives the real
+    `reattach_session` path against live Chrome, the same route a WebSocket
+    reconnect takes.
+    """
+    if not _chrome_ready("phase 6 engine reinjection"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab("<button id=x>X</button>")
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "from repld.browser import inject as _inj\n"
+            "await _inj.resolve_element(_t, '#x')\n"
+            "_h1 = _t._session._injected\n"
+            f"await _t.navigate('data:text/html,<button id=y>Y</button><i>{_MARKER}</i>')\n"
+            "await _inj.resolve_element(_t, '#y')\n"
+            "_h2 = _t._session._injected\n"
+            "print('NAV', _h1 is not None, _h2 is not None, _h1 is not _h2)\n"
+            "await _t._session.browser_session.reattach_session(_t._session)\n"
+            "print('REATTACH-CLEARED', _t._session._injected is None)\n"
+            "await _inj.resolve_element(_t, '#y')\n"
+            "print('REATTACH-RESOLVED', _t._session._injected is not None)",
+            timeout=30,
+        )
+        assert_true(
+            "NAV True True True" in out,
+            f"navigation yields a fresh engine instance (got {out!r})",
+        )
+        assert_true(
+            "REATTACH-CLEARED True" in out,
+            f"reattach_session drops the stale handle (got {out!r})",
+        )
+        assert_true(
+            "REATTACH-RESOLVED True" in out,
+            f"and the next resolve re-instantiates (got {out!r})",
+        )
+        print(
+            "  ✓ engine reinjection: per document (navigate) and per session (reattach)"
+        )
+    finally:
+        h.close()

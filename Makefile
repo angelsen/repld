@@ -1,6 +1,9 @@
 ROOT := $(shell git rev-parse --show-toplevel)
 
-.PHONY: deploy site-build site-preview
+.PHONY: deploy site-build site-preview injected
+
+injected:
+	uv run python scripts/build_injected.py
 
 deploy: site-build
 	@git branch -D gh-pages >/dev/null 2>&1 || true

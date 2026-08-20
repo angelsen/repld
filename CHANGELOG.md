@@ -8,11 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Vendored Playwright's `InjectedScript` engine** (Apache-2.0, see THIRD_PARTY_LICENSES.md) as `browser/injected_source.py`, built in-repo from a pinned microsoft/playwright commit via `make injected` (node/esbuild at dev time only). Injected lazily once per document into an isolated utility world (main world on the few targets that refuse one; a loud `EngineUnavailable` if neither injects), re-instantiated automatically across navigation and reattach.
+- **Strict selector resolution.** A selector matching more than one element with no single visible winner now errors with a candidate digest (preview + generated selector for up to 10 candidates) instead of silently picking the first — wrong-element clicks become impossible rather than diagnosable. A lone match is still used visible or not, and a hidden-vs-visible pair still resolves to the visible one, now announced in the receipt (`[2 matches, 1 visible]`).
+- **Click/type receipts.** `Tab.click`/`tap`/`type_text`/`select_option` return a `Receipt` naming what the action actually hit (`clicked: <button id="save">Save</button> — #save (412,133)`), with a warning when an overlay intercepts the point — surfaced as the first line of the `browser_click`/`browser_type`/`browser_select` observation.
+- **Actionability waits.** Input methods wait (2 s budget) for the element to be visible, enabled and stable (rAF-based, Playwright's `checkElementStates`) before dispatching; failures name the missing state.
+- **Widget-aware typing.** `type_text` verifies the value landed; when keystrokes changed nothing (a framework-controlled input reverting them), it falls back to the native prototype value setter + bubbled `input`/`change` events — React's `_valueTracker` can't see the write across worlds — and re-verifies.
+- **`Tab.select_option(selector, option)` + `browser_select` tool.** Native `<select>` (option by label else value, set via the prototype setter) or custom listbox (click field → wait for `role=option` → click it); a miss lists the visible options' accessible names.
+- **`aria-ref=` selectors + aria snapshots.** `browser_tree` / `tab.tree()` default to Playwright's `ariaSnapshot({mode:'ai'})` — an LLM-oriented snapshot whose `[ref=eN]` handles are directly clickable as `aria-ref=eN` until the next snapshot, navigation, or reattach (a dead ref errors with a fresh-snapshot hint). `mode="ax"` keeps the raw CDP accessibility tree.
+- Real W3C accessible-name matching: `role=X[name=]` and `label=` now use the engine's accname algorithm (labels, alt text, `aria-labelledby`) instead of textContent/aria-label approximations; every selector form pierces open shadow roots through the engine's own css/role/text engines.
+- **MCP 2025-06-18** with proper version negotiation: a supported requested version is echoed back (previously the server always answered its own, telling newer clients less than it supports and older clients to disconnect). Additive protocol features: **tool annotations** (`readOnlyHint` on every query tool, `openWorldHint` on everything driving the live web, `destructiveHint`/`idempotentHint` where they apply), **structured tool output** (`get_task` declares an `outputSchema` and returns `structuredContent`; gist tools returning dicts carry them as `structuredContent` alongside the text), `resources/templates/list` advertises `repld://gists/{name}` (was hardcoded empty), and a real `ping` handler — answered by the bridge itself on cold sessions, so a liveness probe costs no kernel.
+
 ### Changed
 
-### Fixed
-
-### Removed
+- **Selector resolution is engine-only — the legacy first-visible-pick path is removed** (`_PICK_FN`, `_DEEP_QSA_FN`, and the custom-form JS builders in `selector.py` are gone; `selector.py` is now a pure translation layer). Legacy custom selectors already required `Runtime.evaluate`, so pages the engine can't serve were already unserved; the escape hatches on such pages are `tab.js()` and coordinate `click(x, y)`.
+- `Tab.click`/`tap`/`type_text` return a `Receipt` (previously `None`).
+- `browser_tree`'s default output is the aria snapshot; pass `mode="ax"` for the previous tree format.
+- `text=` matching is exact on normalized text (with an exact `aria-label` retry); former shortest-text tie-breaks among multiple visible matches now surface as strict-violation errors whose digest makes the fix a copy-paste.
 
 ## [0.2.9] - 2026-08-11
 
