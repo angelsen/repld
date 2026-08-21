@@ -886,6 +886,7 @@ class Tab(TabQueryMixin):
         *,
         steps: int = 12,
         duration_ms: int = 400,
+        dwell_ms: int = 150,
     ) -> Receipt:
         """Mouse drag from *source* to *to* — press, paced moves, release,
         atomically in one call. Endpoints are selectors or (x, y) / 'x,y'.
@@ -901,6 +902,13 @@ class Tab(TabQueryMixin):
         A drop target that only appears once the drag starts (drop zones) is
         handled: if *to* doesn't resolve up front, the drag begins and the
         selector is re-resolved mid-gesture.
+
+        *dwell_ms* holds the pointer at the drop point (repeated same-position
+        mouseMoved events) before releasing — many editors run their own
+        debounced hit-detection on move events and only arm a drop target
+        once it reports itself hovered, which a same-frame arrive-then-release
+        never gives time to fire. 0 disables the hold for gestures where it's
+        pure overhead (sliders, whole-node moves).
         """
         await self._ensure_front()
         x1, y1, src_el, src_desc = await self._resolve_drag_point(source)
@@ -980,6 +988,14 @@ class Tab(TabQueryMixin):
                 frac = i / steps
                 await _move(sx + (x2 - sx) * frac, sy + (y2 - sy) * frac)
                 await asyncio.sleep(delay)
+
+            if dwell_ms > 0:
+                # Same-position moves, not a bare sleep: a debounced drop
+                # handler is listening for mousemove, and a hold with no
+                # events during it never reaches the handler at all.
+                for _ in range(3):
+                    await _move(x2, y2)
+                    await asyncio.sleep(dwell_ms / 3 / 1000)
 
             drop_note = ""
             warning = False

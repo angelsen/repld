@@ -474,6 +474,7 @@ class BrowserDispatchMixin:
                     args["to"],
                     steps=int(args.get("steps", 12)),
                     duration_ms=int(args.get("duration_ms", 400)),
+                    dwell_ms=int(args.get("dwell_ms", 150)),
                 )
             )
 

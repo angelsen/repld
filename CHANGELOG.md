@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`dwell_ms` on `browser_drag`** (default 150) — holds the pointer at the drop point with repeated same-position `mouseMoved` events before releasing. A debounced drop handler (the common shape in edge-draw/canvas editors) only arms a drop target once its own move-event hit-detection reports the pointer hovered there; a same-frame arrive-then-release never gave it the chance to fire, so the micro-stepped drag now reached the drop point but the drop itself silently didn't register. Found live on the same Jira workflow editor as the micro-step fix, one gesture phase later. Pass `dwell_ms=0` to skip it for gestures where it's pure overhead (sliders, whole-node moves).
+
 ### Changed
 
 ### Fixed

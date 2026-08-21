@@ -2313,7 +2313,8 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
     """browser_hover parks the pointer (hover-revealed UI enters the diff and
     stays clickable, and a presentational reveal falls back to the dom: line);
     browser_drag presses, moves with buttons=1, releases — micro-stepping out
-    of a small origin, and re-resolving a drop zone that mounts on dragstart."""
+    of a small origin, dwelling at the drop point for a debounced drop
+    handler, and re-resolving a drop zone that mounts on dragstart."""
     if not _chrome_ready("phase 6 hover and drag"):
         return
     h = _BridgeHarness(kernel)
@@ -2339,6 +2340,10 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             'width:40px;height:40px;background:gray"></div>'
             '<div id=jsrev style="position:absolute;left:400px;top:20px;'
             'width:60px;height:30px;background:orange"></div>'
+            '<div id=dsrc style="position:absolute;left:440px;top:380px;'
+            'width:20px;height:20px;background:teal"></div>'
+            '<div id=dtgt style="position:absolute;left:700px;top:380px;'
+            'width:30px;height:30px;background:pink"></div>'
             "<script>"
             "let down=0,moves=0;"
             "document.getElementById('src').addEventListener('mousedown',()=>{down=1});"
@@ -2376,6 +2381,22 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             "document.getElementById('jsrev').addEventListener('mouseenter',()=>{"
             "for(let i=0;i<3;i++){document.body.appendChild("
             "document.createElement('div'))}});"
+            # A drop handler that debounces its own hit-detection on move
+            # events, the shape browser_drag's dwell_ms exists for: armed
+            # only after 80ms of continuous inside-target movement, and a
+            # release before that doesn't count as a drop.
+            "document.getElementById('dsrc').addEventListener('mousedown',()=>{"
+            "window.dwellDropped=undefined;window.__dwellIn=null;"
+            "window.__dwellArmed=false});"
+            "document.addEventListener('mousemove',e=>{if(e.buttons!==1)return;"
+            "const r=document.getElementById('dtgt').getBoundingClientRect();"
+            "const inside=e.clientX>=r.left&&e.clientX<=r.right"
+            "&&e.clientY>=r.top&&e.clientY<=r.bottom;"
+            "if(inside){if(window.__dwellIn===null)window.__dwellIn=performance.now();"
+            "if(performance.now()-window.__dwellIn>=80)window.__dwellArmed=true;}"
+            "else{window.__dwellIn=null;window.__dwellArmed=false}});"
+            "document.getElementById('dtgt').addEventListener('mouseup',()=>{"
+            "window.dwellDropped=window.__dwellArmed?1:0});"
             "</script>"
         )
 
@@ -2464,9 +2485,40 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             f"micro-steps arm a 10px origin's slop threshold before leaving it"
             f" (got {out!r})",
         )
+
+        resp = h.tool(
+            "browser_drag",
+            {"target": tid, "from": "#dsrc", "to": "#dtgt", "dwell_ms": 0},
+        )
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(first.startswith("dragged:"), f"dwell_ms=0 receipt (got {first!r})")
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('DWELL0', await _t.js('window.dwellDropped'))"
+        )
+        assert_true(
+            "DWELL0 0" in out,
+            f"arrive-then-release doesn't arm a debounced drop handler (got {out!r})",
+        )
+
+        resp = h.tool("browser_drag", {"target": tid, "from": "#dsrc", "to": "#dtgt"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(
+            first.startswith("dragged:"), f"default-dwell receipt (got {first!r})"
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('DWELL1', await _t.js('window.dwellDropped'))"
+        )
+        assert_true(
+            "DWELL1 1" in out,
+            f"the default dwell arms a debounced drop handler before release"
+            f" (got {out!r})",
+        )
         print(
             "  ✓ hover parks + reveals (dom: fallback, x,y form); drag is atomic,"
-            " paced, micro-stepped, and resolves mid-gesture"
+            " paced, micro-stepped, dwells for debounced drop handlers, and"
+            " resolves mid-gesture"
         )
     finally:
         h.close()

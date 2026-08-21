@@ -525,18 +525,23 @@ Convention: add data-testid to your root layout component.
       accessible proxy sits elsewhere (SVG diagram nodes): hover has no
       element.click()-style fallback, so a proxy hover parks on the proxy.
 
-  tab.drag(source, to, *, steps=12, duration_ms=400)         → Receipt
+  tab.drag(source, to, *, steps=12, duration_ms=400, dwell_ms=150)  → Receipt
       Mouse drag in one call: press on source, paced mouseMoved events with
-      the button held, release on to.  Endpoints are selectors (strictly
-      resolved, scrolled into view) or (x, y) tuples / 'x,y' strings.  The
-      first moves are 2px micro-steps, so a small origin (a 10px SVG port)
-      arms its drag-slop threshold before the pointer leaves it.  A drop
-      target that only appears once the drag starts is re-resolved
-      mid-gesture.  Covers pointer/mouse-event drag (SVG editors, sliders,
-      drag libraries); native HTML5 draggable=true DnD rides a different
-      browser pipeline these events don't start — an observation saying
-      "changes: none" after dragging one is the tell.  The Receipt names
-      both endpoints and warns if the drop point was occluded.
+      the button held, dwell at the drop point, release on to.  Endpoints
+      are selectors (strictly resolved, scrolled into view) or (x, y)
+      tuples / 'x,y' strings.  The first moves are 2px micro-steps, so a
+      small origin (a 10px SVG port) arms its drag-slop threshold before
+      the pointer leaves it.  dwell_ms holds the pointer at the drop point
+      with repeated same-position moves before releasing — a debounced
+      drop handler needs move events to see the pointer as hovered before
+      a release counts as a drop; 0 disables it for gestures where it's
+      pure overhead (sliders, whole-node moves).  A drop target that only
+      appears once the drag starts is re-resolved mid-gesture.  Covers
+      pointer/mouse-event drag (SVG editors, sliders, drag libraries);
+      native HTML5 draggable=true DnD rides a different browser pipeline
+      these events don't start — an observation saying "changes: none"
+      after dragging one is the tell.  The Receipt names both endpoints
+      and warns if the drop point was occluded.
 
   tab.key(key)                                               → None
       Dispatch one key press: named keys ("Enter", "Backspace", "ArrowLeft",
@@ -1278,7 +1283,7 @@ Tab (async unless noted):
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
   tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
   tab.hover(selector)                              → Receipt (park the pointer on an element or 'x,y' point; hover-revealed UI stays up)
-  tab.drag(source, to, steps=, duration_ms=)       → Receipt (press→paced moves→release in one call; endpoints are selectors or (x,y)/'x,y')
+  tab.drag(source, to, steps=, duration_ms=, dwell_ms=)  → Receipt (press→micro-steps→paced moves→dwell→release; endpoints are selectors or (x,y)/'x,y')
   tab.key(key)                                     → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
   tab.keys(keys, delay_ms=)                        → None (sequence of presses in one call)
   tab.wait_for(selector, timeout=5)                → None (wait for element to appear)

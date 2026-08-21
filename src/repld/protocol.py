@@ -387,15 +387,15 @@ TOOLS = [
     {
         "name": "browser_drag",
         "description": (
-            "Mouse drag in a single call: press, paced moves with the button "
-            "held, release — gesture state can't survive being split across "
-            "calls. Endpoints are selectors (strictly resolved) or 'x,y' "
-            "coordinates. A drop target that only appears once the drag "
-            "starts is re-resolved mid-gesture. Covers pointer/mouse-event "
-            "drag (SVG editors, sliders, drag libraries); native HTML5 "
-            "draggable DnD rides a different browser pipeline — an "
-            "observation saying 'changes: none' after dragging one is the "
-            "tell. Returns receipt + observation."
+            "Mouse drag in a single call: press, micro-stepped then paced "
+            "moves with the button held, dwell, release — gesture state "
+            "can't survive being split across calls. Endpoints are selectors "
+            "(strictly resolved) or 'x,y' coordinates. A drop target that "
+            "only appears once the drag starts is re-resolved mid-gesture. "
+            "Covers pointer/mouse-event drag (SVG editors, sliders, drag "
+            "libraries); native HTML5 draggable DnD rides a different "
+            "browser pipeline — an observation saying 'changes: none' after "
+            "dragging one is the tell. Returns receipt + observation."
         ),
         "inputSchema": {
             "type": "object",
@@ -418,6 +418,16 @@ TOOLS = [
                     "type": "integer",
                     "default": 400,
                     "description": "Total move time across the steps",
+                },
+                "dwell_ms": {
+                    "type": "integer",
+                    "default": 150,
+                    "description": (
+                        "Hold at the drop point (repeated same-position "
+                        "moves) before releasing, for drop handlers that "
+                        "debounce their own hit-detection on move events. "
+                        "0 disables it."
+                    ),
                 },
             },
             "required": ["target", "from", "to"],
