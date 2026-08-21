@@ -483,9 +483,14 @@ Convention: add data-testid to your root layout component.
       Raises BrowserJSError on JS exceptions (with preserved stack trace).
 
   tab.click(selector, *, button='left', click_count=1)       → Receipt
-      Mouse click via Input.dispatchMouseEvent (mousePressed + mouseReleased).
-      Produces isTrusted=true events.  Auto-waits up to 2s for the element,
-      then for visible/enabled/stable (actionability).  Strict resolution:
+      Mouse click: arrives (mouseMoved) then Input.dispatchMouseEvent
+      (mousePressed + mouseReleased).  The arrival matters beyond hover
+      styling — Chromium's native click synthesis can silently fail without
+      it on some pages (drag-capable elements are the confirmed case);
+      Playwright's own mouse implementation always moves before pressing
+      for the same reason.  Produces isTrusted=true events.  Auto-waits up
+      to 2s for the element, then for visible/enabled/stable
+      (actionability).  Strict resolution:
       a selector matching >1 element with no single visible winner raises
       with a candidate digest instead of guessing.  The Receipt names what
       the click actually hit ("clicked: <button…> — #save (412,133)").  When

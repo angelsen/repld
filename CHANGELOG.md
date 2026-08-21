@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`browser_click` could silently fail to register as a click on some pages.** `mousePressed`/`mouseReleased` with no preceding `mouseMoved` fired `pointerdown`/`mousedown`/`pointerup`/`mouseup` correctly but Chromium's native `click` synthesis never ran — found live on a Jira SVG workflow-diagram editor, where the receipt reported "clicked:" and nothing about the click was wrong from repld's side, yet the app never registered the interaction (no sidebar, nothing selected). Every JS-observable cause was ruled out by direct instrumentation: pressed-element identity and DOM membership held throughout, no position/layout shift, no `preventDefault()` at either event phase, no `setPointerCapture()`. The actual gate lives in Chromium's own drag-detection state machine, above the DOM event model — confirmed against Playwright's own `crInput.ts`, which routes a plain move through its `DragManager` but skips that specifically for a click's move ("click relies on move-down-up protocol commands being sent synchronously"), and whose `down()` skips dispatching `mousePressed` outright when a drag is already in flight. `click()` now dispatches an arrival `mouseMoved` before doing anything else, matching Playwright's own `Mouse.click()`, which calls `move()` unconditionally before every press.
+
 ### Removed
 
 ## [0.3.5] - 2026-08-21

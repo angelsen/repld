@@ -1945,6 +1945,60 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_click_arrival(kernel: Kernel) -> None:
+    """click() dispatches a mouseMoved arrival before mousePressed/
+    mouseReleased.
+
+    Found live: on a Jira SVG diagram editor, mousePressed/mouseReleased
+    with no preceding move dispatched pointerdown/mousedown/pointerup/
+    mouseup but never native `click` — confirmed via direct instrumentation
+    that no JS-observable cause explains it (pressed-element identity and
+    DOM membership held throughout, no position shift, no
+    preventDefault()/setPointerCapture() anywhere in the chain). Matches
+    Playwright's own crInput.ts, which routes a plain move through its
+    DragManager but skips that specifically for a click's move ("click
+    relies on move-down-up protocol commands being sent synchronously") —
+    Chromium's native drag-detection state machine, above the DOM event
+    model, can preempt click invisibly to any JS instrumentation. This
+    asserts the dispatch order directly (what's actually in repld's
+    control) rather than trying to reproduce the Chromium-internal
+    consequence, which needs page-specific drag machinery no offline
+    fixture engages.
+    """
+    if not _chrome_ready("phase 6 click arrival"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            "<button id=btn>Press me</button>"
+            "<script>window.order=[];"
+            "for (const t of ['mousemove','pointermove','mousedown','pointerdown'])"
+            " document.addEventListener(t, () => window.order.push(t),"
+            " {capture:true});"
+            "</script>"
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#btn"})
+        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        assert_true(first.startswith("clicked:"), f"click receipt (got {first!r})")
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\nprint('ORDER', await _t.js('window.order'))"
+        )
+        m = re.search(r"ORDER \[(.*)\]", out)
+        assert_true(m is not None, f"event order captured (got {out!r})")
+        order = [s.strip(" '\"") for s in m.group(1).split(",")] if m else []
+        assert_true(
+            order and order[0] in ("mousemove", "pointermove"),
+            f"the mouse arrives before any press event (got {order!r})",
+        )
+        assert_true(
+            "mousedown" in order and order.index("mousedown") > 0,
+            f"press comes strictly after arrival (got {order!r})",
+        )
+        print("  ✓ click() arrives (mouseMoved) before pressing")
+    finally:
+        h.close()
+
+
 def phase_6_actionability(kernel: Kernel) -> None:
     """Input waits for visible/enabled/stable — and fails naming the miss.
 

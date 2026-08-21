@@ -747,16 +747,40 @@ class Tab(TabQueryMixin):
     ) -> Receipt:
         """Coordinate resolution + hit receipt + dispatch for a resolved element.
 
-        The hit test runs *before* dispatch — the click's own handlers may
-        re-render the DOM. When the point lands on something unrelated, a
-        plain left-click switches to `element.click()`: dispatching at the
-        coordinates can start a drag on a pan layer, while a DOM click
-        reaches the resolved element the way assistive tech does. It is
-        isTrusted=false, so the receipt names the path taken. Modified clicks
-        (right/double) have no element.click() equivalent and keep the
-        coordinate dispatch plus the warning.
+        The mouse arrives (`mouseMoved`) before anything else runs. Found
+        live: `mousePressed`/`mouseReleased` with no preceding move on an
+        SVG diagram node fired pointerdown/mousedown/pointerup/mouseup but
+        never native `click` — and every JS-observable cause was ruled out
+        by direct instrumentation (pressed-element identity and DOM
+        membership held throughout, no position shift, no
+        `preventDefault()` at either event phase, no
+        `setPointerCapture`). The actual gate lives above the DOM event
+        model, in Chromium's own drag-detection state machine: Playwright's
+        `CRMouse.move` skips its `DragManager`'s
+        `interceptDragCausedByMove` specifically for click (the comment:
+        "click relies on move-down-up protocol commands being sent
+        synchronously"), and `CRMouse.down` skips dispatching
+        `mousePressed` outright when the drag manager thinks a drag is
+        already in flight — proof native drag detection can preempt click
+        handling invisibly to any JS instrumentation. Playwright's own
+        `Mouse.click()` calls `move()` unconditionally before every
+        `down()`/`up()` pair for exactly this reason; a plain
+        `mousePressed`+`mouseReleased` is not sufficient on a page whose
+        elements are drag targets. The hit test runs after the move (real
+        DOM, not the pre-arrival one) but still *before* dispatch — the
+        click's own handlers may re-render further still. When the point
+        lands on something unrelated, a plain left-click switches to
+        `element.click()`: dispatching at the coordinates can start a drag
+        on a pan layer, while a DOM click reaches the resolved element the
+        way assistive tech does. It is isTrusted=false, so the receipt names
+        the path taken. Modified clicks (right/double) have no
+        element.click() equivalent and keep the coordinate dispatch plus the
+        warning.
         """
         x, y = await self._element_center_of(el, selector)
+        await self._exec(
+            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
+        )
         data = await inject.hit_receipt(self, el, x, y)
         t = data.get("target") or {}
         hit = data.get("hit")
