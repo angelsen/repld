@@ -136,12 +136,17 @@ def save_hint() -> None:
     if pool is not None:
         hint["chrome_ports"] = pool.connected_ports
         hint["patterns"] = pool.patterns
-        from .browser.cdp import _suppress_patterns
+        from .browser.cdp import _no_capture_patterns, _suppress_patterns
 
         if _suppress_patterns:
             hint["suppress"] = sorted(_suppress_patterns)
         else:
             hint.pop("suppress", None)
+
+        if _no_capture_patterns:
+            hint["no_capture"] = sorted(_no_capture_patterns)
+        else:
+            hint.pop("no_capture", None)
     try:
         atomic_write_json(_hint_path, hint, chmod=0o600)
     except OSError:

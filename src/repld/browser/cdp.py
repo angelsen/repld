@@ -69,6 +69,13 @@ def _on_loop(loop: asyncio.AbstractEventLoop | None) -> bool:
 
 _suppress_patterns: set[str] = set()
 
+# URL globs exempted from Fetch-domain body capture (browser.no_capture) —
+# Chrome's Fetch.continueResponse/fulfillRequest replay path applies CORB/ORB
+# more strictly than a natively-fetched response, which false-positives as a
+# CORS block on same-origin resources from servers with no CORS/CORP headers
+# (old embedded-device admin UIs are the common case).
+_no_capture_patterns: set[str] = set()
+
 _DEDUP_WINDOW = 2.0  # seconds — collapse rapid bursts
 _HINT_WINDOW = 30.0  # seconds — track recurring errors for suppress hint
 _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window

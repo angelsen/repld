@@ -278,6 +278,33 @@ class BrowserPool:
 
         return sorted(_suppress_patterns)
 
+    def no_capture(self, pattern: str) -> str:
+        """Skip Fetch body capture on tabs whose URL matches this glob.
+
+        For servers where Chrome's Fetch-domain response replay trips CORB/ORB
+        on same-origin resources — see cdp.py's `_no_capture_patterns` comment.
+        """
+        from .cdp import _no_capture_patterns
+
+        _no_capture_patterns.add(pattern)
+        self._save_hint()
+        return f"no_capture {pattern!r} ({len(_no_capture_patterns)} active)"
+
+    def capture_ok(self, pattern: str) -> str:
+        """Undo `no_capture` for this pattern."""
+        from .cdp import _no_capture_patterns
+
+        _no_capture_patterns.discard(pattern)
+        self._save_hint()
+        return f"capture_ok {pattern!r} ({len(_no_capture_patterns)} active)"
+
+    @property
+    def no_capture_patterns(self) -> list[str]:
+        """URL globs currently exempted from Fetch body capture."""
+        from .cdp import _no_capture_patterns
+
+        return sorted(_no_capture_patterns)
+
     async def get(
         self,
         target: str,

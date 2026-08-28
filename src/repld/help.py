@@ -838,6 +838,22 @@ Suppress filter (opt-in):
   browser.suppressed                                list active patterns
   Suppressed patterns persist across kernel restarts.
 
+Fetch capture exemption (opt-in):
+  browser.no_capture("*asusrouter.com*")   skip Fetch body capture for matching tab URLs
+  browser.capture_ok("*asusrouter.com*")   undo — re-enable capture for matching tabs
+  browser.no_capture_patterns                list active exemption globs
+  For servers with no CORS/CORP headers (old embedded-device admin UIs are the
+  common case), Chrome's Fetch.continueResponse/fulfillRequest replay path
+  applies CORB/ORB more strictly than a natively-fetched response, which
+  false-positives as a CORS block on resources that are actually same-origin.
+  Exempting the host skips Fetch interception entirely on matching tabs —
+  tab.network()/tab.body() still work via the Tier-1 on-demand path, only the
+  proactive capture is lost. Exemption patterns persist across kernel restarts.
+  Unlike suppress/unsuppress, which apply live to every open tab immediately,
+  no_capture/capture_ok only take effect on the *next* attach — a tab that
+  already has Fetch enabled keeps capturing until it's re-attached.
+  tab.disable_capture() is still the retroactive per-tab knob for that case.
+
 == Selectors ==
 
 Same syntax across click, tap, type_text, select_option, hover, drag, wait_for:
@@ -1347,6 +1363,9 @@ Browser:
   browser.suppress(pattern)                      → str  mute console errors matching substring
   browser.unsuppress(pattern)                    → str  un-mute
   browser.suppressed                             → list[str]  active suppress patterns
+  browser.no_capture(url_glob)                   → str  skip Fetch body capture for matching tabs
+  browser.capture_ok(url_glob)                   → str  undo — re-enable capture
+  browser.no_capture_patterns                    → list[str]  active exemption globs
 
   ready= takes a selector or a JS expression, classified exactly as
   click/type_text classify theirs: '.', '#', '[', 'data-', a bare tag or

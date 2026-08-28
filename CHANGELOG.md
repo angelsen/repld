@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`browser.no_capture(url_glob)` / `capture_ok(url_glob)` / `no_capture_patterns`** — exempt matching tab URLs from Fetch-domain body capture, mirroring `suppress`/`unsuppress`/`suppressed`'s pattern-list shape and hint-file persistence. `browser.get()`/`open()` enable Fetch interception unconditionally for body capture, but Chrome's `Fetch.continueResponse`/`fulfillRequest` replay path applies CORB/ORB more strictly than a natively-fetched response — found live against an ASUS router's decade-old stock admin UI, which sends no CORS/CORP headers at all, where same-origin `<script>`/`<link>` loads failed with "blocked by CORS policy" even though CORS enforcement should never apply to a same-origin request in the first place. `tab.disable_capture()` worked as a one-tab-at-a-time fix but had to be re-applied on every fresh `open()`/`get()` for that host; `no_capture` persists the exemption so future attaches pick it up automatically. It only takes effect on the *next* attach, though — a tab that already has Fetch enabled keeps capturing until re-attached, so `tab.disable_capture()` remains the retroactive per-tab knob. `tab.network()`/`tab.body()` still work on an exempted tab via the Tier-1 on-demand path (`Network.getResponseBody`) — only the proactive capture is skipped.
+
 ### Changed
 
 ### Fixed

@@ -12,7 +12,7 @@ import time
 from fnmatch import fnmatch
 
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
-from .cdp import CDPSession
+from .cdp import CDPSession, _no_capture_patterns
 from .row import Rows
 from .session import WORKER_TYPES, BrowserSession
 from .tab import Tab
@@ -194,7 +194,9 @@ class Browser:
         cdp = await self._session.attach(tid, t)
         if cdp is None:
             return None
-        await cdp.enable_fetch()
+        url = cdp.target_info.get("url", "")
+        if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
+            await cdp.enable_fetch()
         return Tab(cdp, tid, self.port, ready=ready)
 
     async def _attach_racing(

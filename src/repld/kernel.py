@@ -909,7 +909,8 @@ def _restore_browser_state(
     """Recover browser state from the previous kernel's dashboard hint.
 
     Reconnects saved Chrome ports, re-watches patterns, and restores the
-    console-error suppress list. Best-effort — failures are reported to
+    console-error suppress list and the Fetch-capture exemption list.
+    Best-effort — failures are reported to
     stderr but never block boot. Reconnect/re-watch is opt-in: prompted on
     the real terminal when `interactive`, skipped otherwise (headless boot
     or non-tty stdin can't be prompted, so it defaults to not reconnecting).
@@ -953,6 +954,15 @@ def _restore_browser_state(
             from .browser.cdp import _suppress_patterns
 
             _suppress_patterns.update(suppress_list)
+        except ImportError:
+            pass
+
+    no_capture_list = hint.get("no_capture", [])
+    if no_capture_list:
+        try:
+            from .browser.cdp import _no_capture_patterns
+
+            _no_capture_patterns.update(no_capture_list)
         except ImportError:
             pass
 
