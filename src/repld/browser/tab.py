@@ -19,21 +19,21 @@ from .. import bg
 from ..channel import push_kind
 from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
+from . import inject
+from . import selector as selector_mod
 from .cdp import CDPSession
 from .pin import (
+    _PIN_JS,
     BINDING_NAME,
     _handle_binding,
     _next_label_color,
-    _PIN_JS,
     label_script,
 )
 from .png import _png_size, check_budget
-from . import inject
-from . import selector as selector_mod
 from .tab_query import TabQueryMixin
 from .target import make_target
 
-__all__ = ["Tab", "BrowserJSError", "Receipt"]
+__all__ = ["BrowserJSError", "Receipt", "Tab"]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
 # heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
@@ -212,6 +212,18 @@ class Tab(TabQueryMixin):
     async def disable_capture(self) -> None:
         """Disable proactive Fetch body capture. Awaitable."""
         await self._session.disable_fetch()
+
+    @property
+    def ready_confirmed(self) -> bool:
+        """True if the last ready-wait used an explicit ``ready=`` condition.
+
+        False if it fell back to the bare ``document.readyState === 'complete'``
+        default — a best-effort heuristic, not a confirmation the page's
+        content has actually rendered.  Lives on CDPSession, so it persists
+        across Tab re-wrapping (re-``get()``-ing an already-attached tab
+        returns the original attach's value, not a reset default).
+        """
+        return self._session._ready_confirmed
 
     # ------------------------------------------------------------------
     # Label API
@@ -480,9 +492,7 @@ class Tab(TabQueryMixin):
 
         await browser_session.reattach_session(self._session)
 
-        await self._await_ready_signal(
-            self._ready or "document.readyState === 'complete'"
-        )
+        await self._wait_condition()
         await asyncio.sleep(_POST_REATTACH_SETTLE_S)
 
     async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
@@ -1652,10 +1662,19 @@ class Tab(TabQueryMixin):
 
         return await settle([self], timeout=timeout, quiet=quiet)
 
-    async def _wait_ready(self, timeout: float = 10) -> None:
-        """Wait for the ready signal after navigation/reload, then network idle."""
+    async def _wait_condition(self, timeout: float = 10) -> None:
+        """Resolve and poll the ready signal, then record whether it was an
+        explicit ready= (confirmed) or the readyState fallback (a guess) —
+        only once the poll actually succeeds, since a raise leaves the Tab
+        unusable and must not leave a stale confirmed=True behind it.
+        """
         ready = self._ready or "document.readyState === 'complete'"
         await self._await_ready_signal(ready, timeout)
+        self._session._ready_confirmed = bool(self._ready)
+
+    async def _wait_ready(self, timeout: float = 10) -> None:
+        """Wait for the ready signal after navigation/reload, then network idle."""
+        await self._wait_condition(timeout)
         await self.wait_for_idle(timeout=2.0, quiet=0.3)
 
     async def reload(self) -> None:
@@ -1786,4 +1805,5 @@ class Tab(TabQueryMixin):
         return await self._exec(method, params if params else None)
 
     def __repr__(self) -> str:
-        return f"<Tab {self.target_id} {self.url!r}>"
+        rc = " ready=confirmed" if self.ready_confirmed else ""
+        return f"<Tab {self.target_id} {self.url!r}{rc}>"

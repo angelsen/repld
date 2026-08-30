@@ -82,7 +82,7 @@ _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
 
 class _DedupEntry:
-    __slots__ = ("count", "text", "meta")
+    __slots__ = ("count", "meta", "text")
 
     def __init__(self, text: str, meta: dict):
         self.count = 0
@@ -399,6 +399,12 @@ class CDPSession:
         self._label_text: str | None = None
         self._label_color: str | None = None
         self._label_script_id: str | None = None
+
+        # Whether the last ready-wait had an explicit caller-supplied ready=
+        # condition that was polled and satisfied, rather than the bare
+        # document.readyState fallback (a guess, not a confirmation) — same
+        # ephemeral-Tab-vs-persistent-CDPSession reasoning as pin/label above.
+        self._ready_confirmed: bool = False
 
         # Injected-engine handle (inject.EngineHandle) — lives here for the
         # same reason as pin/label state, and is *cache*, not registration:

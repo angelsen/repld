@@ -229,7 +229,7 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
         try:
             await asyncio.wait_for(s.enable_fetch(), timeout=2)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     assert_true(
@@ -1123,7 +1123,9 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
 
 def phase_6_label_and_reattach(kernel: Kernel) -> None:
     """Label state survives Tab re-wrapping; ready-selector poll survives a
-    document replacement mid-wait (regression: stale DOM.getDocument root).
+    document replacement mid-wait (regression: stale DOM.getDocument root);
+    ready_confirmed distinguishes an explicit ready= from the readyState
+    fallback and survives Tab re-wrapping the same way label does.
 
     Requires Chrome with --remote-debugging-port=9222; skips gracefully.
     """
@@ -1206,6 +1208,34 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             f"ready-selector survives document replacement (got {out!r})",
         )
         print("  ✓ ready-selector poll survives mid-wait navigation")
+
+        # ready_confirmed: True only when an explicit ready= was polled and
+        # satisfied; False for the bare readyState fallback. State lives on
+        # CDPSession, so a hot re-query (no wait at all) preserves the
+        # original attach's value rather than resetting on the fresh Tab.
+        out = _exec(
+            f"_rc1 = await browser.open('data:text/html,<p>{_MARKER}-rc1</p>')\n"
+            "print('RC1=' + repr(_rc1.ready_confirmed))\n"
+            "_rc2 = await browser.open("
+            f"'data:text/html,<div id=\"rc-el\">{_MARKER}-rc2</div>',"
+            " ready='#rc-el')\n"
+            "print('RC2=' + repr(_rc2.ready_confirmed))\n"
+            "_rc3 = await browser.get(_rc2.target_id)\n"
+            "print('RC3=' + repr(_rc3.ready_confirmed))"
+        )
+        assert_true(
+            "RC1=False" in out, f"no ready= -> ready_confirmed=False (got {out!r})"
+        )
+        assert_true(
+            "RC2=True" in out, f"explicit ready= -> ready_confirmed=True (got {out!r})"
+        )
+        assert_true(
+            "RC3=True" in out,
+            f"re-query preserves ready_confirmed via CDPSession (got {out!r})",
+        )
+        print(
+            "  ✓ ready_confirmed: False by default, True with ready=, survives re-query"
+        )
 
         # Every custom selector form ranks visible matches over hidden ones —
         # each pair in _SEL_HTML puts the hidden match *first* in document

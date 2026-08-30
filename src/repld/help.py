@@ -485,7 +485,7 @@ markup would never fire):
 
   tab = await browser.get(
       "*admin.shopify.com*/products*",
-      ready="a[href*='/products/']",   # first real row link, not just the shell
+      ready="[href*='/products/']",   # first real row link, not just the shell
   )
 
 get()/open() only apply ready= on the tab's *first* attach — re-calling
@@ -498,6 +498,14 @@ Selector-vs-JS classification checks the string's *prefix*
 combo like "a[href*='/products/']" doesn't start with any of those, so it's
 read as JS and fails as a syntax error.  Drop the leading tag ("[href*=...]")
 or lead with a recognized prefix instead.
+
+get()/open() also fall back silently when no ready= is given — the fallback
+is a best-effort guess (readyState + a network-idle settle), not a
+confirmation the SPA gotcha above didn't just happen again.
+tab.ready_confirmed (bool, read-only) tells you which one happened: True
+only if an explicit ready= was polled and satisfied; False if the bare
+default was used.  Lives on the underlying session, so a later re-`get()`
+on an already-attached tab still reports the original attach's value.
 
 == Tab API (async) ==
 
@@ -811,6 +819,8 @@ from tab.network(); this is the per-request detail view, not a superset.
   tab.target_id      str   short ID in "{port}:{6-hex}" format, stable across nav
   tab.parent_frame_id str  parent frame for iframes
   tab.capture_bodies bool  toggle Fetch body capture (True on get/open tabs, False on watch tabs)
+  tab.ready_confirmed bool True if the last ready-wait used an explicit ready=;
+                              False if it fell back to document.readyState (best-effort guess)
 
 Staleness: tab.url and tab.title are read from a cached target_info dict,
 updated only on Target.targetInfoChanged events.  They can be briefly stale
@@ -1389,6 +1399,7 @@ Tab properties:
   tab.url / tab.title / tab.type         str   target info (type: page/iframe/worker)
   tab.target_id / tab.parent_frame_id    str   short ID; parent frame for iframes
   tab.capture_bodies                      bool  Fetch body capture (True on get/open, False on watch)
+  tab.ready_confirmed                     bool  True = explicit ready= polled and satisfied; False = best-effort fallback
   tab.label                               str | None  colored ID bar; set "text" / ("text", "#hex") / None to clear; survives navigation
 
 Browser:
