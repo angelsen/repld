@@ -17,12 +17,12 @@ from .row import Rows
 from .session import WORKER_TYPES, BrowserSession
 from .tab import Tab
 from .target import (
-    _is_target_id,
     _NO_TABS,
+    TabNotFoundError,
+    _is_target_id,
     _print_browser_help,
     _split_target,
     make_target,
-    TabNotFoundError,
 )
 
 __all__ = ["Browser"]
@@ -197,7 +197,12 @@ class Browser:
         url = cdp.target_info.get("url", "")
         if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
             await cdp.enable_fetch()
-        return Tab(cdp, tid, self.port, ready=ready)
+        tab = Tab(cdp, tid, self.port, ready=ready)
+        # "Initial attach" per the ready= docstring: get()/open() on a target
+        # that's already attached skip this (the hot re-query path stays
+        # cheap) — only a target attached for the first time here waits.
+        await tab._wait_ready()
+        return tab
 
     async def _attach_racing(
         self,
@@ -387,10 +392,10 @@ class Browser:
             msg += f" {len(failures)} attach attempt(s) failed: {detail}"
         return msg
 
-    async def open(self, url: str) -> "Tab":
+    async def open(self, url: str, *, ready: str | None = None) -> "Tab":
         """Create a new tab and attach to it.
 
-        Target.createTarget → attach → enable Fetch → return Tab.
+        Target.createTarget → attach → enable Fetch → wait for ready → return Tab.
 
         The attach goes through `_attach_racing` because we may lose a race with
         ourselves when the new URL matches a watch pattern — see that method for
@@ -398,11 +403,16 @@ class Browser:
         it uses the session `attach()` returns directly rather than looking the
         target up afterwards: the new session isn't always registered under its
         targetId yet, so a sync lookup would race it.
+
+        ready: same as `get()` — a CSS selector or JS expression the page must
+        satisfy before this call returns. Default (None) waits for
+        document.readyState === 'complete' only, which fires well before a
+        client-rendered SPA has anything in the DOM worth reading.
         """
         await self._ensure_connected()
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
-        tab = await self._attach_racing(tid)
+        tab = await self._attach_racing(tid, ready=ready)
         if tab is None:
             raise RuntimeError(f"Failed to attach to new tab '{tid}'")
         return tab

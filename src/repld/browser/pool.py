@@ -32,12 +32,12 @@ from .browser import Browser
 from .row import Rows
 from .tab import Tab
 from .target import (
-    _is_target_id,
     _NO_TABS,
+    TabNotFoundError,
+    _is_target_id,
     _print_browser_help,
     _split_target,
     make_target,
-    TabNotFoundError,
 )
 
 __all__ = ["BrowserPool", "LazyBrowser"]
@@ -345,12 +345,12 @@ class BrowserPool:
             f"No tab matching '{target}' across {len(self._browsers)} browser(s)"
         )
 
-    async def open(self, url: str) -> Tab:
+    async def open(self, url: str, *, ready: str | None = None) -> Tab:
         """Open a URL in the first connected browser."""
         await self._ensure_any()
         for b in list(self._browsers.values()):
             if b._connected:
-                return await b.open(url)
+                return await b.open(url, ready=ready)
         raise RuntimeError("No browsers connected")
 
     async def fetch(

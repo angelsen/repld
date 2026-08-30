@@ -447,8 +447,8 @@ Quirks:
   - get() raises RuntimeError if no match found (with timeout=None, checks once).
   - fresh=True snapshots currently-matching targets at call time and excludes
     them — returns only tabs that appear *after* the call.
-  - open() creates a tab via Target.createTarget, waits for attach, sleeps 0.3s
-    for the page to settle before returning.
+  - open() creates a tab via Target.createTarget, then waits the same ready=
+    signal as get() before returning (default: document.readyState === 'complete').
   - browser.connect(profile=path) reads DevToolsActivePort from a Chrome
     user-data-dir to discover the debug port.  Works with --remote-debugging-port=0
     (random port) — Chrome writes the actual port to that file on startup.
@@ -475,6 +475,29 @@ immediately rather than polled out.
 Default (no ready=): waits for document.readyState === 'complete'.
 
 Convention: add data-testid to your root layout component.
+
+SPA gotcha: readyState fires once the page shell has loaded, often well
+before a client-rendered app has painted anything worth reading — a bare
+get()/navigate() with no ready= can hand back a tab whose tree() is still
+an empty shell.  Confirmed live against Shopify admin's product list (a
+div-based Polaris grid, not a real <table>, so waiting on generic table/row
+markup would never fire):
+
+  tab = await browser.get(
+      "*admin.shopify.com*/products*",
+      ready="a[href*='/products/']",   # first real row link, not just the shell
+  )
+
+get()/open() only apply ready= on the tab's *first* attach — re-calling
+get() on a tab that's already attached skips the wait (the hot re-query
+path stays cheap), so passing ready= there is a no-op.  Set it once, on
+whichever call first attaches the tab.
+
+Selector-vs-JS classification checks the string's *prefix*
+(.,#,[,data-,...), not whether it contains selector syntax — a tag+attribute
+combo like "a[href*='/products/']" doesn't start with any of those, so it's
+read as JS and fails as a syntax error.  Drop the leading tag ("[href*=...]")
+or lead with a recognized prefix instead.
 
 == Tab API (async) ==
 
