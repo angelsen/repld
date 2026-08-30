@@ -27,7 +27,7 @@ from .pin import (
     _PIN_JS,
     label_script,
 )
-from .png import _model_dims, _resize_png
+from .png import _png_size, check_budget
 from . import inject
 from . import selector as selector_mod
 from .tab_query import TabQueryMixin
@@ -558,10 +558,46 @@ class Tab(TabQueryMixin):
                 ) from reattach_exc
             return await self._session.execute(method, params, timeout)
 
+    async def _front_target(self) -> "Tab":
+        """The Tab whose window should actually be raised: self, unless
+        self is an iframe — Page.bringToFront only accepts top-level
+        targets (confirmed live: browser_hover on an iframe target raised
+        "Command can only be executed on top-level targets" the moment the
+        Chrome window itself lost OS focus, since document.visibilityState
+        is "hidden" for the iframe too and _ensure_front tried to front it
+        directly).
+
+        Resolves via `BrowserSession.find_frame_owner` (a `DOM.getFrameOwner`
+        call per attached page), not by matching `parentFrameId` against a
+        candidate's own `targetId` — confirmed live those two identifiers
+        are *not* reliably equal for an ordinary page target (`Page.
+        getFrameTree` showed a real target's own main frame id differing
+        from its Chrome target id), so that comparison silently found no
+        parent for a page whose ids happened to disagree. `CDPSession.
+        browser_session` is the same back-reference `_reattach()` already
+        relies on — a Tab only holds its own session, not the pool.
+
+        Falls back to self when no parent is attached or resolvable — the
+        caller then skips Page.bringToFront rather than attempting it on
+        an iframe and raising the same error, best-effort over a target we
+        have no way to locate.
+        """
+        if self.type != "iframe":
+            return self
+        browser_session = self._session.browser_session
+        if browser_session is None:
+            return self
+        found = await browser_session.find_frame_owner(self._chrome_target_id)
+        if found is None:
+            return self
+        parent_cdp, _ = found
+        parent_target_id = parent_cdp.target_info.get("targetId", "")
+        return Tab(parent_cdp, parent_target_id, self._port)
+
     @asynccontextmanager
     async def _ensure_front(self):
-        """Raise this tab if Chrome has it backgrounded, then hold a
-        per-Chrome-instance lock for the caller's whole action.
+        """Raise this tab's window if Chrome has it backgrounded, then hold
+        a per-Chrome-instance lock for the caller's whole action.
 
         `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
         the renderer's real input pipeline, which Chrome silently drops for
@@ -575,6 +611,12 @@ class Tab(TabQueryMixin):
         only on the degraded path — the multi-window watch workflow this
         kernel exists for means N-1 tabs are hidden at any given time, so
         this can't be opt-in.
+
+        Checks and fronts via `_front_target()`, not `self` directly — an
+        iframe target has no window of its own to raise; its enclosing page
+        does. Skips `Page.bringToFront` outright when that resolution falls
+        back to an unresolvable iframe (`_front_target()`'s own fallback),
+        rather than attempting it and raising the same top-level-only error.
 
         `Page.bringToFront` raises a window at the Chrome-instance level, not
         per-call — two concurrent front-then-act sequences against different
@@ -592,12 +634,16 @@ class Tab(TabQueryMixin):
         """
         fd = await asyncio.to_thread(acquire_lock_blocking, front_lock_for(self._port))
         try:
-            result = await self._exec(
+            front_target = await self._front_target()
+            result = await front_target._exec(
                 "Runtime.evaluate",
                 {"expression": "document.visibilityState", "returnByValue": True},
             )
-            if result.get("result", {}).get("value") == "hidden":
-                await self._exec("Page.bringToFront")
+            if (
+                result.get("result", {}).get("value") == "hidden"
+                and front_target.type != "iframe"
+            ):
+                await front_target._exec("Page.bringToFront")
             yield
         finally:
             import os
@@ -1448,7 +1494,11 @@ class Tab(TabQueryMixin):
         await self.swipe(cx, cy, cx - dx, cy - dy, steps=steps, duration_ms=duration_ms)
 
     async def tree(
-        self, mode: str = "aria", *, at: "str | tuple[float, float] | None" = None
+        self,
+        mode: str = "aria",
+        *,
+        at: "str | tuple[float, float] | None" = None,
+        in_crop: str | None = None,
     ) -> list[str]:
         """Accessibility snapshot as text lines. Standalone read — no settle.
 
@@ -1459,12 +1509,20 @@ class Tab(TabQueryMixin):
 
         at=(x, y) / 'x,y' hit-tests that point instead and returns a small
         elided tree rooted there, with real [ref=…] handles (same engine as
-        mode="aria", just scoped) — ignores mode. For "where is this on the
-        page" when you have a coordinate (a screenshot region, a failed
-        click) rather than a selector to grow a tree from. A point that
-        lands on an iframe reports the redirect (target + translated local
-        coordinate) instead of a tree — cross-frame hit-testing needs a
-        second call against that target's own session.
+        mode="aria", just scoped) — ignores mode, and always also captures a
+        screenshot cropped to the hit — for "where is this on the page" when
+        you have a coordinate (a screenshot region, a failed click) rather
+        than a selector to grow a tree from. A point that lands on an
+        iframe reports the redirect (target + translated local coordinate)
+        instead of a tree — cross-frame hit-testing needs a second call
+        against that target's own session.
+
+        in_crop=<path> reinterprets at= as a pixel *within* an earlier
+        seed's screenshot instead of a page coordinate — the crop embeds
+        its own translation (repld.browser.png.embed_crop_metadata), so
+        picking a point you see in that image needs no scale/offset math
+        of your own: pass it straight through and this seeds the page at
+        the point it actually corresponds to.
         """
         from .observe import (
             build_aria_tree,
@@ -1477,8 +1535,26 @@ class Tab(TabQueryMixin):
             pt = self._parse_point(at)
             if pt is None:
                 raise ValueError(f"tree(at=...) needs 'x,y' or (x, y), got {at!r}")
+            if in_crop is not None:
+                from .png import read_crop_metadata
+
+                meta = read_crop_metadata(in_crop)
+                if meta is None:
+                    raise ValueError(
+                        f"{in_crop!r} carries no repld crop metadata — pass a "
+                        "path from a previous browser_tree(at=...) screenshot, "
+                        "or drop in_crop= and pass at= as a page coordinate"
+                    )
+                local_x, local_y = pt
+                origin = meta["crop_origin"]
+                pt = (
+                    origin["x"] + local_x / meta["scale"],
+                    origin["y"] + local_y / meta["scale"],
+                )
             result = await seeded_tree(self, *pt)
             return format_seeded_tree(result, *pt, self)
+        if in_crop is not None:
+            raise ValueError("in_crop needs at= (a pixel within that crop)")
         if mode == "ax":
             return await build_tree(self)
         return await build_aria_tree(self)
@@ -1601,16 +1677,22 @@ class Tab(TabQueryMixin):
         self,
         *,
         full_page: bool = False,
+        force: bool = False,
         path: str | None = None,
     ) -> dict:
-        """Capture a PNG screenshot, resized to the vision API token grid.
+        """Capture a native-resolution PNG screenshot.
 
-        Captures full-res from CDP (no clip.scale — that races the compositor),
-        then resizes via Pillow off the event loop (in a thread executor, so
-        the resize's CPU cost doesn't stall the kernel's shared asyncio loop).
-        Fronts the tab first and holds the front lock for the whole capture —
-        Page.captureScreenshot on a backgrounded tab otherwise hangs for the
-        full CDP command timeout rather than erroring or no-opping, and
+        Raises if the capture exceeds the vision API's token budget instead
+        of silently shrinking it — pass force=True to send it natively
+        anyway, or crop to a smaller region when the goal is fitting the
+        budget without losing detail (browser_tree(at=...) does this).
+        Budget is checked against the PNG's real pixel dimensions, not
+        Page.getLayoutMetrics' CSS-pixel viewport size — they diverge by
+        the device pixel ratio, and the vision API tokenizes on real pixels.
+
+        Fronts the tab first and holds the front lock for the whole capture
+        — Page.captureScreenshot on a backgrounded tab otherwise hangs for
+        the full CDP command timeout rather than erroring or no-opping, and
         without the lock another tab's concurrent front-then-act could steal
         focus between fronting and the actual capture, screenshotting the
         wrong window.
@@ -1625,39 +1707,13 @@ class Tab(TabQueryMixin):
             params: dict = {"format": "png"}
             if full_page:
                 params["captureBeyondViewport"] = True
-
-            metrics = await self._exec("Page.getLayoutMetrics", {})
-            # Measure whatever CDP actually captured. With captureBeyondViewport
-            # the PNG is the full content box, so sizing the resize off the visual
-            # viewport squashed a tall full-page shot down to viewport height —
-            # and reported a `scale` that mapped back to nothing.
-            box = metrics.get(
-                "cssContentSize" if full_page else "cssVisualViewport", {}
-            )
-            src_w = int(box.get("width") or box.get("clientWidth") or 0)
-            src_h = int(box.get("height") or box.get("clientHeight") or 0)
-
             result = await self._exec("Page.captureScreenshot", params)
             img_bytes = base64.b64decode(result.get("data", ""))
 
-        tgt_w, tgt_h = (
-            _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)
-        )
-        if tgt_w < src_w or tgt_h < src_h:
-            try:
-                img_bytes = await asyncio.get_running_loop().run_in_executor(
-                    None, _resize_png, img_bytes, tgt_w, tgt_h
-                )
-            except Exception:
-                # Unparseable/exotic PNG variant — report the untouched image
-                # accurately rather than resizing metadata that doesn't match
-                # the bytes actually written.
-                tgt_w, tgt_h = src_w, src_h
-        scale = (
-            min(tgt_w / src_w, tgt_h / src_h)
-            if src_w > 0 and src_h > 0 and (tgt_w < src_w or tgt_h < src_h)
-            else 1.0
-        )
+        # Image.open() is lazy — .size reads only the header, not the full
+        # pixel buffer — so this is cheap enough to run on the loop.
+        w, h = _png_size(img_bytes)
+        check_budget(w, h, force=force)
 
         if path:
             out = pathlib.Path(path)
@@ -1665,8 +1721,12 @@ class Tab(TabQueryMixin):
             ensure_runtime_dir()
             tid = self.target_id.replace(":", "-")
             # `{pid}-` prefix like task spills: it is what lets a later kernel
-            # boot sweep this file once this process is gone.
-            out = RUNTIME_DIR / f"{os.getpid()}-screenshot-{tid}-{int(time.time())}.png"
+            # boot sweep this file once this process is gone. Nanosecond
+            # timestamp, not int(time.time()) -- confirmed live: two
+            # screenshots of the same target within the same wall-clock
+            # second collided on an identical filename, silently
+            # overwriting the first before it was ever read.
+            out = RUNTIME_DIR / f"{os.getpid()}-screenshot-{tid}-{time.time_ns()}.png"
 
         def write(data: bytes) -> None:
             if path:
@@ -1680,9 +1740,8 @@ class Tab(TabQueryMixin):
         await asyncio.get_running_loop().run_in_executor(None, write, img_bytes)
         return {
             "path": str(out),
-            "source": {"width": src_w, "height": src_h},
-            "model": {"width": tgt_w, "height": tgt_h},
-            "scale": round(scale, 4),
+            "width": w,
+            "height": h,
             "bytes": len(img_bytes),
         }
 

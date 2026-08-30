@@ -595,20 +595,27 @@ Convention: add data-testid to your root layout component.
       (scrollBy semantics: positive dy scrolls down, positive dx scrolls
       right). Auto-waits up to 2s for the element.
 
-  tab.tree(mode='aria', *, at=None)                           → list[str]
+  tab.tree(mode='aria', *, at=None, in_crop=None)             → list[str]
       Accessibility snapshot as text lines.  mode='aria' (default): Playwright
       ariaSnapshot with [ref=eN] handles, reusable as aria-ref=eN selectors
       in click/type_text until the next snapshot, navigation, or reattach.
       mode='ax': the raw CDP accessibility tree (pierces same-process
       iframes, no refs).  Crosses OOPIF iframes either way — discovers
-      attached iframe children by matching parentFrameId, inlines their trees.
+      attached iframe children via DOM.getFrameOwner, inlines their trees.
       Standalone read (no settle, no observation pipeline).
       at=(x, y) / 'x,y' hit-tests that point instead (ignores mode) and
       returns a small elided tree rooted at the nearest meaningful ancestor
       of the hit — for "what's actually here" from a coordinate rather than
       a selector.  Rendered through the same engine as mode='aria', so its
-      nodes carry real [ref=eN] handles too.  A hit on an iframe reports the
-      redirect (target id + translated local coordinate) instead of a tree.
+      nodes carry real [ref=eN] handles too.  Always also captures a
+      screenshot cropped to the hit (path in the result's `screenshot` key)
+      — the tree's text isn't always enough to disambiguate (visual-only
+      state, near-identical rows).  A hit on an iframe reports the redirect
+      (target id + translated local coordinate) instead of a tree.
+      in_crop=<path> reinterprets at= as a pixel *within* an earlier seed's
+      screenshot instead of a page coordinate — the crop embeds its own
+      translation, so no scale/offset math is needed: pass the point you
+      see in the image straight through.
 
   tab.fetch(url, *, method='GET', body=None, headers=None)    → dict
       In-page JS fetch() — inherits the browser's cookies, session, and CORS
@@ -638,10 +645,14 @@ Convention: add data-testid to your root layout component.
       Wait for network idle.  Returns settle time in ms.
       See "Settle loop" below for what "idle" means.
 
-  tab.screenshot(*, full_page=False, path=None)               → dict
-      Capture PNG screenshot. Returns {path, source:{w,h}, model:{w,h}, scale, bytes}.
-      Model dims show what the API will resize to for its token grid.
-      When scale < 1, multiply coordinates by 1/scale to map back to page pixels.
+  tab.screenshot(*, full_page=False, force=False, path=None)  → dict
+      Capture a native-resolution PNG. Returns {path, width, height, bytes}.
+      Raises if the capture exceeds the vision API's token budget instead
+      of silently shrinking it — pass force=True to send it natively
+      anyway, or crop to a smaller region instead (browser_tree(at=...)
+      does this). Budget is checked against the PNG's real pixel
+      dimensions, which diverge from the CSS-pixel viewport size by the
+      device pixel ratio.
 
   tab.cookies()                                               → list[dict]
       All cookies for this tab via Network.getCookies.
@@ -1302,7 +1313,7 @@ Channel kinds:
     "browser": """\
 Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=)      → any
-  tab.tree(mode="aria", at=None)                   → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree; at="x,y": elided [ref=eN] tree hit-tested at a point)
+  tab.tree(mode="aria", at=None, in_crop=None)     → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
   tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
@@ -1323,7 +1334,7 @@ Tab (async unless noted):
   tab.close()                                      → None (Target.closeTarget)
   tab.controls()                                   → dict | None
   tab.invoke(control, action, args=)               → dict
-  tab.screenshot(full_page=, path=)                → dict {path, source, model, scale, bytes}
+  tab.screenshot(full_page=, force=, path=)        → dict {path, width, height, bytes} (native res; raises over the vision token budget unless force=True)
   tab.cookies()                                    → list[dict]
   tab.cdp(method, **params)                        → dict
 

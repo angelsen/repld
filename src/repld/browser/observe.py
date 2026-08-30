@@ -9,6 +9,7 @@ Pipeline:
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -237,8 +238,9 @@ def _inline_iframe_lines(
 ) -> list[str]:
     """Insert child tree lines under iframe lines with a → target_id marker.
 
-    parentFrameId already guarantees these are this tab's children; pairing a
-    specific iframe line with a specific child is best-effort document order.
+    `_discover_iframe_children`'s `find_frame_owner` resolution already
+    guarantees these are this tab's children; pairing a specific iframe
+    line with a specific child is best-effort document order.
     """
     result_lines: list[str] = []
     used: set[str] = set()
@@ -269,18 +271,27 @@ def _inline_iframe_lines(
 
 
 async def _discover_iframe_children(tab: Tab, session: BrowserSession) -> list[Tab]:
-    """Find attached tabs whose parentFrameId matches this tab's target.
+    """Find attached tabs whose owning page is `tab`.
 
-    Uses CDP target metadata directly — no JS eval or URL heuristics.
+    Resolved via `BrowserSession.find_frame_owner` (a `DOM.getFrameOwner`
+    call per attached iframe), not by matching an iframe's `parentFrameId`
+    against `tab`'s own `chrome_target_id` — confirmed live those two
+    identifiers are *not* reliably equal for an ordinary page target
+    (`Page.getFrameTree` showed a real target's own main frame id differs
+    from its Chrome target id), so that comparison silently found no
+    children on a page whose ids happened to disagree. In the common
+    single-page case this is one CDP round trip per iframe, same order as
+    the dict comparison it replaces — just correct.
     """
-    parent_id = tab._session.chrome_target_id
+    own_target_id = tab._session.chrome_target_id
     children: list[Tab] = []
-    for cdp_session in session._sessions.values():
+    for cdp_session in list(session._sessions.values()):
         info = cdp_session.target_info
         if info.get("type") != "iframe":
             continue
-        if info.get("parentFrameId") == parent_id:
-            target_id = info.get("targetId", "")
+        target_id = info.get("targetId", "")
+        found = await session.find_frame_owner(target_id)
+        if found is not None and found[0].target_info.get("targetId") == own_target_id:
             children.append(Tab(cdp_session, target_id, tab._port))
     return children
 
@@ -305,35 +316,27 @@ Array.from(document.querySelectorAll(
 async def _detect_parent_dialogs(tab: Tab, session: BrowserSession) -> list[str]:
     """Report a visible modal on the page that *owns* this iframe.
 
-    Only that page. Scanning every attached page-type target instead was wrong
-    twice over: a modal in some unrelated tab got reported as this iframe's
-    parent dialog, and the sweep cost one `Runtime.evaluate` round trip per
-    attached page on every iframe observation — which scales with how many tabs
-    happen to be attached, not with anything about the page being observed.
-
-    `parentFrameId` names the real parent, and is the same field
-    `_discover_iframe_children` matches on in the other direction.
+    Only that page — scanning every attached page-type target instead was
+    wrong twice over: a modal in some unrelated tab got reported as this
+    iframe's parent dialog, and the sweep cost one `Runtime.evaluate` round
+    trip per attached page on every iframe observation. Resolved via
+    `BrowserSession.find_frame_owner` (`DOM.getFrameOwner`) — the same
+    resolution `_discover_iframe_children` needs in the other direction,
+    and unlike matching `parentFrameId` against a candidate's own
+    `targetId` (confirmed live: not reliably equal), `getFrameOwner` can't
+    misattribute the same way — it either confirms real ownership or
+    errors, and in the common single-page case is one CDP round trip, not
+    a sweep.
     """
-    info = tab._session.target_info
-    if info.get("type") != "iframe":
+    if tab.type != "iframe":
         return []
-    parent_frame = info.get("parentFrameId")
-    if not parent_frame:
+    found = await session.find_frame_owner(tab._session.chrome_target_id)
+    if found is None:
         return []
+    parent_cdp, _ = found
+    parent_target_id = parent_cdp.target_info.get("targetId", "")
 
-    parent_cdp = next(
-        (
-            s
-            for s in session._sessions.values()
-            if s.target_info.get("targetId") == parent_frame
-            and s.target_info.get("type") == "page"
-        ),
-        None,
-    )
-    if parent_cdp is None:
-        return []
-
-    parent_tab = Tab(parent_cdp, parent_frame, tab._port)
+    parent_tab = Tab(parent_cdp, parent_target_id, tab._port)
     try:
         result = await parent_tab.js(_DIALOG_DETECT_JS)
     except Exception:
@@ -341,7 +344,7 @@ async def _detect_parent_dialogs(tab: Tab, session: BrowserSession) -> list[str]
     if not isinstance(result, list):
         return []
 
-    parent_tid = make_target(tab._port, parent_frame)
+    parent_tid = make_target(tab._port, parent_target_id)
     warnings: list[str] = []
     for dialog in result:
         if not isinstance(dialog, dict):
@@ -411,7 +414,26 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
     instead of the document. Falls back to the raw AX-tree render
     (_build_lines, no refs) on any engine failure — a detached node, a page
     the engine can't inject into — same fallback shape as build_aria_tree.
-    Returns {"iframe": False, "path": [...], "tree": [...]}.
+
+    A hit with no AX representation at all (an `aria-hidden` icon nested
+    inside an otherwise-accessible control — confirmed live: Shopify's
+    notification bell hit-tests to its own SVG glyph) walks the DOM's own
+    parent chain — a separate structure from the AX tree's `parentId`,
+    which only covers nodes already in it — up to the nearest backend id
+    the AX tree does know about, then proceeds as an ordinary hit from
+    there.
+
+    Always also captures a screenshot — cropped to the anchor's box when
+    one exists (padded, clamped), or a fixed radius around the raw point
+    when it doesn't (no anchor even after the DOM walk, or its box-model
+    query fails) — the tree's text is sometimes not enough to disambiguate
+    (visual-only state, near-identical rows), and the crop shares the
+    seed's coordinate space so a point picked in it translates straight
+    back to a page coordinate. Best-effort like the tree render:
+    `screenshot` is None rather than failing the whole seed if the capture
+    doesn't work out.
+    Returns {"iframe": False, "path": [...], "tree": [...], "screenshot":
+    {...} | None}.
 
     An iframe hit can't be grown the same way — DOM.getNodeForLocation only
     hit-tests same-process frames, and an OOPIF's AX tree lives in a separate
@@ -445,15 +467,33 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
     children_map: dict[str, list[str]] = {
         n["nodeId"]: n.get("childIds") or [] for n in nodes
     }
-    hit_ax_id = next(
-        (n["nodeId"] for n in nodes if n.get("backendDOMNodeId") == backend_node_id),
-        None,
-    )
+    backend_to_ax_id: dict[int, str] = {
+        n["backendDOMNodeId"]: n["nodeId"] for n in nodes if "backendDOMNodeId" in n
+    }
+    hit_ax_id = backend_to_ax_id.get(backend_node_id)
     if hit_ax_id is None:
+        try:
+            parent_of = await _dom_parent_map(tab)
+            dom_id: int | None = backend_node_id
+            while dom_id is not None and dom_id not in backend_to_ax_id:
+                dom_id = parent_of.get(dom_id)
+            if dom_id is not None:
+                hit_ax_id = backend_to_ax_id[dom_id]
+        except Exception:
+            # Best-effort — a failed DOM walk leaves hit_ax_id None, same
+            # as before this fallback existed.
+            pass
+    if hit_ax_id is None:
+        screenshot = None
+        try:
+            screenshot = await _seed_screenshot(tab, x, y, None)
+        except Exception:
+            pass
         return {
             "iframe": False,
             "path": [],
             "tree": ["(no accessibility node at this point)"],
+            "screenshot": screenshot,
         }
 
     # Walk to the root, collecting the elided ancestor spine and the
@@ -491,21 +531,242 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
             break
 
     anchor_backend_id = nodes_by_id[anchor_id].get("backendDOMNodeId")
+    tree_lines: list[str] | None = None
     if anchor_backend_id is not None:
         from . import inject
 
         try:
             text = await inject.scoped_aria_snapshot(tab, anchor_backend_id)
-            return {"iframe": False, "path": path, "tree": text.splitlines() or [""]}
+            tree_lines = text.splitlines() or [""]
         except Exception:
             # Broad on purpose: the raw-AX render below is pure local dict
             # traversal with no failure modes of its own, so falling back to
             # it is always safe and never worse than skipping the refs.
             pass
+    if tree_lines is None:
+        tree_lines = []
+        _build_lines(
+            nodes_by_id, children_map, anchor_id, 0, max_depth, tree_lines, Counter()
+        )
 
-    lines: list[str] = []
-    _build_lines(nodes_by_id, children_map, anchor_id, 0, max_depth, lines, Counter())
-    return {"iframe": False, "path": path, "tree": lines}
+    screenshot = None
+    try:
+        # anchor_backend_id may itself be None (an anchor whose AX node has
+        # no DOM backing) — _seed_screenshot's fixed-radius fallback covers
+        # that the same way it covers a missing box-model query.
+        screenshot = await _seed_screenshot(tab, x, y, anchor_backend_id)
+    except Exception:
+        # Same best-effort posture as the tree render above.
+        pass
+
+    return {"iframe": False, "path": path, "tree": tree_lines, "screenshot": screenshot}
+
+
+async def _dom_parent_map(tab: Tab) -> dict[int, int]:
+    """backendNodeId -> parent backendNodeId, for the whole DOM (shadow
+    roots and same-process iframes included, via pierce=True).
+
+    Accessibility.getFullAXTree's parentId chain only covers nodes already
+    IN the AX tree — a hit with no AX representation (an aria-hidden icon)
+    needs a DOM-side walk first to find the nearest ancestor that is. One
+    DOM.getDocument call (confirmed live: ~40ms on a ~1800-node page,
+    dwarfed by the CDP round trips already on this path) — the response
+    nests children rather than offering a flat parentId like the AX tree
+    does, so building this map is the one-time cost of a walkable shape.
+    """
+    doc = await tab._exec("DOM.getDocument", {"depth": -1, "pierce": True})
+    parent_of: dict[int, int] = {}
+
+    def walk(node: dict, parent_backend: int | None) -> None:
+        backend_id = node.get("backendNodeId")
+        if backend_id is not None and parent_backend is not None:
+            parent_of[backend_id] = parent_backend
+        for child in node.get("children") or []:
+            walk(child, backend_id)
+        content_doc = node.get("contentDocument")
+        if content_doc:
+            walk(content_doc, backend_id)
+        for shadow_root in node.get("shadowRoots") or []:
+            walk(shadow_root, backend_id)
+
+    walk(doc["root"], None)
+    return parent_of
+
+
+# Padding and clamp for seeded_tree()'s screenshot leg — validated live
+# (browser-screenshot-pipeline.md) against a tight button, a medium nav
+# link, and the RootWebArea-fallback case: padding alone gives in-context
+# legibility (pulled in neighboring rows on the nav-link case) without a
+# separate radius knob, and the clamp is what keeps a broad anchor (a
+# full-height list, the RootWebArea fallback) from becoming a full-page
+# crop — centered on the hit point, not the anchor's own center, when
+# clamped. The fixed-radius fallback below reuses the clamp itself as its
+# box, so a point with no anchor box gets exactly the same ceiling size.
+_SEED_CROP_PAD = 20
+_SEED_CROP_MAX_W = 400
+_SEED_CROP_MAX_H = 400
+
+
+async def _iframe_offset(tab: Tab) -> tuple[Tab, float, float] | None:
+    """(owning page Tab, offset_x, offset_y) — the CSS-pixel position of
+    `tab`'s own `<iframe>` element within the page that owns it. None if
+    `tab` isn't an iframe, or no attached page owns its frame.
+
+    `DOM.getFrameOwner` (via `find_frame_owner`) gives the iframe
+    element's `backendNodeId` in the *parent's* DOM; `DOM.getBoxModel` on
+    that, also via the parent's own session, gives its position there —
+    the reverse of what `seeded_tree`'s iframe-hit branch already does
+    (translating a hit *into* a child frame) needed to translate a
+    coordinate *out* of one, for a seed that originated inside it.
+    """
+    if tab.type != "iframe":
+        return None
+    browser_session = tab._session.browser_session
+    if browser_session is None:
+        return None
+    found = await browser_session.find_frame_owner(tab._session.chrome_target_id)
+    if found is None:
+        return None
+    parent_cdp, backend_id = found
+    box = await parent_cdp.execute("DOM.getBoxModel", {"backendNodeId": backend_id})
+    content = box.get("model", {}).get("content")
+    if not content:
+        return None
+    parent_target_id = parent_cdp.target_info.get("targetId", "")
+    parent_tab = Tab(parent_cdp, parent_target_id, tab._port)
+    return parent_tab, content[0], content[1]
+
+
+async def _seed_screenshot(
+    tab: Tab, x: float, y: float, backend_node_id: int | None
+) -> dict:
+    """Crop a fresh capture to the anchor's box, padded and clamped — or,
+    when there's no anchor box (backend_node_id is None, or its box-model
+    query fails: no AX anchor was found even after the DOM-ancestor walk,
+    or the node is detached), a fixed radius centered on the raw point
+    instead, at the same clamp size. Raises on any failure — seeded_tree()
+    catches it; this stays a plain function so the failure is visible to a
+    caller that wants it (e.g. a future direct test).
+
+    When `tab` is an iframe, the actual capture happens via the page that
+    owns it — `Page.captureScreenshot` is top-level-only, just like
+    `Page.bringToFront` (confirmed live: both raise "Command can only be
+    executed on top-level targets" against an iframe target directly) —
+    with the crop box translated by `tab`'s own position within that page
+    (`_iframe_offset`). The *embedded* crop_origin stays in `tab`'s own
+    coordinate space regardless, though: that's what a later `at=`/
+    `in_crop=` call against this same `tab` needs to land back in, not
+    the parent page's.
+    """
+    from .png import _crop_png, _model_dims, _png_size, _resize_png, embed_crop_metadata
+    from ..paths import RUNTIME_DIR, ensure_runtime_dir
+    from ..state import open_private
+
+    box_css: tuple[float, float, float, float] | None = None
+    if backend_node_id is not None:
+        try:
+            box = await tab._exec("DOM.getBoxModel", {"backendNodeId": backend_node_id})
+        except RuntimeError:
+            # "Could not compute box model" is a genuine CDP error here,
+            # not an empty result (confirmed live: a Klara grid
+            # columnheader raised this outright) — falls through to the
+            # fixed-radius box below same as an empty `content` does.
+            box = {}
+        content = box.get("model", {}).get("content")
+        if content:
+            xs, ys = content[0::2], content[1::2]
+            left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
+            box_css = (
+                left - _SEED_CROP_PAD,
+                top - _SEED_CROP_PAD,
+                right + _SEED_CROP_PAD,
+                bottom + _SEED_CROP_PAD,
+            )
+    if box_css is None:
+        box_css = (
+            x - _SEED_CROP_MAX_W / 2,
+            y - _SEED_CROP_MAX_H / 2,
+            x + _SEED_CROP_MAX_W / 2,
+            y + _SEED_CROP_MAX_H / 2,
+        )
+
+    l, t, r, b = box_css
+    if r - l > _SEED_CROP_MAX_W:
+        l, r = x - _SEED_CROP_MAX_W / 2, x + _SEED_CROP_MAX_W / 2
+    if b - t > _SEED_CROP_MAX_H:
+        t, b = y - _SEED_CROP_MAX_H / 2, y + _SEED_CROP_MAX_H / 2
+
+    capture_tab = tab
+    offset_x = offset_y = 0.0
+    if tab.type == "iframe":
+        resolved = await _iframe_offset(tab)
+        if resolved is not None:
+            capture_tab, offset_x, offset_y = resolved
+
+    metrics = await capture_tab._exec("Page.getLayoutMetrics", {})
+    viewport = metrics["cssVisualViewport"]
+    css_w, css_h = viewport["clientWidth"], viewport["clientHeight"]
+    # Translate into capture_tab's own coordinate space (a no-op offset
+    # when tab isn't an iframe) before clamping against *its* viewport —
+    # tab's own viewport bounds are the wrong ones once the pixels being
+    # cropped come from the parent's compositor instead.
+    cap_l = max(0.0, l + offset_x)
+    cap_t = max(0.0, t + offset_y)
+    cap_r = min(float(css_w), r + offset_x)
+    cap_b = min(float(css_h), b + offset_y)
+
+    async with capture_tab._ensure_front():
+        cap = await capture_tab._exec("Page.captureScreenshot", {"format": "png"})
+    img_bytes = base64.b64decode(cap["data"])
+    # captureScreenshot's bytes are device pixels; the box model above is
+    # CSS pixels — they diverge by the device pixel ratio (confirmed live,
+    # 1.25x on the prototype target), so the crop box needs scaling before
+    # it can slice the actual captured image.
+    dpr = _png_size(img_bytes)[0] / css_w if css_w else 1.0
+
+    cropped = _crop_png(img_bytes, (cap_l * dpr, cap_t * dpr, cap_r * dpr, cap_b * dpr))
+    cw, ch = _png_size(cropped)
+    # Belt-and-suspenders, not a routinely-hit branch — the clamp above
+    # keeps a crop well under the vision token budget in practice
+    # (confirmed live: both a 163x70 and a 500x275 clamped crop passed).
+    tgt_w, tgt_h = _model_dims(cw, ch)
+    if (tgt_w, tgt_h) != (cw, ch):
+        cropped = _resize_png(cropped, tgt_w, tgt_h)
+        cw, ch = tgt_w, tgt_h
+
+    # Delivered-pixel-to-page-CSS-pixel factor — folds in both the DPR
+    # correction and the (rare) belt-and-suspenders resize above. Embedded
+    # in the file itself (embed_crop_metadata) rather than returned for the
+    # caller to do arithmetic with: a point picked in the delivered image
+    # goes back in as at="local_x,local_y", in_crop=<this path>, and
+    # Tab.tree() does crop_origin + local_px / scale internally. crop_origin
+    # is converted back out of capture_tab's coordinate space (subtracting
+    # the same offset added above) rather than reusing the pre-clamp l/t,
+    # since clamping against capture_tab's viewport can shift the actual
+    # captured region — this is what keeps that shift honest.
+    crop_css_w = cap_r - cap_l
+    scale = round(cw / crop_css_w, 4) if crop_css_w else 1.0
+    cropped = embed_crop_metadata(
+        cropped, origin_x=cap_l - offset_x, origin_y=cap_t - offset_y, scale=scale
+    )
+
+    import os
+
+    ensure_runtime_dir()
+    tid = tab.target_id.replace(":", "-")
+    # Nanosecond timestamp, not int(time.time()) -- confirmed live: two
+    # seeds against the same target within the same wall-clock second
+    # collided on an identical filename, silently overwriting the first
+    # crop before it was ever read.
+    out = RUNTIME_DIR / f"{os.getpid()}-seed-{tid}-{time.time_ns()}.png"
+
+    def write(data: bytes) -> None:
+        with open_private(out, "wb") as f:
+            f.write(data)
+
+    await asyncio.get_running_loop().run_in_executor(None, write, cropped)
+
+    return {"path": str(out), "width": cw, "height": ch}
 
 
 def format_seeded_tree(result: dict, x: float, y: float, tab: Tab) -> list[str]:
@@ -521,6 +782,13 @@ def format_seeded_tree(result: dict, x: float, y: float, tab: Tab) -> list[str]:
     lines = [f"seed: ({x:.0f},{y:.0f}) on {tab.target_id}"]
     if result["path"]:
         lines.append("path: " + " -> ".join(result["path"]))
+    screenshot = result.get("screenshot")
+    if screenshot:
+        lines.append(
+            f"screenshot: {screenshot['path']} ({screenshot['width']}x{screenshot['height']}) "
+            "— Read to view; to act on a point in it, pass "
+            f"at='local_x,local_y' with in_crop={screenshot['path']!r}"
+        )
     lines.append("")
     lines.extend(result["tree"])
     return lines
