@@ -13,7 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`Tab._ensure_front()` now holds a per-Chrome-instance lock across the caller's whole action**, not just the `Page.bringToFront` call — `click`/`hover`/`drag`/`type_text`/`select_option`/`key`/`keys`/`tap`/`swipe`/`screenshot` all serialize against each other now, on the same tab or a different one, and across separate repld kernels sharing one `--remote-debugging-port`. `Page.bringToFront` raises a window at the Chrome-instance level, not per-call, so two concurrent front-then-act sequences could otherwise interleave and misdirect input to the wrong window. New `state.acquire_lock_blocking` (blocking `flock`, releases itself on process death) and `paths.front_lock_for(port)`.
+
 ### Fixed
+
+- **`tab.screenshot()` never called `_ensure_front()`** — `Page.captureScreenshot` on a backgrounded tab hung for the full 30s CDP command timeout instead of erroring or capturing. Now fronts (and locks, per the change above) like every other input method.
 
 ### Removed
 
