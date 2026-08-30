@@ -1404,16 +1404,38 @@ class Tab(TabQueryMixin):
         cx, cy = await self._element_center_of(el, selector)
         await self.swipe(cx, cy, cx - dx, cy - dy, steps=steps, duration_ms=duration_ms)
 
-    async def tree(self, mode: str = "aria") -> list[str]:
+    async def tree(
+        self, mode: str = "aria", *, at: "str | tuple[float, float] | None" = None
+    ) -> list[str]:
         """Accessibility snapshot as text lines. Standalone read — no settle.
 
         mode="aria" (default): Playwright ariaSnapshot with [ref=…] handles,
         usable as aria-ref=<ref> selectors in click/type until the next
         snapshot or navigation. mode="ax": the raw CDP accessibility tree
         (pierces same-process iframes, no refs).
-        """
-        from .observe import build_aria_tree, build_tree
 
+        at=(x, y) / 'x,y' hit-tests that point instead and returns a small
+        elided tree rooted there, with real [ref=…] handles (same engine as
+        mode="aria", just scoped) — ignores mode. For "where is this on the
+        page" when you have a coordinate (a screenshot region, a failed
+        click) rather than a selector to grow a tree from. A point that
+        lands on an iframe reports the redirect (target + translated local
+        coordinate) instead of a tree — cross-frame hit-testing needs a
+        second call against that target's own session.
+        """
+        from .observe import (
+            build_aria_tree,
+            build_tree,
+            format_seeded_tree,
+            seeded_tree,
+        )
+
+        if at is not None:
+            pt = self._parse_point(at)
+            if pt is None:
+                raise ValueError(f"tree(at=...) needs 'x,y' or (x, y), got {at!r}")
+            result = await seeded_tree(self, *pt)
+            return format_seeded_tree(result, *pt, self)
         if mode == "ax":
             return await build_tree(self)
         return await build_aria_tree(self)

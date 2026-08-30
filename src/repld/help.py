@@ -72,7 +72,9 @@ _BROWSER_MODEL = (
     "out of small origins). "
     "browser_tree default is an aria snapshot with [ref=eN] handles — reuse as "
     "aria-ref=eN selectors until the next snapshot or navigation; mode='ax' is "
-    "the raw CDP tree. "
+    "the raw CDP tree; at='x,y' hit-tests a coordinate instead and returns a "
+    "small elided tree rooted there, with real [ref=eN] handles usable the "
+    "same way (an iframe hit reports the redirect instead). "
     "Mutations (click/type/select/hover/drag/navigate/key/open) settle then "
     "return receipt + a changes: AX-diff (what appeared/disappeared/changed "
     "state) + tree + network delta + console delta. "
@@ -593,7 +595,7 @@ Convention: add data-testid to your root layout component.
       (scrollBy semantics: positive dy scrolls down, positive dx scrolls
       right). Auto-waits up to 2s for the element.
 
-  tab.tree(mode='aria')                                       → list[str]
+  tab.tree(mode='aria', *, at=None)                           → list[str]
       Accessibility snapshot as text lines.  mode='aria' (default): Playwright
       ariaSnapshot with [ref=eN] handles, reusable as aria-ref=eN selectors
       in click/type_text until the next snapshot, navigation, or reattach.
@@ -601,6 +603,12 @@ Convention: add data-testid to your root layout component.
       iframes, no refs).  Crosses OOPIF iframes either way — discovers
       attached iframe children by matching parentFrameId, inlines their trees.
       Standalone read (no settle, no observation pipeline).
+      at=(x, y) / 'x,y' hit-tests that point instead (ignores mode) and
+      returns a small elided tree rooted at the nearest meaningful ancestor
+      of the hit — for "what's actually here" from a coordinate rather than
+      a selector.  Rendered through the same engine as mode='aria', so its
+      nodes carry real [ref=eN] handles too.  A hit on an iframe reports the
+      redirect (target id + translated local coordinate) instead of a tree.
 
   tab.fetch(url, *, method='GET', body=None, headers=None)    → dict
       In-page JS fetch() — inherits the browser's cookies, session, and CORS
@@ -1294,7 +1302,7 @@ Channel kinds:
     "browser": """\
 Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=)      → any
-  tab.tree(mode="aria")                            → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree)
+  tab.tree(mode="aria", at=None)                   → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree; at="x,y": elided [ref=eN] tree hit-tested at a point)
   tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)

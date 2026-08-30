@@ -344,6 +344,11 @@ class BrowserDispatchMixin:
         from .browser.observe import compose_aria_tree, compose_tree
 
         tab = self._get_tab(browser, args)
+        if args.get("at") is not None:
+            # No iframe composition here on purpose — an at= hit on an
+            # iframe redirects the caller to a fresh call against that
+            # target's own session instead (see Tab.tree's docstring).
+            return "\n".join(self._run_async(tab.tree(at=args["at"])))
         session = self._session_for(browser, tab)
         if args.get("mode") == "ax":
             lines, _, _ = self._run_async(compose_tree(tab, session))

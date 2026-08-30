@@ -56,6 +56,12 @@ class EngineUnavailable(RuntimeError):
 class EngineHandle:
     object_id: str
     world: str  # "utility" | "main"
+    # The world's Runtime execution context — None for "main" (the page's
+    # default context, which DOM.resolveNode targets when omitted too).
+    # Needed to resolve a DOM.getNodeForLocation hit into an objectId this
+    # handle can accept: Runtime.callFunctionOn refuses an argument whose
+    # objectId belongs to a different JS world than the target object's.
+    context_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +148,7 @@ async def ensure_engine(tab: "Tab") -> EngineHandle:
         handle = EngineHandle(
             object_id=result["result"]["objectId"],
             world="utility" if context_id is not None else "main",
+            context_id=context_id,
         )
         cdp._injected = handle
         return handle
@@ -421,6 +428,37 @@ async def aria_snapshot(tab: "Tab") -> str:
         "function() { return this.ariaSnapshot(this.document.documentElement,"
         ' {mode: "ai"}); }',
         [],
+    )
+    if "exceptionDetails" in result:
+        detail = result["exceptionDetails"].get("exception", {}).get("description", "")
+        raise RuntimeError(f"ariaSnapshot failed: {_strip_stack(detail)}")
+    return result.get("result", {}).get("value") or ""
+
+
+async def scoped_aria_snapshot(tab: "Tab", backend_node_id: int) -> str:
+    """ariaSnapshot rooted at one DOM node instead of the whole document.
+
+    For turning a DOM.getNodeForLocation hit into a real, click-able [ref=…]
+    handle: resolves the backend node into the engine's own world first
+    (DOM.resolveNode's default target is the main-world context, which
+    Runtime.callFunctionOn rejects as an argument when the engine itself is
+    in the isolated utility world — confirmed live: "Argument should belong
+    to the same JavaScript world as target object") — the same ariaSnapshot
+    call aria_snapshot() makes, just scoped, so refs land in the same live
+    map and resolve via aria-ref=eN exactly like a full-page snapshot's.
+    """
+    handle = await ensure_engine(tab)
+    params: dict[str, Any] = {"backendNodeId": backend_node_id}
+    if handle.context_id is not None:
+        params["executionContextId"] = handle.context_id
+    resolved = await tab._exec("DOM.resolveNode", params)
+    object_id = resolved.get("object", {}).get("objectId")
+    if object_id is None:
+        raise RuntimeError(f"could not resolve backendNodeId {backend_node_id}")
+    result = await call_engine(
+        tab,
+        "function(el) { return this.ariaSnapshot(el, {mode: 'ai'}); }",
+        [{"objectId": object_id}],
     )
     if "exceptionDetails" in result:
         detail = result["exceptionDetails"].get("exception", {}).get("description", "")

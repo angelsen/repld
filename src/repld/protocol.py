@@ -253,7 +253,12 @@ TOOLS = [
             "valid until the next snapshot, navigation, or reattach. "
             "Mode 'ax': raw CDP accessibility tree (pierces same-process "
             "iframes, no refs). Crosses iframe boundaries for attached "
-            "child targets either way."
+            "child targets either way. "
+            "Pass at='x,y' instead to hit-test a coordinate (a screenshot "
+            "region, a failed click) and get a small elided tree rooted "
+            "there, with real [ref=eN] handles — ignores mode. A hit on an "
+            "iframe reports the redirect (target + translated coordinate) "
+            "rather than a tree."
         ),
         "inputSchema": {
             "type": "object",
@@ -263,6 +268,10 @@ TOOLS = [
                     "type": "string",
                     "enum": ["aria", "ax"],
                     "default": "aria",
+                },
+                "at": {
+                    "type": "string",
+                    "description": "Hit-test 'x,y' instead of a full snapshot",
                 },
             },
             "required": ["target"],
