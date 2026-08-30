@@ -370,6 +370,34 @@ class BrowserSession:
                 return cdp
         return None
 
+    async def find_frame_owner(self, frame_id: str) -> tuple[CDPSession, int] | None:
+        """The (page-type CDPSession, backendNodeId) whose DOM contains
+        *frame_id* as an `<iframe>` element — or None if no attached page
+        owns it.
+
+        Tries `DOM.getFrameOwner` against each attached page-type session
+        rather than matching an iframe's `parentFrameId` against a
+        candidate's own `targetId` — confirmed live those two identifiers
+        are *not* reliably equal for an ordinary page target (a
+        `Page.getFrameTree` call showed a real target's own main frame id
+        differs from its Chrome target id), so a page whose target id
+        happens not to equal its frame id was silently never found as any
+        iframe's parent. `getFrameOwner` asks Chrome the question that
+        actually matters instead of inferring the answer from IDs that
+        aren't guaranteed to agree.
+        """
+        for cdp in list(self._sessions.values()):
+            if cdp.target_info.get("type") != "page":
+                continue
+            try:
+                owner = await cdp.execute("DOM.getFrameOwner", {"frameId": frame_id})
+            except RuntimeError:
+                continue
+            backend_id = owner.get("backendNodeId")
+            if backend_id is not None:
+                return cdp, backend_id
+        return None
+
     async def _reattach_core(self, cdp: CDPSession) -> None:
         """Attach cdp to its target under a new sessionId, preserving all state.
 

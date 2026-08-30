@@ -224,7 +224,7 @@ tab.click(selector, *, button="left", click_count=1)
 tab.type_text(selector, text, *, delay_ms=0, press_enter=False)
 tab.navigate(url)
 tab.reload()
-tab.screenshot(*, full_page=False, path=None) -> dict
+tab.screenshot(*, full_page=False, force=False, path=None) -> dict
 
 # query (sync, DuckDB-backed; all return list[Row])
 tab.network(url=None, method=None, status=None, type=None, since=None, include_assets=False)

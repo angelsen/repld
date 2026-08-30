@@ -256,9 +256,12 @@ TOOLS = [
             "child targets either way. "
             "Pass at='x,y' instead to hit-test a coordinate (a screenshot "
             "region, a failed click) and get a small elided tree rooted "
-            "there, with real [ref=eN] handles — ignores mode. A hit on an "
-            "iframe reports the redirect (target + translated coordinate) "
-            "rather than a tree."
+            "there, with real [ref=eN] handles — ignores mode. Always also "
+            "captures a screenshot cropped to the hit — to act on a point "
+            "you see in it, pass at='local_x,local_y' with in_crop=<that "
+            "screenshot's path>; no scale/offset math needed, the crop "
+            "carries its own translation. A hit on an iframe reports the "
+            "redirect (target + translated coordinate) rather than a tree."
         ),
         "inputSchema": {
             "type": "object",
@@ -272,6 +275,13 @@ TOOLS = [
                 "at": {
                     "type": "string",
                     "description": "Hit-test 'x,y' instead of a full snapshot",
+                },
+                "in_crop": {
+                    "type": "string",
+                    "description": (
+                        "Path to an earlier browser_tree(at=...) screenshot — "
+                        "at= is then a pixel within it, not a page coordinate"
+                    ),
                 },
             },
             "required": ["target"],
@@ -460,12 +470,17 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a PNG screenshot of a tab, resized to the vision API token grid. Returns path + coordinate mapping. Use Read to view. For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}. Reapplying the override on an already-emulated tab can leave viewport metrics inconsistent (clientWidth != innerWidth) — prefer a fresh tab per distinct size, and verify document.documentElement.clientWidth === window.innerWidth before trusting the capture.",
+        "description": "Capture a native-resolution PNG screenshot of a tab. Use Read to view. Raises if it exceeds the vision API's token budget instead of silently shrinking it — pass force=true to send it natively anyway, or crop to a smaller region instead (browser_tree(at=...) does this). For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}. Reapplying the override on an already-emulated tab can leave viewport metrics inconsistent (clientWidth != innerWidth) — prefer a fresh tab per distinct size, and verify document.documentElement.clientWidth === window.innerWidth before trusting the capture.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": _TARGET_PARAM,
                 "full_page": {"type": "boolean", "default": False},
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Capture natively even if it exceeds the vision token budget",
+                },
             },
             "required": ["target"],
         },

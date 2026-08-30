@@ -138,18 +138,22 @@ Closes this tab (`Target.closeTarget`). Session cleanup follows from the resulti
 ### tree
 
 ```python
-await tab.tree(mode="aria") → list[str]
+await tab.tree(mode="aria", *, at=None, in_crop=None) → list[str]
 ```
 
 Accessibility snapshot as text lines. Crosses iframes. The default `aria` mode is Playwright's LLM-oriented snapshot with `[ref=eN]` handles — each ref is usable as an `aria-ref=eN` selector in `click`/`type_text` until the next snapshot, navigation, or reattach. `mode="ax"` returns the raw CDP accessibility tree (pierces same-process iframes, no refs).
 
+`at=(x, y)` / `'x,y'` hit-tests that point instead (ignores `mode`) and returns a small elided tree rooted at the nearest meaningful ancestor of the hit, rendered through the same engine as `mode="aria"` so its nodes carry real `[ref=eN]` handles too — for "what's actually here" from a coordinate rather than a selector. Always also captures a screenshot cropped to the hit (its path is in the result's `screenshot` line) — the tree's text isn't always enough to disambiguate visual-only state or near-identical rows. A hit landing on an iframe reports the redirect (target id + translated local coordinate) instead of a tree.
+
+`in_crop=<path>` reinterprets `at=` as a pixel *within* an earlier seed's screenshot instead of a page coordinate — the crop embeds its own translation, so acting on a point you see in that image needs no scale/offset math: pass it straight through and this seeds the page at the point it actually corresponds to.
+
 ### screenshot
 
 ```python
-await tab.screenshot(*, full_page=False, path=None) → dict
+await tab.screenshot(*, full_page=False, force=False, path=None) → dict
 ```
 
-Always writes a PNG — to `path` if given, otherwise a 0600 file under `$XDG_RUNTIME_DIR/repld/`. Returns `{path, source: {width, height}, model: {width, height}, scale, bytes}`. The image is resized to the vision API's token grid; when `scale < 1`, multiply coordinates by `1/scale` to map back to page pixels.
+Always writes a native-resolution PNG — to `path` if given, otherwise a 0600 file under `$XDG_RUNTIME_DIR/repld/`. Returns `{path, width, height, bytes}`. Raises if the capture exceeds the vision API's token budget instead of silently shrinking it — pass `force=True` to send it natively anyway, or crop to a smaller region instead (`browser_tree(at=...)` does this). The budget check uses the PNG's real pixel dimensions, not the CSS-pixel viewport size — they diverge by the device pixel ratio.
 
 ### set_viewport
 

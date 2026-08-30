@@ -316,20 +316,18 @@ class BrowserDispatchMixin:
     def _bh_screenshot(self, browser, args):
         tab = self._get_tab(browser, args)
         info = self._run_async(
-            tab.screenshot(full_page=bool(args.get("full_page", False)))
-        )
-        src = info["source"]
-        mdl = info["model"]
-        lines = [
-            f"Screenshot saved to {info['path']}",
-            f"Captured: {src['width']}x{src['height']}  →  Resized: {mdl['width']}x{mdl['height']} ({info['bytes'] // 1024}KB PNG)",
-            "Use Read to view it.",
-        ]
-        if info["scale"] < 1.0:
-            lines.append(
-                f"Coordinates: multiply by {1 / info['scale']:.2f} to map back to page pixels."
+            tab.screenshot(
+                full_page=bool(args.get("full_page", False)),
+                force=bool(args.get("force", False)),
             )
-        return "\n".join(lines)
+        )
+        return "\n".join(
+            [
+                f"Screenshot saved to {info['path']}",
+                f"{info['width']}x{info['height']} ({info['bytes'] // 1024}KB PNG)",
+                "Use Read to view it.",
+            ]
+        )
 
     def _bh_cdp(self, browser, args):
         tab = self._get_tab(browser, args)
@@ -348,7 +346,9 @@ class BrowserDispatchMixin:
             # No iframe composition here on purpose — an at= hit on an
             # iframe redirects the caller to a fresh call against that
             # target's own session instead (see Tab.tree's docstring).
-            return "\n".join(self._run_async(tab.tree(at=args["at"])))
+            return "\n".join(
+                self._run_async(tab.tree(at=args["at"], in_crop=args.get("in_crop")))
+            )
         session = self._session_for(browser, tab)
         if args.get("mode") == "ax":
             lines, _, _ = self._run_async(compose_tree(tab, session))
