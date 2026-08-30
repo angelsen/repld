@@ -86,6 +86,14 @@ _MODIFIER_BITS = {"Alt": 1, "Control": 2, "Ctrl": 2, "Meta": 4, "Cmd": 4, "Shift
 # to be observed. Empirical, and the cheapest place to absorb it.
 _POST_REATTACH_SETTLE_S = 0.3
 
+# Default budget for the ready-signal poll (get()/open()/reattach). Was 10s;
+# raised after a live-verified Meta Ads Manager attach genuinely took 12.6s
+# end-to-end on a correct selector — not a stuck/wrong condition, just a slow
+# cold load. 15s gives real headroom over that without padding for slowness
+# nothing has actually shown; a wrong/never-satisfied ready= should still
+# fail loud in well under it, not be encouraged to just wait longer.
+_DEFAULT_READY_TIMEOUT_S = 15.0
+
 
 def _format_stack_trace(stack_trace: dict | None) -> str:
     """Render a CDP Runtime.StackTrace as a JS-style multi-line stack string."""
@@ -495,7 +503,9 @@ class Tab(TabQueryMixin):
         await self._wait_condition()
         await asyncio.sleep(_POST_REATTACH_SETTLE_S)
 
-    async def _await_ready_signal(self, ready: str, timeout: float = 10) -> None:
+    async def _await_ready_signal(
+        self, ready: str, timeout: float = _DEFAULT_READY_TIMEOUT_S
+    ) -> None:
         """Wait for a ready signal — selector or JS expression, by shape.
 
         Classification comes from `selector.looks_like_selector`, not from a
@@ -1662,7 +1672,7 @@ class Tab(TabQueryMixin):
 
         return await settle([self], timeout=timeout, quiet=quiet)
 
-    async def _wait_condition(self, timeout: float = 10) -> None:
+    async def _wait_condition(self, timeout: float = _DEFAULT_READY_TIMEOUT_S) -> None:
         """Resolve and poll the ready signal, then record whether it was an
         explicit ready= (confirmed) or the readyState fallback (a guess) —
         only once the poll actually succeeds, since a raise leaves the Tab
@@ -1672,7 +1682,7 @@ class Tab(TabQueryMixin):
         await self._await_ready_signal(ready, timeout)
         self._session._ready_confirmed = bool(self._ready)
 
-    async def _wait_ready(self, timeout: float = 10) -> None:
+    async def _wait_ready(self, timeout: float = _DEFAULT_READY_TIMEOUT_S) -> None:
         """Wait for the ready signal after navigation/reload, then network idle."""
         await self._wait_condition(timeout)
         await self.wait_for_idle(timeout=2.0, quiet=0.3)
