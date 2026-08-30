@@ -104,6 +104,13 @@ def _node_props(node: dict) -> str:
 TreeSig = Counter
 
 
+def _node_label(role: str, name: str, props: str) -> str:
+    label = role
+    if name:
+        label += f" {name!r}"
+    return label + props
+
+
 def _build_lines(
     nodes_by_id: dict[str, dict],
     children_map: dict[str, list[str]],
@@ -129,12 +136,7 @@ def _build_lines(
 
     name = _node_name(node)
     props = _node_props(node)
-    indent = "  " * depth
-    label = f"{indent}{role}"
-    if name:
-        label += f" {name!r}"
-    label += props
-    lines.append(label)
+    lines.append("  " * depth + _node_label(role, name, props))
     sig[(role, name, props)] += 1
 
     if role in LEAF_ROLES:
@@ -146,7 +148,7 @@ def _build_lines(
         )
 
 
-async def build_tree_sig(tab: "Tab", max_depth: int = 6) -> tuple[list[str], TreeSig]:
+async def build_tree_sig(tab: Tab, max_depth: int = 6) -> tuple[list[str], TreeSig]:
     """Compact accessibility tree from CDP Accessibility.getFullAXTree.
 
     Returns (indented text lines, signature multiset). The signature counts
@@ -182,12 +184,12 @@ async def build_tree_sig(tab: "Tab", max_depth: int = 6) -> tuple[list[str], Tre
     return lines or ["(empty tree)"], sig
 
 
-async def build_tree(tab: "Tab", max_depth: int = 6) -> list[str]:
+async def build_tree(tab: Tab, max_depth: int = 6) -> list[str]:
     lines, _ = await build_tree_sig(tab, max_depth)
     return lines
 
 
-async def build_aria_tree(tab: "Tab") -> list[str]:
+async def build_aria_tree(tab: Tab) -> list[str]:
     """Playwright ariaSnapshot ('ai' mode) — YAML lines with [ref=…] handles.
 
     Refs are usable as `aria-ref=<ref>` selectors in click/type until the next
@@ -206,8 +208,8 @@ async def build_aria_tree(tab: "Tab") -> list[str]:
 
 
 async def compose_aria_tree(
-    tab: "Tab", session: "BrowserSession"
-) -> tuple[list[str], list["Tab"]]:
+    tab: Tab, session: BrowserSession
+) -> tuple[list[str], list[Tab]]:
     """build_aria_tree with OOPIF iframe children inlined, compose_tree-style.
 
     Each child session's engine carries its own frameSeq, so child refs render
@@ -230,7 +232,7 @@ async def compose_aria_tree(
 
 def _inline_iframe_lines(
     lines: list[str],
-    iframe_children: list["Tab"],
+    iframe_children: list[Tab],
     child_trees: dict[str, list[str]],
 ) -> list[str]:
     """Insert child tree lines under iframe lines with a → target_id marker.
@@ -244,7 +246,7 @@ def _inline_iframe_lines(
         stripped = line.lstrip()
         indent = line[: len(line) - len(stripped)]
         if stripped.lower().lstrip("- ").startswith("iframe"):
-            matched_child: "Tab | None" = None
+            matched_child: Tab | None = None
             for child in iframe_children:
                 if child.target_id not in used:
                     matched_child = child
@@ -266,15 +268,13 @@ def _inline_iframe_lines(
 # ---------------------------------------------------------------------------
 
 
-async def _discover_iframe_children(
-    tab: "Tab", session: "BrowserSession"
-) -> list["Tab"]:
+async def _discover_iframe_children(tab: Tab, session: BrowserSession) -> list[Tab]:
     """Find attached tabs whose parentFrameId matches this tab's target.
 
     Uses CDP target metadata directly — no JS eval or URL heuristics.
     """
     parent_id = tab._session.chrome_target_id
-    children: list["Tab"] = []
+    children: list[Tab] = []
     for cdp_session in session._sessions.values():
         info = cdp_session.target_info
         if info.get("type") != "iframe":
@@ -302,7 +302,7 @@ Array.from(document.querySelectorAll(
 """
 
 
-async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[str]:
+async def _detect_parent_dialogs(tab: Tab, session: BrowserSession) -> list[str]:
     """Report a visible modal on the page that *owns* this iframe.
 
     Only that page. Scanning every attached page-type target instead was wrong
@@ -357,10 +357,10 @@ async def _detect_parent_dialogs(tab: "Tab", session: "BrowserSession") -> list[
 
 
 async def compose_tree(
-    tab: "Tab",
-    session: "BrowserSession",
+    tab: Tab,
+    session: BrowserSession,
     max_depth: int = 8,
-) -> tuple[list[str], list["Tab"], dict[str, TreeSig]]:
+) -> tuple[list[str], list[Tab], dict[str, TreeSig]]:
     """Build accessibility tree with iframe children inlined.
 
     Returns (lines, iframe_child_tabs, signatures keyed by target_id).
@@ -387,12 +387,152 @@ async def compose_tree(
 
 
 # ---------------------------------------------------------------------------
+# Coordinate-seeded tree
+# ---------------------------------------------------------------------------
+
+
+async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
+    """Hit-test (x, y) and return the local structure at that point.
+
+    Picks the anchor to render from build_tree_sig's node map (one
+    Accessibility.getFullAXTree call, same as mode="ax") — the nearest
+    ancestor of the hit node that has something to show, a role outside
+    SKIP_ROLES *and* either an interactive LEAF_ROLE or real descendants of
+    its own. The raw hit is frequently a paragraph/StaticText wrapper with
+    nothing useful beneath it (a real, not just SKIP_ROLES, wrapper role
+    still renders as a childless one-line subtree), so anchoring there
+    instead of on the nearest ancestor with content would show the seed and
+    nothing else.
+
+    Renders the anchor through the engine's own scoped ariaSnapshot when
+    available, so the tree's nodes carry real [ref=…] handles — usable in
+    click/type exactly like a full-page browser_tree(mode="aria") snapshot,
+    because it's the same live engine instance, just scoped to one element
+    instead of the document. Falls back to the raw AX-tree render
+    (_build_lines, no refs) on any engine failure — a detached node, a page
+    the engine can't inject into — same fallback shape as build_aria_tree.
+    Returns {"iframe": False, "path": [...], "tree": [...]}.
+
+    An iframe hit can't be grown the same way — DOM.getNodeForLocation only
+    hit-tests same-process frames, and an OOPIF's AX tree lives in a separate
+    CDP session. Returns {"iframe": True, "frame_id": ..., "local_x": ...,
+    "local_y": ...} instead, so the caller can re-issue against that target.
+    """
+    ix, iy = round(x), round(y)
+    hit = await tab._exec(
+        "DOM.getNodeForLocation",
+        {"x": ix, "y": iy, "includeUserAgentShadowDOM": True},
+    )
+    backend_node_id = hit["backendNodeId"]
+
+    described = await tab._exec("DOM.describeNode", {"backendNodeId": backend_node_id})
+    node = described.get("node", {})
+    if node.get("nodeName", "").upper() == "IFRAME":
+        box = await tab._exec("DOM.getBoxModel", {"backendNodeId": backend_node_id})
+        # content quad's first point is the box's top-left corner (tab.py's
+        # _quad_center reads the same list for the center instead).
+        origin_x, origin_y = (box.get("model", {}).get("content") or [0, 0])[:2]
+        return {
+            "iframe": True,
+            "frame_id": node.get("frameId"),
+            "local_x": x - origin_x,
+            "local_y": y - origin_y,
+        }
+
+    result = await tab._exec("Accessibility.getFullAXTree", {})
+    nodes = result.get("nodes", [])
+    nodes_by_id: dict[str, dict] = {n["nodeId"]: n for n in nodes}
+    children_map: dict[str, list[str]] = {
+        n["nodeId"]: n.get("childIds") or [] for n in nodes
+    }
+    hit_ax_id = next(
+        (n["nodeId"] for n in nodes if n.get("backendDOMNodeId") == backend_node_id),
+        None,
+    )
+    if hit_ax_id is None:
+        return {
+            "iframe": False,
+            "path": [],
+            "tree": ["(no accessibility node at this point)"],
+        }
+
+    # Walk to the root, collecting the elided ancestor spine and the
+    # candidate anchors along it (every role surviving SKIP_ROLES).
+    # RootWebArea is never a SKIP_ROLES role, so there's always at least
+    # one candidate, however far up.
+    path: list[str] = []
+    candidates: list[str] = []
+    node_id: str | None = hit_ax_id
+    while node_id is not None:
+        n = nodes_by_id.get(node_id)
+        if n is None:
+            break
+        role = _node_role(n)
+        if role not in SKIP_ROLES:
+            path.append(_node_label(role, _node_name(n), _node_props(n)))
+            candidates.append(node_id)
+        node_id = n.get("parentId")
+    path.reverse()
+
+    # Anchor at the deepest candidate that actually has something to show —
+    # an interactive leaf, or a subtree wider than the single anchor line
+    # itself. A candidate whose trial render is exactly its own line has
+    # nothing under it worth being the root of.
+    anchor_id = candidates[-1]  # falls back to the root-most candidate
+    for cand_id in candidates:
+        role = _node_role(nodes_by_id[cand_id])
+        if role in LEAF_ROLES:
+            anchor_id = cand_id
+            break
+        trial: list[str] = []
+        _build_lines(nodes_by_id, children_map, cand_id, 0, max_depth, trial, Counter())
+        if len(trial) > 1:
+            anchor_id = cand_id
+            break
+
+    anchor_backend_id = nodes_by_id[anchor_id].get("backendDOMNodeId")
+    if anchor_backend_id is not None:
+        from . import inject
+
+        try:
+            text = await inject.scoped_aria_snapshot(tab, anchor_backend_id)
+            return {"iframe": False, "path": path, "tree": text.splitlines() or [""]}
+        except Exception:
+            # Broad on purpose: the raw-AX render below is pure local dict
+            # traversal with no failure modes of its own, so falling back to
+            # it is always safe and never worse than skipping the refs.
+            pass
+
+    lines: list[str] = []
+    _build_lines(nodes_by_id, children_map, anchor_id, 0, max_depth, lines, Counter())
+    return {"iframe": False, "path": path, "tree": lines}
+
+
+def format_seeded_tree(result: dict, x: float, y: float, tab: Tab) -> list[str]:
+    """seeded_tree()'s result as text lines, ready to join for the tool response."""
+    if result.get("iframe"):
+        redirect = make_target(tab._port, result["frame_id"] or "")
+        line = (
+            f"point ({x:.0f},{y:.0f}) on {tab.target_id} lands inside an iframe "
+            f"— re-issue at target='{redirect}' (browser_watch it first if not "
+            f"already attached) with at='{result['local_x']:.0f},{result['local_y']:.0f}'"
+        )
+        return [line]
+    lines = [f"seed: ({x:.0f},{y:.0f}) on {tab.target_id}"]
+    if result["path"]:
+        lines.append("path: " + " -> ".join(result["path"]))
+    lines.append("")
+    lines.extend(result["tree"])
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Settle loop
 # ---------------------------------------------------------------------------
 
 
 async def settle(
-    tabs: list["Tab"],
+    tabs: list[Tab],
     timeout: float = 5.0,
     quiet: float = 0.5,
 ) -> int:
@@ -467,7 +607,7 @@ class Observation:
 class PreObservation:
     """State captured before the mutation."""
 
-    iframe_children: list["Tab"] = field(default_factory=list)
+    iframe_children: list[Tab] = field(default_factory=list)
     # target_id → events.rowid high-water mark. One cutoff for both the network
     # and console deltas — see _snapshot_max_ids for why that is sufficient.
     # These were two separate fields until the cutoff moved to `events`; they
@@ -483,7 +623,7 @@ class PreObservation:
     dom_watch: bool = False
 
 
-def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
+def _snapshot_max_ids(tabs: list[Tab]) -> dict[str, int]:
     """Record each tab's event-log high-water mark, keyed by target_id.
 
     Read from `events` rather than from `har_entries` / `console_entries`,
@@ -510,7 +650,7 @@ def _snapshot_max_ids(tabs: list["Tab"]) -> dict[str, int]:
     return result
 
 
-async def pre_observe(tab: "Tab", session: "BrowserSession") -> PreObservation:
+async def pre_observe(tab: Tab, session: BrowserSession) -> PreObservation:
     """Capture state before a mutation.
 
     The signature capture fetches the same AX trees post_observe will — same
@@ -558,7 +698,7 @@ def _truncate_path(url: str) -> str:
     return path[:_PATH_TRUNCATE]
 
 
-def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEntry]:
+def network_delta(tabs: list[Tab], pre_ids: dict[str, int]) -> list[NetworkEntry]:
     """Query each tab's DuckDB for entries with id > snapshot."""
     entries: list[NetworkEntry] = []
     for tab in tabs:
@@ -596,7 +736,7 @@ def network_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[NetworkEnt
     return entries
 
 
-def console_delta(tabs: list["Tab"], pre_ids: dict[str, int]) -> list[str]:
+def console_delta(tabs: list[Tab], pre_ids: dict[str, int]) -> list[str]:
     """Query each tab's console_entries for new entries since snapshot.
 
     Returns lines tagged with target + level.
@@ -789,8 +929,8 @@ def format_observation(obs: Observation) -> str:
 
 
 async def post_observe(
-    tab: "Tab",
-    session: "BrowserSession",
+    tab: Tab,
+    session: BrowserSession,
     pre: PreObservation,
     *,
     timeout: float = 5.0,
