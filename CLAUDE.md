@@ -174,6 +174,6 @@ Key invariants to preserve when building this out:
 
 ## Design principles (from README)
 
-- **Substrate, not library.** Expose small composable primitives (`notify`, `defer`, `@every`, `browser.watch`, `browser.get`) and let the LLM write integration code against live pages/APIs/DBs. Resist adding per-service helpers.
+- **Substrate, not library.** Expose small composable primitives (`notify`, `defer`, `@every`, `browser.watch`, `browser.get`) and let the LLM write integration code against live pages/APIs/DBs. Resist adding per-service helpers. Before calling a new primitive done, check that its output plugs straight into the others — a ref usable by `click`/`type` directly, not descriptive text the agent has to hand-translate into a selector first.
 - **Channel push over polling.** Long jobs, file watchers, webhooks, and timers all surface as `<channel>` injections rather than requiring the agent to poll.
 - **Shared `__main__` namespace.** Human and agent operate on the same module dict — don't sandbox the agent into an isolated scope.
