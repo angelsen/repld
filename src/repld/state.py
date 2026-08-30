@@ -282,6 +282,22 @@ def sweep_dead_project_dirs(projects_dir: Path) -> int:
     return removed
 
 
+def acquire_lock_blocking(flock_path: Path) -> int:
+    """Wait-your-turn mutex — LOCK_EX with no LOCK_NB, so the call blocks
+    the calling thread until the current holder releases, instead of
+    failing fast like acquire_lock(). Same O_CREAT-without-O_TRUNC
+    reasoning applies. Genuinely blocking: a caller on an asyncio loop
+    must run this via asyncio.to_thread, never call it directly.
+
+    Closing the returned fd releases the lock (POSIX flock semantics) —
+    including on process death, so a crashed holder needs no cleanup.
+    """
+    flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 def acquire_lock(flock_path: Path) -> int | None:
     """Take the single-kernel-per-project mutex.
 

@@ -11,11 +11,14 @@ import base64
 import json
 import pathlib
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from .. import bg
 from ..channel import push_kind
+from ..paths import front_lock_for
+from ..state import acquire_lock_blocking
 from .cdp import CDPSession
 from .pin import (
     BINDING_NAME,
@@ -555,10 +558,12 @@ class Tab(TabQueryMixin):
                 ) from reattach_exc
             return await self._session.execute(method, params, timeout)
 
-    async def _ensure_front(self) -> None:
-        """Raise this tab if Chrome has it backgrounded, before dispatching input.
+    @asynccontextmanager
+    async def _ensure_front(self):
+        """Raise this tab if Chrome has it backgrounded, then hold a
+        per-Chrome-instance lock for the caller's whole action.
 
-        `click`/`tap`/`type_text`/`key` all ride `Input.dispatch*Event` —
+        `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
         the renderer's real input pipeline, which Chrome silently drops for
         a tab whose window is occluded or backgrounded
         (`document.visibilityState === "hidden"`): the CDP command still
@@ -570,13 +575,34 @@ class Tab(TabQueryMixin):
         only on the degraded path — the multi-window watch workflow this
         kernel exists for means N-1 tabs are hidden at any given time, so
         this can't be opt-in.
+
+        `Page.bringToFront` raises a window at the Chrome-instance level, not
+        per-call — two concurrent front-then-act sequences against different
+        tabs of the *same* Chrome instance (even across two separate repld
+        kernels pointed at the same `--remote-debugging-port`, which share no
+        in-process state to coordinate through) can otherwise interleave: A
+        fronts tab 1, B fronts tab 2 before A's dispatch lands, A's input
+        goes to the wrong window. The lock is a blocking flock (`state.
+        acquire_lock_blocking`, off-thread — LOCK_EX with no LOCK_NB
+        genuinely blocks, and this runs from the kernel loop), held by the
+        caller for its whole body via `async with`, not just the front call:
+        a race that reopens between fronting and dispatching is the same
+        race back. Releases itself on process death (POSIX flock semantics),
+        so a crashed holder needs no cleanup.
         """
-        result = await self._exec(
-            "Runtime.evaluate",
-            {"expression": "document.visibilityState", "returnByValue": True},
-        )
-        if result.get("result", {}).get("value") == "hidden":
-            await self._exec("Page.bringToFront")
+        fd = await asyncio.to_thread(acquire_lock_blocking, front_lock_for(self._port))
+        try:
+            result = await self._exec(
+                "Runtime.evaluate",
+                {"expression": "document.visibilityState", "returnByValue": True},
+            )
+            if result.get("result", {}).get("value") == "hidden":
+                await self._exec("Page.bringToFront")
+            yield
+        finally:
+            import os
+
+            os.close(fd)
 
     async def set_viewport(self, width: int, height: int) -> None:
         """Emulate a fixed viewport (Emulation.setDeviceMetricsOverride).
@@ -837,14 +863,14 @@ class Tab(TabQueryMixin):
         be visible, enabled and stable, and returns a Receipt naming what the
         click actually hit.
         """
-        await self._ensure_front()
-        el = await inject.resolve_element(self, selector)
-        await inject.check_actionable(
-            self, el, ("visible", "enabled", "stable"), selector=selector
-        )
-        return await self._click_element(
-            el, selector=selector, button=button, click_count=click_count
-        )
+        async with self._ensure_front():
+            el = await inject.resolve_element(self, selector)
+            await inject.check_actionable(
+                self, el, ("visible", "enabled", "stable"), selector=selector
+            )
+            return await self._click_element(
+                el, selector=selector, button=button, click_count=click_count
+            )
 
     async def hover(self, selector: "str | tuple[float, float]") -> Receipt:
         """Move the mouse over an element — or an (x, y) / 'x,y' point — and
@@ -859,21 +885,23 @@ class Tab(TabQueryMixin):
         tooltips) remain up for a following click — and the observation's
         `changes:` section reports what the hover revealed.
         """
-        await self._ensure_front()
-        pt = self._parse_point(selector)
-        if pt is not None:
-            x, y = pt
-            receipt = Receipt(line=f"hovering: ({x:.0f},{y:.0f})")
-        else:
-            sel = selector if isinstance(selector, str) else str(selector)
-            el = await inject.resolve_element(self, sel)
-            await inject.check_actionable(self, el, ("visible", "stable"), selector=sel)
-            x, y = await self._element_center_of(el, sel)
-            receipt = await self._receipt_for(el, x, y, verb="hovering")
-        await self._exec(
-            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
-        )
-        return receipt
+        async with self._ensure_front():
+            pt = self._parse_point(selector)
+            if pt is not None:
+                x, y = pt
+                receipt = Receipt(line=f"hovering: ({x:.0f},{y:.0f})")
+            else:
+                sel = selector if isinstance(selector, str) else str(selector)
+                el = await inject.resolve_element(self, sel)
+                await inject.check_actionable(
+                    self, el, ("visible", "stable"), selector=sel
+                )
+                x, y = await self._element_center_of(el, sel)
+                receipt = await self._receipt_for(el, x, y, verb="hovering")
+            await self._exec(
+                "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
+            )
+            return receipt
 
     @staticmethod
     def _parse_point(spec: Any) -> tuple[float, float] | None:
@@ -934,121 +962,127 @@ class Tab(TabQueryMixin):
         never gives time to fire. 0 disables the hold for gestures where it's
         pure overhead (sliders, whole-node moves).
         """
-        await self._ensure_front()
-        x1, y1, src_el, src_desc = await self._resolve_drag_point(source)
-        if src_el is not None:
-            data = await inject.hit_receipt(self, src_el, x1, y1)
-            if data.get("hit") is not None and not data.get("related", True):
-                h = data["hit"]
-                hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
-                push_kind(
-                    f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
-                    "browser_warning",
-                    target=self.target_id,
-                )
-
-        # Resolve the drop point before pressing when it already exists —
-        # a wrong-direction first nudge matters at 6 px drag scale.
-        deferred_target = False
-        try:
-            x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to, timeout=0.5)
-        except RuntimeError:
-            deferred_target = True
-            x2 = y2 = 0.0
-            tgt_el, tgt_desc = None, str(to)
-
-        await self._exec(
-            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x1, "y": y1}
-        )
-        await self._exec(
-            "Input.dispatchMouseEvent",
-            {
-                "type": "mousePressed",
-                "x": x1,
-                "y": y1,
-                "button": "left",
-                "buttons": 1,
-                "clickCount": 1,
-            },
-        )
-        # From here the button is down — never leave the page mid-drag: the
-        # release in `finally` fires at the last point the pointer reached.
-        cur_x, cur_y = x1, y1
-
-        async def _move(mx: float, my: float) -> None:
-            nonlocal cur_x, cur_y
-            cur_x, cur_y = mx, my
-            await self._exec(
-                "Input.dispatchMouseEvent",
-                {"type": "mouseMoved", "x": mx, "y": my, "buttons": 1},
-            )
-
-        try:
-            if deferred_target:
-                # Cross the typical dragstart threshold so drag-revealed drop
-                # zones mount, then resolve the selector for real. Two 2 px
-                # diagonal steps, not one 4 px jump — same small-origin rule
-                # as the micro-steps below.
-                for d in (2.0, 4.0):
-                    await _move(x1 + d, y1 + d)
-                    await asyncio.sleep(0.03)
-                x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to)
-            else:
-                # Micro-steps first: a first move of distance/steps px exits a
-                # small origin (a 10 px SVG port) before the app's drag-slop
-                # threshold arms, and the whole gesture reads as a stray
-                # click. 2 px increments stay inside anything big enough to
-                # press; three of them cross any typical slop threshold.
-                dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
-                for d in (2.0, 4.0, 6.0):
-                    if d >= dist:
-                        break
-                    await _move(x1 + (x2 - x1) * d / dist, y1 + (y2 - y1) * d / dist)
-                    await asyncio.sleep(0.03)
-
-            delay = duration_ms / max(steps, 1) / 1000
-            sx, sy = cur_x, cur_y
-            for i in range(1, steps + 1):
-                frac = i / steps
-                await _move(sx + (x2 - sx) * frac, sy + (y2 - sy) * frac)
-                await asyncio.sleep(delay)
-
-            if dwell_ms > 0:
-                # Same-position moves, not a bare sleep: a debounced drop
-                # handler is listening for mousemove, and a hold with no
-                # events during it never reaches the handler at all.
-                for _ in range(3):
-                    await _move(x2, y2)
-                    await asyncio.sleep(dwell_ms / 3 / 1000)
-
-            drop_note = ""
-            warning = False
-            if tgt_el is not None:
-                data = await inject.hit_receipt(self, tgt_el, x2, y2)
+        async with self._ensure_front():
+            x1, y1, src_el, src_desc = await self._resolve_drag_point(source)
+            if src_el is not None:
+                data = await inject.hit_receipt(self, src_el, x1, y1)
                 if data.get("hit") is not None and not data.get("related", True):
                     h = data["hit"]
                     hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
-                    drop_note = f" — warning: drop point hits {hdesc}"
-                    warning = True
-        finally:
+                    push_kind(
+                        f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
+                        "browser_warning",
+                        target=self.target_id,
+                    )
+
+            # Resolve the drop point before pressing when it already exists —
+            # a wrong-direction first nudge matters at 6 px drag scale.
+            deferred_target = False
+            try:
+                x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(
+                    to, timeout=0.5
+                )
+            except RuntimeError:
+                deferred_target = True
+                x2 = y2 = 0.0
+                tgt_el, tgt_desc = None, str(to)
+
+            await self._exec(
+                "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x1, "y": y1}
+            )
             await self._exec(
                 "Input.dispatchMouseEvent",
                 {
-                    "type": "mouseReleased",
-                    "x": cur_x,
-                    "y": cur_y,
+                    "type": "mousePressed",
+                    "x": x1,
+                    "y": y1,
                     "button": "left",
-                    "buttons": 0,
+                    "buttons": 1,
                     "clickCount": 1,
                 },
             )
-        return Receipt(
-            line=(
-                f"dragged: {src_desc} ({x1:.0f},{y1:.0f}) → "
-                f"({x2:.0f},{y2:.0f}) {tgt_desc}{drop_note}"
-            ),
-            warning=warning,
-        )
+            # From here the button is down — never leave the page mid-drag: the
+            # release in `finally` fires at the last point the pointer reached.
+            cur_x, cur_y = x1, y1
+
+            async def _move(mx: float, my: float) -> None:
+                nonlocal cur_x, cur_y
+                cur_x, cur_y = mx, my
+                await self._exec(
+                    "Input.dispatchMouseEvent",
+                    {"type": "mouseMoved", "x": mx, "y": my, "buttons": 1},
+                )
+
+            try:
+                if deferred_target:
+                    # Cross the typical dragstart threshold so drag-revealed drop
+                    # zones mount, then resolve the selector for real. Two 2 px
+                    # diagonal steps, not one 4 px jump — same small-origin rule
+                    # as the micro-steps below.
+                    for d in (2.0, 4.0):
+                        await _move(x1 + d, y1 + d)
+                        await asyncio.sleep(0.03)
+                    x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to)
+                else:
+                    # Micro-steps first: a first move of distance/steps px exits a
+                    # small origin (a 10 px SVG port) before the app's drag-slop
+                    # threshold arms, and the whole gesture reads as a stray
+                    # click. 2 px increments stay inside anything big enough to
+                    # press; three of them cross any typical slop threshold.
+                    dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+                    for d in (2.0, 4.0, 6.0):
+                        if d >= dist:
+                            break
+                        await _move(
+                            x1 + (x2 - x1) * d / dist, y1 + (y2 - y1) * d / dist
+                        )
+                        await asyncio.sleep(0.03)
+
+                delay = duration_ms / max(steps, 1) / 1000
+                sx, sy = cur_x, cur_y
+                for i in range(1, steps + 1):
+                    frac = i / steps
+                    await _move(sx + (x2 - sx) * frac, sy + (y2 - sy) * frac)
+                    await asyncio.sleep(delay)
+
+                if dwell_ms > 0:
+                    # Same-position moves, not a bare sleep: a debounced drop
+                    # handler is listening for mousemove, and a hold with no
+                    # events during it never reaches the handler at all.
+                    for _ in range(3):
+                        await _move(x2, y2)
+                        await asyncio.sleep(dwell_ms / 3 / 1000)
+
+                drop_note = ""
+                warning = False
+                if tgt_el is not None:
+                    data = await inject.hit_receipt(self, tgt_el, x2, y2)
+                    if data.get("hit") is not None and not data.get("related", True):
+                        h = data["hit"]
+                        hdesc = " — ".join(
+                            p for p in (h.get("preview"), h.get("sel")) if p
+                        )
+                        drop_note = f" — warning: drop point hits {hdesc}"
+                        warning = True
+            finally:
+                await self._exec(
+                    "Input.dispatchMouseEvent",
+                    {
+                        "type": "mouseReleased",
+                        "x": cur_x,
+                        "y": cur_y,
+                        "button": "left",
+                        "buttons": 0,
+                        "clickCount": 1,
+                    },
+                )
+            return Receipt(
+                line=(
+                    f"dragged: {src_desc} ({x1:.0f},{y1:.0f}) → "
+                    f"({x2:.0f},{y2:.0f}) {tgt_desc}{drop_note}"
+                ),
+                warning=warning,
+            )
 
     async def type_text(
         self,
@@ -1067,47 +1101,54 @@ class Tab(TabQueryMixin):
         bubbled input/change events, and re-verifies. The Receipt says which
         path the text took.
         """
-        await self._ensure_front()
-        el = await inject.resolve_element(self, selector)
-        await inject.check_actionable(
-            self, el, ("visible", "enabled", "editable", "stable"), selector=selector
-        )
-        await self._exec("DOM.focus", {"objectId": el.object_id})
-        await inject.call_engine(
-            self,
-            "function(el) { if (el.select) el.select();"
-            " else el.ownerDocument.execCommand('selectAll'); }",
-            [{"objectId": el.object_id}],
-        )
-
-        before = await inject.read_value(self, el)
-        await self._type_chars(text, delay_ms=delay_ms)
-
-        after = await inject.read_value(self, el)
-        if after == text:
-            note = "value verified"
-        elif after == before:
-            # Keystrokes changed nothing — a controlled input reverted them.
-            # `after != before but != text` is deliberately NOT this branch:
-            # a masking/formatting field transformed the input legitimately,
-            # and overwriting it with the raw text would undo the widget.
-            await inject.set_value_native(self, el, text)
-            final = await inject.read_value(self, el)
-            note = (
-                "value verified via native-setter fallback"
-                if final == text
-                else f"value not verified (got {final!r})"
+        async with self._ensure_front():
+            el = await inject.resolve_element(self, selector)
+            await inject.check_actionable(
+                self,
+                el,
+                ("visible", "enabled", "editable", "stable"),
+                selector=selector,
             )
-        else:
-            note = f"value transformed to {after!r}"
+            await self._exec("DOM.focus", {"objectId": el.object_id})
+            await inject.call_engine(
+                self,
+                "function(el) { if (el.select) el.select();"
+                " else el.ownerDocument.execCommand('selectAll'); }",
+                [{"objectId": el.object_id}],
+            )
 
-        preview, sel = await inject.describe_element(self, el)
-        tdesc = " — ".join(p for p in (preview, sel) if p)
-        receipt = Receipt(line=f"typed into {tdesc} ({note})")
+            before = await inject.read_value(self, el)
+            await self._type_chars(text, delay_ms=delay_ms)
 
-        if press_enter:
-            await self.key("Enter")
-        return receipt
+            after = await inject.read_value(self, el)
+            if after == text:
+                note = "value verified"
+            elif after == before:
+                # Keystrokes changed nothing — a controlled input reverted them.
+                # `after != before but != text` is deliberately NOT this branch:
+                # a masking/formatting field transformed the input legitimately,
+                # and overwriting it with the raw text would undo the widget.
+                await inject.set_value_native(self, el, text)
+                final = await inject.read_value(self, el)
+                note = (
+                    "value verified via native-setter fallback"
+                    if final == text
+                    else f"value not verified (got {final!r})"
+                )
+            else:
+                note = f"value transformed to {after!r}"
+
+            preview, sel = await inject.describe_element(self, el)
+            tdesc = " — ".join(p for p in (preview, sel) if p)
+            receipt = Receipt(line=f"typed into {tdesc} ({note})")
+
+            if press_enter:
+                # Not self.key() -- that re-acquires the same per-port front
+                # lock this block already holds, and flock isn't reentrant
+                # even within one process (two fds on the same file still
+                # serialize), so it would deadlock against itself.
+                await self._dispatch_key("Enter")
+            return receipt
 
     async def _type_chars(self, text: str, *, delay_ms: int = 0) -> None:
         """Key events into whatever holds focus — the shared core of
@@ -1136,116 +1177,118 @@ class Tab(TabQueryMixin):
         which is what reaches an option a virtualized list hasn't rendered.
         A miss lists the visible options' accessible names.
         """
-        await self._ensure_front()
-        el = await inject.resolve_element(self, selector)
-        await inject.check_actionable(
-            self, el, ("visible", "enabled", "stable"), selector=selector
-        )
-        tag_r = await inject.call_engine(
-            self, "function(el) { return el.tagName; }", [{"objectId": el.object_id}]
-        )
-        preview, sel = await inject.describe_element(self, el)
-        tdesc = " — ".join(p for p in (preview, sel) if p)
-
-        if tag_r.get("result", {}).get("value") == "SELECT":
-            v = await inject.select_native(self, el, option)
-            if not v.get("ok"):
-                raise RuntimeError(
-                    f"option {option!r} not found in {tdesc}"
-                    f" — options: {v.get('options')}"
-                )
-            return Receipt(line=f'selected "{option}" in {tdesc}')
-
-        await self._click_element(el, selector=selector)
-
-        # Type-to-filter. aria-autocomplete on the freshly-focused element is
-        # the widget's own declaration that typing narrows the listbox; going
-        # through the filter is the only route to an option a virtualized
-        # list keeps below its render window, where waiting can never make it
-        # appear. The keystrokes go to document.activeElement regardless, so
-        # the focused element is also the right one to ask.
-        filtered = False
-        ac = await inject.call_engine(
-            self,
-            "function() { const a = this.document.activeElement;"
-            " const ac = a && a.getAttribute && a.getAttribute('aria-autocomplete');"
-            " return !!ac && ac !== 'none'; }",
-            [],
-        )
-        if ac.get("result", {}).get("value"):
-            await self._type_chars(option)
-            filtered = True
-
-        opt_label = f"option {option!r}"
-        opt_selectors = [
-            f"role=option[name={selector_mod._text_body(option, exact=True)}]",
-            f"role=option[name*={selector_mod._text_body(option, exact=True)}]",
-        ]
-        try:
-            opt_el = await inject.resolve_engine_selectors(
-                self, opt_selectors, opt_label
+        async with self._ensure_front():
+            el = await inject.resolve_element(self, selector)
+            await inject.check_actionable(
+                self, el, ("visible", "enabled", "stable"), selector=selector
             )
-        except inject.AmbiguousSelectorError:
-            raise
-        except RuntimeError as exc:
-            names = await inject.list_option_names(self)
-            via = " and typing it into the filter" if filtered else ""
-            if names:
-                raise RuntimeError(
-                    f"{opt_label} not found after opening {tdesc}{via}"
-                    f" — visible options: {names}"
-                ) from exc
-            raise RuntimeError(
-                f"{opt_label} not found — no listbox opened after clicking {tdesc}{via}"
-            ) from exc
-        await inject.check_actionable(
-            self, opt_el, ("visible", "stable"), selector=opt_label
-        )
-        # A just-opened menu is still moving: Popper repositions the listbox
-        # after first paint, and the engine's 1-rAF stable check passes inside
-        # that window — a click at the pre-reposition point lands outside the
-        # menu. Sample the option's center 120 ms apart until it stops moving.
-        loop = asyncio.get_running_loop()
-        prev: tuple[float, float] | None = None
-        deadline = loop.time() + 1.5
-        while True:
-            pos = await self._element_center_of(opt_el, opt_label)
-            if (
-                prev is not None
-                and abs(pos[0] - prev[0]) < 1
-                and abs(pos[1] - prev[1]) < 1
-            ):
-                break
-            if loop.time() >= deadline:
-                break
-            prev = pos
-            await asyncio.sleep(0.12)
-        await self._click_element(opt_el, selector=opt_label)
-
-        # Verify what the widget *renders*: react-select never stores the
-        # choice in input.value and puts role=combobox on the input itself, so
-        # a `closest` self-match walks up two levels to the value container
-        # instead. try/except: the click may have replaced the field element
-        # outright, detaching our handle — not a failure.
-        verified = False
-        try:
-            v = await inject.call_engine(
+            tag_r = await inject.call_engine(
                 self,
-                "function(el, opt) {"
-                " let root = el.closest('[role=\"combobox\"]');"
-                " if (!root || root === el)"
-                "   root = el.parentElement"
-                "     ? (el.parentElement.parentElement || el.parentElement) : el;"
-                " const t = (el.value || '') + ' ' + (root.textContent || '');"
-                " return t.includes(opt); }",
-                [{"objectId": el.object_id}, {"value": option}],
+                "function(el) { return el.tagName; }",
+                [{"objectId": el.object_id}],
             )
-            verified = bool(v.get("result", {}).get("value"))
-        except Exception:
-            pass
-        suffix = " (typed to filter)" if filtered else ""
-        suffix += "" if verified else " (selection not verified)"
-        return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
+            preview, sel = await inject.describe_element(self, el)
+            tdesc = " — ".join(p for p in (preview, sel) if p)
+
+            if tag_r.get("result", {}).get("value") == "SELECT":
+                v = await inject.select_native(self, el, option)
+                if not v.get("ok"):
+                    raise RuntimeError(
+                        f"option {option!r} not found in {tdesc}"
+                        f" — options: {v.get('options')}"
+                    )
+                return Receipt(line=f'selected "{option}" in {tdesc}')
+
+            await self._click_element(el, selector=selector)
+
+            # Type-to-filter. aria-autocomplete on the freshly-focused element is
+            # the widget's own declaration that typing narrows the listbox; going
+            # through the filter is the only route to an option a virtualized
+            # list keeps below its render window, where waiting can never make it
+            # appear. The keystrokes go to document.activeElement regardless, so
+            # the focused element is also the right one to ask.
+            filtered = False
+            ac = await inject.call_engine(
+                self,
+                "function() { const a = this.document.activeElement;"
+                " const ac = a && a.getAttribute && a.getAttribute('aria-autocomplete');"
+                " return !!ac && ac !== 'none'; }",
+                [],
+            )
+            if ac.get("result", {}).get("value"):
+                await self._type_chars(option)
+                filtered = True
+
+            opt_label = f"option {option!r}"
+            opt_selectors = [
+                f"role=option[name={selector_mod._text_body(option, exact=True)}]",
+                f"role=option[name*={selector_mod._text_body(option, exact=True)}]",
+            ]
+            try:
+                opt_el = await inject.resolve_engine_selectors(
+                    self, opt_selectors, opt_label
+                )
+            except inject.AmbiguousSelectorError:
+                raise
+            except RuntimeError as exc:
+                names = await inject.list_option_names(self)
+                via = " and typing it into the filter" if filtered else ""
+                if names:
+                    raise RuntimeError(
+                        f"{opt_label} not found after opening {tdesc}{via}"
+                        f" — visible options: {names}"
+                    ) from exc
+                raise RuntimeError(
+                    f"{opt_label} not found — no listbox opened after clicking {tdesc}{via}"
+                ) from exc
+            await inject.check_actionable(
+                self, opt_el, ("visible", "stable"), selector=opt_label
+            )
+            # A just-opened menu is still moving: Popper repositions the listbox
+            # after first paint, and the engine's 1-rAF stable check passes inside
+            # that window — a click at the pre-reposition point lands outside the
+            # menu. Sample the option's center 120 ms apart until it stops moving.
+            loop = asyncio.get_running_loop()
+            prev: tuple[float, float] | None = None
+            deadline = loop.time() + 1.5
+            while True:
+                pos = await self._element_center_of(opt_el, opt_label)
+                if (
+                    prev is not None
+                    and abs(pos[0] - prev[0]) < 1
+                    and abs(pos[1] - prev[1]) < 1
+                ):
+                    break
+                if loop.time() >= deadline:
+                    break
+                prev = pos
+                await asyncio.sleep(0.12)
+            await self._click_element(opt_el, selector=opt_label)
+
+            # Verify what the widget *renders*: react-select never stores the
+            # choice in input.value and puts role=combobox on the input itself, so
+            # a `closest` self-match walks up two levels to the value container
+            # instead. try/except: the click may have replaced the field element
+            # outright, detaching our handle — not a failure.
+            verified = False
+            try:
+                v = await inject.call_engine(
+                    self,
+                    "function(el, opt) {"
+                    " let root = el.closest('[role=\"combobox\"]');"
+                    " if (!root || root === el)"
+                    "   root = el.parentElement"
+                    "     ? (el.parentElement.parentElement || el.parentElement) : el;"
+                    " const t = (el.value || '') + ' ' + (root.textContent || '');"
+                    " return t.includes(opt); }",
+                    [{"objectId": el.object_id}, {"value": option}],
+                )
+                verified = bool(v.get("result", {}).get("value"))
+            except Exception:
+                pass
+            suffix = " (typed to filter)" if filtered else ""
+            suffix += "" if verified else " (selection not verified)"
+            return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
 
     async def key(self, key: str) -> None:
         """Dispatch one key press — a named key, a printable character, or a
@@ -1257,8 +1300,8 @@ class Tab(TabQueryMixin):
         modifiers ("Ctrl+A", "Shift+Tab"). A trailing "+" is the plus key
         itself ("Ctrl++").
         """
-        await self._ensure_front()
-        await self._dispatch_key(key)
+        async with self._ensure_front():
+            await self._dispatch_key(key)
 
     async def keys(self, keys: list[str], *, delay_ms: int = 0) -> None:
         """Dispatch a sequence of key()/combo presses in one call.
@@ -1267,11 +1310,11 @@ class Tab(TabQueryMixin):
         "Backspace", then arrows) instead of one per keypress. delay_ms adds a
         pause between presses for apps that debounce key handling.
         """
-        await self._ensure_front()
-        for k in keys:
-            await self._dispatch_key(k)
-            if delay_ms:
-                await asyncio.sleep(delay_ms / 1000)
+        async with self._ensure_front():
+            for k in keys:
+                await self._dispatch_key(k)
+                if delay_ms:
+                    await asyncio.sleep(delay_ms / 1000)
 
     async def _dispatch_key(self, spec: str) -> None:
         if spec.endswith("+"):
@@ -1341,23 +1384,23 @@ class Tab(TabQueryMixin):
         returns a Receipt like click(); the raw-coordinate form has no target
         element to check, so its receipt is just the point.
         """
-        await self._ensure_front()
-        if y is not None:
-            x, y = float(selector_or_x), y
-            receipt = Receipt(line=f"tapped ({x:.0f},{y:.0f})")
-        else:
-            selector = selector_or_x
-            el = await inject.resolve_element(self, selector)
-            await inject.check_actionable(
-                self, el, ("visible", "stable"), selector=selector
-            )
-            x, y = await self._element_center_of(el, selector)
-            receipt = await self._receipt_for(el, x, y, verb="tapped")
+        async with self._ensure_front():
+            if y is not None:
+                x, y = float(selector_or_x), y
+                receipt = Receipt(line=f"tapped ({x:.0f},{y:.0f})")
+            else:
+                selector = selector_or_x
+                el = await inject.resolve_element(self, selector)
+                await inject.check_actionable(
+                    self, el, ("visible", "stable"), selector=selector
+                )
+                x, y = await self._element_center_of(el, selector)
+                receipt = await self._receipt_for(el, x, y, verb="tapped")
 
-        tp = [{"x": x, "y": y}]
-        await self._touch("touchStart", tp)
-        await self._touch("touchEnd", [])
-        return receipt
+            tp = [{"x": x, "y": y}]
+            await self._touch("touchStart", tp)
+            await self._touch("touchEnd", [])
+            return receipt
 
     async def swipe(
         self,
@@ -1374,16 +1417,16 @@ class Tab(TabQueryMixin):
         Dispatches touchStart → touchMove × steps → touchEnd.
         For scrolling on mobile Chrome via ADB.
         """
-        await self._ensure_front()
-        await self._touch("touchStart", [{"x": x1, "y": y1}])
-        delay = duration_ms / steps / 1000
-        for i in range(1, steps + 1):
-            frac = i / steps
-            cx = x1 + (x2 - x1) * frac
-            cy = y1 + (y2 - y1) * frac
-            await self._touch("touchMove", [{"x": cx, "y": cy}])
-            await asyncio.sleep(delay)
-        await self._touch("touchEnd", [])
+        async with self._ensure_front():
+            await self._touch("touchStart", [{"x": x1, "y": y1}])
+            delay = duration_ms / steps / 1000
+            for i in range(1, steps + 1):
+                frac = i / steps
+                cx = x1 + (x2 - x1) * frac
+                cy = y1 + (y2 - y1) * frac
+                await self._touch("touchMove", [{"x": cx, "y": cy}])
+                await asyncio.sleep(delay)
+            await self._touch("touchEnd", [])
 
     async def scroll(
         self,
@@ -1565,6 +1608,12 @@ class Tab(TabQueryMixin):
         Captures full-res from CDP (no clip.scale — that races the compositor),
         then resizes via Pillow off the event loop (in a thread executor, so
         the resize's CPU cost doesn't stall the kernel's shared asyncio loop).
+        Fronts the tab first and holds the front lock for the whole capture —
+        Page.captureScreenshot on a backgrounded tab otherwise hangs for the
+        full CDP command timeout rather than erroring or no-opping, and
+        without the lock another tab's concurrent front-then-act could steal
+        focus between fronting and the actual capture, screenshotting the
+        wrong window.
         """
         import os
         import time
@@ -1572,21 +1621,24 @@ class Tab(TabQueryMixin):
         from ..paths import RUNTIME_DIR, ensure_runtime_dir
         from ..state import open_private
 
-        params: dict = {"format": "png"}
-        if full_page:
-            params["captureBeyondViewport"] = True
+        async with self._ensure_front():
+            params: dict = {"format": "png"}
+            if full_page:
+                params["captureBeyondViewport"] = True
 
-        metrics = await self._exec("Page.getLayoutMetrics", {})
-        # Measure whatever CDP actually captured. With captureBeyondViewport
-        # the PNG is the full content box, so sizing the resize off the visual
-        # viewport squashed a tall full-page shot down to viewport height —
-        # and reported a `scale` that mapped back to nothing.
-        box = metrics.get("cssContentSize" if full_page else "cssVisualViewport", {})
-        src_w = int(box.get("width") or box.get("clientWidth") or 0)
-        src_h = int(box.get("height") or box.get("clientHeight") or 0)
+            metrics = await self._exec("Page.getLayoutMetrics", {})
+            # Measure whatever CDP actually captured. With captureBeyondViewport
+            # the PNG is the full content box, so sizing the resize off the visual
+            # viewport squashed a tall full-page shot down to viewport height —
+            # and reported a `scale` that mapped back to nothing.
+            box = metrics.get(
+                "cssContentSize" if full_page else "cssVisualViewport", {}
+            )
+            src_w = int(box.get("width") or box.get("clientWidth") or 0)
+            src_h = int(box.get("height") or box.get("clientHeight") or 0)
 
-        result = await self._exec("Page.captureScreenshot", params)
-        img_bytes = base64.b64decode(result.get("data", ""))
+            result = await self._exec("Page.captureScreenshot", params)
+            img_bytes = base64.b64decode(result.get("data", ""))
 
         tgt_w, tgt_h = (
             _model_dims(src_w, src_h) if src_w > 0 and src_h > 0 else (src_w, src_h)

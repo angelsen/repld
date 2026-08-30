@@ -131,6 +131,17 @@ def lock_path(cwd: Path | None = None) -> Path:
     return lock_for(socket_path(cwd))
 
 
+def front_lock_for(port: int) -> Path:
+    """One lock per Chrome instance, not per project — two separate repld
+    kernels (or a kernel and a manually-run one) can point `browser.connect`
+    at the same `--remote-debugging-port`, and Page.bringToFront races
+    across that boundary the same way it does across two tabs in one
+    kernel. Lives directly under RUNTIME_DIR rather than a project dir for
+    that reason."""
+    ensure_runtime_dir()
+    return RUNTIME_DIR / f"browser-{port}.front-lock"
+
+
 # ---------------------------------------------------------------------------
 # Resolution — turning CLI flags and env into one of the paths above
 # ---------------------------------------------------------------------------
