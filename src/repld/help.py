@@ -465,7 +465,7 @@ ready= stores a CSS selector or JS expression on the Tab.  It's used by:
 Selectors use the same classification as click/type_text: '.', '#', '[',
 'data-', a bare tag or custom-element name ('main', 'my-app'), and the
 custom forms (text=, role=, label=, :has-text, aria-ref=) are polled as an
-existence check through the selector engine every 100ms, 10s timeout —
+existence check through the selector engine every 100ms, 15s timeout —
 existence only, never strictness: a ready signal that matched three nodes
 has still fired.  Anything else — anything with a dot or an operator in
 it — is evaluated as a JS expression via Runtime.evaluate, polled the same
@@ -1045,7 +1045,7 @@ destroys the render process), tab methods detect the error and recover:
     1. Detach old CDPSession from BrowserSession
     2. Re-attach to the same Chrome target ID (target ID is stable, only the
        session ID changes)
-    3. Wait for ready signal (CSS or JS, 10s timeout)
+    3. Wait for ready signal (CSS or JS, 15s timeout)
     4. Sleep 0.3s for stability
     5. Retry the original CDP command once
 
