@@ -12,10 +12,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.5.3] - 2026-08-31
+
+### Fixed
+
 - 0.5.2's dialog guarantee (a `confirm()`/`prompt()` auto-rejected by default makes the triggering call raise, rather than returning a receipt) only held through the `browser_click`/`browser_type`/etc. MCP tools — a raw `tab.click()`/`tab.type_text()`/`tab.key()`/`tab.select_option()`/`tab.drag()`/`tab.hover()`/`tab.navigate()`/`tab.invoke()` call from a gist or exec cell returned normally while the dialog was silently rejected underneath. Moved the check down into `Tab._ensure_front()` (plus `navigate()`/`invoke()`, which don't route through it) so exec/gist callers get the same guarantee the docs already promised.
 - Documented (previously undocumented) that the engine's `>>` combinator scopes any engine-native selector form to an ancestor, not just CSS descendant selectors — `[aria-label="Card B"] >> text=Click` — with the caveat that a leading repld shorthand (`label=`, `testid=`, `getBy*()`) swallows the `>> ...` tail as literal text instead.
 
-### Removed
 
 ## [0.5.2] - 2026-08-31
 
