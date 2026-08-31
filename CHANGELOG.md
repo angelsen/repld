@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.5.1] - 2026-08-31
+
+### Fixed
+
 - `docs/guide`'s canonical gist template and Conventions section taught the try/get/except/open pattern `browser.acquire()` replaced in 0.5.0. Now teaches `acquire()` and the `tab.ready_confirmed`/`tab.http_client()` idioms that go with it.
 
-### Removed
 
 ## [0.5.0] - 2026-08-31
 
