@@ -852,6 +852,8 @@ class Observation:
     # None → no diff available (browser_open, or the page navigated);
     # [] → diff computed, nothing changed.
     changes: list[str] | None = None
+    # Dialogs auto-dismissed during this mutation — see CDPSession._dialog_log.
+    dialogs: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +920,11 @@ async def pre_observe(tab: Tab, session: BrowserSession) -> PreObservation:
 
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
+    # Only report dialogs dismissed during *this* mutation, not stragglers
+    # from a prior one that never got read (e.g. a watch()-ed tab's ambient
+    # dialog, already surfaced via its own channel push).
+    for t in all_tabs:
+        t._session._dialog_log.clear()
     tree_sigs: dict[str, TreeSig] | None = {}
     try:
         _, tree_sigs[tab.target_id] = await build_tree_sig(tab, max_depth=8)
@@ -1125,6 +1132,13 @@ def format_observation(obs: Observation) -> str:
     parts.append(f"url: {obs.url} (settled in {obs.settle_ms}ms)")
     parts.append("")
 
+    # Dialogs — auto-dismissed alert/confirm/prompt/beforeunload, if any.
+    for d in obs.dialogs:
+        action = "accepted" if d["accepted"] else "rejected"
+        parts.append(f"dialog: {d['type']} {d['message']!r} → {action} ({d['source']})")
+    if obs.dialogs:
+        parts.append("")
+
     # Changes — what this mutation did to the AX tree, before the full tree.
     if obs.changes is not None:
         if obs.changes:
@@ -1243,6 +1257,8 @@ async def post_observe(
         asyncio.to_thread(console_delta, all_tabs_post, pre.snapshots),
     )
 
+    dialogs = [d for t in all_tabs_post for d in t._session._dialog_log]
+
     obs = Observation(
         url=tab.url,
         settle_ms=settle_ms,
@@ -1250,6 +1266,7 @@ async def post_observe(
         network=net_entries,
         console=console_lines,
         changes=changes,
+        dialogs=dialogs,
     )
 
     text = format_observation(obs)

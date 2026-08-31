@@ -263,6 +263,64 @@ def _push_error_text(
     )
 
 
+async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
+    """Auto-dismiss a native JS dialog (alert/confirm/prompt/beforeunload).
+
+    Without this, a `confirm()`/`alert()` triggered by a click blocks Chrome's
+    renderer, and the CDP command that triggered it (Input.dispatchMouseEvent)
+    hangs until the dialog is dismissed — up to the 30s watchdog. Default
+    policy: alert (only option) and beforeunload accept; confirm/prompt reject
+    (safe — nothing destructive happens). A pinned tab with guard_unload=True
+    rejects beforeunload too, honoring the pin's "don't navigate away" intent
+    over the general default. A pre-armed `_dialog_policy` overrides all of
+    this once, then is consumed.
+    """
+    dialog_type = params.get("type", "")
+    message = params.get("message", "")
+
+    policy = cdp._dialog_policy
+    if policy is not None:
+        accept = policy.get("accept", False)
+        prompt_text = policy.get("promptText")
+        source = "pre-armed"
+        cdp._dialog_policy = None
+    elif dialog_type == "beforeunload" and cdp._pinned and cdp._pin_guard_unload:
+        accept, prompt_text, source = False, None, "auto"
+    else:
+        accept = dialog_type in ("alert", "beforeunload")
+        prompt_text = None
+        source = "auto"
+
+    dismiss_params: dict = {"accept": accept}
+    if prompt_text is not None:
+        dismiss_params["promptText"] = prompt_text
+    try:
+        await cdp.execute("Page.handleJavaScriptDialog", dismiss_params)
+    except Exception as exc:
+        logger.debug("handleJavaScriptDialog failed: %s", exc)
+        return
+
+    cdp._dialog_log.append(
+        {
+            "type": dialog_type,
+            "message": message,
+            "accepted": accept,
+            "source": source,
+        }
+    )
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    action = "accepted" if accept else "rejected"
+    push_channel(
+        f"[dialog:{dialog_type}] {short_id}: {message!r} → {action} ({source})",
+        {
+            "kind": "dialog",
+            "target": short_id,
+            "dialog_type": dialog_type,
+            "action": action,
+        },
+    )
+
+
 def _push_console_error(
     params: dict,
     target_id: str,
@@ -386,6 +444,17 @@ class CDPSession:
 
         # Binding handler (set by Tab._setup_binding)
         self._binding_handler: Any | None = None
+
+        # Dialog handler — always-on (unlike fetch/binding, which are opt-in),
+        # since Page.enable is already part of _enable_domains(). A function
+        # reference, so it survives _reattach_core without replaying anything.
+        self._dialog_handler: Any | None = _handle_dialog
+        # One-shot pre-arm set by tab.dismiss_dialog()/browser_dismiss_dialog;
+        # consumed (reset to None) by the next Page.javascriptDialogOpening.
+        self._dialog_policy: dict | None = None
+        # Dialogs dismissed during the current observed mutation — cleared by
+        # pre_observe, read by post_observe to report them in the observation.
+        self._dialog_log: list[dict] = []
 
         # Pin + label state — lives here (not on Tab) because Tab wrappers
         # are ephemeral (a fresh Tab is constructed on every _iter_tabs()/
@@ -612,6 +681,18 @@ class CDPSession:
                 bg.spawn(
                     self._binding_handler(self, params),
                     name=f"repld-binding-{params.get('name', '?')}",
+                )
+
+            if (
+                method == "Page.javascriptDialogOpening"
+                and self._dialog_handler is not None
+            ):
+                # bg.spawn: this is the only thing that ever dismisses the
+                # dialog, and Chrome's renderer — and any CDP command already
+                # in flight against it — stays blocked until it runs.
+                bg.spawn(
+                    self._dialog_handler(self, params),
+                    name=f"repld-dialog-{params.get('type', '?')}",
                 )
 
             if method == "Runtime.executionContextsCleared":

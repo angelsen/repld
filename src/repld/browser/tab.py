@@ -1675,6 +1675,25 @@ class Tab(TabQueryMixin):
 
         return await settle([self], timeout=timeout, quiet=quiet)
 
+    async def dismiss_dialog(
+        self, accept: bool = True, prompt_text: str | None = None
+    ) -> str:
+        """Pre-arm how to handle the next native JS dialog on this tab.
+
+        alert()/confirm()/prompt()/beforeunload dialogs are always dismissed
+        the instant they open, so nothing ever hangs waiting on one — but
+        confirm()/prompt() reject by default and the action that triggered
+        one raises instead of returning a receipt, since accepting one is
+        never guessed. Call this first with accept=True, then repeat the
+        action, to get the dialog to actually accept. One-shot: consumed by
+        the next dialog, then reverts to the reject default.
+        """
+        policy: dict = {"accept": accept}
+        if prompt_text is not None:
+            policy["promptText"] = prompt_text
+        self._session._dialog_policy = policy
+        return f"Next dialog on {self.target_id} will be {'accept' if accept else 'reject'}ed"
+
     async def _wait_condition(self, timeout: float = _DEFAULT_READY_TIMEOUT_S) -> None:
         """Resolve and poll the ready signal, then record whether it was an
         explicit ready= (confirmed) or the readyState fallback (a guess) —

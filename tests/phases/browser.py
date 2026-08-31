@@ -1503,6 +1503,7 @@ def phase_6(kernel: Kernel) -> None:
             "browser_clear",
             "browser_controls",
             "browser_invoke",
+            "browser_dismiss_dialog",
             "browser_navigate",
             "browser_key",
             "browser_open",
@@ -1971,6 +1972,163 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
         print(
             "  ✓ click receipts: named target; occlusion falls back to element.click()"
         )
+    finally:
+        h.close()
+
+
+def phase_6_dialog_policy(_kernel: Kernel) -> None:
+    """`_handle_dialog`'s accept/reject decision, in isolation — no Chrome.
+
+    A real confirm()/beforeunload dialog is flaky to trigger deterministically
+    (beforeunload in particular needs a prior user gesture Chrome won't grant
+    headlessly), so the policy itself is exercised directly against a fake
+    CDPSession, and only the end-to-end hang-fix is proven live below.
+    """
+
+    class _Cdp:
+        def __init__(self, *, pinned: bool = False, guard_unload: bool = True) -> None:
+            self.port = 9222
+            self.chrome_target_id = "abcdef123456"
+            self._pinned = pinned
+            self._pin_guard_unload = guard_unload
+            self._dialog_policy: dict | None = None
+            self._dialog_log: list[dict] = []
+            self.sent: list[dict] = []
+
+        async def execute(self, method: str, params: dict | None = None) -> dict:
+            self.sent.append(params or {})
+            return {}
+
+    from repld.browser.cdp import _handle_dialog
+
+    async def _run() -> None:
+        # alert: only one option, always accepted.
+        cdp = _Cdp()
+        await _handle_dialog(cdp, {"type": "alert", "message": "Done"})  # type: ignore[arg-type]
+        assert_eq(cdp.sent[-1], {"accept": True}, "alert() accepts")
+        assert_eq(cdp._dialog_log[-1]["source"], "auto", "alert logged as auto")
+
+        # confirm: rejected by default.
+        cdp = _Cdp()
+        await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
+        assert_eq(cdp.sent[-1], {"accept": False}, "confirm() rejects by default")
+
+        # prompt: rejected by default.
+        cdp = _Cdp()
+        await _handle_dialog(cdp, {"type": "prompt", "message": "Name?"})  # type: ignore[arg-type]
+        assert_eq(cdp.sent[-1], {"accept": False}, "prompt() rejects by default")
+
+        # beforeunload: accepted when not pinned.
+        cdp = _Cdp()
+        await _handle_dialog(cdp, {"type": "beforeunload", "message": ""})  # type: ignore[arg-type]
+        assert_eq(cdp.sent[-1], {"accept": True}, "beforeunload accepts when unpinned")
+
+        # beforeunload: rejected on a pin with guard_unload=True.
+        cdp = _Cdp(pinned=True, guard_unload=True)
+        await _handle_dialog(cdp, {"type": "beforeunload", "message": ""})  # type: ignore[arg-type]
+        assert_eq(
+            cdp.sent[-1], {"accept": False}, "beforeunload rejects — pin's guard wins"
+        )
+
+        # beforeunload: still accepted on a pin with guard_unload=False.
+        cdp = _Cdp(pinned=True, guard_unload=False)
+        await _handle_dialog(cdp, {"type": "beforeunload", "message": ""})  # type: ignore[arg-type]
+        assert_eq(
+            cdp.sent[-1],
+            {"accept": True},
+            "beforeunload accepts — guard_unload=False opts out",
+        )
+
+        # A pre-armed policy overrides the default once, then is consumed.
+        cdp = _Cdp()
+        cdp._dialog_policy = {"accept": True, "promptText": "Bob"}
+        await _handle_dialog(cdp, {"type": "prompt", "message": "Name?"})  # type: ignore[arg-type]
+        assert_eq(
+            cdp.sent[-1],
+            {"accept": True, "promptText": "Bob"},
+            "pre-armed policy accepts with the given prompt text",
+        )
+        assert_eq(cdp._dialog_policy, None, "pre-arm is consumed after one dialog")
+        assert_eq(cdp._dialog_log[-1]["source"], "pre-armed", "logged as pre-armed")
+
+    asyncio.run(_run())
+    print("  ✓ dialog policy: alert/confirm/prompt defaults, pin guard, pre-arm")
+
+
+def phase_6_dialog(kernel: Kernel) -> None:
+    """A click that opens a native confirm() completes instantly instead of
+    hanging for the watchdog's full timeout — the actual regression this
+    covers — and the reject/pre-arm/accept round trip lands on the real page.
+    """
+    if not _chrome_ready("phase 6 dialog"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            "<button id=del onclick=\"if(confirm('Delete?'))"
+            " this.textContent='Deleted'\">Delete</button>"
+            "<button id=al onclick=\"alert('Done');"
+            " this.textContent='Alerted'\">Alert</button>"
+        )
+
+        # confirm() rejects by default — the call errors, naming the dialog,
+        # instead of returning a receipt for an action the page declined.
+        started = time.monotonic()
+        resp = h.tool("browser_click", {"target": tid, "selector": "#del"})
+        elapsed = time.monotonic() - started
+        assert_true(
+            elapsed < 5, f"click returned promptly, not after a hang ({elapsed:.1f}s)"
+        )
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "confirm" in msg and "Delete?" in msg and "browser_dismiss_dialog" in msg,
+            f"rejected confirm() errors, naming the dialog (got {msg!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('TEXT', await _t.js('document.getElementById(\"del\").textContent'))"
+        )
+        assert_true(
+            "TEXT Delete" in out,
+            f"declined confirm() left the page unchanged ({out!r})",
+        )
+
+        # Pre-arm accept, then repeat — this time confirm() returns true.
+        resp = h.tool("browser_dismiss_dialog", {"target": tid, "accept": True})
+        assert_true(
+            "accept" in resp["result"]["content"][0]["text"],
+            "pre-arm call confirms the armed outcome",
+        )
+        resp = h.tool("browser_click", {"target": tid, "selector": "#del"})
+        text = resp["result"]["content"][0]["text"]
+        assert_true(
+            text.splitlines()[0].startswith("clicked:"),
+            f"pre-armed accept returns a normal receipt (got {text[:200]!r})",
+        )
+        assert_true(
+            "dialog: confirm 'Delete?' → accepted (pre-armed)" in text,
+            f"observation names the pre-armed accept (got {text[:400]!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "print('TEXT', await _t.js('document.getElementById(\"del\").textContent'))"
+        )
+        assert_true(
+            "TEXT Deleted" in out, f"accepted confirm() let the page proceed ({out!r})"
+        )
+
+        # alert() has no other option — always accepts, never errors.
+        resp = h.tool("browser_click", {"target": tid, "selector": "#al"})
+        text = resp["result"]["content"][0]["text"]
+        assert_true(
+            text.splitlines()[0].startswith("clicked:"),
+            f"alert() click returns a normal receipt (got {text[:200]!r})",
+        )
+        assert_true(
+            "dialog: alert 'Done' → accepted (auto)" in text,
+            f"observation names the auto-accepted alert (got {text[:400]!r})",
+        )
+        print("  ✓ dialog: confirm rejects + errors, pre-arm accepts, alert is silent")
     finally:
         h.close()
 

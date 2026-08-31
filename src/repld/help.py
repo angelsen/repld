@@ -89,6 +89,11 @@ _BROWSER_MODEL = (
     "browser_invoke (act) MCP tools. Action observations push as channel messages. "
     "Console errors from watched tabs push as [console:error] channel messages automatically "
     "(cross-tab duplicates within 2s are collapsed; browser.suppress(substring) mutes matching errors). "
+    "Native dialogs (alert/confirm/prompt/beforeunload) are always dismissed the instant they open "
+    "so nothing hangs — but confirm()/prompt() reject by default and the triggering call errors "
+    "rather than returning a receipt, since accepting one is never guessed. Pre-arm "
+    "browser_dismiss_dialog(target, accept=true) first, then repeat the action, to accept it. "
+    "alert() (only one option) and beforeunload (governed by the pin's guard_unload) don't error. "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
@@ -683,6 +688,11 @@ on an already-attached tab still reports the original attach's value.
       Wait for network idle.  Returns settle time in ms.
       See "Settle loop" below for what "idle" means.
 
+  tab.dismiss_dialog(accept=True, prompt_text=None)           → str
+      Pre-arm the next native JS dialog on this tab. Dialogs auto-dismiss
+      already (see "Native JS dialogs" above) — this overrides the default
+      for one dialog, e.g. to make a confirm() return true.
+
   tab.screenshot(*, full_page=False, force=False, path=None)  → dict
       Capture a native-resolution PNG. Returns {path, width, height, bytes}.
       Raises if the capture exceeds the vision API's token budget instead
@@ -928,6 +938,8 @@ Same syntax across click, tap, type_text, select_option, hover, drag, wait_for:
 
   .css-class, #id, [attr], tag                        CSS
   [data-testid='name']                                CSS (recommended for own code)
+  [aria-label="Aug 30"] button                        CSS descendant — scopes to one
+                                                      ancestor among repeated components
   text=Submit                                         exact text match
   role=button[name="Save"]                            ARIA role + accessible name
   label=Username                                      input by label
@@ -967,6 +979,43 @@ text= matching: exact (whitespace-normalized) text content, with an exact
 aria-ref= lifetime: refs come from the last tab.tree() / browser_tree aria
   snapshot and die on the next snapshot, navigation, or reattach — a dead ref
   errors telling you to take a fresh snapshot, it never polls.
+
+getBy*() chaining (.filter(), a second getBy*() call) is refused with
+  guidance rather than silently mis-resolving — for "this control, but under
+  that specific ancestor" (N identical repeated components disambiguated by
+  a parent's text/label), scope with a plain CSS descendant selector instead:
+  '[aria-label="Aug 30"] button[data-testid=manage]' rather than
+  getByLabel('Aug 30').getByTestId('manage').
+
+== Native JS dialogs ==
+
+alert()/confirm()/prompt()/beforeunload block Chrome's renderer until
+dismissed, which would otherwise hang the CDP command that triggered them
+for the full watchdog timeout. repld listens for Page.javascriptDialogOpening
+and dismisses every dialog within milliseconds, before it can wedge anything:
+
+  alert()       → accepted (the only option)
+  beforeunload  → accepted (navigate away), unless the tab is pinned with
+                   guard_unload=True, which rejects it to honor the pin
+  confirm()      → rejected — and the click/type/key/etc. call that
+                   triggered it raises an error instead of returning a
+                   receipt, naming the dialog. Accepting one is never
+                   guessed at.
+  prompt()       → same as confirm() — rejected, and the call errors
+
+To accept a confirm()/prompt() — get it to return true / a typed answer —
+pre-arm the tab *before* the action that opens it:
+
+  await tab.dismiss_dialog(accept=True)   # exec cell, or browser_dismiss_dialog
+  await tab.click("button.delete")        # confirm() now returns true
+
+The pre-arm is one-shot: it applies to the next dialog only, then reverts to
+the defaults above. alert()/beforeunload never error — accepting either
+isn't a guess (alert has no other option; beforeunload already reflects the
+pin's own guard_unload). Their outcome, and any dialog with no in-flight
+action behind it (a setTimeout, or one on a watch()-ed tab), shows up as a
+`dialog:` line in the observation and pushes to channel:
+`[dialog:confirm] 9222:a1b2c3: 'Delete?' → rejected (auto)`.
 
 Auto-wait: selectors auto-wait up to 2s (click/type_text) or the specified
   timeout (wait_for), polling every 100ms, then actionability waits for
@@ -1354,6 +1403,7 @@ Channel kinds:
   browser_unwatch       dashboard unwatched a pattern
   controls              window.controls action observation (control, action, state in meta)
   console_error         console.error or uncaught exception from watched tab
+  dialog                native JS dialog auto-dismissed (target, dialog_type, action in meta)
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
   browser_disconnect    dashboard disconnected a Chrome connection or tab
   venv                  a project venv was adopted onto the running kernel
@@ -1379,6 +1429,7 @@ Tab (async unless noted):
   tab.keys(keys, delay_ms=)                               → None (sequence of presses in one call)
   tab.wait_for(selector, timeout=5)                       → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)                 → int  (network idle; returns settle ms)
+  tab.dismiss_dialog(accept=True, prompt_text=)           → str  (pre-arm the next native dialog's outcome, one-shot)
   tab.fetch(url, method=, body=, headers=)                → {status, ok, body, base64Encoded}
   tab.navigate(url)                                       → None
   tab.reload()                                            → None
@@ -1452,6 +1503,7 @@ Browser:
 Selectors (click/tap/type_text/select_option/hover/drag):
   .css-class, #id, [attr], tag           CSS
   [data-testid='name']                   CSS (recommended for own code)
+  [aria-label="Aug 30"] button           CSS descendant — scope to one ancestor
   text=Submit                            exact text match
   role=button[name="Save"]              ARIA role + accessible name (accname)
   label=Username                        input by label

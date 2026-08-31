@@ -98,6 +98,24 @@ async def route_detach(browser, target, port) -> str | None:
     return None
 
 
+def _raise_on_unresolved_dialog(tab, pre) -> None:
+    """Fail the call if it triggered a confirm()/prompt() that was rejected
+    by default, rather than returning a receipt for an action the page
+    itself declined. Accepting one is only ever the result of an explicit
+    prior `browser_dismiss_dialog(target, accept=true)` — alert() (only one
+    option) and beforeunload (governed by the pin's own guard_unload) don't
+    raise, since neither is a guessed decision.
+    """
+    for t in (tab, *pre.iframe_children):
+        for d in t._session._dialog_log:
+            if d["source"] == "auto" and d["type"] in ("confirm", "prompt"):
+                raise RuntimeError(
+                    f"{d['type']}() dialog {d['message']!r} was auto-rejected "
+                    "(no explicit decision) — call browser_dismiss_dialog"
+                    "(target, accept=true) then repeat the action to accept it."
+                )
+
+
 class BrowserDispatchMixin:
     """Browser tool-call handlers, mixed into protocol.Dispatcher.
 
@@ -237,6 +255,12 @@ class BrowserDispatchMixin:
             return {"controls": None, "message": "No window.controls on this tab"}
         return result
 
+    def _bh_dismiss_dialog(self, browser, args):
+        tab = self._get_tab(browser, args)
+        return self._run_async(
+            tab.dismiss_dialog(bool(args.get("accept", True)), args.get("prompt_text"))
+        )
+
     def _bh_invoke(self, browser, args):
         tab = self._get_tab(browser, args)
         invoke_args = args.get("args")
@@ -369,7 +393,9 @@ class BrowserDispatchMixin:
         session = self._session_for(browser, tab)
         pre = self._run_async(pre_observe(tab, session))
         mutate()
-        return self._run_async(post_observe(tab, session, pre, timeout=timeout))
+        text = self._run_async(post_observe(tab, session, pre, timeout=timeout))
+        _raise_on_unresolved_dialog(tab, pre)
+        return text
 
     def _receipt_mutation(self, browser, tab, coro_factory, *, after_s: float = 0.0):
         """_observed_mutation for a receipt-returning Tab call: the receipt
@@ -509,4 +535,5 @@ class BrowserDispatchMixin:
         "browser_drag": _bh_drag,
         "browser_controls": _bh_controls,
         "browser_invoke": _bh_invoke,
+        "browser_dismiss_dialog": _bh_dismiss_dialog,
     }

@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Native JS dialogs (`alert`/`confirm`/`prompt`/`beforeunload`) are now auto-dismissed instead of hanging the triggering click/type for 30s — `alert` and `beforeunload` accept (unless a pin's `guard_unload=True` says otherwise), `confirm`/`prompt` reject by default and the triggering call raises rather than returning a receipt, since accepting one is never guessed. `browser_dismiss_dialog(target, accept=)`/`tab.dismiss_dialog()` pre-arm the other outcome for one dialog.
+
 ### Changed
 
 ### Fixed

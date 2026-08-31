@@ -567,6 +567,35 @@ TOOLS = [
             "required": ["target", "control", "action"],
         },
     },
+    {
+        "name": "browser_dismiss_dialog",
+        "description": (
+            "Pre-arm how the next native JS dialog (alert/confirm/prompt/"
+            "beforeunload) on a tab gets dismissed. Every dialog is dismissed "
+            "the instant it opens so nothing hangs — but confirm()/prompt() "
+            "reject by default and the click/type/etc. call that triggered "
+            "one raises instead of returning a receipt, since accepting one "
+            "is never guessed. Call this first with accept=true, then repeat "
+            "the action, to make it actually accept. One-shot: consumed by "
+            "the next dialog only, then reverts to the reject default."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "accept": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Accept (true) or reject/cancel (false) the next dialog",
+                },
+                "prompt_text": {
+                    "type": "string",
+                    "description": "Text to answer with for a prompt() dialog",
+                },
+            },
+            "required": ["target"],
+        },
+    },
 ]
 
 # MCP tool annotations (2025-03-26), applied by name so the classification
@@ -604,6 +633,7 @@ _TOOL_ANNOTATIONS = {
     "browser_hover": {"openWorldHint": True},
     "browser_drag": {"openWorldHint": True},
     "browser_invoke": {"openWorldHint": True},
+    "browser_dismiss_dialog": {"openWorldHint": True},
 }
 
 
