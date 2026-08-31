@@ -72,7 +72,7 @@ __repld_deps__ = [
 ]
 ```
 
-Installs land in a shared, interpreter-versioned directory (`~/.local/share/repld/deps/py3.12`), never in your project's venv — `uv sync` would prune them, and a kernel bound to a project runs under an ephemeral `uv run` overlay that differs every invocation. The directory is *appended* to `sys.path`, so your project's own packages always win.
+Installs land in a shared, interpreter-versioned directory (`~/.local/share/repld/deps/py3.12`), never in your project's venv — `uv sync` would prune them, and a kernel bound to a project runs under an ephemeral `uv run` overlay that differs every invocation. The directory is _appended_ to `sys.path`, so your project's own packages always win.
 
 :::caution[Headless kernels need one deliberate install]
 The prompt has to be answered at the kernel's own stdin, and since kernels spawn lazily the usual one is headless with stdin on `/dev/null`. It doesn't read that as consent: it reports what's missing and prints the `uv pip install --target …` command to run. Start `repld` in a pane once to be asked instead. `repld exec` can't answer it — that's a separate process talking over the socket, while the install runs in the kernel.

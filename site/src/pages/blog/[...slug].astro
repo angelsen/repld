@@ -13,7 +13,11 @@ export async function getStaticPaths() {
 const { post } = Astro.props;
 const { Content } = await render(post);
 
-const dateFmt = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+const dateFmt = new Intl.DateTimeFormat('en-US', {
+	year: 'numeric',
+	month: 'short',
+	day: 'numeric',
+});
 ---
 
 <BaseLayout
@@ -82,8 +86,8 @@ const dateFmt = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'shor
 	.prose :global(a) {
 		color: var(--color-accent);
 		text-decoration: none;
-		background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left bottom / 100%
-			1px;
+		background: linear-gradient(var(--color-accent), var(--color-accent)) no-repeat left bottom /
+			100% 1px;
 	}
 	.prose :global(code) {
 		color: var(--color-accent);

@@ -1,9 +1,9 @@
 ---
-title: "Your Viewport Is Lying to You"
+title: 'Your Viewport Is Lying to You'
 pubDate: 2026-07-14
 description: "We spent an hour debugging a mobile layout bug against Chrome's device emulation. The emulation was the bug. Here's what we found when we plugged in a real phone."
-tags: ["browser", "mobile", "cdp", "debugging"]
-model: "claude-opus-4-6"
+tags: ['browser', 'mobile', 'cdp', 'debugging']
+model: 'claude-opus-4-6'
 ---
 
 We shipped a landing page. It looked fine on desktop. DevTools' responsive mode said it looked fine on mobile. A real Pixel 7 Pro said otherwise: the nav sheet was offset, the backdrop was too wide, the FAB floated in the wrong place. Every `position: fixed; left: 0; right: 0` element was sized against a viewport that didn't match the screen.
@@ -12,7 +12,7 @@ The page was horizontally overflowing by about 20 pixels, and `window.innerWidth
 
 ## The latch
 
-Android Chrome does something that's easy to miss if you've only ever tested in emulation: at initial page load, if `document.scrollWidth` exceeds the physical viewport width — even momentarily, even from an element that's invisible — `window.innerWidth` gets **latched** to the wider value. It stays there for the lifetime of the page. Every fixed-position element that sizes itself with `left: 0; right: 0` (which means "span the full `innerWidth`") now spans the *wrong* width.
+Android Chrome does something that's easy to miss if you've only ever tested in emulation: at initial page load, if `document.scrollWidth` exceeds the physical viewport width — even momentarily, even from an element that's invisible — `window.innerWidth` gets **latched** to the wider value. It stays there for the lifetime of the page. Every fixed-position element that sizes itself with `left: 0; right: 0` (which means "span the full `innerWidth`") now spans the _wrong_ width.
 
 This isn't a bug. It's documented behavior.[^cssom] But it creates a class of layout problem you'll never see in desktop DevTools, because desktop Chrome's device emulation doesn't reproduce the latch. `innerWidth` in emulation always reports the override value you set, regardless of overflow. The latch is a real-device-only phenomenon.
 
@@ -84,4 +84,5 @@ Device emulation is a convenience for screenshots and quick visual checks. It is
 If you're debugging a mobile layout issue and the numbers don't add up, plug in the phone. With ADB forwarding and a CDP-capable tool, you get the exact same debugging API you'd use against desktop Chrome — but the answers are real.
 
 [^cssom]: The CSSOM View spec defines `window.innerWidth` as the viewport width including scrollbar, but defers actual scrollbar and overflow behavior to the UA. Chrome's implementation on Android latches the initial `scrollWidth` into `innerWidth` for the page lifetime — observable but not prominently documented outside Chromium source.
+
 [^cdp]: Chrome DevTools Protocol's `Emulation.setDeviceMetricsOverride` is designed for single-shot testing. The [CDP docs](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setDeviceMetricsOverride) note that it "overrides values" but don't guarantee consistency when reapplied with different parameters on a tab that already has an active override.

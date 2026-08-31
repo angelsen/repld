@@ -116,9 +116,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 		<h2 class="display sm">Core logic stays.<br />Wiring gets replaced.</h2>
 		<p class="body-text">
 			Write gists in two layers. The core logic sits at the top and moves to production untouched.
-			The repld wiring sits at the bottom: a thin <code class="c">_tool_*</code> function with type
-			hints — repld infers the schema, no separate declaration needed. That bottom layer drops away
-			when the gist graduates, and a <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
+			The repld wiring sits at the bottom: a thin <code class="c">_tool_*</code> function with type hints
+			— repld infers the schema, no separate declaration needed. That bottom layer drops away when the
+			gist graduates, and a <code class="c">@mcp.tool</code> or <code class="c">@router.get</code>
 			takes its place.
 		</p>
 		<div class="code-stack" data-reveal>

@@ -1,9 +1,9 @@
 ---
-title: "The Kernel Never Restarted"
+title: 'The Kernel Never Restarted'
 pubDate: 2026-07-20
 description: "We rewrote a tmux MCP server from scratch — daemon, wake-up shim, async readiness notifications — in one repld session. The interesting part isn't that it worked. It's how many wrong assumptions we caught before they shipped, because testing them never cost more than a REPL cell."
-tags: ["repld", "mcp", "fastmcp", "tmux", "debugging"]
-model: "claude-sonnet-5"
+tags: ['repld', 'mcp', 'fastmcp', 'tmux', 'debugging']
+model: 'claude-sonnet-5'
 ---
 
 We spent today rewriting termtap — a tmux pane manager exposed over MCP — from scratch. New architecture: one async FastMCP daemon instead of a socket-RPC daemon/client split, a minimal stdio shim instead of a companion app, async completion notifications instead of a blocking poll loop. By the end of the session it was installed, registered with Claude Code, and pushing real async notifications from a live tmux pane.
@@ -21,13 +21,13 @@ Tested against a live fish pane immediately:
 'X' '↪ echo fish-pane-test'
 ```
 
-Wrong. Fish's prompt spans two lines — the OSC 133 mark lands on the *first* line (`P`), and the line you actually type on gets `X` (an unrelated color-attribute flag from the wrapping character, nothing to do with readiness). The heuristic found the second line, saw no `P`, and reported "not ready" on a pane that had been sitting at a fresh prompt the whole time.
+Wrong. Fish's prompt spans two lines — the OSC 133 mark lands on the _first_ line (`P`), and the line you actually type on gets `X` (an unrelated color-attribute flag from the wrapping character, nothing to do with readiness). The heuristic found the second line, saw no `P`, and reported "not ready" on a pane that had been sitting at a fresh prompt the whole time.
 
-The fix was positional, not local: track the position of the *last* `P` line and the *last* `O` line across the whole capture; ready if `P` comes after `O`, regardless of what's on the very last line. Fixed and reverified in the same cell, against the same pane, thirty seconds after the bug showed up. Nothing about that heuristic would have looked wrong in review — it only broke against a real multi-line prompt, and repld's whole value proposition is that "real" was one line of Python away the entire time.
+The fix was positional, not local: track the position of the _last_ `P` line and the _last_ `O` line across the whole capture; ready if `P` comes after `O`, regardless of what's on the very last line. Fixed and reverified in the same cell, against the same pane, thirty seconds after the bug showed up. Nothing about that heuristic would have looked wrong in review — it only broke against a real multi-line prompt, and repld's whole value proposition is that "real" was one line of Python away the entire time.
 
 ## Proving a hypothesis that would normally need throwaway infra
 
-Later, we needed to know something fastmcp doesn't document: does `create_proxy` — the machinery bridging our daemon's HTTP session to Claude Code's stdio connection — relay a *non-standard* server-initiated notification, or silently drop it? Normally this is the kind of question you write a disposable test harness for, in a separate terminal, probably more than once as you get the protocol framing wrong.
+Later, we needed to know something fastmcp doesn't document: does `create_proxy` — the machinery bridging our daemon's HTTP session to Claude Code's stdio connection — relay a _non-standard_ server-initiated notification, or silently drop it? Normally this is the kind of question you write a disposable test harness for, in a separate terminal, probably more than once as you get the protocol framing wrong.
 
 Instead: a cell that spawns the actual proxy subprocess, writes raw JSON-RPC over its stdin, and reads raw stdout — bypassing any client-side type validation that might be hiding the real answer.
 
@@ -73,7 +73,7 @@ this session. Space-separated server names.
 --dangerously-load-development-channels <servers...>
 ```
 
-Undocumented in `--help`, space-separated not comma-separated, and gated behind an explicit per-launch opt-in — nothing on the server side could detect a session that hadn't set it. Restarted with the flag; still nothing. One more raw JSON-RPC check found the actual last gap: our proxy's own `initialize` response declared `"experimental": {}` — empty — even though the daemon behind it had correctly declared `claude/channel`. `create_proxy` doesn't forward a backend's capability declarations to its own identity, and Claude Code gates all notification handling on the *connecting* server's own declared capabilities, not whatever's further upstream. Added the declaration to the proxy directly, confirmed it showed up in a fresh raw handshake, restarted the real session — and the notification arrived, unprompted, mid-conversation, exactly where it was supposed to.
+Undocumented in `--help`, space-separated not comma-separated, and gated behind an explicit per-launch opt-in — nothing on the server side could detect a session that hadn't set it. Restarted with the flag; still nothing. One more raw JSON-RPC check found the actual last gap: our proxy's own `initialize` response declared `"experimental": {}` — empty — even though the daemon behind it had correctly declared `claude/channel`. `create_proxy` doesn't forward a backend's capability declarations to its own identity, and Claude Code gates all notification handling on the _connecting_ server's own declared capabilities, not whatever's further upstream. Added the declaration to the proxy directly, confirmed it showed up in a fresh raw handshake, restarted the real session — and the notification arrived, unprompted, mid-conversation, exactly where it was supposed to.
 
 ## What actually made this fast
 

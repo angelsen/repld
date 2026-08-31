@@ -91,14 +91,14 @@ This is the bridge between browser-as-explorer and browser-as-API-client.
 
 All interaction methods (`click`, `type_text`, `select_option`, `tap`, `wait_for`) share the same selector syntax:
 
-| Pattern | Type | Notes |
-|---------|------|-------|
-| `.class`, `#id`, `[attr]` | CSS | |
-| `[data-testid='name']` | CSS | Recommended for own code |
-| `text=Submit` | Text | Exact text match |
-| `role=button[name="Save"]` | ARIA | Real accessible-name computation (accname) |
-| `label=Username` | Label | Input by associated label |
-| `aria-ref=e12` | Snapshot ref | From `tab.tree()` — valid until the next snapshot or navigation |
+| Pattern                    | Type         | Notes                                                           |
+| -------------------------- | ------------ | --------------------------------------------------------------- |
+| `.class`, `#id`, `[attr]`  | CSS          |                                                                 |
+| `[data-testid='name']`     | CSS          | Recommended for own code                                        |
+| `text=Submit`              | Text         | Exact text match                                                |
+| `role=button[name="Save"]` | ARIA         | Real accessible-name computation (accname)                      |
+| `label=Username`           | Label        | Input by associated label                                       |
+| `aria-ref=e12`             | Snapshot ref | From `tab.tree()` — valid until the next snapshot or navigation |
 
 Selectors resolve through Playwright's injected engine (vendored, evaluated once per document in an isolated world) and pierce open shadow roots. Resolution is **strict**: a selector matching several elements with no single visible winner fails with a candidate list instead of silently picking one — and every `click`/`type_text` returns a receipt naming what it actually hit, so a misdirected action is visible in the same call rather than after a screenshot.
 
@@ -118,7 +118,7 @@ This injects a floating pill UI with a `beforeunload` guard.
 await tab.pin("dev server — repld integration", guard_unload=False)
 ```
 
-The default guard's `beforeunload` handler fires on *any* unload, same-origin included, so it blocks the framework's own HMR full-page reload behind a native confirm dialog that no CDP driver can dismiss — every call against that tab then times out, indistinguishable from a genuinely hung page. This isn't a rare edge case: it's the default outcome of pinning a tab you're actively iterating against.
+The default guard's `beforeunload` handler fires on _any_ unload, same-origin included, so it blocks the framework's own HMR full-page reload behind a native confirm dialog that no CDP driver can dismiss — every call against that tab then times out, indistinguishable from a genuinely hung page. This isn't a rare edge case: it's the default outcome of pinning a tab you're actively iterating against.
 
 Same-origin navigation self-heals — a reload re-injects the pill automatically — but a cross-origin navigation drops the pin entirely (pushed to the channel as `pin_lost`); call `pin()` again after landing on the new origin.
 

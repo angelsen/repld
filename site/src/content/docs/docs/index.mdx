@@ -24,14 +24,14 @@ The agent calls `exec` to run Python. Short code returns inline; long-running ta
 
 ## Core primitives
 
-| Primitive | What it does |
-|-----------|-------------|
-| `exec` | Run Python in the shared kernel |
-| `defer(coro)` | Fire-and-forget background task, pushes channel on completion |
-| `@every(seconds)` | Periodic ticker — survives past the exec that started it |
-| `notify(content)` | Push a channel notification to the agent |
-| `browser.get(glob)` | Attach to a Chrome tab by URL pattern |
-| `tab.fetch(url)` | In-page fetch — inherits the browser's session |
+| Primitive           | What it does                                                  |
+| ------------------- | ------------------------------------------------------------- |
+| `exec`              | Run Python in the shared kernel                               |
+| `defer(coro)`       | Fire-and-forget background task, pushes channel on completion |
+| `@every(seconds)`   | Periodic ticker — survives past the exec that started it      |
+| `notify(content)`   | Push a channel notification to the agent                      |
+| `browser.get(glob)` | Attach to a Chrome tab by URL pattern                         |
+| `tab.fetch(url)`    | In-page fetch — inherits the browser's session                |
 
 ## Next steps
 

@@ -85,15 +85,15 @@ mv repl.py repld_init.py
 
 ## What moved where
 
-| Path | 0.2 |
-| --- | --- |
-| `.pyrepl.lock` | `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock` |
-| `.pyrepl.sock` | `…/kernel.sock` |
-| `.pyrepl.dashboard` | `…/kernel.dashboard` |
-| `.gitignore` block | nothing to ignore |
-| `.mcp.json` | `claude mcp add repld -- repld bridge` |
-| `CLAUDE.md` block | the MCP `initialize` instructions |
-| `repl.py` + `--init` | `repld_init.py`, auto-detected |
+| Path                 | 0.2                                                  |
+| -------------------- | ---------------------------------------------------- |
+| `.pyrepl.lock`       | `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock` |
+| `.pyrepl.sock`       | `…/kernel.sock`                                      |
+| `.pyrepl.dashboard`  | `…/kernel.dashboard`                                 |
+| `.gitignore` block   | nothing to ignore                                    |
+| `.mcp.json`          | `claude mcp add repld -- repld bridge`               |
+| `CLAUDE.md` block    | the MCP `initialize` instructions                    |
+| `repl.py` + `--init` | `repld_init.py`, auto-detected                       |
 
 `./gists/`, `./gists/.links` and `./.env` are unchanged — source, not state.
 

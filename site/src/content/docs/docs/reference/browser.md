@@ -147,7 +147,7 @@ Accessibility snapshot as text lines. Crosses iframes. The default `aria` mode i
 
 `at=(x, y)` / `'x,y'` hit-tests that point instead (ignores `mode`) and returns a small elided tree rooted at the nearest meaningful ancestor of the hit, rendered through the same engine as `mode="aria"` so its nodes carry real `[ref=eN]` handles too — for "what's actually here" from a coordinate rather than a selector. Always also captures a screenshot cropped to the hit (its path is in the result's `screenshot` line) — the tree's text isn't always enough to disambiguate visual-only state or near-identical rows. A hit landing on an iframe reports the redirect (target id + translated local coordinate) instead of a tree.
 
-`in_crop=<path>` reinterprets `at=` as a pixel *within* an earlier seed's screenshot instead of a page coordinate — the crop embeds its own translation, so acting on a point you see in that image needs no scale/offset math: pass it straight through and this seeds the page at the point it actually corresponds to.
+`in_crop=<path>` reinterprets `at=` as a pixel _within_ an earlier seed's screenshot instead of a page coordinate — the crop embeds its own translation, so acting on a point you see in that image needs no scale/offset math: pass it straight through and this seeds the page at the point it actually corresponds to.
 
 ### screenshot
 
@@ -300,33 +300,33 @@ browser.capture_ok("*192.168.1.1*")   # remove the exemption
 browser.no_capture_patterns           # list active patterns
 ```
 
-Patterns persist across kernel restarts, like `suppress`. An exemption applies on the *next* attach — a tab that already has Fetch enabled keeps capturing until re-attached; `await tab.disable_capture()` is the retroactive per-tab knob. `tab.network()` / `tab.body()` still work on an exempted tab through the on-demand path — only the proactive capture is skipped.
+Patterns persist across kernel restarts, like `suppress`. An exemption applies on the _next_ attach — a tab that already has Fetch enabled keeps capturing until re-attached; `await tab.disable_capture()` is the retroactive per-tab knob. `tab.network()` / `tab.body()` still work on an exempted tab through the on-demand path — only the proactive capture is skipped.
 
 ## Properties
 
-| Property             | Type   | Description                                                   |
-| -------------------- | ------ | ------------------------------------------------------------- |
-| `tab.url`            | `str`  | Current URL (cached — use `tab.js("location.href")` for live) |
-| `tab.title`          | `str`  | Page title (cached)                                           |
-| `tab.type`           | `str`  | `"page"`, `"iframe"`, `"service_worker"`, etc.                |
-| `tab.target_id`      | `str`  | Short ID in `{port}:{6-hex}` format                           |
-| `tab.capture_bodies` | `bool` | Toggle Fetch body capture (True on get/open, False on watch)  |
+| Property              | Type   | Description                                                                                 |
+| --------------------- | ------ | ------------------------------------------------------------------------------------------- |
+| `tab.url`             | `str`  | Current URL (cached — use `tab.js("location.href")` for live)                               |
+| `tab.title`           | `str`  | Page title (cached)                                                                         |
+| `tab.type`            | `str`  | `"page"`, `"iframe"`, `"service_worker"`, etc.                                              |
+| `tab.target_id`       | `str`  | Short ID in `{port}:{6-hex}` format                                                         |
+| `tab.capture_bodies`  | `bool` | Toggle Fetch body capture (True on get/open, False on watch)                                |
 | `tab.ready_confirmed` | `bool` | `True` if the last ready-wait satisfied an explicit `ready=`, not the `readyState` fallback |
-| `tab.label`          | `str`  | Human-readable identifier                                     |
+| `tab.label`           | `str`  | Human-readable identifier                                                                   |
 
 ## Selectors
 
-| Pattern                    | Type                            |
-| -------------------------- | ------------------------------- |
-| `.class`, `#id`, `[attr]`  | CSS                             |
-| `[data-testid='name']`     | CSS                             |
-| `text=Submit`              | Exact text match                |
-| `role=button[name="Save"]` | ARIA role + accessible name     |
-| `label=Username`           | Input by label                  |
-| `placeholder=Search`       | Input by placeholder            |
-| `testid=x`                 | `data-testid` shorthand         |
-| `tag:has-text('OK')`       | CSS + text filter               |
-| `aria-ref=e12`             | Ref from `tab.tree()` snapshot  |
+| Pattern                               | Type                                                                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `.class`, `#id`, `[attr]`             | CSS                                                                                                                                       |
+| `[data-testid='name']`                | CSS                                                                                                                                       |
+| `text=Submit`                         | Exact text match                                                                                                                          |
+| `role=button[name="Save"]`            | ARIA role + accessible name                                                                                                               |
+| `label=Username`                      | Input by label                                                                                                                            |
+| `placeholder=Search`                  | Input by placeholder                                                                                                                      |
+| `testid=x`                            | `data-testid` shorthand                                                                                                                   |
+| `tag:has-text('OK')`                  | CSS + text filter                                                                                                                         |
+| `aria-ref=e12`                        | Ref from `tab.tree()` snapshot                                                                                                            |
 | `getByRole('button', { name: 'OK' })` | Playwright locator call — strict-error suggestions paste as-is (also `getByTestId`/`getByText`/`getByLabel`/`getByPlaceholder`/`locator`) |
 
 Every form resolves through a vendored build of Playwright's `InjectedScript` engine, evaluated once per document in an isolated world, and pierces open shadow roots. `role=` computes real implicit ARIA roles and accessible names (the W3C accname algorithm), so labels, `alt` text and `aria-labelledby` all resolve; hidden elements are excluded from `role=` matches.

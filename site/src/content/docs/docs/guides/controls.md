@@ -9,11 +9,11 @@ Controls expose your app's UI state machines as typed, invocable APIs. Instead o
 
 Your app exposes a `window.controls` object with three methods:
 
-| Method | Returns | Purpose |
-|--------|---------|---------|
-| `describeAll()` | `Record<string, ControlDescription>` | Schema for all controls — actions, params, properties, current state |
-| `invoke(control, action, args)` | `{returned, stateBefore, stateAfter, duration}` | Execute an action with state diffing |
-| `list()` | `[{name, title, state}, ...]` | Quick summary of registered controls |
+| Method                          | Returns                                         | Purpose                                                              |
+| ------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| `describeAll()`                 | `Record<string, ControlDescription>`            | Schema for all controls — actions, params, properties, current state |
+| `invoke(control, action, args)` | `{returned, stateBefore, stateAfter, duration}` | Execute an action with state diffing                                 |
+| `list()`                        | `[{name, title, state}, ...]`                   | Quick summary of registered controls                                 |
 
 repld auto-detects `window.controls` on attached tabs and exposes two MCP tools: `browser_controls` (discovery) and `browser_invoke` (invocation with full observation pipeline).
 
@@ -32,7 +32,7 @@ const { control, def } = defineControl({
   description: 'User authentication and session',
 
   // state() returns a string summarizing current state
-  state: () => currentUser ? currentUser.email : 'anonymous',
+  state: () => (currentUser ? currentUser.email : 'anonymous'),
 
   actions: {
     login: {
@@ -80,6 +80,7 @@ window.controls = registry;
 ### What `defineControl()` creates
 
 The factory builds a runtime object with:
+
 - **Data properties:** `name`, `title`, `description`
 - **Computed `state`:** calls your `state()` getter
 - **Property getters:** each calls the corresponding `get()` function
