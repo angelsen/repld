@@ -1062,7 +1062,7 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
 
         # Verify new tools appear in tool list
         resp = b.call("tools/list")
-        tool_names = set(t["name"] for t in resp["result"]["tools"])
+        tool_names = {t["name"] for t in resp["result"]["tools"]}
         new_tools = {
             "browser_navigate",
             "browser_key",
