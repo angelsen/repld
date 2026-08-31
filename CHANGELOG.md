@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Subcommand argument-validation errors (`unknown argument` / `unexpected argument` plus the usage block from `check_args`) now print to stderr like `repld`'s own unknown-command error, instead of stdout — `repld stop --typo 2>/dev/null` no longer silences the wrong stream.
+
 ### Removed
 
 ## [0.5.3] - 2026-08-31

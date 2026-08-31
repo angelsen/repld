@@ -2,8 +2,8 @@
 
 The public grammar is repld's (`text=`, `role=[name=]`, `label=`, `:has-text`,
 `aria-ref=`, plain CSS); the vendored InjectedScript engine (inject.py) is the
-only thing that ever *resolves* one. translate() maps each form onto the
-engine's own selector language, which stays an internal detail — a raw
+only thing that ever *resolves* one. translate_fallbacks() maps each form onto
+the engine's own selector language, which stays an internal detail — a raw
 Playwright-syntax string a caller happens to pass falls through to `css=` and
 fails like any bad CSS.
 """
@@ -30,11 +30,12 @@ _ROLE_CSS: dict[str, str] = {
 
 
 # A string that is unambiguously a selector rather than a JS expression.
-# `translate()` itself can't answer this — its fallback treats *anything*
-# unrecognised as CSS, which is right for `click`/`type_text`, where a selector
-# is the only thing a caller can mean. `ready=` is the one parameter that
-# accepts either, so it needs the question asked separately, and it needs the
-# answer to agree with `translate()` about what a selector looks like.
+# `translate_fallbacks()` itself can't answer this — its fallback treats
+# *anything* unrecognised as CSS, which is right for `click`/`type_text`, where
+# a selector is the only thing a caller can mean. `ready=` is the one parameter
+# that accepts either, so it needs the question asked separately, and it needs
+# the answer to agree with `translate_fallbacks()` about what a selector looks
+# like.
 #
 # The bare-name branch is the whole reason this exists: `ready="main"` and
 # `ready="my-app"` are ordinary CSS, and the hand-rolled
@@ -143,11 +144,6 @@ def _translate_getby(fn: str, args: str) -> list[str]:
         "getByTitle": "title",
     }[fn]
     return [f"internal:attr=[{attr}={_text_body(value, exact=exact)}]"]
-
-
-def translate(selector: str) -> str:
-    """Translate one repld selector to the engine's selector language."""
-    return translate_fallbacks(selector)[0]
 
 
 def translate_fallbacks(selector: str) -> list[str]:

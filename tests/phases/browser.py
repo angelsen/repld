@@ -291,7 +291,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute     # type: ignore[assignment]
+        session.execute = fake_execute  # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -492,14 +492,17 @@ def phase_6_stale_context_retry(_kernel: Kernel) -> None:
 
 
 def phase_6_selector_translation(_kernel: Kernel) -> None:
-    """translate()/translate_fallbacks(): repld grammar → engine selectors.
+    """translate_fallbacks(): repld grammar → engine selectors.
 
     Pure functions, no kernel or Chrome. The `internal:` spellings are load-
     bearing: the public text= engine parses `"Save"s` as a literal string and
     matches nothing, and there is no public label engine at all — both
     verified against a live engine before this table was written.
     """
-    from repld.browser.selector import translate, translate_fallbacks
+    from repld.browser.selector import translate_fallbacks
+
+    def translate(sel):
+        return translate_fallbacks(sel)[0]
 
     cases = [
         ("#app .btn", "css=#app .btn"),
@@ -1681,14 +1684,17 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
     halves asserted together are the point: bare names must read as selectors
     *and* real expressions must still read as JS.
     """
-    from repld.browser.selector import looks_like_selector, translate
+    from repld.browser.selector import looks_like_selector, translate_fallbacks
+
+    def translate(sel):
+        return translate_fallbacks(sel)[0]
 
     selectors = [
         ".app-root",
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",    # bare tag — the regression
+        "main",  # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",

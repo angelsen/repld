@@ -21,6 +21,8 @@ carve-out is about `check_args` only — `wants_help` is argv-shape-agnostic, so
 like everyone else rather than keeping a third and fourth spelling of it.
 """
 
+import sys
+
 
 def wants_help(argv: list[str]) -> bool:
     """Whether any argument asks for usage.
@@ -52,12 +54,12 @@ def check_args(
     """
     unknown = [a for a in argv if a.startswith("-") and a not in flags]
     if unknown:
-        print(f"{prog}: unknown argument {unknown[0]!r}\n")
-        print(usage)
+        print(f"{prog}: unknown argument {unknown[0]!r}\n", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     names = [a for a in argv if not a.startswith("-")]
     if positionals is not None and len(names) > positionals:
-        print(f"{prog}: unexpected argument {names[positionals]!r}\n")
-        print(usage)
+        print(f"{prog}: unexpected argument {names[positionals]!r}\n", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     return None

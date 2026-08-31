@@ -2128,19 +2128,6 @@ Combine with project context for dev workflows:
 # ---------------------------------------------------------------------------
 
 
-def _check_state(cwd: Path) -> dict:
-    from . import paths
-
-    lock_path = paths.lock_path(cwd)
-    state: dict = {
-        "lock_exists": lock_path.exists(),
-        "lock_alive": False,
-    }
-    if state["lock_exists"]:
-        state["lock_alive"] = isinstance(read_lock(lock_path), dict)
-    return state
-
-
 def _suggestion(cwd: Path) -> str:
     """What to do next here, from what can actually be observed.
 
@@ -2149,8 +2136,10 @@ def _suggestion(cwd: Path) -> str:
     client internals to guess would be worse than saying nothing. A live kernel
     is observable, and it implies registration anyway.
     """
-    s = _check_state(cwd)
-    if s["lock_alive"]:
+    from . import paths
+
+    lock_path = paths.lock_path(cwd)
+    if lock_path.exists() and isinstance(read_lock(lock_path), dict):
         return (
             "Kernel running for this project. Open Claude Code: `claude`\n"
             "  repld log -f    # watch what it's doing\n"

@@ -26,20 +26,15 @@ from .channel import push_kind
 
 # Source introspection — AST in, API text out. `gist_api` imports nothing from
 # repld, so unlike the siblings above it is not part of that cycle and a plain
-# `from` is safe. Re-exported deliberately: `gist_links`, `gist_deps` and
-# `gist_lint` reach these as `gists._parse` / `gists._dunder_value`, which is
-# the cycle contract described above and stays true whichever module defines
-# them.
-from .gist_api import (  # noqa: F401  (re-exported for gists.<name> callers)
-    _decorator_names,
-    _dunder_value,
+# `from` is safe. `gist_links`, `gist_deps`, `gist_lint` and `gist_cmd` reach
+# `_parse` / `_dunder_value` / `signature_for_path` as `gists.<name>` — the
+# cycle contract described above, true whichever module defines them.
+from .gist_api import (
+    _dunder_value,  # noqa: F401  (re-exported: gist_deps/gist_lint call gists._dunder_value)
     _extract_doc,
     _first_line,
-    _format_args,
     _format_class,
     _format_function,
-    _init_args,
-    _is_exception_class,
     _parse,
     _usage_value,
     signature_for_path,

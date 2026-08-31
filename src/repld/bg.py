@@ -80,8 +80,3 @@ def spawn(
         return _track(asyncio.create_task(coro, name=name))
     loop.call_soon_threadsafe(lambda: _track(loop.create_task(coro, name=name)))
     return None
-
-
-def count() -> int:
-    """In-flight fire-and-forget tasks. For diagnostics."""
-    return len(_running)
