@@ -23,7 +23,7 @@ import uuid
 from typing import Literal
 
 from . import state
-from .events import StdoutChunk, StderrChunk, emit
+from .events import StderrChunk, StdoutChunk, emit
 from .paths import RUNTIME_DIR, ensure_runtime_dir
 from .state import open_private
 

@@ -50,3 +50,9 @@ build-backend = "uv_build"
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
+
+[tool.ruff.lint]
+# Track ruff's default rule selection; record only the deliberate exceptions.
+# BLE001/S110/S112: housekeeping paths must never raise (see CLAUDE.md) —
+# broad excepts around channel pushes, sweeps, and teardown are the design.
+ignore = ["BLE001", "S110", "S112"]

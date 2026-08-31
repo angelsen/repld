@@ -5,9 +5,11 @@ replays the client's handshake onto a fresh kernel — but it never interprets a
 tool call, so every schema and handler below lives on this side of the socket.
 """
 
-import __main__
 import inspect
 import json
+from typing import ClassVar
+
+import __main__
 
 from .browser_dispatch import BrowserDispatchMixin
 from .core_schemas import (
@@ -17,14 +19,23 @@ from .core_schemas import (
     PROTOCOL_VERSION,
     RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
+)
+from .core_schemas import (
     error as _error,
+)
+from .core_schemas import (
     negotiate_version as _negotiate_version,
+)
+from .core_schemas import (
     response as _response,
+)
+from .core_schemas import (
     wire as _wire,
 )
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
-from .tasks import spill_marker, spill_text as _spill_text
+from .tasks import spill_marker
+from .tasks import spill_text as _spill_text
 
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
@@ -966,7 +977,7 @@ class Dispatcher(BrowserDispatchMixin):
 
         return gists.registry_summary()
 
-    _RESOURCE_DISPATCH = {
+    _RESOURCE_DISPATCH: ClassVar[dict] = {
         "repld://browser/tabs": _resource_tabs,
         "repld://browser/network": _resource_network,
         "repld://browser/console": _resource_console,

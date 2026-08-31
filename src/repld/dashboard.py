@@ -8,7 +8,6 @@ The markup lives in `dashboard_html.py`. This module is the server: routing,
 the auth ladder, and the JSON-RPC dispatch.
 """
 
-import __main__
 import asyncio
 import json
 import os
@@ -17,6 +16,8 @@ import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
+
+import __main__
 
 from . import tasks
 from .channel import push_kind
@@ -580,7 +581,7 @@ async def _handle_connection(
         await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)
 
     except (
-        asyncio.TimeoutError,
+        TimeoutError,
         asyncio.IncompleteReadError,
         ConnectionResetError,
         BrokenPipeError,

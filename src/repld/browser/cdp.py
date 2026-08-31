@@ -596,25 +596,23 @@ class CDPSession:
                     # for a stream the answer is yes the moment the headers land.
                     self._inflight.pop(request_id, None)
 
-            if method == "Fetch.requestPaused":
+            if method == "Fetch.requestPaused" and self._fetch_handler is not None:
                 # Dispatch async handler without blocking the recv loop.
                 # `bg.spawn`, not a bare create_task: this coroutine is the only
                 # thing that ever resumes the paused request, so a task
                 # collected mid-flight leaves it hanging in Chrome until the
                 # request times out — with `settle` waiting on it the whole
                 # time. See bg.py.
-                if self._fetch_handler is not None:
-                    bg.spawn(
-                        self._fetch_handler(self, params),
-                        name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
-                    )
+                bg.spawn(
+                    self._fetch_handler(self, params),
+                    name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
+                )
 
-            if method == "Runtime.bindingCalled":
-                if self._binding_handler is not None:
-                    bg.spawn(
-                        self._binding_handler(self, params),
-                        name=f"repld-binding-{params.get('name', '?')}",
-                    )
+            if method == "Runtime.bindingCalled" and self._binding_handler is not None:
+                bg.spawn(
+                    self._binding_handler(self, params),
+                    name=f"repld-binding-{params.get('name', '?')}",
+                )
 
             if method == "Runtime.executionContextsCleared":
                 # Navigation replaced the document; the injected engine (and

@@ -10,7 +10,9 @@ import sys
 
 from . import eventlog, paths, render, state
 from .cli_args import wants_help
-from .render import DIM as _DIM, RED as _RED, RESET as _RESET
+from .render import DIM as _DIM
+from .render import RED as _RED
+from .render import RESET as _RESET
 
 # Rendered as a raw byte stream rather than as lines — see _emit.
 _CHUNK_TYPES = ("StdoutChunk", "StderrChunk")

@@ -99,11 +99,11 @@ _HAS_TEXT_RE = re.compile(r"^(.+?):has-text\(['\"](.+?)['\"]\)$")
 _GETBY_RE = re.compile(
     r"^(getByRole|getByTestId|getByText|getByLabel|getByPlaceholder"
     r"|getByAltText|getByTitle|locator)\s*\((.*)\)\s*$",
-    re.S,
+    re.DOTALL,
 )
 _GETBY_ARGS_RE = re.compile(
     r"""^\s*(['"])(?P<v>(?:\\.|(?!\1).)*)\1\s*(?:,\s*\{(?P<opts>.*)\}\s*)?$""",
-    re.S,
+    re.DOTALL,
 )
 _GETBY_NAME_RE = re.compile(r"""name\s*:\s*(['"])(?P<v>(?:\\.|(?!\1).)*)\1""")
 _GETBY_EXACT_RE = re.compile(r"exact\s*:\s*true")

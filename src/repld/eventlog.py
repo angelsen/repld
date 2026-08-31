@@ -20,8 +20,8 @@ import dataclasses
 import json
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from . import events
 from .display import VIEWER_MAX_BYTES

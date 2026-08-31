@@ -154,6 +154,7 @@ def _unit_running(sock_path: Path) -> bool:
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -187,7 +188,9 @@ def _spawn_via_systemd(
     """
     argv = _systemd_run_argv(cmd, sock_path, cwd, dict(os.environ))
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            argv, capture_output=True, text=True, timeout=30, check=False
+        )
     except (OSError, subprocess.SubprocessError) as e:
         _note(f"repld: systemd-run failed ({e})", quiet)
         return FAILED

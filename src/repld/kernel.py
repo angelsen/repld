@@ -10,7 +10,6 @@ Architecture:
 Pure stdlib; rich is an optional rendering backend.
 """
 
-import __main__
 import asyncio
 import atexit
 import concurrent.futures
@@ -28,12 +27,15 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import events, eventlog, gates, ipc, paths, sessions, state, tasks
-from .channel import push_channel, push_kind as _push
+import __main__
+
+from . import eventlog, events, gates, ipc, paths, sessions, state, tasks
+from .channel import push_channel
+from .channel import push_kind as _push
 from .events import CellDone, CellStart
 from .paths import default_socket_path, lock_for
-from .state import atomic_write_json
 from .protocol import Dispatcher
+from .state import atomic_write_json
 from .tasks import install_tee
 
 # Re-exported: `from repld.kernel import push_channel` is a plausible line in
@@ -203,10 +205,14 @@ def _banner(
 ) -> str:
     lines = [
         f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}",
-        f"  watchdog:  loop_blocked channel push if cell holds the loop > {watchdog_threshold}s "
-        f"(REPLD_LOOP_BLOCK_THRESHOLD)",
-        f"  kill:      longest-running task cancelled if loop blocked > {kill_threshold}s "
-        f"(REPLD_LOOP_KILL_THRESHOLD)",
+        (
+            f"  watchdog:  loop_blocked channel push if cell holds the loop > "
+            f"{watchdog_threshold}s (REPLD_LOOP_BLOCK_THRESHOLD)"
+        ),
+        (
+            f"  kill:      longest-running task cancelled if loop blocked > "
+            f"{kill_threshold}s (REPLD_LOOP_KILL_THRESHOLD)"
+        ),
     ]
     if dashboard_port is not None:
         # The port, not a URL: `GET /` needs the API token now, and this banner
@@ -273,7 +279,7 @@ def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future
     creates an anonymous Task that the fallback victim search can select
     instead of the actual offending task.
     """
-    fut: "concurrent.futures.Future[None]" = concurrent.futures.Future()
+    fut: concurrent.futures.Future[None] = concurrent.futures.Future()
 
     def _start() -> None:
         task = loop.create_task(asyncio.sleep(0), name="repld-watchdog-probe")
@@ -309,7 +315,9 @@ def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | Non
         m = re.fullmatch(r"Task-(\d+)", name)
         return (0, int(m.group(1))) if m else (1, name)
 
-    for _tid, task in tasks.items():
+    # tasks.items() is the module's lock-held snapshot, not a dict — there is
+    # no .values() sibling.
+    for _tid, task in tasks.items():  # noqa: PERF102
         if task["done_event"].is_set():
             continue
         atask = task.get("asyncio_task")
@@ -562,7 +570,7 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
         channel notification is pushed.
         """
         if inspect.iscoroutine(coro):
-            thunk = lambda c=coro: c  # noqa: E731
+            thunk = lambda c=coro: c
         elif inspect.iscoroutinefunction(coro):
             raise TypeError(
                 f"defer() expects a coroutine object, got the function "
@@ -1027,7 +1035,9 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     from . import bind as _bind
 
     _project_venv = _bind.project_venv()
-    if _project_venv is not None and not _bind.is_bound(_project_venv):
+    # Nested on purpose: adopt() splices sys.path, a side effect that should
+    # not hide inside a compound condition.
+    if _project_venv is not None and not _bind.is_bound(_project_venv):  # noqa: SIM102
         if _bind.adopt(_project_venv) is None:
             print(
                 f"repld: {_bind.describe(_project_venv)} — its packages are "
@@ -1055,9 +1065,11 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
 
 def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
     """3. Inject helpers into __main__ + repld module."""
-    from . import runtime
     import pydoc
+
     import repld as _repld_mod
+
+    from . import runtime
 
     _every = _make_every(loop)
     _defer = _make_defer(loop)
@@ -1076,15 +1088,17 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
     # Pager-free help — pydoc's default pager forks less(1) on the kernel tty,
     # bypassing _Tee and deadlocking the asyncio loop. Helper(output=...) writes
     # directly through sys.stdout (the _Tee) so output flows to exec clients.
-    setattr(__main__, "help", pydoc.Helper(output=sys.stdout))
+    # setattr, not assignment: basedpyright rejects unknown attributes on a
+    # module object, and these are injected names by design.
+    setattr(__main__, "help", pydoc.Helper(output=sys.stdout))  # noqa: B010
 
     # Inject lazy browser builtin (zero import cost until first browser.watch()).
     try:
         from .browser import LazyBrowser
 
         _lazy_browser = LazyBrowser()
-        setattr(__main__, "browser", _lazy_browser)
-        setattr(_repld_mod, "browser", _lazy_browser)
+        setattr(__main__, "browser", _lazy_browser)  # noqa: B010
+        setattr(_repld_mod, "browser", _lazy_browser)  # noqa: B010
         # No atexit disconnect hook, and adding one cannot work: `_shutdown`
         # stops the loop before atexit runs, so a coroutine scheduled there is
         # never driven and the wait just burns its timeout. Tabs clean

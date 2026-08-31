@@ -19,8 +19,9 @@ unread.
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Event types

@@ -92,11 +92,8 @@ def _node_props(node: dict) -> str:
             "selected",
             "pressed",
             "invalid",
-        ):
-            if pval not in (None, False, "false", "mixed"):
-                props.append(
-                    f"{pname}={pval!r}" if pval not in (True, "true") else pname
-                )
+        ) and pval not in (None, False, "false", "mixed"):
+            props.append(f"{pname}={pval!r}" if pval not in (True, "true") else pname)
     return (" [" + ", ".join(props) + "]") if props else ""
 
 
@@ -658,9 +655,14 @@ async def _seed_screenshot(
     `in_crop=` call against this same `tab` needs to land back in, not
     the parent page's.
     """
-    from .png import _crop_png, _model_dims, _png_size, _resize_png, embed_crop_metadata
-    from ..paths import RUNTIME_DIR, ensure_runtime_dir
-    from ..state import open_private
+    from .png import (
+        _crop_png,
+        _model_dims,
+        _png_size,
+        _resize_png,
+        embed_crop_metadata,
+        save_capture,
+    )
 
     box_css: tuple[float, float, float, float] | None = None
     if backend_node_id is not None:
@@ -750,21 +752,7 @@ async def _seed_screenshot(
         cropped, origin_x=cap_l - offset_x, origin_y=cap_t - offset_y, scale=scale
     )
 
-    import os
-
-    ensure_runtime_dir()
-    tid = tab.target_id.replace(":", "-")
-    # Nanosecond timestamp, not int(time.time()) -- confirmed live: two
-    # seeds against the same target within the same wall-clock second
-    # collided on an identical filename, silently overwriting the first
-    # crop before it was ever read.
-    out = RUNTIME_DIR / f"{os.getpid()}-seed-{tid}-{time.time_ns()}.png"
-
-    def write(data: bytes) -> None:
-        with open_private(out, "wb") as f:
-            f.write(data)
-
-    await asyncio.get_running_loop().run_in_executor(None, write, cropped)
+    out = await save_capture("seed", tab.target_id, cropped)
 
     return {"path": str(out), "width": cw, "height": ch}
 
@@ -1065,13 +1053,6 @@ def _diff_one(pre: TreeSig, post: TreeSig) -> tuple[Counter, Counter, list[tuple
     return +added, +removed, changed
 
 
-def _entry_str(role: str, name: str, props: str) -> str:
-    label = role
-    if name:
-        label += f" {name!r}"
-    return label + props
-
-
 def tree_diff_lines(
     pre_sigs: dict[str, TreeSig],
     post_sigs: dict[str, TreeSig],
@@ -1096,17 +1077,17 @@ def tree_diff_lines(
         prefix = "" if target == main_target else f"{target}  "
         for (role, name, props), cnt in sorted(added.items(), key=lambda kv: -kv[1]):
             mult = f" ×{cnt}" if cnt > 1 else ""
-            detail.append(f"+ {prefix}{_entry_str(role, name, props)}{mult}")
+            detail.append(f"+ {prefix}{_node_label(role, name, props)}{mult}")
         for role, name, old, new, n in changed:
             mult = f" ×{n}" if n > 1 else ""
             old_s = old.strip() or "[none]"
             new_s = new.strip() or "[none]"
             detail.append(
-                f"~ {prefix}{_entry_str(role, name, '')} {old_s} → {new_s}{mult}"
+                f"~ {prefix}{_node_label(role, name, '')} {old_s} → {new_s}{mult}"
             )
         for (role, name, props), cnt in sorted(removed.items(), key=lambda kv: -kv[1]):
             mult = f" ×{cnt}" if cnt > 1 else ""
-            detail.append(f"- {prefix}{_entry_str(role, name, props)}{mult}")
+            detail.append(f"- {prefix}{_node_label(role, name, props)}{mult}")
 
     if not detail:
         return []

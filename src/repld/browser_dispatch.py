@@ -7,9 +7,11 @@ resources, exec/get_task/cancel, gist tools) stays in protocol.py, which
 mixes BrowserDispatchMixin into its Dispatcher class.
 """
 
-import __main__
 import asyncio
 import json
+from typing import ClassVar
+
+import __main__
 
 from .kernel_context import KernelContext
 
@@ -369,6 +371,22 @@ class BrowserDispatchMixin:
         mutate()
         return self._run_async(post_observe(tab, session, pre, timeout=timeout))
 
+    def _receipt_mutation(self, browser, tab, coro_factory, *, after_s: float = 0.0):
+        """_observed_mutation for a receipt-returning Tab call: the receipt
+        line goes above the observation. after_s sleeps inside mutate(), so
+        the settle window opens only after the debounce."""
+        captured: dict = {}
+
+        def mutate():
+            captured["receipt"] = self._run_async(coro_factory())
+            if after_s:
+                self._run_async(asyncio.sleep(after_s))
+
+        obs = self._observed_mutation(
+            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        )
+        return f"{captured['receipt']}\n\n{obs}"
+
     def _bh_navigate(self, browser, args):
         tab = self._get_tab(browser, args)
         if tab.type == "iframe" and not args.get("force"):
@@ -416,9 +434,9 @@ class BrowserDispatchMixin:
     def _bh_key(self, browser, args):
         tab = self._get_tab(browser, args)
         if args.get("keys"):
-            mutate = lambda: self._run_async(tab.keys(list(args["keys"])))  # noqa: E731
+            mutate = lambda: self._run_async(tab.keys(list(args["keys"])))
         elif args.get("key"):
-            mutate = lambda: self._run_async(tab.key(args["key"]))  # noqa: E731
+            mutate = lambda: self._run_async(tab.key(args["key"]))
         else:
             raise ValueError("browser_key needs 'key' or 'keys'")
         return self._observed_mutation(
@@ -427,82 +445,46 @@ class BrowserDispatchMixin:
 
     def _bh_click(self, browser, args):
         tab = self._get_tab(browser, args)
-        captured: dict = {}
-
-        def mutate():
-            captured["receipt"] = self._run_async(tab.click(args["selector"]))
-
-        obs = self._observed_mutation(
-            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
-        )
-        return f"{captured['receipt']}\n\n{obs}"
+        return self._receipt_mutation(browser, tab, lambda: tab.click(args["selector"]))
 
     def _bh_type(self, browser, args):
         tab = self._get_tab(browser, args)
-        captured: dict = {}
-
-        def mutate():
-            captured["receipt"] = self._run_async(
-                tab.type_text(
-                    args["selector"],
-                    args["text"],
-                    press_enter=bool(args.get("press_enter", False)),
-                )
-            )
-            self._run_async(asyncio.sleep(_POST_TYPE_DEBOUNCE_S))
-
-        obs = self._observed_mutation(
-            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        return self._receipt_mutation(
+            browser,
+            tab,
+            lambda: tab.type_text(
+                args["selector"],
+                args["text"],
+                press_enter=bool(args.get("press_enter", False)),
+            ),
+            after_s=_POST_TYPE_DEBOUNCE_S,
         )
-        return f"{captured['receipt']}\n\n{obs}"
 
     def _bh_hover(self, browser, args):
         tab = self._get_tab(browser, args)
-        captured: dict = {}
-
-        def mutate():
-            captured["receipt"] = self._run_async(tab.hover(args["selector"]))
-
-        obs = self._observed_mutation(
-            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
-        )
-        return f"{captured['receipt']}\n\n{obs}"
+        return self._receipt_mutation(browser, tab, lambda: tab.hover(args["selector"]))
 
     def _bh_drag(self, browser, args):
         tab = self._get_tab(browser, args)
-        captured: dict = {}
-
-        def mutate():
-            captured["receipt"] = self._run_async(
-                tab.drag(
-                    args["from"],
-                    args["to"],
-                    steps=int(args.get("steps", 12)),
-                    duration_ms=int(args.get("duration_ms", 400)),
-                    dwell_ms=int(args.get("dwell_ms", 150)),
-                )
-            )
-
-        obs = self._observed_mutation(
-            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        return self._receipt_mutation(
+            browser,
+            tab,
+            lambda: tab.drag(
+                args["from"],
+                args["to"],
+                steps=int(args.get("steps", 12)),
+                duration_ms=int(args.get("duration_ms", 400)),
+                dwell_ms=int(args.get("dwell_ms", 150)),
+            ),
         )
-        return f"{captured['receipt']}\n\n{obs}"
 
     def _bh_select(self, browser, args):
         tab = self._get_tab(browser, args)
-        captured: dict = {}
-
-        def mutate():
-            captured["receipt"] = self._run_async(
-                tab.select_option(args["selector"], args["option"])
-            )
-
-        obs = self._observed_mutation(
-            browser, tab, mutate, timeout=_SETTLE_INTERACTION_S
+        return self._receipt_mutation(
+            browser, tab, lambda: tab.select_option(args["selector"], args["option"])
         )
-        return f"{captured['receipt']}\n\n{obs}"
 
-    _BROWSER_DISPATCH = {
+    _BROWSER_DISPATCH: ClassVar[dict] = {
         "browser_watch": _bh_watch,
         "browser_detach": _bh_detach,
         "browser_tabs": _bh_tabs,

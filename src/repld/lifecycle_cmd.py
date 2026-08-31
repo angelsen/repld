@@ -18,8 +18,14 @@ from pathlib import Path
 from . import cli_args, paths, sessions, spawn, state
 from .render import (
     DIM as _DIM,
+)
+from .render import (
     GREEN as _GREEN,
+)
+from .render import (
     RESET as _RESET,
+)
+from .render import (
     YELLOW as _YELLOW,
 )
 

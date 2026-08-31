@@ -319,7 +319,8 @@ def _gist_fetch(argv: list[str]) -> int:
             return 1
 
     url = f"https://gist.github.com/{gist_id}"
-    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())
+    # Local date on purpose: a human-facing provenance stamp, not a timestamp.
+    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())  # noqa: DTZ011
     dest_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for fname, content in sorted(files.items()):
@@ -596,8 +597,10 @@ _GIST_COMMANDS = {
         _gist_fetch,
         "fetch <gist-url>",
         "download a GitHub gist into ./gists",
-        "Like `new`, but seeded from someone else's working code.\n"
-        "flags: --global (install to ~/.repld/gists), --name NAME, --force",
+        (
+            "Like `new`, but seeded from someone else's working code.\n"
+            "flags: --global (install to ~/.repld/gists), --name NAME, --force"
+        ),
     ),
     "add": (_gist_add, "add <name>", "link a gist registered in another project", ""),
     "rm": (_gist_rm, "rm <name> | --stale", "unlink a gist (or all dead links)", ""),
@@ -606,9 +609,11 @@ _GIST_COMMANDS = {
         _gist_lint,
         "lint [--local] [name...]",
         "check gist(s) against best practices",
-        "Default scope is everything a kernel here would import — "
-        "~/.repld/gists, ./gists, and linked.\n"
-        "--local restricts to ./gists, so the exit code is usable as a gate "
-        "for this project alone.",
+        (
+            "Default scope is everything a kernel here would import — "
+            "~/.repld/gists, ./gists, and linked.\n"
+            "--local restricts to ./gists, so the exit code is usable as a gate "
+            "for this project alone."
+        ),
     ),
 }

@@ -32,7 +32,7 @@ import time
 
 from .cdp import _STREAMING_MIME_TYPES, CDPSession
 
-__all__ = ["enable", "disable", "handle_paused"]
+__all__ = ["disable", "enable", "handle_paused"]
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +165,7 @@ def _should_capture_body(params: dict) -> bool:
     if any(mime in content_type for mime in _STREAMING_MIME_TYPES):
         return False
 
-    if any(marker in content_type for marker in _ASSET_MIME_MARKERS):
-        return False
-
-    return True
+    return not any(marker in content_type for marker in _ASSET_MIME_MARKERS)
 
 
 async def _handle_response(

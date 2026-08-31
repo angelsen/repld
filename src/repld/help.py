@@ -1183,7 +1183,8 @@ def static_instructions() -> str:
     depends on kernel state — the browser model, the gist listing, and
     registered gist tools.
     """
-    return "\n\n".join(
+    # The join-a-list shape deliberately mirrors build_instructions below.
+    return "\n\n".join(  # noqa: FLY002
         [_EXEC_MODEL, _GISTS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
     )
 

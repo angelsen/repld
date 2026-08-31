@@ -5,10 +5,17 @@ Pre-sizes screenshots to the Anthropic vision API's token grid so the
 model sees exactly what we send.
 """
 
+import asyncio
 import io
+import os
+import pathlib
+import time
 
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
+
+from ..paths import RUNTIME_DIR, ensure_runtime_dir
+from ..state import open_private
 
 _MAX_PX = 1440
 _PX_PER_TOKEN = 28
@@ -20,6 +27,28 @@ _MAX_TOKENS = 1716  # ceil(1440/28) * ceil(900/28) = 52*33
 _CROP_ORIGIN_X_KEY = "repld:crop_origin_x"
 _CROP_ORIGIN_Y_KEY = "repld:crop_origin_y"
 _CROP_SCALE_KEY = "repld:scale"
+
+
+async def save_capture(prefix: str, target_id: str, data: bytes) -> pathlib.Path:
+    """Write a capture to RUNTIME_DIR as {pid}-{prefix}-{tid}-{ns}.png.
+
+    The `{pid}-` prefix is what lets a later kernel's boot sweep reclaim the
+    file once this process is gone; 0600 (open_private) because a capture can
+    show authenticated page content. time_ns(), not int(time.time()) —
+    confirmed live: two captures of the same target within the same
+    wall-clock second collided on an identical filename, silently
+    overwriting the first before it was ever read.
+    """
+    ensure_runtime_dir()
+    tid = target_id.replace(":", "-")
+    out = RUNTIME_DIR / f"{os.getpid()}-{prefix}-{tid}-{time.time_ns()}.png"
+
+    def write() -> None:
+        with open_private(out, "wb") as f:
+            f.write(data)
+
+    await asyncio.get_running_loop().run_in_executor(None, write)
+    return out
 
 
 def _resize_png(data: bytes, tgt_w: int, tgt_h: int) -> bytes:

@@ -5,11 +5,11 @@ Tab.pin(), Tab._set_label(), and the human-gate pill.
 import json
 
 __all__ = [
-    "_PIN_JS",
-    "_LABEL_JS",
     "BINDING_NAME",
-    "_next_label_color",
+    "_LABEL_JS",
+    "_PIN_JS",
     "_handle_binding",
+    "_next_label_color",
     "label_script",
     "reapply_label",
 ]

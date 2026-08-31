@@ -553,7 +553,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     # sdist (numpy, cryptography) legitimately takes minutes.
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_INSTALL_TIMEOUT
+            cmd, capture_output=True, text=True, timeout=_INSTALL_TIMEOUT, check=False
         )
     except subprocess.TimeoutExpired:
         _tty_write(

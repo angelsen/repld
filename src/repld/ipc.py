@@ -18,8 +18,8 @@ import json
 import os
 import socket
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .state import read_lock
 

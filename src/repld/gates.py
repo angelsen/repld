@@ -283,7 +283,7 @@ async def _gate(
         if timeout is not None:
             return await asyncio.wait_for(wrapped, timeout=timeout)
         return await wrapped
-    except asyncio.TimeoutError:
+    except TimeoutError:
         reason = "timeout"
         if default is not None:
             return default

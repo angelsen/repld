@@ -29,7 +29,7 @@ from .pin import (
     _next_label_color,
     label_script,
 )
-from .png import _png_size, check_budget
+from .png import _png_size, check_budget, save_capture
 from .tab_query import TabQueryMixin
 from .target import make_target
 
@@ -384,8 +384,8 @@ class Tab(TabQueryMixin):
         check = (
             "window.__repld_pill"
             " ? (window.__repld_hb = Date.now(), 'ok')"
-            " : location.origin === %s ? 'reload' : 'gone'"
-        ) % json.dumps(origin)
+            f" : location.origin === {json.dumps(origin)} ? 'reload' : 'gone'"
+        )
         misses = 0
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
@@ -1452,7 +1452,7 @@ class Tab(TabQueryMixin):
         """
         async with self._ensure_front():
             if y is not None:
-                x, y = float(selector_or_x), y
+                x = float(selector_or_x)
                 receipt = Receipt(line=f"tapped ({x:.0f},{y:.0f})")
             else:
                 selector = selector_or_x
@@ -1726,12 +1726,6 @@ class Tab(TabQueryMixin):
         focus between fronting and the actual capture, screenshotting the
         wrong window.
         """
-        import os
-        import time
-
-        from ..paths import RUNTIME_DIR, ensure_runtime_dir
-        from ..state import open_private
-
         async with self._ensure_front():
             params: dict = {"format": "png"}
             if full_page:
@@ -1746,27 +1740,12 @@ class Tab(TabQueryMixin):
 
         if path:
             out = pathlib.Path(path)
+            # Caller picked the location — respect their umask.
+            await asyncio.get_running_loop().run_in_executor(
+                None, out.write_bytes, img_bytes
+            )
         else:
-            ensure_runtime_dir()
-            tid = self.target_id.replace(":", "-")
-            # `{pid}-` prefix like task spills: it is what lets a later kernel
-            # boot sweep this file once this process is gone. Nanosecond
-            # timestamp, not int(time.time()) -- confirmed live: two
-            # screenshots of the same target within the same wall-clock
-            # second collided on an identical filename, silently
-            # overwriting the first before it was ever read.
-            out = RUNTIME_DIR / f"{os.getpid()}-screenshot-{tid}-{time.time_ns()}.png"
-
-        def write(data: bytes) -> None:
-            if path:
-                # Caller picked the location — respect their umask.
-                out.write_bytes(data)
-                return
-            # 0600: a screenshot can show authenticated page content.
-            with open_private(out, "wb") as f:
-                f.write(data)
-
-        await asyncio.get_running_loop().run_in_executor(None, write, img_bytes)
+            out = await save_capture("screenshot", self.target_id, img_bytes)
         return {
             "path": str(out),
             "width": w,

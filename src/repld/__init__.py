@@ -8,7 +8,8 @@ from .cli import main
 __version__ = importlib.metadata.version("repld-tool")
 
 if TYPE_CHECKING:
-    from typing import Any, Callable, Coroutine
+    from collections.abc import Callable, Coroutine
+    from typing import Any
 
     def notify(content: Any, **meta: Any) -> None: ...
     def defer(
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     browser: _LazyBrowser
 
 
-__all__ = ["main", "load_dotenv"]
+__all__ = ["load_dotenv", "main"]
 
 
 def __getattr__(name: str):

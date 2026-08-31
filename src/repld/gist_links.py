@@ -61,7 +61,9 @@ def read_links(gists_dir: Path) -> dict[str, str]:
     except (OSError, json.JSONDecodeError) as e:
         raise ValueError(f"corrupt link manifest {path}: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError(f"corrupt link manifest {path}: expected a JSON object")
+        # ValueError, not TypeError: corrupt file content is a value problem,
+        # and both corruption branches must raise the same class.
+        raise ValueError(f"corrupt link manifest {path}: expected a JSON object")  # noqa: TRY004
     return {str(k): str(v) for k, v in data.items()}
 
 

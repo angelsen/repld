@@ -14,7 +14,7 @@ import sys
 import types
 import typing
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Deps + links live in sibling modules. Intentional two-way cycle: they do
@@ -23,7 +23,6 @@ from pathlib import Path
 # monkeypatching (e.g. gists.registry) effective.
 from . import gist_deps, gist_links, paths
 from .channel import push_kind
-from .state import atomic_write_json
 
 # Source introspection — AST in, API text out. `gist_api` imports nothing from
 # repld, so unlike the siblings above it is not part of that cycle and a plain
@@ -45,19 +44,20 @@ from .gist_api import (  # noqa: F401  (re-exported for gists.<name> callers)
     _usage_value,
     signature_for_path,
 )
+from .state import atomic_write_json
 
 __all__ = [
-    "install",
-    "scan",
-    "scan_tools",
-    "resolve_tool",
-    "signature",
-    "signature_for_path",
-    "introspect",
     "hint_for_name",
-    "usage_for",
+    "install",
+    "introspect",
     "registry",
     "registry_summary",
+    "resolve_tool",
+    "scan",
+    "scan_tools",
+    "signature",
+    "signature_for_path",
+    "usage_for",
 ]
 
 # Module names managed by the gist finder (populated by _GistFinder)
@@ -159,7 +159,7 @@ def _register(name: str) -> None:
             "path": str(src),
             "description": doc,
             "project": str(Path.cwd()),
-            "last_used": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "last_used": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         atomic_write_json(_REGISTRY_PATH, reg, indent=2)
         _registered.add((name, str(src)))
@@ -286,7 +286,7 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         )
 
     @staticmethod
-    def _find_in(dirs, parts: list[str]) -> "tuple[Path, Path] | None":
+    def _find_in(dirs, parts: list[str]) -> tuple[Path, Path] | None:
         """First (file, package-root) match for a dotted name under *dirs*."""
         for d in dirs:
             candidate = Path(d).joinpath(*parts)

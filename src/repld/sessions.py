@@ -18,7 +18,7 @@ from pathlib import Path
 from .paths import RUNTIME_DIR, ensure_runtime_dir
 from .state import atomic_write_json, pid_alive
 
-__all__ = ["register", "unregister", "list_sessions"]
+__all__ = ["list_sessions", "register", "unregister"]
 
 SESSIONS_DIR = RUNTIME_DIR / "sessions"
 

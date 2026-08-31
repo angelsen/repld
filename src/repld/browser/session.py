@@ -14,8 +14,9 @@ import asyncio
 import json
 import logging
 import urllib.request
+from collections.abc import Callable
 from fnmatch import fnmatch
-from typing import Any, Callable
+from typing import Any
 
 from .. import bg
 from . import inject
@@ -159,9 +160,7 @@ class BrowserSession:
         """True if the WebSocket is alive and the recv loop is running."""
         if self._ws is None:
             return False
-        if self._recv_task is not None and self._recv_task.done():
-            return False
-        return True
+        return self._recv_task is None or not self._recv_task.done()
 
     # ------------------------------------------------------------------
     # Auto-reconnect
@@ -183,9 +182,7 @@ class BrowserSession:
         ):
             return True
         # Socket-level errors (broken pipe, connection reset)
-        if isinstance(exc, OSError):
-            return True
-        return False
+        return isinstance(exc, OSError)
 
     async def _reconnect(self) -> None:
         """Tear down the dead WebSocket, reconnect, and re-attach all targets.
@@ -322,7 +319,7 @@ class BrowserSession:
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(msg_id, None)
             # `from None`: on 3.11+ `asyncio.TimeoutError` *is* `TimeoutError`,
             # so chaining shows the same class twice — once bare, once with the
@@ -660,8 +657,8 @@ class BrowserSession:
                 # Browser-level event
                 try:
                     self._handle_browser_event(data)
-                except Exception as exc:
-                    logger.exception("_handle_browser_event error: %s", exc)
+                except Exception:
+                    logger.exception("_handle_browser_event error")
 
     def _handle_browser_event(self, data: dict) -> None:
         """Handle browser-level CDP events (target lifecycle)."""
