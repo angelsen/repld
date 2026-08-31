@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Align trailing # comments to the same column within consecutive groups.
+"""Align trailing # comments and `sig  → type` doc markers to a common column.
+
+Both share the same grouping/apply logic: 2+ consecutive lines carrying the
+same kind of marker get padded to the longest line in the run, plus a gap.
+An arrow marker needs 2+ spaces before it to count — that's what tells a
+real reference line ("tab.js(...)  → Any") apart from an inline prose arrow
+("gate bridge → BROWSER_GUIDE"), which always has exactly one space.
 
 Usage:
     align-comments < file.py             # stdout
@@ -8,10 +14,40 @@ Usage:
     align-comments --fix file.py         # fix all groups in place
     align-comments --fix file.py 1 3     # fix only groups 1 and 3
     align-comments --tab 10 file.py      # snap to column multiples of 10
+    align-comments --fix-all             # sweep the standard file set, fix all in place
 """
 
 import re
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The standard sweep for --fix-all: the tracked codebase + doc surfaces with
+# embedded Python examples. Deliberately excludes ./gists (personal,
+# gitignored, not part of the lint gate) and CHANGELOG/TODO/LICENSE files
+# (no code-comment groups worth aligning).
+_SWEEP_GLOBS = [
+    "src/**/*.py",
+    "tests/**/*.py",
+    "scripts/*.py",
+    "README.md",
+    "CLAUDE.md",
+    "docs/*.md",
+    "site/src/content/docs/**/*.md",
+    "site/src/content/docs/**/*.mdx",
+]
+
+
+def _sweep_targets() -> list[Path]:
+    seen: set[Path] = set()
+    for pattern in _SWEEP_GLOBS:
+        for path in REPO_ROOT.glob(pattern):
+            if "__pycache__" in path.parts:
+                continue
+            seen.add(path)
+    return sorted(seen)
+
 
 # Matches: code  # comment — but not # inside strings (best-effort)
 _COMMENT_RE = re.compile(
@@ -73,7 +109,7 @@ def _track_multiline(line: str, in_multiline: bool, delimiter: str) -> tuple[boo
     return in_multiline, delimiter
 
 
-Group = list[tuple[int, str, str]]  # [(line_index, code, comment), ...]
+Group = list[tuple[int, str, str]]  # [(line_index, code, marker), ...]
 
 
 def find_groups(lines: list[str]) -> list[Group]:
@@ -91,6 +127,48 @@ def find_groups(lines: list[str]) -> list[Group]:
     for i, line in enumerate(lines):
         in_multiline, delimiter = _track_multiline(line, in_multiline, delimiter)
         parsed = _find_comment(line, in_multiline)
+        if parsed:
+            current.append((i, parsed[0], parsed[1]))
+        else:
+            flush()
+
+    flush()
+    return groups
+
+
+# Doc convention (BROWSER_GUIDE, _TOPICS, the site's reference blocks) for a
+# `signature  → return type/description` line — not Python's `->`, and not a
+# comment, so it needs its own detector rather than reusing _find_comment.
+# The 2+-space requirement is what tells a real reference line ("tab.js(...)
+# → Any") apart from an inline prose arrow ("gate bridge → BROWSER_GUIDE"),
+# which always has exactly one space on each side.
+_ARROW_RE = re.compile(r"^(.*\S)( {2,}→ ?.*)$")
+
+
+def _find_arrow(line: str) -> tuple[str, str] | None:
+    m = _ARROW_RE.match(line)
+    if not m:
+        return None
+    code = m.group(1)
+    if "#" in code:
+        # A trailing # comment on the same line already owns this line's
+        # alignment — leave it to the comment pass, not both.
+        return None
+    return code, m.group(2).lstrip()
+
+
+def find_arrow_groups(lines: list[str]) -> list[Group]:
+    """Find all groups of 2+ consecutive lines with a `→` marker."""
+    groups: list[Group] = []
+    current: Group = []
+
+    def flush() -> None:
+        if len(current) >= 2:
+            groups.append(list(current))
+        current.clear()
+
+    for i, line in enumerate(lines):
+        parsed = _find_arrow(line)
         if parsed:
             current.append((i, parsed[0], parsed[1]))
         else:
@@ -122,7 +200,35 @@ def is_misaligned(lines: list[str], group: Group) -> bool:
     return False
 
 
+def fix_file(path: Path, tab: int = 0) -> bool:
+    """Align every comment and arrow group in `path` in place. Returns True if it changed."""
+    text = path.read_text()
+    lines = text.splitlines()
+    for group in find_groups(lines):
+        apply_group(lines, group, tab=tab)
+    for group in find_arrow_groups(lines):
+        apply_group(lines, group, tab=tab)
+    fixed = "\n".join(lines) + "\n"
+    if fixed == text:
+        return False
+    path.write_text(fixed)
+    return True
+
+
 def main() -> int:
+    if "--fix-all" in sys.argv:
+        tab = 0
+        for i, a in enumerate(sys.argv[1:]):
+            if a == "--tab" and i + 2 < len(sys.argv):
+                tab = int(sys.argv[i + 2])
+            elif a.startswith("--tab="):
+                tab = int(a.split("=", 1)[1])
+        changed = [p for p in _sweep_targets() if fix_file(p, tab=tab)]
+        for p in changed:
+            print(f"  aligned: {p.relative_to(REPO_ROOT)}")
+        print(f"{len(changed)} file(s) changed, {len(_sweep_targets())} scanned.")
+        return 0
+
     check = "--check" in sys.argv
     fix = "--fix" in sys.argv
     tab = 0
@@ -155,26 +261,28 @@ def main() -> int:
 
     if check:
         found = False
-        for gid, group in enumerate(groups, 1):
-            if not is_misaligned(lines, group):
-                continue
-            found = True
-            first_line = group[0][0] + 1
-            last_line = group[-1][0] + 1
-            print(f"  group {gid} (lines {first_line}-{last_line}):")
-            for idx, code, comment in group:
-                print(f"    {idx + 1}: {lines[idx]}")
-            # show what it would look like
-            preview = list(lines)
-            apply_group(preview, group, tab=tab)
-            print("  fixed:")
-            for idx, _, _ in group:
-                print(f"    {idx + 1}: {preview[idx]}")
-            print()
+        for kind, group_list in (
+            ("comment", groups),
+            ("arrow", find_arrow_groups(lines)),
+        ):
+            for gid, group in enumerate(group_list, 1):
+                if not is_misaligned(lines, group):
+                    continue
+                found = True
+                first_line = group[0][0] + 1
+                last_line = group[-1][0] + 1
+                print(f"  {kind} group {gid} (lines {first_line}-{last_line}):")
+                for idx, code, comment in group:
+                    print(f"    {idx + 1}: {lines[idx]}")
+                # show what it would look like
+                preview = list(lines)
+                apply_group(preview, group, tab=tab)
+                print("  fixed:")
+                for idx, _, _ in group:
+                    print(f"    {idx + 1}: {preview[idx]}")
+                print()
         if found:
-            print(
-                f"  {len(groups)} group(s) found. Fix with: --fix file.py [group_ids...]"
-            )
+            print("  Fix with: --fix file.py [comment_group_ids...]")
         return 1 if found else 0
 
     if fix or not files:
@@ -182,6 +290,9 @@ def main() -> int:
         for gid, group in enumerate(groups, 1):
             if targets is not None and gid not in targets:
                 continue
+            apply_group(lines, group, tab=tab)
+        # Arrow groups have no id-targeting — --fix always aligns all of them.
+        for group in find_arrow_groups(lines):
             apply_group(lines, group, tab=tab)
 
         if fix:
@@ -196,6 +307,8 @@ def main() -> int:
 
     # Default: align all, stdout
     for group in groups:
+        apply_group(lines, group, tab=tab)
+    for group in find_arrow_groups(lines):
         apply_group(lines, group, tab=tab)
     print("\n".join(lines))
     return 0

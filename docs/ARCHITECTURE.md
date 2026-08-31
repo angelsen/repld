@@ -21,21 +21,21 @@ Two things happened at once:
 ## System architecture
 
 ```
-Project cwd                     → no repld config; `claude mcp add` registers it
- └─ repld_init.py               → optional bootstrap, run at every kernel start
+Project cwd        → no repld config; `claude mcp add` registers it
+ └─ repld_init.py  → optional bootstrap, run at every kernel start
 
-$XDG_RUNTIME_DIR/repld/        → 0700; /tmp/repld-{uid} if XDG is unset
- └─ projects/<slug>/            → per-project runtime state, 0700
-     ├─ kernel.sock             → unix-domain IPC socket
-     ├─ kernel.lock             → {pid, socket_path, cwd, started_at, python,
+$XDG_RUNTIME_DIR/repld/  → 0700; /tmp/repld-{uid} if XDG is unset
+ └─ projects/<slug>/     → per-project runtime state, 0700
+     ├─ kernel.sock      → unix-domain IPC socket
+     ├─ kernel.lock      → {pid, socket_path, cwd, started_at, python,
      │                              executable, dashboard_port}
-     ├─ kernel.flock            → single-kernel-per-project mutex
-     ├─ kernel.dashboard        → dashboard port/token + browser restore hint
-     ├─ kernel.events           → NDJSON event log (`repld log` reads this)
-     └─ kernel.cache            → last-computed instructions/tools/resources,
+     ├─ kernel.flock      → single-kernel-per-project mutex
+     ├─ kernel.dashboard  → dashboard port/token + browser restore hint
+     ├─ kernel.events     → NDJSON event log (`repld log` reads this)
+     └─ kernel.cache      → last-computed instructions/tools/resources,
                                   read by the bridge before a kernel exists
- └─ sessions/<pid>.json         → user-scoped index of every live kernel
- └─ {pid}-{task_id}.out         → task spill files (per-process, not per-project)
+ └─ sessions/<pid>.json  → user-scoped index of every live kernel
+ └─ {pid}-{task_id}.out  → task spill files (per-process, not per-project)
 
 Every file above is created 0600, the directories 0700 — the tree holds cell
 output and socket paths, and the /tmp fallback has no protected parent.

@@ -274,9 +274,9 @@ def _resolve_path_dep(rel_path: str, gist_path: Path) -> Path | None:
 
 
 # The three forms a `__repld_deps__` entry can take.
-DEP_DOT = "dot"  # "."       — the gist's own project, as an editable install
+DEP_DOT = "dot"    # "."       — the gist's own project, as an editable install
 DEP_PATH = "path"  # "path:X"  — a local directory to prepend to sys.path
-DEP_PKG = "pkg"  # anything else — a PEP 508 requirement string
+DEP_PKG = "pkg"    # anything else — a PEP 508 requirement string
 
 
 def _warn_malformed(gist_path: Path, suffix: str, reason: str) -> None:

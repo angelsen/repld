@@ -370,10 +370,10 @@ def _inflight_never_stranded(tmp: Path) -> None:
 
     b = _B(tmp / "nonexistent.sock")
     sent: list[dict] = []
-    b._to_client = sent.append  # pyright: ignore[reportAttributeAccessIssue]
+    b._to_client = sent.append              # pyright: ignore[reportAttributeAccessIssue]
     b._try_attach_existing = lambda: False  # pyright: ignore[reportAttributeAccessIssue]
-    b._ensure_kernel = lambda: True  # pyright: ignore[reportAttributeAccessIssue]
-    b._sock = None  # ...but it vanished right after the probe
+    b._ensure_kernel = lambda: True         # pyright: ignore[reportAttributeAccessIssue]
+    b._sock = None                          # ...but it vanished right after the probe
 
     # A real tools/call, not a discovery method: those are answered from cache
     # without ever reaching _ensure_kernel, which would sidestep the race this

@@ -806,7 +806,7 @@ def _fetch_checks() -> None:
     orig_fetch, orig_home, cwd = gist_cmd._fetch_gist, Path.home, os.getcwd()
     try:
         gist_cmd._fetch_gist = lambda _id, timeout=20.0: stub  # pyright: ignore[reportAttributeAccessIssue]
-        Path.home = staticmethod(lambda: home)  # pyright: ignore[reportAttributeAccessIssue]
+        Path.home = staticmethod(lambda: home)                 # pyright: ignore[reportAttributeAccessIssue]
         os.chdir(proj)
         fetch = lambda *a: _quiet(gist_cmd._gist_fetch, list(a))
 
@@ -864,7 +864,7 @@ def _fetch_checks() -> None:
         print("  ✓ gist fetch: header, --force, --name, and all three collision scopes")
     finally:
         gist_cmd._fetch_gist = orig_fetch  # pyright: ignore[reportAttributeAccessIssue]
-        Path.home = orig_home  # pyright: ignore[reportAttributeAccessIssue]
+        Path.home = orig_home              # pyright: ignore[reportAttributeAccessIssue]
         os.chdir(cwd)
         shutil.rmtree(root, ignore_errors=True)
 

@@ -740,7 +740,7 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         for h in every_snapshot():
             h.cancel()
 
-    every.list = _list  # type: ignore[attr-defined]
+    every.list = _list              # type: ignore[attr-defined]
     every.cancel_all = _cancel_all  # type: ignore[attr-defined]
     return every
 
@@ -1097,7 +1097,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         from .browser import LazyBrowser
 
         _lazy_browser = LazyBrowser()
-        setattr(__main__, "browser", _lazy_browser)  # noqa: B010
+        setattr(__main__, "browser", _lazy_browser)    # noqa: B010
         setattr(_repld_mod, "browser", _lazy_browser)  # noqa: B010
         # No atexit disconnect hook, and adding one cannot work: `_shutdown`
         # stops the loop before atexit runs, so a coroutine scheduled there is

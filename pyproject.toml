@@ -50,6 +50,12 @@ build-backend = "uv_build"
 [tool.basedpyright]
 typeCheckingMode = "standard"
 
+[tool.ruff]
+# ruff format reformats embedded Python code blocks in markdown by default —
+# it silently collapses hand-aligned trailing comments in README/docs/site
+# examples on every `ruff format` run. Exclude docs from its scope entirely.
+extend-exclude = ["*.md"]
+
 [tool.ruff.lint]
 # Track ruff's default rule selection; record only the deliberate exceptions.
 # BLE001/S110/S112: housekeeping paths must never raise (see CLAUDE.md) —

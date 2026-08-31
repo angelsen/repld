@@ -310,7 +310,7 @@ class CDPSession:
         target_info: dict,
         port: int,
         loop: asyncio.AbstractEventLoop | None = None,
-        send_nowait: Any = None,  # BrowserSession.send_nowait bound method
+        send_nowait: Any = None,      # BrowserSession.send_nowait bound method
         browser_session: Any = None,  # owning BrowserSession, for re-attach
     ) -> None:
         self._send = send

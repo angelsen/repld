@@ -1,8 +1,8 @@
 """Dashboard: browser control panel + kernel status served over HTTP.
 
 Pure-stdlib async HTTP server on an ephemeral port.  Two routes:
-  GET /        → inline HTML page (`dashboard_html.PAGE`)
-  POST /api    → JSON-RPC commands (state, browser.connect, browser.watch, etc.)
+  GET /      → inline HTML page (`dashboard_html.PAGE`)
+  POST /api  → JSON-RPC commands (state, browser.connect, browser.watch, etc.)
 
 The markup lives in `dashboard_html.py`. This module is the server: routing,
 the auth ladder, and the JSON-RPC dispatch.

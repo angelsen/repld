@@ -8,8 +8,8 @@ Every kernel runs a small HTTP control panel alongside the socket — no setup, 
 ## Opening the dashboard
 
 ```bash
-repld dashboard           # resolve the port, read the token, open the browser
-repld dashboard --print   # print the authenticated URL instead
+repld dashboard          # resolve the port, read the token, open the browser
+repld dashboard --print  # print the authenticated URL instead
 ```
 
 That is the intended route, because the page itself is authenticated — see [Security](#security). `repld dashboard` reads the API token out of the project's 0600 hint file and opens the URL with it attached; a bare `http://127.0.0.1:<port>/` answers 401. The port alone is printed by `repld status` and recorded in the kernel's lockfile (`dashboard_port` field) if you need to script against it. It's ephemeral by default, and stable across restarts when possible.

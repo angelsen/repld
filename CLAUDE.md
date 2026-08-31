@@ -11,13 +11,23 @@ Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), h
 Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
 
 ```bash
-uv sync                                 # install deps into .venv
-uv run repld                            # runs the `repld:main` entrypoint
-uv build                                # wheel + sdist via uv_build
-uv run tests/smoketest.py --phase 12          # end-to-end smoketest
-ruff check --fix && ruff format && basedpyright   # lint / format / type-check
-make injected                                 # regenerate src/repld/browser/injected_source.py
+uv sync                                                                                         # install deps into .venv
+uv run repld                                                                                    # runs the `repld:main` entrypoint
+uv build                                                                                        # wheel + sdist via uv_build
+uv run tests/smoketest.py --phase 12                                                            # end-to-end smoketest
+ruff check --fix && ruff format && python3 scripts/align-comments.py --fix-all && basedpyright  # lint / format / align / type-check
+make injected                                                                                   # regenerate src/repld/browser/injected_source.py
 ```
+
+`scripts/align-comments.py --fix-all` runs last on purpose — it re-applies
+column alignment to trailing `#` comments and `sig  → type` doc markers that
+`ruff format` would otherwise collapse to a flat 2-space gap on every `.py`
+file. This means a fresh `ruff format --check` run right after this command
+reports drift again on those files — expected, not a bug; alignment is
+deliberately the last word. Markdown is excluded from `ruff format`'s scope
+entirely (`pyproject.toml`'s `extend-exclude`) for the same reason — ruff
+0.16+ formats embedded Python code blocks in `.md` by default, which
+collapsed the same alignment in README/docs/site examples.
 
 `injected_source.py` is generated — never hand-edit it. `make injected` rebuilds
 it from the pinned microsoft/playwright clone via `scripts/build_injected.py`
@@ -35,11 +45,11 @@ Published to PyPI as `repld-tool`. Manual, no CI. The local `uv` is a wrapper
 ```bash
 # 1. Accrue changelog notes under CHANGELOG.md [Unreleased] as you work, and COMMIT them.
 #    The bump needs a clean tree and promotes [Unreleased] → [X.Y.Z].
-uv version --bump patch        # bumps pyproject + uv.lock, promotes changelog, commits "release repld-tool X.Y.Z", tags vX.Y.Z
-rm -f dist/* && uv build       # clean stale artifacts first — publish refuses mixed versions
+uv version --bump patch   # bumps pyproject + uv.lock, promotes changelog, commits "release repld-tool X.Y.Z", tags vX.Y.Z
+rm -f dist/* && uv build  # clean stale artifacts first — publish refuses mixed versions
 git push origin master --tags
-uv publish                     # prints a review summary + a confirmation token (10-min TTL)
-uv publish --confirm <token>   # GPG prompt for the PyPI token (from `pass pypi/uv-publish`), then uploads
+uv publish                    # prints a review summary + a confirmation token (10-min TTL)
+uv publish --confirm <token>  # GPG prompt for the PyPI token (from `pass pypi/uv-publish`), then uploads
 ```
 
 Gotchas the wrapper enforces: clean working tree before `version --bump`; only

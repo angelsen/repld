@@ -6,21 +6,21 @@ description: Full Tab API reference — every method, property, and query interf
 ## Getting tabs
 
 ```python
-tab = await browser.get("*example.com*")          # URL glob
-tab = await browser.get("9222:a1b2c3")            # target ID
-tab = await browser.get("*app*", fresh=True)       # only newly-appearing tabs
-tab = await browser.get("*app*", timeout=10)       # wait up to 10s
-tab = await browser.get("*app*", ready="#root")    # wait for element after attach
-tab = await browser.open("https://...")            # open new tab
-tab = await browser.acquire("*pattern*")            # get(), falling back to open() on a miss
-await browser.watch("*pattern*")                   # auto-attach current + future
+tab = await browser.get("*example.com*")         # URL glob
+tab = await browser.get("9222:a1b2c3")           # target ID
+tab = await browser.get("*app*", fresh=True)     # only newly-appearing tabs
+tab = await browser.get("*app*", timeout=10)     # wait up to 10s
+tab = await browser.get("*app*", ready="#root")  # wait for element after attach
+tab = await browser.open("https://...")          # open new tab
+tab = await browser.acquire("*pattern*")         # get(), falling back to open() on a miss
+await browser.watch("*pattern*")                 # auto-attach current + future
 
-browser.tabs                                       # list[Tab] attached
-await browser.pages()                              # all Chrome targets
-browser.patterns                                   # active watch patterns (property)
-await browser.detach("*pattern*")                  # detach by pattern
-await browser.detach()                             # detach everything
-browser.clear(target=)                             # clear captured data
+browser.tabs                       # list[Tab] attached
+await browser.pages()              # all Chrome targets
+browser.patterns                   # active watch patterns (property)
+await browser.detach("*pattern*")  # detach by pattern
+await browser.detach()             # detach everything
+browser.clear(target=)             # clear captured data
 
 await browser.connect(9223)                        # add another Chrome instance
 await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePort
@@ -257,9 +257,9 @@ Query `Page.lifecycleEvent` entries: `DOMContentLoaded`, `load`, `networkIdle`, 
 ### request / body
 
 ```python
-tab.request(request_id) → dict    # full HAR entry (headers, timing, postData)
-tab.body(request_id) → dict       # response body {"body": str, "base64Encoded": bool}
-row.body() → dict                 # shortcut on any network Row
+tab.request(request_id) → dict  # full HAR entry (headers, timing, postData)
+tab.body(request_id) → dict     # response body {"body": str, "base64Encoded": bool}
+row.body() → dict               # shortcut on any network Row
 ```
 
 ### clear
@@ -276,7 +276,7 @@ tab.clear() → None
 await browser.connect(42829)
 await browser.connect(43213)
 await browser.watch("*localhost:5200*")  # watches across both
-browser.tabs  # tabs from all instances
+browser.tabs                             # tabs from all instances
 ```
 
 Connected ports and watch patterns persist across kernel restarts. On boot, repld prompts on the terminal (`[Y/n]`, default yes) before reconnecting and re-watching — headless boot (`--no-display`) or non-tty stdin skips the restore entirely.
@@ -294,9 +294,9 @@ Console errors and uncaught exceptions from watched tabs push as `[console:error
 Cross-tab duplicates within 2 seconds are collapsed into one follow-up message (`... (×14 tabs)`). Mute noisy patterns:
 
 ```python
-browser.suppress("[vite] failed to connect")  # mute matching errors
+browser.suppress("[vite] failed to connect")    # mute matching errors
 browser.unsuppress("[vite] failed to connect")  # un-mute
-browser.suppressed  # list active patterns
+browser.suppressed                              # list active patterns
 ```
 
 Suppress patterns persist across kernel restarts.
@@ -308,7 +308,7 @@ Suppress patterns persist across kernel restarts.
 ```python
 browser.no_capture("*192.168.1.1*")  # skip Fetch body capture for matching tab URLs
 browser.capture_ok("*192.168.1.1*")  # remove the exemption
-browser.no_capture_patterns  # list active patterns
+browser.no_capture_patterns          # list active patterns
 ```
 
 Patterns persist across kernel restarts, like `suppress`. An exemption applies on the _next_ attach — a tab that already has Fetch enabled keeps capturing until re-attached; `await tab.disable_capture()` is the retroactive per-tab knob. `tab.network()` / `tab.body()` still work on an exempted tab through the on-demand path — only the proactive capture is skipped.

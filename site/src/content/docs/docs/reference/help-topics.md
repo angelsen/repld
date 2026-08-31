@@ -67,8 +67,8 @@ Push a `user` channel notification to the agent. Metadata appears as extra field
 ## Human gates
 
 ```python
-await ask(prompt, *, tab=None, default=None, timeout=None)            → str
-await confirm(prompt, *, tab=None, default=None, timeout=None)        → bool
+await ask(prompt, *, tab=None, default=None, timeout=None)      → str
+await confirm(prompt, *, tab=None, default=None, timeout=None)  → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 ```
 

@@ -185,10 +185,10 @@ or plain data transforms.
   Auto stages fill themselves; human stages wait. The UI can be anything:
   a spreadsheet column, a dashboard, a Slack message, or nothing at all.
 
-    [Auto]   Finding      → system analyzes, writes result
-    [Human]  Decision     → human reviews, writes action        # ← gate
-    [Auto]   Execution    → system executes the action
-    [Auto]   Status       → Pending → Done
+    [Auto]   Finding    → system analyzes, writes result
+    [Human]  Decision   → human reviews, writes action        # ← gate
+    [Auto]   Execution  → system executes the action
+    [Auto]   Status     → Pending → Done
 
 == The progression ==
 
@@ -948,8 +948,8 @@ accessible names (W3C accname), so labels, alt text, and aria-labelledby all
 resolve; hidden elements are excluded from role= matches.
 
 Strict resolution:
-  0 matches   → auto-wait (poll 100ms, 2s), then "Element not found"
-  1 match     → used, visible or not (apps keep real controls off-screen
+  0 matches  → auto-wait (poll 100ms, 2s), then "Element not found"
+  1 match    → used, visible or not (apps keep real controls off-screen
                 behind styled proxies — a lone invisible match is the target)
   >1 matches  → filtered by visibility; exactly one visible wins (the receipt
                 notes "N matches, 1 visible"); otherwise the call raises with
@@ -1334,8 +1334,8 @@ defer(coro, label=None) → task_id
 
 every(seconds, label=, delay=0)(fn) → fn   periodic ticker; fn.cancel() stops
   delay= defers the first tick (default: tick now)
-every.list()                → list  active EveryHandles
-every.cancel_all()          → None  stop all tickers
+every.list()        → list  active EveryHandles
+every.cancel_all()  → None  stop all tickers
 
 get_task(task_id)  → {done, text, spill_path, ...}
 cancel(task_id)    → {cancelled: bool}
@@ -1372,30 +1372,30 @@ Tab (async unless noted):
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
-  tab.select_option(selector, option)              → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
-  tab.hover(selector)                              → Receipt (park the pointer on an element or 'x,y' point; hover-revealed UI stays up)
-  tab.drag(source, to, steps=, duration_ms=, dwell_ms=)  → Receipt (press→micro-steps→paced moves→dwell→release; endpoints are selectors or (x,y)/'x,y')
-  tab.key(key)                                     → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
-  tab.keys(keys, delay_ms=)                        → None (sequence of presses in one call)
-  tab.wait_for(selector, timeout=5)                → None (wait for element to appear)
-  tab.wait_for_idle(timeout=5, quiet=0.5)          → int  (network idle; returns settle ms)
-  tab.fetch(url, method=, body=, headers=)         → {status, ok, body, base64Encoded}
-  tab.navigate(url)                                → None
-  tab.reload()                                     → None
-  tab.close()                                      → None (Target.closeTarget)
-  tab.controls()                                   → dict | None
-  tab.invoke(control, action, args=)               → dict
-  tab.screenshot(full_page=, force=, path=)        → dict {path, width, height, bytes} (native res; raises over the vision token budget unless force=True)
-  tab.cookies()                                    → list[dict]
-  tab.http_client(base_url=None, **kwargs)         → httpx.AsyncClient (requires `http` extra; copies tab's cookies for plain concurrent HTTP calls)
-  tab.cdp(method, **params)                        → dict
+  tab.select_option(selector, option)                     → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
+  tab.hover(selector)                                     → Receipt (park the pointer on an element or 'x,y' point; hover-revealed UI stays up)
+  tab.drag(source, to, steps=, duration_ms=, dwell_ms=)   → Receipt (press→micro-steps→paced moves→dwell→release; endpoints are selectors or (x,y)/'x,y')
+  tab.key(key)                                            → None (named keys, chars, "Ctrl+A" combos; VK-coded so Backspace/arrows actually edit)
+  tab.keys(keys, delay_ms=)                               → None (sequence of presses in one call)
+  tab.wait_for(selector, timeout=5)                       → None (wait for element to appear)
+  tab.wait_for_idle(timeout=5, quiet=0.5)                 → int  (network idle; returns settle ms)
+  tab.fetch(url, method=, body=, headers=)                → {status, ok, body, base64Encoded}
+  tab.navigate(url)                                       → None
+  tab.reload()                                            → None
+  tab.close()                                             → None (Target.closeTarget)
+  tab.controls()                                          → dict | None
+  tab.invoke(control, action, args=)                      → dict
+  tab.screenshot(full_page=, force=, path=)               → dict {path, width, height, bytes} (native res; raises over the vision token budget unless force=True)
+  tab.cookies()                                           → list[dict]
+  tab.http_client(base_url=None, **kwargs)                → httpx.AsyncClient (requires `http` extra; copies tab's cookies for plain concurrent HTTP calls)
+  tab.cdp(method, **params)                               → dict
 
 Tab — pin + gate bridge (see repld://docs/browser for pill lifecycle + heartbeat detail):
   tab.pin(reason="", guard_unload=True)  → None  inject pill + guard (guard_unload=False for dev-loop tabs); idempotent
-  tab.unpin()                        → None  remove pill + guard
-  tab.confirm(prompt, **kw)          → bool  gate routed to pill UI
-  tab.choose(prompt, options, **kw)  → str   gate routed to pill UI
-  tab.ask(prompt, **kw)              → str   terminal only (no pill UI for text input)
+  tab.unpin()                            → None  remove pill + guard
+  tab.confirm(prompt, **kw)              → bool  gate routed to pill UI
+  tab.choose(prompt, options, **kw)      → str   gate routed to pill UI
+  tab.ask(prompt, **kw)                  → str   terminal only (no pill UI for text input)
 
 Tab (sync — DuckDB queries):
   tab.network(url=, method=, status=, type=, since=, include_assets=)  → Rows
@@ -1405,14 +1405,14 @@ Tab (sync — DuckDB queries):
   tab.sse(url=, event_name=, since=)                                   → Rows
   tab.lifecycle(name=, since=)                                         → Rows
   since= on all four is epoch seconds (time.time()).
-  tab.clear()                                                          → None
-  tab.control_observations()                                           → list[dict]
+  tab.clear()                 → None
+  tab.control_observations()  → list[dict]
 
   row.body()                             → dict (response body for a Row)
 
 Tab (async — Fetch capture control):
-  await tab.enable_capture()                                             → None
-  await tab.disable_capture()                                            → None
+  await tab.enable_capture()   → None
+  await tab.disable_capture()  → None
 
 Tab properties:
   tab.url / tab.title / tab.type         str   target info (type: page/iframe/worker)
@@ -1427,18 +1427,18 @@ Browser:
   browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
   browser.open(url)                              → Tab
   browser.acquire(pattern, open=, ready=, timeout=) → Tab  (get(), falling back to open() on a miss)
-  browser.tabs                                   → list[Tab]
-  browser.pages()                                → list[dict]
-  browser.detach(pattern=)                       → str
-  browser.patterns                               → list[str]  active watch patterns
-  browser.clear(target=)                         → str
-  browser.disconnect(port=)                      → str  (unpins tabs first; port=None disconnects all)
-  browser.suppress(pattern)                      → str  mute console errors matching substring
-  browser.unsuppress(pattern)                    → str  un-mute
-  browser.suppressed                             → list[str]  active suppress patterns
-  browser.no_capture(url_glob)                   → str  skip Fetch body capture for matching tabs
-  browser.capture_ok(url_glob)                   → str  undo — re-enable capture
-  browser.no_capture_patterns                    → list[str]  active exemption globs
+  browser.tabs                  → list[Tab]
+  browser.pages()               → list[dict]
+  browser.detach(pattern=)      → str
+  browser.patterns              → list[str]  active watch patterns
+  browser.clear(target=)        → str
+  browser.disconnect(port=)     → str  (unpins tabs first; port=None disconnects all)
+  browser.suppress(pattern)     → str  mute console errors matching substring
+  browser.unsuppress(pattern)   → str  un-mute
+  browser.suppressed            → list[str]  active suppress patterns
+  browser.no_capture(url_glob)  → str  skip Fetch body capture for matching tabs
+  browser.capture_ok(url_glob)  → str  undo — re-enable capture
+  browser.no_capture_patterns   → list[str]  active exemption globs
 
   ready= takes a selector or a JS expression, classified exactly as
   click/type_text classify theirs: '.', '#', '[', 'data-', a bare tag or
@@ -1588,8 +1588,8 @@ Writing gists:
   Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
 """,
     "gates": """\
-await ask(prompt, *, tab=None, default=None, timeout=None)             → str
-await confirm(prompt, *, tab=None, default=None, timeout=None)         → bool
+await ask(prompt, *, tab=None, default=None, timeout=None)      → str
+await confirm(prompt, *, tab=None, default=None, timeout=None)  → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 
 Blocks the cell until a human answers. Three surfaces can answer, and

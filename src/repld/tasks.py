@@ -32,17 +32,17 @@ from .state import open_private
 PREVIEW_HEAD_LINES = 5
 PREVIEW_TAIL_LINES = 5
 PREVIEW_MAX_BYTES = 4 * 1024  # wire budget — independent of display.VIEWER_MAX_BYTES
-PREVIEW_MAX_LINE = 400  # per-line clamp for unbroken-text lines
+PREVIEW_MAX_LINE = 400        # per-line clamp for unbroken-text lines
 
 _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "repld_task_id", default=None
 )
 _tasks: dict[str, dict] = {}
 _tasks_lock = threading.Lock()
-_CLOSED = object()  # sentinel: spill file was open, now closed by pruning
-_PRUNE_AGE = 300.0  # seconds after done_event before closing spill handle
-_EVICT_AGE = 3600.0  # seconds after done_event before dropping the entry entirely
-_PRUNE_EVERY = 50  # finalize() calls between prune sweeps
+_CLOSED = object()       # sentinel: spill file was open, now closed by pruning
+_PRUNE_AGE = 300.0       # seconds after done_event before closing spill handle
+_EVICT_AGE = 3600.0      # seconds after done_event before dropping the entry entirely
+_PRUNE_EVERY = 50        # finalize() calls between prune sweeps
 _PRUNE_INTERVAL = 600.0  # seconds between prune sweeps, regardless of call count
 _finalize_count = 0
 _last_prune = 0.0

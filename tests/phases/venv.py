@@ -379,8 +379,8 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
             bind.has_browser_extra = orig_has_extra
             importable = True
             try:
-                import duckdb as _d  # noqa: F401
-                import websockets as _w  # noqa: F401
+                import duckdb as _d          # noqa: F401
+                import websockets as _w      # noqa: F401
                 from PIL import Image as _i  # noqa: F401
             except ImportError:
                 importable = False
