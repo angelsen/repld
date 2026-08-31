@@ -281,6 +281,7 @@ def phase_5(kernel: Kernel) -> None:
         text=True,
         timeout=10,
         env=env,
+        check=False,
     )
     # Exit 0, not an error: a racing bridge should just use the incumbent.
     assert_eq(proc.returncode, 0, "second kernel exits 0")
@@ -320,6 +321,7 @@ def phase_5_boot_failure(_kernel: Kernel) -> None:
             timeout=120,
             cwd=tmp,
             env=env,
+            check=False,
         )
         assert_true(r.returncode != 0, "a failed boot exits non-zero")
         assert_true(
@@ -342,6 +344,7 @@ def _repld(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
 
@@ -350,14 +353,15 @@ def _boot_in(tmp: Path) -> Kernel:
     k = Kernel.__new__(Kernel)
     k.cwd = tmp
     k.stderr_log = tmp / "kernel.stderr"
-    k.proc = subprocess.Popen(
-        ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
-        cwd=str(tmp),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=open(k.stderr_log, "w"),
-        env=os.environ.copy(),
-    )
+    with open(k.stderr_log, "w") as log:
+        k.proc = subprocess.Popen(
+            ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
+            cwd=str(tmp),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=log,
+            env=os.environ.copy(),
+        )
     k._wait_lockfile()
     return k
 

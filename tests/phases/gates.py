@@ -19,6 +19,7 @@ def _gate_cli(kernel: Kernel, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
 
@@ -276,6 +277,7 @@ def _timeout_closes_the_gate(b: Bridge, kernel: Kernel) -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
     assert_eq(proc.returncode, 0, f"repld log --json exits 0 (stderr: {proc.stderr})")
     closed = [

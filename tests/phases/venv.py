@@ -35,7 +35,9 @@ def _make_venv(root: Path, python: str | None = None) -> Path | None:
         cmd += ["--python", python]
     cmd.append(str(root / ".venv"))
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=180, check=False
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return (root / ".venv") if r.returncode == 0 else None
@@ -123,7 +125,10 @@ def _systemd_spawn_live(tmp: Path) -> None:
         print("  ⚠ no systemd-run / XDG_RUNTIME_DIR — skipping live unit check")
         return
     probe = subprocess.run(
-        ["systemctl", "--user", "is-system-running"], capture_output=True, text=True
+        ["systemctl", "--user", "is-system-running"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if probe.returncode != 0 and "running" not in probe.stdout:
         print(f"  ⚠ user manager not usable ({probe.stdout.strip()}) — skipping")
@@ -184,9 +189,14 @@ def _systemd_spawn_live(tmp: Path) -> None:
     finally:
         os.chdir(orig_cwd)
         subprocess.run(
-            ["systemctl", "--user", "stop", unit], capture_output=True, timeout=30
+            ["systemctl", "--user", "stop", unit],
+            capture_output=True,
+            timeout=30,
+            check=False,
         )
-        subprocess.run(["systemctl", "--user", "reset-failed"], capture_output=True)
+        subprocess.run(
+            ["systemctl", "--user", "reset-failed"], capture_output=True, check=False
+        )
 
 
 def phase_16_venv_binding(_kernel: Kernel) -> None:
@@ -379,7 +389,9 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
             bind.has_browser_extra = orig_has_extra
             importable = True
             try:
-                import duckdb as _d          # noqa: F401
+                # I001: align-comments.py column-aligns these noqa comments,
+                # which isort reads as unformatted; alignment wins by design.
+                import duckdb as _d          # noqa: F401, I001
                 import websockets as _w      # noqa: F401
                 from PIL import Image as _i  # noqa: F401
             except ImportError:

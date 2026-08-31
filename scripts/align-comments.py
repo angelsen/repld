@@ -252,7 +252,7 @@ def main() -> int:
             files.append(a)
 
     if files:
-        text = open(files[0]).read()
+        text = Path(files[0]).read_text()
     else:
         text = sys.stdin.read()
 
@@ -299,7 +299,7 @@ def main() -> int:
             if not files:
                 print("--fix requires a file argument", file=sys.stderr)
                 return 2
-            open(files[0], "w").write("\n".join(lines) + "\n")
+            Path(files[0]).write_text("\n".join(lines) + "\n")
             return 0
 
         print("\n".join(lines))

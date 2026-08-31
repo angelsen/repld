@@ -6,6 +6,7 @@ auto-discovered by the kernel, hot-reloaded on save.
 
 import json
 import urllib.request
+from typing import ClassVar
 
 __repld_usage__ = "from weather import Weather; w = Weather(); w.now('Oslo')"
 
@@ -15,7 +16,9 @@ class Weather:
 
     _BASE = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
     _GEOCODE = "https://nominatim.openstreetmap.org/search"
-    _HEADERS = {"User-Agent": "repld-example/1.0 github.com/angelsen/repld"}
+    _HEADERS: ClassVar[dict[str, str]] = {
+        "User-Agent": "repld-example/1.0 github.com/angelsen/repld"
+    }
 
     def _get(self, url: str) -> dict:
         req = urllib.request.Request(url, headers=self._HEADERS)

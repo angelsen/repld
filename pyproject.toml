@@ -61,15 +61,3 @@ extend-exclude = ["*.md"]
 # BLE001/S110/S112: housekeeping paths must never raise (see CLAUDE.md) —
 # broad excepts around channel pushes, sweeps, and teardown are the design.
 ignore = ["BLE001", "S110", "S112"]
-
-[tool.ruff.lint.per-file-ignores]
-# Non-shipped code, same defaults-drift triage as the src/ ignore list above.
-# PLW1510: tests/scripts inspect returncode themselves; SIM115: short-lived
-# handles closed by process exit; TRY004: shape checks deliberately raise
-# the harness's own error type. I001 on venv.py: align-comments.py column-
-# aligns that import block's noqa comments, which isort reads as unformatted
-# — alignment is deliberately the last word (see CLAUDE.md's lint gate).
-"tests/**" = ["PLW1510", "SIM115", "TRY004"]
-"tests/phases/venv.py" = ["I001"]
-"scripts/**" = ["PLW1510", "SIM115"]
-"examples/**" = ["RUF012"]

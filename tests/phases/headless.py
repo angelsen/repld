@@ -333,7 +333,9 @@ def _bridge_tool_bypass_error(tmp: Path) -> None:
 
     result = ipc.connect_to_kernel(lock_path_for(tmp))
     if isinstance(result, str):  # str is the failure channel, not a socket
-        raise AssertionError(f"could not connect to the kernel: {result}")
+        # Harness precondition, not a caller type contract — AssertionError
+        # is what the test runner reports as a failure.
+        raise AssertionError(f"could not connect to the kernel: {result}")  # noqa: TRY004
     sock, _ = result
     try:
         req = {
@@ -478,6 +480,7 @@ def _event_log(tmp: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert_eq(out.returncode, 0, "repld log exits 0")
     assert_true(
@@ -491,6 +494,7 @@ def _event_log(tmp: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert_eq(out.returncode, 0, "repld status exits 0")
     status = json.loads(out.stdout)

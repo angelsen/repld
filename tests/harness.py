@@ -148,14 +148,17 @@ class Kernel:
         self.cwd = cwd
         self.stderr_log = cwd / "kernel.stderr"
         env = os.environ.copy()
-        self.proc = subprocess.Popen(
-            ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=open(self.stderr_log, "w"),
-            env=env,
-        )
+        # The child gets its own dup of the fd; closing the parent's copy here
+        # doesn't cut off the kernel's stderr.
+        with open(self.stderr_log, "w") as log:
+            self.proc = subprocess.Popen(
+                ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
+                cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                env=env,
+            )
         self._wait_lockfile()
 
     @property

@@ -124,6 +124,7 @@ def _test_unusable_entry_skipped(b: Bridge, cwd: Path) -> None:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                check=False,
             )
             assert_eq(
                 out.returncode, 0, f"repld status survives a {label} session file"

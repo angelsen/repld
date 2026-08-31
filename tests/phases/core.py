@@ -238,6 +238,7 @@ def phase_3_argv_and_registry(_kernel: Kernel) -> None:
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         return p.returncode, p.stdout + p.stderr
 

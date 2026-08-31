@@ -140,6 +140,7 @@ def _bundle(esbuild: Path) -> str:
         # at the clone they read `packages/injected/src/...` instead of
         # leaking this machine's directory layout.
         cwd=PLAYWRIGHT_CLONE,
+        check=False,
     )
     if proc.returncode != 0:
         _fail(f"esbuild failed:\n{proc.stderr}")
