@@ -17,6 +17,7 @@ You're turning a GUI into an API. The browser is your auth layer — the user is
 **Don't follow a recipe.** Every app is different. A Shopify embedded app uses Remix loaders inside an iframe. Instagram uses a GraphQL API behind a custom header. A SaaS dashboard might be plain REST. Adapt to what you find.
 
 **The loop is always:**
+
 1. See what's there (tree, network, JS globals)
 2. Trigger an action, capture what fires
 3. Replay it from Python
@@ -65,13 +66,14 @@ await tab.tree()
 ```
 
 Key questions:
+
 - What page/view am I on?
 - Is this an iframe inside a shell? (Shopify admin, Salesforce, Google Workspace)
 - What framework? Check `__remixManifest`, `__NEXT_DATA__`, `__NUXT__`, `__INITIAL_STATE__`
 
 ```python
-await tab.js("!!window.__remixManifest")   # Remix?
-await tab.js("!!window.__NEXT_DATA__")     # Next.js?
+await tab.js("!!window.__remixManifest")  # Remix?
+await tab.js("!!window.__NEXT_DATA__")  # Next.js?
 ```
 
 ### Embedded apps (iframes)
@@ -87,6 +89,7 @@ iframe = await browser.get("*search-and-discovery.shopifyapps*", timeout=10)
 ```
 
 **Rules:**
+
 - Never `navigate()` an iframe directly — it breaks the embedding and kills the session.
 - Navigate the **host** page. The iframe reloads automatically.
 - Use the **iframe** tab for `tab.fetch()` and `tab.js()` — that's where the app's auth context lives.
@@ -98,7 +101,7 @@ Clear network, trigger an action, see what fires.
 
 ```python
 tab.clear()
-await tab.click('text=Filters')
+await tab.click("text=Filters")
 await tab.wait_for('role=heading[name="Filters"]')  # wait for page to render
 tab.network(url="*api*")
 ```
@@ -107,19 +110,21 @@ Or capture everything since a point in time:
 
 ```python
 mark = tab.network()[-1].id if tab.network() else 0  # bookmark
-await tab.click('text=Save')
+await tab.click("text=Save")
 tab.network(since=mark)  # only new requests
 ```
 
 Look for:
+
 - The **data request** — largest JSON response, not tracking/analytics pixels
 - The **auth pattern** — Bearer token? Cookie? Custom header? CSRF?
 - The **API shape** — REST? GraphQL? Remix `?_data=`? Next.js `/_next/data/`?
 
 Inspect the interesting request:
+
 ```python
 tab.request("rid")  # headers, auth scheme, postData, initiator
-tab.body("rid")     # response content
+tab.body("rid")  # response content
 ```
 
 ## Phase 3: Replay from Python
@@ -132,6 +137,7 @@ r["status"], r["body"]
 ```
 
 If it works, you have the pattern. If not:
+
 - **Missing headers?** Copy them from `tab.request(rid)` — especially CSRF tokens, custom auth headers.
 - **Different domain?** The iframe's fetch context might differ from the host's. Use the right tab.
 - **Client-side state required?** Try `tab.js()` to call the app's own functions directly.
@@ -150,6 +156,7 @@ One endpoint working. Now map the rest.
 - What parameters do they take?
 
 **Remix/React Router:**
+
 ```python
 routes = await tab.js("Object.keys(window.__remixManifest.routes)")
 # Routes with hasAction=True support mutations (POST)
@@ -158,6 +165,7 @@ routes = await tab.js("Object.keys(window.__remixManifest.routes)")
 ```
 
 **Next.js:**
+
 ```python
 data = await tab.js("JSON.parse(document.getElementById('__NEXT_DATA__').textContent)")
 # API routes: /api/...
@@ -165,8 +173,11 @@ data = await tab.js("JSON.parse(document.getElementById('__NEXT_DATA__').textCon
 ```
 
 **GraphQL:**
+
 ```python
-await tab.fetch("/graphql", method="POST", body={"query": "{ __schema { types { name } } }"})
+await tab.fetch(
+    "/graphql", method="POST", body={"query": "{ __schema { types { name } } }"}
+)
 # If introspection disabled, capture queries from network traffic
 ```
 
@@ -208,9 +219,9 @@ class AppName:
 
     async def create_thing(self, name: str) -> dict:
         """Create a new thing. -> {id, name, status}"""
-        return (await self._tab.fetch(
-            "/api/things", method="POST", body={"name": name}
-        ))["body"]
+        return (
+            await self._tab.fetch("/api/things", method="POST", body={"name": name})
+        )["body"]
 ```
 
 ### Conventions
@@ -260,8 +271,8 @@ When the app lives in an iframe, hold both tabs:
 ```python
 class SD:
     def __init__(self, admin_tab, iframe_tab) -> None:
-        self._admin = admin_tab    # navigate here
-        self._tab = iframe_tab     # fetch from here
+        self._admin = admin_tab  # navigate here
+        self._tab = iframe_tab  # fetch from here
 
     @classmethod
     async def connect(cls) -> "SD":
@@ -278,9 +289,7 @@ class SD:
         """Navigate via admin tab, wait for iframe to reload."""
         base = self._admin.url.split("/apps/")[0]
         await self._admin.navigate(f"{base}/apps/search-and-discovery/{path}")
-        self._tab = await browser.get(
-            "*search-and-discovery.shopifyapps*", timeout=10
-        )
+        self._tab = await browser.get("*search-and-discovery.shopifyapps*", timeout=10)
 ```
 
 ### Watch/recipe methods
@@ -288,17 +297,18 @@ class SD:
 For list endpoints with a natural diff (inbox, feed, orders, notifications), add a `watch_*` method that polls and notifies on new items:
 
 ```python
-    async def watch_inbox(self, on_new=None):
-        """Poll inbox, notify on unread. Wire with @every(30)."""
-        if on_new is None:
-            from __main__ import notify
-            on_new = notify
-        if not hasattr(self, "_seen"):
-            self._seen = set()
-        for item in await self.list_items():
-            if item["id"] not in self._seen and item["is_new"]:
-                self._seen.add(item["id"])
-                on_new(f"{item['title']}", kind="new_item")
+async def watch_inbox(self, on_new=None):
+    """Poll inbox, notify on unread. Wire with @every(30)."""
+    if on_new is None:
+        from __main__ import notify
+
+        on_new = notify
+    if not hasattr(self, "_seen"):
+        self._seen = set()
+    for item in await self.list_items():
+        if item["id"] not in self._seen and item["is_new"]:
+            self._seen.add(item["id"])
+            on_new(f"{item['title']}", kind="new_item")
 ```
 
 ## Phase 6: Verify
@@ -310,6 +320,7 @@ await app.list_things()
 ```
 
 If it breaks, edit the file and re-import — auto-reload gives you the fresh version:
+
 ```python
 import {name}  # reloaded, API printed again
 ```
@@ -318,15 +329,15 @@ Iterate until all methods return real data.
 
 ## Auth patterns
 
-| Pattern | How to handle |
-|---------|--------------|
-| Cookie-based session | `tab.fetch()` inherits cookies automatically |
-| Bearer JWT (App Bridge) | `tab.fetch()` inherits — App Bridge intercepts fetch |
-| Bearer JWT (manual) | Extract via `tab.js("getToken()")`, pass in headers |
-| CSRF token in header | Copy from `tab.request(rid)` — look for `X-CSRF-Token`, `X-XSRF-TOKEN` |
-| CSRF token in cookie | `tab.fetch()` inherits — framework JS reads it automatically |
-| API key in page source | Extract via `tab.js("window.API_KEY")`, store in gist |
-| OAuth stored elsewhere | Use `httpx.AsyncClient` with stored token — no tab needed |
+| Pattern                 | How to handle                                                          |
+| ----------------------- | ---------------------------------------------------------------------- |
+| Cookie-based session    | `tab.fetch()` inherits cookies automatically                           |
+| Bearer JWT (App Bridge) | `tab.fetch()` inherits — App Bridge intercepts fetch                   |
+| Bearer JWT (manual)     | Extract via `tab.js("getToken()")`, pass in headers                    |
+| CSRF token in header    | Copy from `tab.request(rid)` — look for `X-CSRF-Token`, `X-XSRF-TOKEN` |
+| CSRF token in cookie    | `tab.fetch()` inherits — framework JS reads it automatically           |
+| API key in page source  | Extract via `tab.js("window.API_KEY")`, store in gist                  |
+| OAuth stored elsewhere  | Use `httpx.AsyncClient` with stored token — no tab needed              |
 
 If auth doesn't require the browser (stored OAuth tokens, API keys), the gist can use `httpx.AsyncClient` directly — no tab needed. The browser is just one auth strategy.
 
@@ -345,6 +356,7 @@ If auth doesn't require the browser (stored OAuth tokens, API keys), the gist ca
 ## Output
 
 A working gist at `gists/{name}.py` that:
+
 1. Has a module docstring and `__repld_usage__` (for discovery)
 2. Has a `connect()` classmethod (for one-line instantiation)
 3. Uses `async def` methods with type hints and docstrings (for introspection)

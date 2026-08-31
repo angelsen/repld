@@ -12,6 +12,7 @@ tab = await browser.get("*app*", fresh=True)       # only newly-appearing tabs
 tab = await browser.get("*app*", timeout=10)       # wait up to 10s
 tab = await browser.get("*app*", ready="#root")    # wait for element after attach
 tab = await browser.open("https://...")            # open new tab
+tab = await browser.acquire("*pattern*")            # get(), falling back to open() on a miss
 await browser.watch("*pattern*")                   # auto-attach current + future
 
 browser.tabs                                       # list[Tab] attached
@@ -26,6 +27,8 @@ await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePor
 await browser.disconnect()                         # unpin tabs, close all WebSockets
 await browser.disconnect(port=9222)                # unpin + close one Chrome instance
 ```
+
+`browser.acquire(pattern, *, open=None, ready=None, timeout=None)` replaces the try-`get`/except-`open` dance a gist returning to one recurring site would otherwise hand-roll. `open` is the URL to navigate to on a miss — defaults to `pattern` itself when the pattern is already a real URL.
 
 ### ready= parameter
 
@@ -118,7 +121,7 @@ await tab.keys(keys, *, delay_ms=0) → None
 await tab.fetch(url, *, method='GET', body=None, headers=None) → dict
 ```
 
-In-page `fetch()` — inherits cookies, session, CORS origin. Returns `{"status": int, "ok": bool, "body": Any}`. Body is auto-parsed as JSON when content-type includes `json`.
+In-page `fetch()` — inherits cookies, session, CORS origin. Returns `{"status": int, "ok": bool, "body": Any}`. Body is auto-parsed as JSON whenever it's valid JSON, regardless of content-type — plenty of real APIs mislabel JSON as `text/plain` or `text/html`. A non-JSON text body comes back as-is.
 
 ### navigate / reload
 
@@ -198,6 +201,14 @@ await tab.cookies() → list[dict]
 
 All cookies for this tab via `Network.getCookies`.
 
+### http_client
+
+```python
+await tab.http_client(*, base_url=None, **kwargs) → httpx.AsyncClient
+```
+
+Copies this tab's current cookies into a plain `httpx.AsyncClient`. Requires the `http` extra (`uv tool install repld-tool[http]`) — raises `RuntimeError` with an install hint if missing. `base_url` defaults to the tab's own origin; extra `kwargs` pass through to `httpx.AsyncClient`. Use this once a site's data lives behind cookie-authenticated JSON — the tab establishes the session, then every read after that is a plain concurrent-safe HTTP call, with none of `tab.fetch()`'s per-call CDP round trip or shared-tab-state races.
+
 ### controls / invoke
 
 ```python
@@ -264,8 +275,8 @@ tab.clear() → None
 ```python
 await browser.connect(42829)
 await browser.connect(43213)
-await browser.watch("*localhost:5200*")   # watches across both
-browser.tabs                              # tabs from all instances
+await browser.watch("*localhost:5200*")  # watches across both
+browser.tabs  # tabs from all instances
 ```
 
 Connected ports and watch patterns persist across kernel restarts. On boot, repld prompts on the terminal (`[Y/n]`, default yes) before reconnecting and re-watching — headless boot (`--no-display`) or non-tty stdin skips the restore entirely.
@@ -283,9 +294,9 @@ Console errors and uncaught exceptions from watched tabs push as `[console:error
 Cross-tab duplicates within 2 seconds are collapsed into one follow-up message (`... (×14 tabs)`). Mute noisy patterns:
 
 ```python
-browser.suppress("[vite] failed to connect")   # mute matching errors
-browser.unsuppress("[vite] failed to connect") # un-mute
-browser.suppressed                             # list active patterns
+browser.suppress("[vite] failed to connect")  # mute matching errors
+browser.unsuppress("[vite] failed to connect")  # un-mute
+browser.suppressed  # list active patterns
 ```
 
 Suppress patterns persist across kernel restarts.
@@ -295,9 +306,9 @@ Suppress patterns persist across kernel restarts.
 `get()`/`open()` tabs capture response bodies through Fetch interception, which replays each captured response — and Chrome applies CORB/ORB more strictly to a replayed response than a natively-fetched one. A site that sends no CORS headers at all (an old embedded-device admin UI is the usual case) can see its own same-origin scripts blocked. Exempt those hosts from capture:
 
 ```python
-browser.no_capture("*192.168.1.1*")   # skip Fetch body capture for matching tab URLs
-browser.capture_ok("*192.168.1.1*")   # remove the exemption
-browser.no_capture_patterns           # list active patterns
+browser.no_capture("*192.168.1.1*")  # skip Fetch body capture for matching tab URLs
+browser.capture_ok("*192.168.1.1*")  # remove the exemption
+browser.no_capture_patterns  # list active patterns
 ```
 
 Patterns persist across kernel restarts, like `suppress`. An exemption applies on the _next_ attach — a tab that already has Fetch enabled keeps capturing until re-attached; `await tab.disable_capture()` is the retroactive per-tab knob. `tab.network()` / `tab.body()` still work on an exempted tab through the on-demand path — only the proactive capture is skipped.

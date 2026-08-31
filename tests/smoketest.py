@@ -17,7 +17,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import Kernel
-
 from phases.browser import (
     phase_6,
     phase_6_actionability,
@@ -45,13 +44,13 @@ from phases.browser import (
     phase_6_select_option,
     phase_6_select_type_filter,
     phase_6_selector_translation,
-    phase_6_viewport_param,
     phase_6_shadow_dom_selectors,
     phase_6_since_time_base,
     phase_6_stale_context_retry,
     phase_6_strict_violation,
     phase_6_tab_close,
     phase_6_tools_and_gists,
+    phase_6_viewport_param,
 )
 from phases.channels import phase_4, phase_4_push_kind_args, phase_4b_pregate
 from phases.core import phase_3, phase_3_argv_and_registry, phase_3_patch_targets
@@ -64,9 +63,9 @@ from phases.headless import phase_15_ephemeral_bridge, phase_15_headless
 from phases.links import phase_12_gist_links
 from phases.lockfile import (
     phase_5,
-    phase_5_init,
     phase_5_boot_failure,
     phase_5_evict,
+    phase_5_init,
     phase_5_orphans,
     phase_5_permissions,
     phase_5_project_sweep,

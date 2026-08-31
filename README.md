@@ -126,12 +126,12 @@ Output from every cell spills to `$XDG_RUNTIME_DIR/repld/` — the inline respon
 ## Kernel builtins
 
 ```python
-notify(content, **meta)              # channel push to the agent
-await ask(prompt)                    # block on free-form human input
-await confirm(prompt)                # block on yes/no
-await choose(prompt, options)        # block on pick-one
-defer(coro, label=None)              # fire-and-forget, channel push on completion
-@every(seconds)                      # periodic ticker, fn.cancel() to stop
+notify(content, **meta)        # channel push to the agent
+await ask(prompt)              # block on free-form human input
+await confirm(prompt)          # block on yes/no
+await choose(prompt, options)  # block on pick-one
+defer(coro, label=None)        # fire-and-forget, channel push on completion
+@every(seconds)                # periodic ticker, fn.cancel() to stop
 ```
 
 A kernel you started with `repld` takes gate answers in its own pane, and a
@@ -144,15 +144,15 @@ what's pending and `repld gate answer <id> <value>` resolves it.
 `repld[browser]` attaches to Chrome via CDP (`--remote-debugging-port=9222`, **Chrome 140+**). You log in normally; the agent sees your traffic, discovers the API surface, and works with your authenticated sessions.
 
 ```python
-tab = await browser.get("*example.com*")     # find tab by URL glob
-tab = await browser.open("https://...")      # open new tab
-await browser.watch("*pattern*")             # auto-attach matching tabs
+tab = await browser.get("*example.com*")  # find tab by URL glob
+tab = await browser.open("https://...")   # open new tab
+await browser.watch("*pattern*")          # auto-attach matching tabs
 
-await tab.js("document.title")               # eval JS (top-level await works)
-await tab.fetch("/api/data")                 # in-page fetch (inherits session)
-await tab.click("#submit")                   # click, settle, return observation
-await tab.type_text("#search", "query")      # type into element
-tab.network(url="*api*")                     # query captured traffic
+await tab.js("document.title")           # eval JS (top-level await works)
+await tab.fetch("/api/data")             # in-page fetch (inherits session)
+await tab.click("#submit")               # click, settle, return observation
+await tab.type_text("#search", "query")  # type into element
+tab.network(url="*api*")                 # query captured traffic
 ```
 
 Body capture via Fetch interception means login flows, redirects, and CSRF exchanges are never lost. See [docs/browser.md](docs/browser.md) for the full design.

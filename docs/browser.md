@@ -178,18 +178,18 @@ Everything the browser feature injects into `__main__`. Three levels: browser (d
 
 ```python
 # watch patterns (persistent — auto-attach future matching tabs)
-browser.watch("*gmail*")            # add pattern, attach current matches
-browser.patterns                    # list active watch patterns
-browser.detach("*gmail*")           # remove pattern, detach its tabs
-browser.detach()                    # clear all patterns, detach everything
+browser.watch("*gmail*")   # add pattern, attach current matches
+browser.patterns           # list active watch patterns
+browser.detach("*gmail*")  # remove pattern, detach its tabs
+browser.detach()           # clear all patterns, detach everything
 
 # resolve a handle
-browser.get("*gmail*")              # → Tab  (glob — skips workers)
-browser.get("9222:a81998")          # → Tab  (target ID — any type, attach on demand)
+browser.get("*gmail*")      # → Tab  (glob — skips workers)
+browser.get("9222:a81998")  # → Tab  (target ID — any type, attach on demand)
 
 # inspect
-browser.tabs                        # list[Tab] — currently attached tabs
-browser.pages                       # list[TargetInfo] — ALL targets Chrome knows about
+browser.tabs   # list[Tab] — currently attached tabs
+browser.pages  # list[TargetInfo] — ALL targets Chrome knows about
 
 # config
 browser.port = 9222                 # default from REPLD_CHROME_PORT env

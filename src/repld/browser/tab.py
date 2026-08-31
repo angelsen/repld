@@ -1590,13 +1590,15 @@ class Tab(TabQueryMixin):
         """In-page JS fetch with Python-ergonomic args.
 
         Returns {status: int, ok: bool, body: Any, base64Encoded: bool}.
-        Body is auto-parsed as JSON when content-type is json (text responses
-        only). Binary responses (invalid UTF-8) are base64-encoded and
-        returned with base64Encoded=True, matching the {body, base64Encoded}
-        convention used by tab.body() / Fetch.getResponseBody. Content-Type
-        defaults to application/json for a dict body, application/x-www-form-
-        urlencoded for a string body — pass `headers={"Content-Type": ...}`
-        to override (e.g. for a raw JSON string or plain text body).
+        Body is auto-parsed as JSON whenever it's valid JSON — regardless of
+        Content-Type, since plenty of real APIs serve JSON as text/plain or
+        text/html and get it wrong. A non-JSON text body is returned as-is.
+        Binary responses (invalid UTF-8) are base64-encoded and returned with
+        base64Encoded=True, matching the {body, base64Encoded} convention
+        used by tab.body() / Fetch.getResponseBody. Content-Type defaults to
+        application/json for a dict body, application/x-www-form-urlencoded
+        for a string body — pass `headers={"Content-Type": ...}` to override
+        (e.g. for a raw JSON string or plain text body).
         """
         body_js = "undefined"
         if body is not None:
@@ -1629,13 +1631,14 @@ class Tab(TabQueryMixin):
     headers: {headers_js},
   }};
   const r = await fetch({json.dumps(url)}, opts);
-  const ct = r.headers.get('content-type') || '';
   const buf = await r.arrayBuffer();
   const bytes = new Uint8Array(buf);
   let body, base64Encoded = false;
   try {{
     body = new TextDecoder('utf-8', {{fatal: true}}).decode(bytes);
-    if (ct.includes('json') && body) {{
+    // Try JSON regardless of Content-Type — plenty of real APIs mislabel
+    // JSON as text/plain or text/html. A non-JSON string falls through.
+    if (body) {{
       try {{ body = JSON.parse(body); }} catch(e) {{}}
     }}
   }} catch(e) {{
@@ -1788,6 +1791,32 @@ class Tab(TabQueryMixin):
         """Return all cookies for this tab via CDP."""
         result = await self._exec("Network.getCookies")
         return result.get("cookies", [])
+
+    async def http_client(self, *, base_url: str | None = None, **kwargs: Any) -> Any:
+        """Build an httpx.AsyncClient carrying this tab's current cookies.
+
+        Requires the `http` extra. base_url defaults to this tab's origin, so
+        relative URLs behave the same as they did through tab.fetch(). Extra
+        kwargs pass through to httpx.AsyncClient. Return type is Any (not
+        httpx.AsyncClient) so this module never imports httpx unconditionally
+        — that would break every browser-only install that lacks the extra.
+        """
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError(
+                "tab.http_client() requires the `http` extra. "
+                "Install with: uv tool install repld-tool[http]"
+            ) from None
+        if base_url is None:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(self.url)
+            base_url = f"{parts.scheme}://{parts.netloc}"
+        jar = httpx.Cookies()
+        for c in await self.cookies():
+            jar.set(c["name"], c["value"], domain=c["domain"], path=c["path"])
+        return httpx.AsyncClient(base_url=base_url, cookies=jar, **kwargs)
 
     async def cdp(self, method: str, **params: Any) -> dict:
         """Raw CDP passthrough."""

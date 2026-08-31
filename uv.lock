@@ -206,10 +206,20 @@ version = "0.4.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
+all = [
+    { name = "duckdb" },
+    { name = "httpx" },
+    { name = "pillow" },
+    { name = "rich" },
+    { name = "websockets" },
+]
 browser = [
     { name = "duckdb" },
     { name = "pillow" },
     { name = "websockets" },
+]
+http = [
+    { name = "httpx" },
 ]
 pretty = [
     { name = "rich" },
@@ -217,24 +227,22 @@ pretty = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
-    { name = "repld-tool", extra = ["browser", "pretty"] },
+    { name = "repld-tool", extra = ["browser", "http", "pretty"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "duckdb", marker = "extra == 'browser'", specifier = ">=1.5.2" },
+    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27" },
     { name = "pillow", marker = "extra == 'browser'", specifier = ">=11.0" },
+    { name = "repld-tool", extras = ["pretty", "browser", "http"], marker = "extra == 'all'" },
     { name = "rich", marker = "extra == 'pretty'", specifier = ">=15.0.0" },
     { name = "websockets", marker = "extra == 'browser'", specifier = ">=16.0" },
 ]
-provides-extras = ["pretty", "browser"]
+provides-extras = ["pretty", "browser", "http", "all"]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "repld-tool", extras = ["pretty", "browser"] },
-]
+dev = [{ name = "repld-tool", extras = ["pretty", "browser", "http"] }]
 
 [[package]]
 name = "rich"

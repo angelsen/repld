@@ -1,11 +1,14 @@
-"""`repld browser` — re-exec via `uv run` with the browser extra.
+"""`repld browser` — re-exec via `uv run` with the browser + http extras.
 
 repld's core is stdlib-only (see CLAUDE.md); `duckdb`, `websockets` and
 `pillow` are gated behind the `browser` extra so most sessions never pay
 for them. All three are load-bearing — `browser/png.py` imports PIL at
 module scope for `Tab.screenshot`, and `kernel._inject_builtins` catches
 the resulting ImportError as "extra not installed", so a partial install
-costs the whole browser builtin rather than just screenshots.
+costs the whole browser builtin rather than just screenshots. `http` rides
+along too — `Tab.http_client()` is meant to be reached for immediately
+after `browser.acquire()`/`get()`, so a session started via `repld browser`
+should have it without a second install step.
 This subcommand is the escape hatch: run `repld browser` instead of
 `repld` and get them for this invocation without adding repld-tool to
 the project's dependencies at all.
@@ -65,8 +68,8 @@ def run_browser(argv: list[str]) -> int:
 
     path = _editable_path()
     with_arg = (
-        ["--with-editable", f"{path}[browser]"]
+        ["--with-editable", f"{path}[browser,http]"]
         if path
-        else ["--with", "repld-tool[browser]"]
+        else ["--with", "repld-tool[browser,http]"]
     )
     os.execvp(uv, [uv, "run", *with_arg, "repld", *argv])

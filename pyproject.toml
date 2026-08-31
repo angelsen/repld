@@ -28,17 +28,16 @@ browser = [
     "websockets>=16.0",
     "pillow>=11.0",
 ]
+http = [
+    "httpx>=0.27",
+]
+all = [
+    "repld-tool[pretty,browser,http]",
+]
 
 [dependency-groups]
-# Optional extras installed in dev so basedpyright can resolve their imports.
-# httpx is not repld's at all — five gists in ./gists declare it via
-# __repld_deps__, and a kernel installs it into the shared gist-deps dir at
-# runtime. basedpyright can't see that directory (it's keyed by interpreter
-# version and lives outside the project), so without this `uv sync` prunes
-# httpx and the typecheck goes 0 errors to 5.
 dev = [
-    "repld-tool[pretty,browser]",
-    "httpx>=0.27",
+    "repld-tool[pretty,browser,http]",
 ]
 
 [tool.uv.build-backend]

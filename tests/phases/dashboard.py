@@ -25,7 +25,7 @@ def _declared_length(port: int, length: int, token: str | None) -> int:
     try:
         s.sendall(req.encode())
         data = s.recv(256)
-    except socket.timeout:
+    except TimeoutError:
         return 0
     finally:
         s.close()
@@ -51,7 +51,7 @@ def _flood_headers(port: int, count: int) -> int:
             except OSError:
                 break  # server answered and closed part-way through
         data = s.recv(256)
-    except (socket.timeout, OSError):
+    except (TimeoutError, OSError):
         return 0
     finally:
         s.close()

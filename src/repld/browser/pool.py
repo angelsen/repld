@@ -353,6 +353,26 @@ class BrowserPool:
                 return await b.open(url, ready=ready)
         raise RuntimeError("No browsers connected")
 
+    async def acquire(
+        self,
+        pattern: str,
+        *,
+        open: str | None = None,
+        ready: str | None = None,
+        timeout: float | None = None,
+    ) -> Tab:
+        """Find a tab matching `pattern`, or open one if none is open yet.
+
+        `open` is the URL to navigate to on a miss — defaults to `pattern`
+        itself, so `browser.acquire(url)` works when pattern and open-URL are
+        the same. Replaces the try-`get`/except-`open` dance every gist that
+        talks to one recurring site ends up hand-rolling.
+        """
+        try:
+            return await self.get(pattern, timeout=timeout, ready=ready)
+        except TabNotFoundError:
+            return await self.open(open if open is not None else pattern, ready=ready)
+
     async def fetch(
         self,
         url: str,

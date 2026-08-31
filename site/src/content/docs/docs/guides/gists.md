@@ -112,10 +112,10 @@ The pre-0.1.0 `__repld_tools__ = [...]` list plus `_tool_*(args: dict)` conventi
 Gists are tracked in a central registry (`~/.config/repld/gist-registry.json`). Link a gist from another project without copying:
 
 ```bash
-repld gist add weather    # resolves from registry, writes ./gists/.links
-repld gist list           # shows local + linked + linkable
-repld gist rm weather     # unlink
-repld gist rm --stale     # clean up broken links
+repld gist add weather  # resolves from registry, writes ./gists/.links
+repld gist list         # shows local + linked + linkable
+repld gist rm weather   # unlink
+repld gist rm --stale   # clean up broken links
 ```
 
 The `.links` manifest records absolute paths and is meant to be committed — stale entries are skipped at load rather than rewritten. Local gists always shadow linked ones of the same name.
@@ -134,8 +134,8 @@ Nothing tracks the file afterwards, so `rm` — which only unlinks — is not ho
 ## Linting
 
 ```bash
-repld gist lint              # everything a kernel here would import
-repld gist lint --local      # just ./gists — usable as a per-project CI gate
+repld gist lint          # everything a kernel here would import
+repld gist lint --local  # just ./gists — usable as a per-project CI gate
 repld gist lint weather
 ```
 

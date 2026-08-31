@@ -808,7 +808,7 @@ def _fetch_checks() -> None:
         gist_cmd._fetch_gist = lambda _id, timeout=20.0: stub  # pyright: ignore[reportAttributeAccessIssue]
         Path.home = staticmethod(lambda: home)  # pyright: ignore[reportAttributeAccessIssue]
         os.chdir(proj)
-        fetch = lambda *a: _quiet(gist_cmd._gist_fetch, list(a))  # noqa: E731
+        fetch = lambda *a: _quiet(gist_cmd._gist_fetch, list(a))
 
         assert_eq(fetch(gid), 0, "fetch writes into ./gists")
         body = (proj / "gists" / "probe_fetched.py").read_text()

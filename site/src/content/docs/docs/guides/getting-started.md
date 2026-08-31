@@ -45,10 +45,10 @@ Claude Code spawns `repld bridge` as a stdio subprocess. If a kernel for this pr
 You don't have to start a kernel by hand, but you can watch and control one from any terminal:
 
 ```bash
-repld status      # pid, uptime, socket, active tasks — plus live kernels elsewhere
-repld log -f      # follow the same cells and channel pushes the display renders
-repld stop        # shut this project's kernel down
-repld dashboard   # open the built-in web control panel
+repld status     # pid, uptime, socket, active tasks — plus live kernels elsewhere
+repld log -f     # follow the same cells and channel pushes the display renders
+repld stop       # shut this project's kernel down
+repld dashboard  # open the built-in web control panel
 ```
 
 Run `repld` in a terminal instead when you want the live TUI display. Either way the kernel writes its PID and socket path to `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock` and stays up until stopped. See the [dashboard guide](/repld/docs/guides/dashboard/) for the control panel.

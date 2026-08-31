@@ -8,7 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `http` extra (`httpx`) and an `all` meta-extra bundling `pretty`+`browser`+`http`.
+- `tab.http_client()` — an `httpx.AsyncClient` carrying the tab's current cookies, for concurrent-safe calls against a cookie-authenticated API once the session is established.
+- `browser.acquire(pattern, *, open=, ready=, timeout=)` — `get()`, falling back to `open()` on a miss.
+
 ### Changed
+
+- `tab.fetch()` now auto-parses a JSON body regardless of Content-Type, not only when the header says `json`.
+- `repld browser` now pulls in the `http` extra alongside `browser`.
 
 ### Fixed
 

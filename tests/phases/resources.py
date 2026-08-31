@@ -83,7 +83,9 @@ def _python_fences(text: str) -> list[str]:
     """
     return [
         line
-        for block in re.findall(r"^```(?:python|py)\n(.*?)^```", text, re.M | re.S)
+        for block in re.findall(
+            r"^```(?:python|py)\n(.*?)^```", text, re.MULTILINE | re.DOTALL
+        )
         for line in block.splitlines()
     ]
 
@@ -191,9 +193,9 @@ def phase_8_site_signatures(_kernel: Kernel) -> None:
     a bare `browser.fetch()` as a table label for an auth mode, which is prose
     wearing a code font, not a call anyone runs.
     """
-    import repld.help as h
-
     from harness import REPO
+
+    import repld.help as h
 
     pkg = pathlib.Path(h.__file__).parent
     kinds = {

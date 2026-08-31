@@ -427,6 +427,7 @@ object.  Read this instead of diving into source code.
   tab = await browser.get("*app*", fresh=True)       # only newly-appearing tabs
   tab = await browser.get("*app*", timeout=10)       # wait up to 10s for match
   tab = await browser.open("https://example.com")    # open new tab
+  tab = await browser.acquire("*example.com*")        # get(), or open() on a miss
   await browser.watch("*example.com*")               # auto-attach current + future
 
   browser.tabs                                       # list[Tab] currently attached
@@ -449,6 +450,10 @@ Quirks:
     them — returns only tabs that appear *after* the call.
   - open() creates a tab via Target.createTarget, then waits the same ready=
     signal as get() before returning (default: document.readyState === 'complete').
+  - acquire(pattern, open=, ready=, timeout=) is get() falling back to open()
+    on a miss — the try-get/except-open dance every gist that returns to one
+    recurring site ends up hand-rolling. open= is the URL to navigate to on
+    a miss; defaults to pattern itself when pattern is already a real URL.
   - browser.connect(profile=path) reads DevToolsActivePort from a Chrome
     user-data-dir to discover the debug port.  Works with --remote-debugging-port=0
     (random port) — Chrome writes the actual port to that file on startup.
@@ -652,7 +657,9 @@ on an already-attached tab still reports the original attach's value.
       In-page JS fetch() — inherits the browser's cookies, session, and CORS
       origin.  NOT a separate HTTP call.
       Returns: {"status": int, "ok": bool, "body": Any}
-      body is auto-parsed as JSON when content-type includes 'json'.
+      body is auto-parsed as JSON whenever it's valid JSON, regardless of
+      content-type (plenty of real APIs mislabel JSON as text/plain or
+      text/html).  A non-JSON text body is returned as-is.
       Auto-sets Content-Type: application/json for a dict body,
       application/x-www-form-urlencoded for a string body.
       Caller headers override auto-set headers (e.g. for raw JSON text).
@@ -687,6 +694,15 @@ on an already-attached tab still reports the original attach's value.
 
   tab.cookies()                                               → list[dict]
       All cookies for this tab via Network.getCookies.
+
+  tab.http_client(*, base_url=None, **kwargs)                 → httpx.AsyncClient
+      Copy this tab's current cookies into a plain httpx.AsyncClient.
+      Requires the `http` extra (RuntimeError with an install hint if
+      missing). base_url defaults to the tab's own origin. Use this once a
+      site's data lives behind cookie-authenticated JSON — the tab is only
+      needed to establish the session; every read after that is a plain
+      concurrent-safe HTTP call, no shared-tab-state races and no per-call
+      CDP round trip the way tab.fetch() pays.
 
   tab.cdp(method, **params)                                   → dict
       Raw CDP passthrough — escape hatch for anything not wrapped.
@@ -1135,8 +1151,9 @@ For APIs that use bearer tokens or API keys (auth not tied to cookies):
       headers={"Authorization": token})
   data = json.loads(urllib.request.urlopen(req).read())
 
-For APIs that rely on cookies or session state — use tab.fetch(). The
-browser maintains the session; you just call through it.
+For APIs that rely on cookies or session state — use tab.fetch(), or, once
+the session is established, tab.http_client() to keep calling it without the
+tab (plain concurrent httpx calls instead of one at a time through the page).
 
 === Multi-tab gists (embedded apps) ===
 
@@ -1370,6 +1387,7 @@ Tab (async unless noted):
   tab.invoke(control, action, args=)               → dict
   tab.screenshot(full_page=, force=, path=)        → dict {path, width, height, bytes} (native res; raises over the vision token budget unless force=True)
   tab.cookies()                                    → list[dict]
+  tab.http_client(base_url=None, **kwargs)         → httpx.AsyncClient (requires `http` extra; copies tab's cookies for plain concurrent HTTP calls)
   tab.cdp(method, **params)                        → dict
 
 Tab — pin + gate bridge (see repld://docs/browser for pill lifecycle + heartbeat detail):
@@ -1408,6 +1426,7 @@ Browser:
   browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
   browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
   browser.open(url)                              → Tab
+  browser.acquire(pattern, open=, ready=, timeout=) → Tab  (get(), falling back to open() on a miss)
   browser.tabs                                   → list[Tab]
   browser.pages()                                → list[dict]
   browser.detach(pattern=)                       → str
