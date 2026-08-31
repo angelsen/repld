@@ -363,6 +363,7 @@ class _EngineFakeSession:
         self._injected = None
         self._injected_lock = asyncio.Lock()
         self._frame_seq = 1
+        self._dialog_log: list[dict] = []
 
     async def execute(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -2129,6 +2130,24 @@ def phase_6_dialog(kernel: Kernel) -> None:
             f"observation names the auto-accepted alert (got {text[:400]!r})",
         )
         print("  ✓ dialog: confirm rejects + errors, pre-arm accepts, alert is silent")
+
+        # The same guarantee applies to a raw tab.click() from exec/gists,
+        # not just the browser_click MCP wrapper — the gap Tab._ensure_front's
+        # own dialog check (not just browser_dispatch's) exists to close.
+        out = h.exec(f"_t = await browser.get({tid!r})\nawait _t.click('#del')")
+        assert_true(
+            "confirm" in out and "Delete?" in out and "browser_dismiss_dialog" in out,
+            f"raw tab.click() also raises on a rejected confirm() (got {out[:400]!r})",
+        )
+        h.tool("browser_dismiss_dialog", {"target": tid, "accept": True})
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\nprint((await _t.click('#del')).line)"
+        )
+        assert_true(
+            "clicked:" in out,
+            f"pre-armed accept via raw tab.click() returns normally (got {out[:400]!r})",
+        )
+        print("  ✓ dialog: raw tab.click() (exec/gist path) carries the same guarantee")
     finally:
         h.close()
 

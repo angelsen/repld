@@ -321,6 +321,29 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     )
 
 
+def unresolved_dialog_error(
+    dialog_log: list[dict], start: int = 0
+) -> RuntimeError | None:
+    """Build the error for an action whose confirm()/prompt() was
+    auto-rejected, or None if `dialog_log[start:]` holds no such entry.
+
+    Shared by Tab's own action methods (start = the log length before the
+    action, so only *this* call's dialogs count) and browser_dispatch.py's
+    cross-tab mutation sweep (start = 0, since pre_observe already clears
+    the log per mutation). Only confirm/prompt raise — accepting one is
+    never a guess (alert has no other option; beforeunload reflects the
+    pin's own guard_unload), so neither belongs here.
+    """
+    for d in dialog_log[start:]:
+        if d["source"] == "auto" and d["type"] in ("confirm", "prompt"):
+            return RuntimeError(
+                f"{d['type']}() dialog {d['message']!r} was auto-rejected "
+                "(no explicit decision) — call browser_dismiss_dialog"
+                "(target, accept=true) then repeat the action to accept it."
+            )
+    return None
+
+
 def _push_console_error(
     params: dict,
     target_id: str,

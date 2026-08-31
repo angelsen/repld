@@ -985,7 +985,12 @@ getBy*() chaining (.filter(), a second getBy*() call) is refused with
   that specific ancestor" (N identical repeated components disambiguated by
   a parent's text/label), scope with a plain CSS descendant selector instead:
   '[aria-label="Aug 30"] button[data-testid=manage]' rather than
-  getByLabel('Aug 30').getByTestId('manage').
+  getByLabel('Aug 30').getByTestId('manage'). The engine's own `>>` combinator
+  works too and scopes any engine-native form on the right (text=, role=,
+  internal:label=, plain CSS), not just CSS: '[aria-label="Aug 30"] >>
+  text=Click'. It only works when the *left* side is plain CSS, though — a
+  leading repld shorthand (label=, testid=, placeholder=, getBy*()) swallows
+  everything after it, `>>` included, as one literal value.
 
 == Native JS dialogs ==
 
@@ -1518,6 +1523,10 @@ Selectors (click/tap/type_text/select_option/hover/drag):
   single visible winner errors with a candidate digest; a lone match is used
   visible or not; input then waits for visible/enabled/stable.
 
+  `>>` scopes any engine-native form to an ancestor: '[aria-label="Aug 30"]
+  >> text=Click'. Left side must be plain CSS — a repld shorthand there
+  (label=, testid=, getBy*()) swallows the whole `>> ...` tail as literal text.
+
 Touch vs mouse:
   tab.click()  — Input.dispatchMouseEvent (works everywhere)
   tab.tap()    — Input.dispatchTouchEvent (fires touchstart/touchend)
@@ -2016,6 +2025,12 @@ HMR reload behind a native confirm dialog nothing can dismiss.
 Gate write operations. Anything that mutates state should call
 tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears
 in both the terminal and the pill UI — first resolution wins.
+
+That's repld's own gate — separate from a native confirm()/prompt() the
+target app itself pops (e.g. clicking its own "Delete" button). Those are
+auto-rejected by default and the triggering call raises naming the dialog;
+call `await self._tab.dismiss_dialog(accept=True)` right before the action
+that opens one to let it through instead.
 
 For apps that don't need browser auth (public APIs), use httpx (declare it
 in __repld_deps__) or stdlib urllib. No browser tab needed. For apps that

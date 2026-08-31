@@ -99,21 +99,19 @@ async def route_detach(browser, target, port) -> str | None:
 
 
 def _raise_on_unresolved_dialog(tab, pre) -> None:
-    """Fail the call if it triggered a confirm()/prompt() that was rejected
-    by default, rather than returning a receipt for an action the page
-    itself declined. Accepting one is only ever the result of an explicit
-    prior `browser_dismiss_dialog(target, accept=true)` — alert() (only one
-    option) and beforeunload (governed by the pin's own guard_unload) don't
-    raise, since neither is a guessed decision.
+    """Fail the call if it (or an iframe child) triggered a confirm()/prompt()
+    that was rejected by default. Belt-and-suspenders with Tab's own action
+    methods, which already raise for a dialog on their own session — this
+    still matters for a dialog fired on a *different* target (a cross-origin
+    iframe) during the same mutation, which a raw `tab.click()` has no way
+    to see.
     """
+    from .browser.cdp import unresolved_dialog_error
+
     for t in (tab, *pre.iframe_children):
-        for d in t._session._dialog_log:
-            if d["source"] == "auto" and d["type"] in ("confirm", "prompt"):
-                raise RuntimeError(
-                    f"{d['type']}() dialog {d['message']!r} was auto-rejected "
-                    "(no explicit decision) — call browser_dismiss_dialog"
-                    "(target, accept=true) then repeat the action to accept it."
-                )
+        exc = unresolved_dialog_error(t._session._dialog_log)
+        if exc is not None:
+            raise exc
 
 
 class BrowserDispatchMixin:

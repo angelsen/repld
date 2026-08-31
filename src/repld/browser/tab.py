@@ -21,7 +21,7 @@ from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
 from . import inject
 from . import selector as selector_mod
-from .cdp import CDPSession
+from .cdp import CDPSession, unresolved_dialog_error
 from .pin import (
     _PIN_JS,
     BINDING_NAME,
@@ -619,6 +619,13 @@ class Tab(TabQueryMixin):
         """Raise this tab's window if Chrome has it backgrounded, then hold
         a per-Chrome-instance lock for the caller's whole action.
 
+        Also the choke point for every input-dispatching method's dialog
+        guarantee: it raises if the action triggered a confirm()/prompt()
+        that got auto-rejected, so `tab.click()` called directly from a gist
+        gets the same "never silently succeed on a declined dialog" contract
+        `browser_click` gets via `browser_dispatch._raise_on_unresolved_dialog`
+        — see `cdp.unresolved_dialog_error`.
+
         `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
         the renderer's real input pipeline, which Chrome silently drops for
         a tab whose window is occluded or backgrounded
@@ -664,7 +671,16 @@ class Tab(TabQueryMixin):
                 and front_target.type != "iframe"
             ):
                 await front_target._exec("Page.bringToFront")
+            # Recorded before yield so the check below only sees dialogs this
+            # call triggered, not ones already sitting in the log from an
+            # earlier action nobody read. Only raised on a clean yield — a
+            # body that already raised (e.g. element not found) propagates
+            # through yield itself and skips straight to finally.
+            dialog_start = len(self._session._dialog_log)
             yield
+            exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+            if exc is not None:
+                raise exc
         finally:
             import os
 
@@ -1716,8 +1732,12 @@ class Tab(TabQueryMixin):
 
     async def navigate(self, url: str) -> None:
         """Navigate to URL, then wait for the ready signal."""
+        dialog_start = len(self._session._dialog_log)
         await self._exec("Page.navigate", {"url": url})
         await self._wait_ready()
+        exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+        if exc is not None:
+            raise exc
 
     async def close(self) -> None:
         """Close this tab (Target.closeTarget). Session cleanup follows from
@@ -1794,12 +1814,16 @@ class Tab(TabQueryMixin):
 
     async def invoke(self, control: str, action: str, args: dict | None = None) -> dict:
         """Invoke a control action via window.controls.invoke(). Returns InvokeResult."""
+        dialog_start = len(self._session._dialog_log)
         args_js = json.dumps(args) if args else "{}"
         code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"
         result = await self._exec(
             "Runtime.evaluate",
             {"expression": code, "returnByValue": True, "awaitPromise": True},
         )
+        exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+        if exc is not None:
+            raise exc
         value = result.get("result", {}).get("value")
         if value is None:
             desc = result.get("result", {}).get("description", "")
