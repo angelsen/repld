@@ -1913,11 +1913,9 @@ Template:
           \"""Find or open the app and return a ready instance.\"""
           import repld
 
-          try:
-              tab = await repld.browser.get("*app.example.com*")
-          except RuntimeError:
-              tab = await repld.browser.open("https://app.example.com")
-              await tab.wait_for("role=main", timeout=10)
+          tab = await repld.browser.acquire(
+              "*app.example.com*", open="https://app.example.com", ready="role=main"
+          )
           await tab.pin("AppName — repld integration")
           return cls(tab)
 
@@ -1950,7 +1948,11 @@ yield to the event loop — browser stays responsive, multiple gists can
 interleave, no "loop blocked" warnings.
 
 connect() classmethod. Finds or opens the app, returns a ready instance.
-Pattern: try browser.get() → except RuntimeError → browser.open() + wait_for().
+Pattern: browser.acquire(pattern, open=url, ready=selector) — ready= only
+applies on the fresh open, so re-attaching an already-open tab stays cheap.
+Check tab.ready_confirmed when the gist depends on real content being
+loaded — False means it fell back to readyState alone; log rather than
+proceed silently against a possibly-empty page.
 
 tab.pin(reason) in connect(). Injects a floating pill UI + beforeunload
 guard. Prevents accidental tab close. The pill also serves as a gate
@@ -1964,7 +1966,10 @@ tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears
 in both the terminal and the pill UI — first resolution wins.
 
 For apps that don't need browser auth (public APIs), use httpx (declare it
-in __repld_deps__) or stdlib urllib. No browser tab needed.
+in __repld_deps__) or stdlib urllib. No browser tab needed. For apps that
+do — once connect() has a tab, tab.http_client() hands back a plain
+httpx.AsyncClient carrying its cookies, for concurrent calls with no
+further browser round trips.
 
 Normalize responses. Parse provider payloads into flat dicts with stable
 keys (_parse_* module helpers) instead of returning raw API JSON — terse
