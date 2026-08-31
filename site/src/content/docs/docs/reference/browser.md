@@ -37,6 +37,8 @@ Stores a selector or a JS expression on the Tab. Used by `get()`, `open()`, `nav
 
 The bare-name case is the one worth knowing: `ready="main"` and `ready="my-app"` are ordinary CSS, and are treated as such.
 
+`tab.ready_confirmed` (read-only `bool`) says which case the last wait actually was: `True` when an explicit `ready=` was polled and satisfied, `False` on the `readyState` default — a best-effort guess that can return before a JS-heavy app has rendered anything.
+
 ## Async methods
 
 ### js
@@ -288,6 +290,18 @@ browser.suppressed                             # list active patterns
 
 Suppress patterns persist across kernel restarts.
 
+## Body capture exemptions
+
+`get()`/`open()` tabs capture response bodies through Fetch interception, which replays each captured response — and Chrome applies CORB/ORB more strictly to a replayed response than a natively-fetched one. A site that sends no CORS headers at all (an old embedded-device admin UI is the usual case) can see its own same-origin scripts blocked. Exempt those hosts from capture:
+
+```python
+browser.no_capture("*192.168.1.1*")   # skip Fetch body capture for matching tab URLs
+browser.capture_ok("*192.168.1.1*")   # remove the exemption
+browser.no_capture_patterns           # list active patterns
+```
+
+Patterns persist across kernel restarts, like `suppress`. An exemption applies on the *next* attach — a tab that already has Fetch enabled keeps capturing until re-attached; `await tab.disable_capture()` is the retroactive per-tab knob. `tab.network()` / `tab.body()` still work on an exempted tab through the on-demand path — only the proactive capture is skipped.
+
 ## Properties
 
 | Property             | Type   | Description                                                   |
@@ -297,6 +311,7 @@ Suppress patterns persist across kernel restarts.
 | `tab.type`           | `str`  | `"page"`, `"iframe"`, `"service_worker"`, etc.                |
 | `tab.target_id`      | `str`  | Short ID in `{port}:{6-hex}` format                           |
 | `tab.capture_bodies` | `bool` | Toggle Fetch body capture (True on get/open, False on watch)  |
+| `tab.ready_confirmed` | `bool` | `True` if the last ready-wait satisfied an explicit `ready=`, not the `readyState` fallback |
 | `tab.label`          | `str`  | Human-readable identifier                                     |
 
 ## Selectors
