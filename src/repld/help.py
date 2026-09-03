@@ -172,6 +172,37 @@ or plain data transforms.
   State/UI       Spreadsheet, DB, file dump      Same — UI is just a view
   Integration    MCP tools (browser, APIs)       Same tools, called from code
 
+== Dispatched reasoning: the middle tier ==
+
+  The AI-reasoning row above jumps straight from Claude Code (human steers)
+  to Claude API (prompt hardened) — skipping the tier that actually earns
+  Phase 3. A dispatched `claude -p` keeps Claude Code's full tool loop, no
+  hand-built scaffolding, but drops the human: the answer to "this stage
+  needs real judgment, and you haven't proven a hardened prompt yet."
+
+  Three capability tiers for what the dispatch's own MCP config grants it.
+  Choose the narrowest that works — never default to the widest:
+
+    1. No repld — the kernel pre-gathers everything the worker needs into
+       the prompt (--tools ""). Nothing to explore, nothing to leak.
+    2. Named tools, no exec — gists registered as individual MCP tools
+       through a scoped bridge. The worker looks around, but only through
+       tools named for it.
+    3. Full bridge exec — human-driven sessions only. Never a dispatch
+       reading untrusted input, never an autonomous pipeline.
+
+  Tier 3 is walled off for a sharper reason than "more tools, more risk":
+  exec is the same primitive that dispatched the worker in the first
+  place. Grant it and the worker can defer() its own claude -p call — a
+  worker able to re-derive its own dispatch capability, recursively, with
+  no natural floor. Same shape as a ticker only a human may register: a
+  worker must never inherit the primitive that created it.
+
+  Always pass an explicit --mcp-config + --strict-mcp-config, even at
+  tier 1. An ambient user-scope MCP server resolves for a dispatched
+  worker regardless of its own --tools flag or working directory — a
+  missing restriction fails silent, not loud.
+
 == The portable unit: the gist ==
 
   A gist is a plain Python file with no framework dependency. Data in,
@@ -1785,6 +1816,29 @@ pre-built awaitable, so the gather() call happens on the kernel's loop:
 
 This returns the task_id immediately. The channel notification arrives
 when the coroutine completes (or fails).
+
+=== Dispatching a subprocess ===
+
+Shelling out to an external process — a build tool, ffmpeg, claude -p —
+needs the right async primitive, or it blocks the loop the same way a
+sync urllib call would. Two tools for two different problems:
+
+  asyncio.create_subprocess_exec   another process, its own binary
+  asyncio.to_thread(sync_fn, ...)  a blocking library call, not a process
+
+create_subprocess_exec is genuinely non-blocking on its own — no thread
+needed, other tickers and cells keep running while it's in flight:
+
+  proc = await asyncio.create_subprocess_exec(
+      "claude", "-p", prompt, "--mcp-config", cfg_path, "--strict-mcp-config",
+      stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+  )
+  out, err = await proc.communicate()
+
+From a ticker or another background task (not a top-level exec cell),
+wrap the dispatch in defer() explicitly — there's no cell to fall back to
+exec's own inline-or-deferred timeout, so nothing surfaces completion
+without it.
 
 === Top-level await ===
 
