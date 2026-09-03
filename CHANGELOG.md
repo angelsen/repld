@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Subcommand argument-validation errors (`unknown argument` / `unexpected argument` plus the usage block from `check_args`) now print to stderr like `repld`'s own unknown-command error, instead of stdout — `repld stop --typo 2>/dev/null` no longer silences the wrong stream.
+- `no_capture` docs (docstrings, `repld://docs/browser`, site reference) named only the CORB/CORS symptom of Fetch interception; a second class — a page that never renders with no network-level signal at all, because the pause itself is enough latency to break a timing-sensitive page — is now documented too. Also corrected a false claim that `Fetch.enable` has no resource-type filter (it does, but it's inclusion-only).
 
 ### Removed
 

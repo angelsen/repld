@@ -303,7 +303,11 @@ Suppress patterns persist across kernel restarts.
 
 ## Body capture exemptions
 
-`get()`/`open()` tabs capture response bodies through Fetch interception, which replays each captured response — and Chrome applies CORB/ORB more strictly to a replayed response than a natively-fetched one. A site that sends no CORS headers at all (an old embedded-device admin UI is the usual case) can see its own same-origin scripts blocked. Exempt those hosts from capture:
+`get()`/`open()` tabs capture response bodies through Fetch interception, which replays each captured response — and Chrome applies CORB/ORB more strictly to a replayed response than a natively-fetched one. A site that sends no CORS headers at all (an old embedded-device admin UI is the usual case) can see its own same-origin scripts blocked.
+
+A second symptom class has no network-level signal at all: a page that just never renders, or throws a JS error with nothing in the console pointing at the network. The pause every intercepted request takes — round-tripping through the kernel's event loop before Chrome may proceed — is itself enough latency to break a timing-sensitive page, even for a request whose body is never captured. Seen live: ExtJS 6's eval-based class loader threw and the page stayed blank, on a target with zero CORS/CORB signal. If a page misbehaves only under repld with no network-level error, try `no_capture` before assuming it's something else.
+
+Exempt affected hosts from interception entirely:
 
 ```python
 browser.no_capture("*192.168.1.1*")  # skip Fetch body capture for matching tab URLs

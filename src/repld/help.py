@@ -917,13 +917,19 @@ Suppress filter (opt-in):
   Suppressed patterns persist across kernel restarts.
 
 Fetch capture exemption (opt-in):
-  browser.no_capture("*asusrouter.com*")   skip Fetch body capture for matching tab URLs
+  browser.no_capture("*asusrouter.com*")   skip Fetch interception for matching tab URLs
   browser.capture_ok("*asusrouter.com*")   undo — re-enable capture for matching tabs
   browser.no_capture_patterns                list active exemption globs
-  For servers with no CORS/CORP headers (old embedded-device admin UIs are the
-  common case), Chrome's Fetch.continueResponse/fulfillRequest replay path
-  applies CORB/ORB more strictly than a natively-fetched response, which
-  false-positives as a CORS block on resources that are actually same-origin.
+  Two symptom classes, both fixed by the same exemption. (1) Servers with no
+  CORS/CORP headers (old embedded-device admin UIs are the common case): Chrome's
+  Fetch.continueResponse/fulfillRequest replay path applies CORB/ORB more
+  strictly than a natively-fetched response, false-positiving as a CORS block
+  on resources that are actually same-origin. (2) A page that just never
+  renders, with no network-level error at all — the pause every intercepted
+  request takes going through the kernel is itself enough latency to break a
+  timing-sensitive page (seen live: a blank page + JS TypeError from ExtJS 6's
+  eval-based class loader). If a page misbehaves only under repld and shows no
+  network error, try no_capture before assuming it's something else.
   Exempting the host skips Fetch interception entirely on matching tabs —
   tab.network()/tab.body() still work via the Tier-1 on-demand path, only the
   proactive capture is lost. Exemption patterns persist across kernel restarts.
@@ -1492,7 +1498,7 @@ Browser:
   browser.suppress(pattern)     → str  mute console errors matching substring
   browser.unsuppress(pattern)   → str  un-mute
   browser.suppressed            → list[str]  active suppress patterns
-  browser.no_capture(url_glob)  → str  skip Fetch body capture for matching tabs
+  browser.no_capture(url_glob)  → str  skip Fetch interception for matching tabs
   browser.capture_ok(url_glob)  → str  undo — re-enable capture
   browser.no_capture_patterns   → list[str]  active exemption globs
 

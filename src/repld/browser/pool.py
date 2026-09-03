@@ -279,10 +279,13 @@ class BrowserPool:
         return sorted(_suppress_patterns)
 
     def no_capture(self, pattern: str) -> str:
-        """Skip Fetch body capture on tabs whose URL matches this glob.
+        """Skip Fetch interception entirely on tabs whose URL matches this glob.
 
-        For servers where Chrome's Fetch-domain response replay trips CORB/ORB
-        on same-origin resources — see cdp.py's `_no_capture_patterns` comment.
+        Covers two symptom classes: Chrome's Fetch-domain response replay
+        tripping CORB/ORB on same-origin resources, and a blank page + JS
+        error with no network-level signal at all — the interception pause
+        itself is enough latency to break a timing-sensitive page. See
+        cdp.py's `_no_capture_patterns` comment.
         """
         from .cdp import _no_capture_patterns
 

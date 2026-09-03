@@ -69,11 +69,16 @@ def _on_loop(loop: asyncio.AbstractEventLoop | None) -> bool:
 
 _suppress_patterns: set[str] = set()
 
-# URL globs exempted from Fetch-domain body capture (browser.no_capture) —
-# Chrome's Fetch.continueResponse/fulfillRequest replay path applies CORB/ORB
-# more strictly than a natively-fetched response, which false-positives as a
-# CORS block on same-origin resources from servers with no CORS/CORP headers
-# (old embedded-device admin UIs are the common case).
+# URL globs exempted from Fetch interception entirely on matching tabs
+# (browser.no_capture), not just body capture — the round trip every paused
+# request takes through the kernel's event loop is enough latency on its own
+# to break a timing-sensitive page, with no network-level symptom at all (a
+# blank page + JS error killed ExtJS 6's eval-based class loader on one real
+# target). Also covers Chrome's Fetch.continueResponse/fulfillRequest replay
+# path applying CORB/ORB more strictly than a natively-fetched response,
+# which false-positives as a CORS block on same-origin resources from
+# servers with no CORS/CORP headers (old embedded-device admin UIs are the
+# common case).
 _no_capture_patterns: set[str] = set()
 
 _DEDUP_WINDOW = 2.0  # seconds — collapse rapid bursts

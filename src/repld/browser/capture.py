@@ -8,9 +8,19 @@ Redirects, SSE streams, and assets pass through untouched. Captured bodies
 are replayed to the page via fulfillRequest.
 
 **Capturing a body is not free, so it is not the default for everything.**
-Interception is registered on `*` at both stages because Chrome gives no
-resource-type filter on `Fetch.enable` — the filtering has to happen here, in
-`_should_capture_body`. Anything that reaches `Fetch.getResponseBody` has its
+Interception is registered on `*` at both stages, unscoped by resource type.
+`Fetch.RequestPattern` does support a `resourceType` filter, but it's
+inclusive-only — excluding `_ASSET_RESOURCE_TYPES` would take one pattern per
+*remaining* type across both stages, not one exclusion — so the filtering
+happens here instead, in `_should_capture_body`. The cost isn't only the
+skipped types' round trip: every request still pauses at both stages and
+crosses the DevTools WebSocket into the Python kernel before Chrome may
+proceed, even ones `_should_capture_body` discards outright — that pause
+alone is enough added latency to break a timing-sensitive page, with no
+network-level symptom at all (ExtJS 6's eval-based class loader threw and
+the page never painted). `browser.no_capture()` is the escape hatch until
+interception itself is scoped by resource type. Anything that reaches
+`Fetch.getResponseBody` has its
 whole body pulled over the DevTools WebSocket as base64 and then pushed back
 the other way via `fulfillRequest`, because `getResponseBody` consumes the
 internal buffer and a plain `continueResponse` after it delivers an empty
