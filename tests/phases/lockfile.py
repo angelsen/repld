@@ -566,3 +566,168 @@ def phase_5_init(_kernel: Kernel) -> None:
             k.stop()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def phase_5_search_dir(_kernel: Kernel) -> None:
+    """gists.add_search_dir() — a third gist-search tier wired in from
+    repld_init.py, e.g. for a Claude Code plugin's bundled gists.
+    """
+    import tempfile as _tmp
+    import time
+
+    tmp = Path(_tmp.mkdtemp(prefix="repld-searchdir-"))
+    extra = Path(_tmp.mkdtemp(prefix="repld-searchdir-extra-"))
+    try:
+        (extra / "plugin_math.py").write_text("def add(a, b):\n    return a + b\n")
+        (extra / "plugin_a.py").write_text(
+            "from plugin_b import VALUE\nRESULT = VALUE * 2\n"
+        )
+        (extra / "plugin_b.py").write_text("VALUE = 21\n")
+        (tmp / "repld_init.py").write_text(
+            "from pathlib import Path\n"
+            "from repld import gists\n"
+            f"gists.add_search_dir(Path({str(extra)!r}))\n"
+        )
+
+        k = _boot_in(tmp)
+        try:
+            out = _exec(tmp, "import plugin_math; print(plugin_math.add(2, 3))")
+            assert_true(
+                "5" in out, f"a gist in the extra dir is importable (got {out!r})"
+            )
+            print("  ✓ add_search_dir() makes a gist in the extra dir importable")
+
+            out = _exec(tmp, "import plugin_a; print(plugin_a.RESULT)")
+            assert_true(
+                "42" in out,
+                f"cross-import between extra-dir gists resolved (got {out!r})",
+            )
+            print("  ✓ cross-imports between extra-dir gists resolve")
+
+            out = _exec(
+                tmp,
+                "from repld import gists\n"
+                f"print({str(extra)!r} in [str(d) for d in gists.search_dirs()])",
+            )
+            assert_true(
+                "True" in out, f"search_dirs() lists the extra dir (got {out!r})"
+            )
+            out = _exec(
+                tmp, "from repld import gists\nprint(gists.resolve('plugin_math'))"
+            )
+            assert_true(
+                str(extra / "plugin_math.py") in out,
+                f"resolve() names the extra dir's file (got {out!r})",
+            )
+            print("  ✓ search_dirs()/resolve() expose the extra tier for debugging")
+
+            # mtime-reload: _GistFinder/_check_reload apply to _installed_dirs
+            # uniformly, so the extra dir gets the same auto-reload as
+            # ./gists — an edit under the running kernel must not go stale.
+            time.sleep(0.05)  # ensure the mtime actually advances
+            (extra / "plugin_math.py").write_text("def add(a, b):\n    return 999\n")
+            out = _exec(tmp, "import plugin_math; print(plugin_math.add(2, 3))")
+            assert_true("999" in out, f"edit picked up without restart (got {out!r})")
+            print("  ✓ mtime-reload applies to the extra dir, same as local/global")
+
+            # resolve() is a stateless dir walk (no _managed/sys.modules
+            # lookup), so it reports a *new* shadow immediately — while the
+            # already-imported module keeps serving the old file until a
+            # restart. resolve() disagreeing with the cached module's
+            # __file__ is the diagnostic for that gap.
+            (tmp / "gists").mkdir(exist_ok=True)
+            (tmp / "gists" / "plugin_math.py").write_text(
+                "def add(a, b):\n    return 'local'\n"
+            )
+            out = _exec(
+                tmp,
+                "import plugin_math\n"
+                "from repld import gists\n"
+                "print('resolve:', gists.resolve('plugin_math'))\n"
+                "print('cached:', plugin_math.__file__)\n"
+                "print('value:', plugin_math.add(2, 3))",
+            )
+            assert_true(
+                f"resolve: {tmp / 'gists' / 'plugin_math.py'}" in out,
+                f"resolve() names the new shadow immediately (got {out!r})",
+            )
+            assert_true(
+                f"cached: {extra / 'plugin_math.py'}" in out,
+                f"the already-imported module keeps its old __file__ (got {out!r})",
+            )
+            assert_true(
+                "value: 999" in out,
+                f"and keeps serving the pre-shadow value until restart (got {out!r})",
+            )
+            print(
+                "  ✓ resolve() vs. module.__file__ diagnoses a not-yet-restarted shadow"
+            )
+        finally:
+            k.stop()
+            (tmp / "gists" / "plugin_math.py").unlink()
+
+        # Shadowing: install() puts global before local; add_search_dir()
+        # appends after both, so a project's own gist of the same name wins
+        # over one shipped by a plugin. Needs a *fresh* kernel — _check_reload
+        # only re-checks a cached module's own recorded path for a newer
+        # mtime, it never re-walks _installed_dirs for a higher-precedence
+        # file appearing after the name was already imported once.
+        (tmp / "gists").mkdir(exist_ok=True)
+        (tmp / "gists" / "plugin_math.py").write_text(
+            "def add(a, b):\n    return 'local'\n"
+        )
+        k = _boot_in(tmp)
+        try:
+            out = _exec(tmp, "import plugin_math; print(plugin_math.add(2, 3))")
+            assert_true("local" in out, f"./gists shadows the extra dir (got {out!r})")
+            print("  ✓ a local gist of the same name shadows the extra dir")
+        finally:
+            k.stop()
+            shutil.rmtree(tmp / "gists", ignore_errors=True)
+
+        # A missing search dir (plugin uninstalled or moved) warns and boots
+        # anyway — a bad path from the project's own bootstrap must not be
+        # why the kernel won't come up.
+        gone = extra / "does-not-exist"
+        (tmp / "repld_init.py").write_text(
+            "from pathlib import Path\n"
+            "from repld import gists\n"
+            f"gists.add_search_dir(Path({str(gone)!r}))\n"
+        )
+        k = _boot_in(tmp)
+        try:
+            assert_true(
+                "alive" in _exec(tmp, "print('alive')"),
+                "kernel still boots when the search dir is missing",
+            )
+            log = _repld(tmp, "log", "-n", "200").stdout
+            assert_true(
+                "does not exist" in log and str(gone) in log,
+                f"missing search dir warns rather than failing silently (got {log!r})",
+            )
+            print("  ✓ a missing search dir warns instead of failing boot")
+        finally:
+            k.stop()
+
+        # Idempotent: repld_init.py runs on every boot, so a repeat call with
+        # the same path must not duplicate the sys.path entry or reorder it.
+        (tmp / "repld_init.py").write_text(
+            "from pathlib import Path\n"
+            "from repld import gists\n"
+            f"gists.add_search_dir(Path({str(extra)!r}))\n"
+            f"gists.add_search_dir(Path({str(extra)!r}))\n"
+        )
+        k = _boot_in(tmp)
+        try:
+            out = _exec(
+                tmp,
+                "from repld import gists\n"
+                f"print([str(d) for d in gists.search_dirs()].count({str(extra)!r}))",
+            )
+            assert_true("1" in out, f"repeat add_search_dir is a no-op (got {out!r})")
+            print("  ✓ add_search_dir() is idempotent")
+        finally:
+            k.stop()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(extra, ignore_errors=True)

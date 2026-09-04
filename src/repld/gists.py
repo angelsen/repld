@@ -42,14 +42,17 @@ from .gist_api import (
 from .state import atomic_write_json
 
 __all__ = [
+    "add_search_dir",
     "hint_for_name",
     "install",
     "introspect",
     "registry",
     "registry_summary",
+    "resolve",
     "resolve_tool",
     "scan",
     "scan_tools",
+    "search_dirs",
     "signature",
     "signature_for_path",
     "usage_for",
@@ -872,3 +875,39 @@ def install(dirs: list[Path], *, create: bool = True) -> None:
 
     # Load cross-project links from the project gist dir's manifest.
     gist_links._load_links(paths.local_gists_dir())
+
+
+def add_search_dir(d: Path) -> None:
+    """Register one more directory of gist files, e.g. from `repld_init.py`.
+
+    Appended after `install()`'s dirs (global, local), so a project gist still
+    shadows a same-named one here — the opposite of `install()`'s own
+    precedence, where global shadows local. `_installed_dirs` is the same list
+    object `_GistFinder` holds (`install()` never rebinds it after boot), so
+    appending here is visible to the finder without touching it directly.
+
+    Idempotent — `repld_init.py` runs on every boot, so a repeat call with the
+    same path must not duplicate the `sys.path` entry or reorder precedence.
+    A path that doesn't exist (plugin uninstalled or moved) warns to stderr
+    and is skipped rather than raised: a bad gist search path from a project's
+    own bootstrap must not be why the kernel won't come up.
+    """
+    if d in _installed_dirs:
+        return
+    if not d.is_dir():
+        print(f"repld: gist search dir {d} does not exist — skipping", file=sys.stderr)
+        return
+    _installed_dirs.append(d)
+    s = str(d)
+    if s not in sys.path:
+        sys.path.append(s)
+
+
+def search_dirs() -> list[Path]:
+    """Active gist directories in resolution order — for debugging shadowing."""
+    return list(_installed_dirs)
+
+
+def resolve(name: str) -> Path | None:
+    """Which file `import <name>` would load, or None. Public sibling of `_find_gist`."""
+    return _find_gist(name)

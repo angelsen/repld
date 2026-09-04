@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `gists.add_search_dir(path)` — register an extra directory of gist files, appended after `./gists` so a project gist still shadows one of the same name. Meant to be called from `repld_init.py`, e.g. to wire a Claude Code plugin's bundled gists into the kernel. Idempotent across boots; warns to stderr (doesn't fail boot) if the path is gone. `gists.search_dirs()` / `gists.resolve(name)` expose the resulting precedence for debugging.
+
 ### Changed
 
 ### Fixed
