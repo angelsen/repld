@@ -8,18 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.5.4] - 2026-09-04
+
+### Added
+
 - `gists.add_search_dir(path)` — register an extra directory of gist files, appended after `./gists` so a project gist still shadows one of the same name. Meant to be called from `repld_init.py`, e.g. to wire a Claude Code plugin's bundled gists into the kernel. Idempotent across boots; warns to stderr (doesn't fail boot) if the path is gone. `gists.search_dirs()` / `gists.resolve(name)` expose the resulting precedence for debugging.
 - `repld://docs/playbook`: names the dispatched-reasoning middle tier between Claude Code (human steers) and the Claude API (hardened prompt) — a dispatched `claude -p` keeping the full tool loop — plus the three MCP capability tiers for what that dispatch's own config grants it, and why tier 3 (full bridge exec) is walled off from autonomous/untrusted dispatch.
 - `repld://docs/guide`: documents dispatching a subprocess from a cell — `asyncio.create_subprocess_exec` vs. `asyncio.to_thread` for shelling out, and the `defer()` requirement for a subprocess dispatch outside a top-level exec cell.
-
-### Changed
 
 ### Fixed
 
 - Subcommand argument-validation errors (`unknown argument` / `unexpected argument` plus the usage block from `check_args`) now print to stderr like `repld`'s own unknown-command error, instead of stdout — `repld stop --typo 2>/dev/null` no longer silences the wrong stream.
 - `no_capture` docs (docstrings, `repld://docs/browser`, site reference) named only the CORB/CORS symptom of Fetch interception; a second class — a page that never renders with no network-level signal at all, because the pause itself is enough latency to break a timing-sensitive page — is now documented too. Also corrected a false claim that `Fetch.enable` has no resource-type filter (it does, but it's inclusion-only).
 
-### Removed
 
 ## [0.5.3] - 2026-08-31
 
