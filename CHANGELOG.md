@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `gists.add_search_dir(path)` — register an extra directory of gist files, appended after `./gists` so a project gist still shadows one of the same name. Meant to be called from `repld_init.py`, e.g. to wire a Claude Code plugin's bundled gists into the kernel. Idempotent across boots; warns to stderr (doesn't fail boot) if the path is gone. `gists.search_dirs()` / `gists.resolve(name)` expose the resulting precedence for debugging.
+- `repld://docs/playbook`: names the dispatched-reasoning middle tier between Claude Code (human steers) and the Claude API (hardened prompt) — a dispatched `claude -p` keeping the full tool loop — plus the three MCP capability tiers for what that dispatch's own config grants it, and why tier 3 (full bridge exec) is walled off from autonomous/untrusted dispatch.
+- `repld://docs/guide`: documents dispatching a subprocess from a cell — `asyncio.create_subprocess_exec` vs. `asyncio.to_thread` for shelling out, and the `defer()` requirement for a subprocess dispatch outside a top-level exec cell.
 
 ### Changed
 
