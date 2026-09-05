@@ -10,11 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `repld gist rm --stale` also drops registry entries (`~/.config/repld/gist-registry.json`) whose path no longer exists, not just dead `./gists/.links` entries — a rename/move elsewhere used to leave `gist add <name>` refusing the name until the registry was hand-edited.
-
 ### Fixed
 
 ### Removed
+
+## [0.5.5] - 2026-09-05
+
+### Changed
+
+- `repld gist rm --stale` also drops registry entries (`~/.config/repld/gist-registry.json`) whose path no longer exists, not just dead `./gists/.links` entries — a rename/move elsewhere used to leave `gist add <name>` refusing the name until the registry was hand-edited.
+
 
 ## [0.5.4] - 2026-09-04
 
