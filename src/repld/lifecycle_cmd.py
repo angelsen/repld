@@ -61,16 +61,24 @@ def _uptime(started_at: float | None) -> str:
     return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
 
 
-def _wait_gone(pid: int, lock_path: Path, timeout: float = 10.0) -> bool:
+def _wait_gone(
+    pid: int, lock_path: Path, sock_path: Path, timeout: float = 10.0
+) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not state.pid_alive(pid) and not lock_path.exists():
+        # Cheap checks first: spawn.unit_settled shells out, and short-circuiting
+        # means it only runs once the process is already believed dead.
+        if (
+            not state.pid_alive(pid)
+            and not lock_path.exists()
+            and spawn.unit_settled(sock_path)
+        ):
             return True
         time.sleep(0.1)
     return not state.pid_alive(pid)
 
 
-def _stop_one(pid: int, lock_path: Path, label: str) -> bool:
+def _stop_one(pid: int, lock_path: Path, sock_path: Path, label: str) -> bool:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -79,7 +87,7 @@ def _stop_one(pid: int, lock_path: Path, label: str) -> bool:
     except PermissionError:
         print(f"{label}: not permitted to signal pid {pid}", file=sys.stderr)
         return False
-    if _wait_gone(pid, lock_path):
+    if _wait_gone(pid, lock_path, sock_path):
         print(f"{label}: stopped (pid {pid})")
         return True
     print(f"{label}: pid {pid} did not exit within 10s", file=sys.stderr)
@@ -114,7 +122,7 @@ def run_stop(argv: list[str]) -> int:
                 print(f"{label}: session file has no socket_path — skipped")
                 ok = False
                 continue
-            ok = _stop_one(pid, paths.lock_for(Path(sock)), label) and ok
+            ok = _stop_one(pid, paths.lock_for(Path(sock)), Path(sock), label) and ok
         return 0 if ok else 1
 
     lock_path = paths.lock_for(sock_path)
@@ -122,7 +130,7 @@ def run_stop(argv: list[str]) -> int:
     if isinstance(lock, str):
         print(f"nothing to stop: {lock}")
         return 0
-    return 0 if _stop_one(int(lock["pid"]), lock_path, "repld") else 1
+    return 0 if _stop_one(int(lock["pid"]), lock_path, sock_path, "repld") else 1
 
 
 def _spawn_headless(sock_path: Path) -> int:

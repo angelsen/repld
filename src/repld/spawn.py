@@ -146,8 +146,8 @@ def _systemd_available() -> bool:
     return bool(shutil.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR"))
 
 
-def _unit_running(sock_path: Path) -> bool:
-    """Whether this socket's unit is already up (or on its way up)."""
+def _unit_state(sock_path: Path) -> str:
+    """Raw `systemctl --user is-active` output for this socket's unit, "" on error."""
     try:
         r = subprocess.run(
             ["systemctl", "--user", "is-active", _systemd_unit_name(sock_path)],
@@ -157,10 +157,33 @@ def _unit_running(sock_path: Path) -> bool:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
+        return ""
+    return r.stdout.strip()
+
+
+def _unit_running(sock_path: Path) -> bool:
+    """Whether this socket's unit is already up (or on its way up)."""
     # `activating` counts: a racing boot's incumbent may still be starting, and
     # treating that as absent is exactly the double-spawn this check prevents.
-    return r.stdout.strip() in ("active", "activating")
+    return _unit_state(sock_path) in ("active", "activating")
+
+
+def unit_settled(sock_path: Path) -> bool:
+    """Whether this socket's unit has fully torn down — not active, activating,
+    or deactivating.
+
+    `lifecycle_cmd._wait_gone` polls this after a stopped kernel's pid and
+    lockfile are both gone: systemd's own reap-and-collect can lag the exited
+    process by close to a second under a heavy kernel, and `repld restart`
+    spawning into the same deterministic unit name during that window sees
+    `_unit_running` still true — `_spawn_via_systemd` reads that as INCUMBENT
+    (a healthy racing boot) rather than the kernel just killed, adopts a unit
+    that is seconds from being collected, and then polls a lockfile that will
+    never reappear. True (nothing to wait for) when systemd isn't in play.
+    """
+    if not _systemd_available():
+        return True
+    return _unit_state(sock_path) not in ("active", "activating", "deactivating")
 
 
 def _note(msg: str, quiet: bool) -> None:

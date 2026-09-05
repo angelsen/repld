@@ -199,6 +199,46 @@ def _systemd_spawn_live(tmp: Path) -> None:
         )
 
 
+def _stop_restart_race(tmp: Path) -> None:
+    """`_wait_gone` must not declare a stop finished while the unit is still
+    tearing down — the race `repld restart` hit as a false "new kernel never
+    came up": pid dead and lockfile gone, but systemd's own reap-and-collect
+    lagging behind, so a same-named `systemd-run` right after read as an
+    INCUMBENT racing boot rather than the kernel just killed.
+    """
+    from repld import lifecycle_cmd, spawn
+
+    proj = tmp / "raceproj"
+    proj.mkdir()
+    sock = proj / "k.sock"
+    # A spawned-then-reaped pid, not a live one: pid_alive and the missing
+    # lockfile are both already satisfied on tick one, so only a fake
+    # unit_settled can be gating the loop below.
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+
+    states = iter(["deactivating", "deactivating", "inactive"])
+    calls = []
+
+    def fake_unit_settled(sp: Path) -> bool:
+        calls.append(sp)
+        return next(states, "inactive") == "inactive"
+
+    orig = spawn.unit_settled
+    spawn.unit_settled = fake_unit_settled
+    try:
+        assert_true(
+            lifecycle_cmd._wait_gone(
+                proc.pid, proj / "nonexistent.lock", sock, timeout=5.0
+            ),
+            "_wait_gone waits out a still-deactivating unit before declaring done",
+        )
+        assert_true(len(calls) >= 3, "unit_settled was actually polled, not skipped")
+    finally:
+        spawn.unit_settled = orig
+    print("  ✓ stop/restart race: _wait_gone holds for a deactivating unit")
+
+
 def phase_16_venv_binding(_kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-venv-"))
     orig_cwd = os.getcwd()
@@ -408,6 +448,7 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
 
         _systemd_spawn_argv(tmp)
         _systemd_spawn_live(tmp)
+        _stop_restart_race(tmp)
     finally:
         os.chdir(orig_cwd)
         if orig_virtual_env is None:
