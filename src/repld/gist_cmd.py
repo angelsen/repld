@@ -389,7 +389,7 @@ def _gist_add(argv: list[str]) -> int:
 
 
 def _gist_rm(argv: list[str]) -> int:
-    from . import gist_links
+    from . import gist_links, gists
 
     usage = _usage("rm")
     if cli_args.wants_help(argv):
@@ -410,10 +410,15 @@ def _gist_rm(argv: list[str]) -> int:
     try:
         if argv and argv[0] == "--stale":
             dropped = gist_links.remove_stale_links(gists_dir)
+            dropped_reg = gists.remove_stale_registry_entries()
             if dropped:
                 print(f"dropped stale link(s): {', '.join(dropped)}")
             else:
                 print("no stale links")
+            if dropped_reg:
+                print(f"dropped stale registry entries: {', '.join(dropped_reg)}")
+            else:
+                print("no stale registry entries")
             return 0
         if not argv:
             print(usage)
@@ -603,7 +608,12 @@ _GIST_COMMANDS = {
         ),
     ),
     "add": (_gist_add, "add <name>", "link a gist registered in another project", ""),
-    "rm": (_gist_rm, "rm <name> | --stale", "unlink a gist (or all dead links)", ""),
+    "rm": (
+        _gist_rm,
+        "rm <name> | --stale",
+        "unlink a gist (or all dead links/registry entries)",
+        "",
+    ),
     "list": (_gist_list, "list", "show local + linked + linkable gists", ""),
     "lint": (
         _gist_lint,

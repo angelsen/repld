@@ -1380,7 +1380,7 @@ Commands:
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
   repld gist fetch URL     Download a GitHub gist into ./gists (--global)
   repld gist add NAME      Link a gist registered in another project
-  repld gist rm NAME       Unlink a gist (--stale drops all dead links)
+  repld gist rm NAME       Unlink a gist (--stale drops dead links + registry entries)
   repld gist list          Show local + linked gists
   repld gist lint [NAME]   Check gist(s) for common authoring gaps
   repld browser ARGS...    Re-exec with browser deps (duckdb/websockets/pillow)
@@ -1667,7 +1667,7 @@ Getting a gist you didn't write:
 Cross-project links:
   repld gist list             local + linked gists in this project
   repld gist add <name>       link a gist registered in another project
-  repld gist rm <name>        unlink (--stale drops all dead links)
+  repld gist rm <name>        unlink (--stale drops dead links + registry entries)
   Every import is recorded in a central registry; `add` resolves a name to its
   path, follows same-dir sibling imports, and records absolute paths in a
   committed ./gists/.links manifest — no copy. Read repld://gists/_registry to

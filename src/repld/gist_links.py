@@ -155,8 +155,8 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
             if cur == name:
                 raise LookupError(
                     f"gist '{name}' is registered at {p} but the file is gone"
-                    " — import it from its home project to re-register, or"
-                    " remove the entry from ~/.config/repld/gist-registry.json"
+                    " — import it from its home project to re-register, or run"
+                    " `repld gist rm --stale` to drop the dead registry entry"
                 )
             print(
                 f"repld: sibling gist '{cur}' could not be resolved — "

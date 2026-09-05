@@ -48,6 +48,7 @@ __all__ = [
     "introspect",
     "registry",
     "registry_summary",
+    "remove_stale_registry_entries",
     "resolve",
     "resolve_tool",
     "scan",
@@ -168,6 +169,24 @@ def _register(name: str) -> None:
 def registry() -> dict:
     """Read the gist registry. Returns {name: {path, description, project, last_used}}."""
     return _read_registry()
+
+
+def remove_stale_registry_entries() -> list[str]:
+    """Drop every registry entry whose path is gone. Returns the removed names.
+
+    Separate from `gist_links.remove_stale_links`: that prunes a project's own
+    `./gists/.links` manifest, this prunes the cross-project registry (a
+    rename or move elsewhere leaves an entry here that `gist add` then refuses
+    on, since `link_targets` treats an unresolvable name as a hard error).
+    """
+    reg = _read_registry()
+    stale = [n for n, e in reg.items() if not Path(e.get("path", "")).is_file()]
+    if stale:
+        for n in stale:
+            del reg[n]
+        _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(_REGISTRY_PATH, reg, indent=2)
+    return stale
 
 
 def registry_summary() -> str:
