@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `repld restart` no longer reports a false "new kernel never came up": `_wait_gone` now waits for the killed kernel's systemd unit to fully settle (not active/activating/deactivating), not just for its pid and lockfile to disappear, before handing off to a fresh `systemd-run` on the same unit name — closes a window where systemd's own reap-and-collect lagged behind and the fresh spawn misread the dying unit as a healthy racing boot to adopt.
+
 ### Removed
 
 ## [0.5.5] - 2026-09-05
