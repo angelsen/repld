@@ -291,7 +291,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute  # type: ignore[assignment]
+        session.execute = fake_execute     # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -1694,7 +1694,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",  # bare tag — the regression
+        "main",    # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",
