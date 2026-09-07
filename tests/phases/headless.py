@@ -19,9 +19,7 @@ from repld import core_schemas
 
 
 def _handshake(b: Bridge) -> dict:
-    resp = b.call("initialize", {"protocolVersion": "2024-11-05"}, timeout=30)
-    b.send("notifications/initialized", {}, notif=True)
-    return resp
+    return b.handshake(timeout=30)
 
 
 def _exec(
@@ -372,10 +370,10 @@ def _inflight_never_stranded(tmp: Path) -> None:
 
     b = _B(tmp / "nonexistent.sock")
     sent: list[dict] = []
-    b._to_client = sent.append              # pyright: ignore[reportAttributeAccessIssue]
-    b._try_attach_existing = lambda: False  # pyright: ignore[reportAttributeAccessIssue]
-    b._ensure_kernel = lambda: True         # pyright: ignore[reportAttributeAccessIssue]
-    b._sock = None                          # ...but it vanished right after the probe
+    b._to_client = sent.append  # pyright: ignore[reportAttributeAccessIssue]
+    b._try_attach_existing = lambda: False
+    b._ensure_kernel = lambda: True
+    b._sock = None  # ...but it vanished right after the probe
 
     # A real tools/call, not a discovery method: those are answered from cache
     # without ever reaching _ensure_kernel, which would sidestep the race this
@@ -526,7 +524,11 @@ def _concurrent_boots(tmp: Path) -> None:
         )
         for _ in range(3)
     ]
-    time.sleep(6)
+    # Wait for the losers to exit — an unresolved `uv run` on a slow box
+    # would otherwise read as a surviving kernel.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and sum(p.poll() is None for p in procs) > 1:
+        time.sleep(0.2)
     alive = [p for p in procs if p.poll() is None]
     assert_eq(len(alive), 1, "exactly one of three racing kernels survived")
     assert_true(

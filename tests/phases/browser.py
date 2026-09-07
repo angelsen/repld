@@ -1060,8 +1060,7 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
     """Verify new tool registrations and gist auto-reload machinery."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # Verify new tools appear in tool list
         resp = b.call("tools/list")
@@ -1138,8 +1137,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
 
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         def _exec(code: str) -> str:
             resp = b.call(
@@ -1284,8 +1282,7 @@ def phase_6_tab_close(kernel: Kernel) -> None:
 
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         def _exec(code: str) -> str:
             resp = b.call(
@@ -1337,8 +1334,7 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
 
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         def _exec(code: str) -> str:
             resp = b.call(
@@ -1419,8 +1415,7 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
 
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         def _exec(code: str) -> str:
             resp = b.call(
@@ -1479,8 +1474,7 @@ def phase_6(kernel: Kernel) -> None:
 
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # Verify browser tools are in the list — exact match, not a subset
         # check, so an added or removed tool actually fails this instead of
@@ -1845,8 +1839,7 @@ class _BridgeHarness:
 
     def __init__(self, kernel: Kernel) -> None:
         self.b = Bridge(kernel.cwd)
-        self.b.call("initialize", {"protocolVersion": "2024-11-05"})
-        self.b.send("notifications/initialized", {}, notif=True)
+        self.b.handshake()
 
     def exec(self, code: str, timeout: float = 20) -> str:
         resp = self.b.call(

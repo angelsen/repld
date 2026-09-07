@@ -7,8 +7,7 @@ def phase_7_defer(kernel: Kernel) -> None:
     """defer() from exec → task_id returned, channel push on completion."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # defer a coroutine — should return task_id inline, then push channel
         resp = b.call(

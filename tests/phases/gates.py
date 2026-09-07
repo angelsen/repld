@@ -104,8 +104,7 @@ def _stdin_is_tty() -> bool:
 def phase_17_gates(kernel: Kernel) -> None:
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         assert_eq(_pending(kernel), [], "no gates pending before any are opened")
 
@@ -235,8 +234,14 @@ def phase_17_gates(kernel: Kernel) -> None:
             },
             timeout=15.0,
         )
+        # Every gate above pushed awaiting_human too, and those are still in
+        # the stash — an unfiltered wait returns the choose gate's push, which
+        # names the command regardless of what this ask did.
         push = b.wait_notification(
-            "notifications/claude/channel", kind="awaiting_human", timeout=10
+            "notifications/claude/channel",
+            kind="awaiting_human",
+            where=lambda m: "token?" in m["params"]["content"],
+            timeout=10,
         )
         text = push["params"]["content"]
         assert_true(

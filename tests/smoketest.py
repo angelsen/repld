@@ -8,6 +8,7 @@ Usage:  uv run tests/smoketest.py [--phase N]
 """
 
 import argparse
+import os
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,10 @@ from pathlib import Path
 
 # Ensure tests/ is on sys.path so phase modules can `from harness import ...`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Isolate the gist registry from the real ~/.config/repld one. This has to
+# precede the phase imports: `gists._REGISTRY_PATH` is bound at import time,
+# and the in-process phases reach it through this very interpreter.
+os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="repld-smoketest-config-")
 
 from harness import Kernel
 from phases.browser import (
@@ -168,11 +173,6 @@ def main() -> int:
     args = ap.parse_args()
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
-    # Isolate the gist registry so test-kernel imports don't pollute the real
-    # ~/.config/repld/gist-registry.json with throwaway tempdir paths.
-    import os
-
-    os.environ["XDG_CONFIG_HOME"] = str(tmp / "config")
     kernel = None
     try:
         print(f"== kernel cwd: {tmp} ==")
@@ -204,6 +204,7 @@ def main() -> int:
 
         shutil.rmtree(runtime_dir_for(tmp), ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(os.environ["XDG_CONFIG_HOME"], ignore_errors=True)
 
 
 if __name__ == "__main__":

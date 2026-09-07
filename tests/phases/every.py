@@ -7,8 +7,7 @@ def phase_10_every(kernel: Kernel) -> None:
     """@every fires immediately, pushes channel, cancel stops it, errors survive."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # --- 1. Immediate first tick + channel push ---
         resp = b.call(
@@ -83,6 +82,9 @@ def phase_10_every(kernel: Kernel) -> None:
         print("  ✓ every: cancel() removes handle, registry empty")
 
         # --- 4. Error in tick doesn't kill the loop; pushes error=1 ---
+        def _err(m: dict) -> bool:
+            return m["params"]["meta"].get("label") == "error_ticker"
+
         resp4 = b.call(
             "tools/call",
             {
@@ -105,8 +107,10 @@ def phase_10_every(kernel: Kernel) -> None:
         )
 
         # First tick fires immediately → error channel push
+        # `_ticker` may have pushed again before its cancel landed; the stash
+        # would hand that tick back here without the label filter.
         notif4 = b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
+            "notifications/claude/channel", kind="every", where=_err, timeout=5.0
         )
         params4 = notif4["params"]
         assert_eq(params4["meta"]["kind"], "every", "error tick kind=every")
@@ -120,7 +124,7 @@ def phase_10_every(kernel: Kernel) -> None:
 
         # Loop still alive — second tick should fire and also push error
         notif4b = b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
+            "notifications/claude/channel", kind="every", where=_err, timeout=5.0
         )
         assert_eq(
             notif4b["params"]["meta"]["kind"], "every", "second error tick kind=every"
@@ -151,7 +155,10 @@ def phase_10_every(kernel: Kernel) -> None:
         )
 
         notif5 = b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
+            "notifications/claude/channel",
+            kind="every",
+            where=lambda m: m["params"]["meta"].get("label") == "async_ticker",
+            timeout=5.0,
         )
         params5 = notif5["params"]
         assert_eq(params5["meta"]["kind"], "every", "async tick kind=every")

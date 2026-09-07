@@ -10,8 +10,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
     """Gist-registered MCP tools: discovery, dispatch, auto-reload, error handling."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # Write a gist with a typed _tool_* function — schema auto-inferred,
         # no __repld_tools__ needed.

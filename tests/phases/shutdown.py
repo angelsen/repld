@@ -24,8 +24,7 @@ def _spawn() -> tuple[Path, Kernel, Bridge]:
     tmp = Path(tempfile.mkdtemp(prefix="repld-phase11-"))
     k = Kernel(tmp)
     b = Bridge(tmp)
-    b.call("initialize", {"protocolVersion": "2024-11-05"})
-    b.send("notifications/initialized", {}, notif=True)
+    b.handshake()
     return tmp, k, b
 
 
@@ -85,9 +84,10 @@ def _test_clean_drain() -> None:
             defer_witness.exists() and "defer-cleaned" in defer_witness.read_text(),
             f"defer try/finally ran on shutdown (witness={defer_witness})",
         )
-        # Clean drain should be near-instant (well under the 2s budget).
+        # A clean drain is near-instant (~0.06s); one that hit the 2s budget
+        # can't come in under it, so this bound is what tells the two apart.
         assert_true(
-            dt < 4.0,
+            dt < 2.0,
             f"clean drain finished promptly (got {dt:.2f}s, budget 2s)",
         )
         print(f"  ✓ shutdown: @every + defer try/finally ran (drain {dt:.2f}s)")

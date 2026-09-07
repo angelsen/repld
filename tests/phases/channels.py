@@ -67,8 +67,7 @@ def phase_4(kernel: Kernel) -> None:
     notify() from user code → channel notification with custom meta."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
         print("  ✓ initialize + notifications/initialized")
 
         # Nudge-and-wait-for-channel

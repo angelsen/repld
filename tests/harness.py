@@ -9,6 +9,8 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from queue import Empty, Queue
 
@@ -50,8 +52,13 @@ class Bridge:
             env=env,
         )
         self.inbox: Queue[dict] = Queue()
+        self._notifs: list[dict] = []
+        # Undrained, a PIPE'd stderr blocks the bridge once its 64 KiB fills —
+        # which surfaces here as a bare `no response` timeout, so keep the tail.
+        self.stderr_tail: deque[str] = deque(maxlen=40)
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
         self._next_id = 1
 
     def _read_loop(self) -> None:
@@ -65,6 +72,19 @@ class Bridge:
             except json.JSONDecodeError:
                 continue
             self.inbox.put(msg)
+
+    def _drain_stderr(self) -> None:
+        assert self.proc.stderr is not None
+        for line in self.proc.stderr:
+            self.stderr_tail.append(line.rstrip())
+
+    def handshake(self, *, timeout: float = 5.0) -> dict:
+        """`initialize` + `notifications/initialized`; returns the initialize response."""
+        resp = self.call(
+            "initialize", {"protocolVersion": "2024-11-05"}, timeout=timeout
+        )
+        self.send("notifications/initialized", {}, notif=True)
+        return resp
 
     def send(
         self, method: str, params: dict | None = None, *, notif: bool = False
@@ -92,30 +112,33 @@ class Bridge:
                 break
             if msg.get("id") == rid:
                 return msg
-            # Unsolicited notification; re-queue? Simpler: push into a
-            # side list so channel-push assertions can still find it.
-            self._stash_notification(msg)
-        raise TimeoutError(f"no response to {method} within {timeout}s")
-
-    _notifs: list[dict]
-
-    def _stash_notification(self, msg: dict) -> None:
-        if not hasattr(self, "_notifs"):
-            self._notifs = []
-        self._notifs.append(msg)
+            # Unsolicited notification: stash it so wait_notification finds it.
+            self._notifs.append(msg)
+        tail = "\n".join(self.stderr_tail)
+        raise TimeoutError(
+            f"no response to {method} within {timeout}s; bridge stderr tail:\n{tail}"
+        )
 
     def wait_notification(
-        self, method: str, *, kind: str | None = None, timeout: float = 5.0
+        self,
+        method: str,
+        *,
+        kind: str | None = None,
+        where: Callable[[dict], bool] | None = None,
+        timeout: float = 5.0,
     ) -> dict:
+        """First matching push, stash first — so `kind=` alone returns the OLDEST
+        push of that kind, which may be an earlier scenario's; narrow with `where=`."""
+
         def _matches(m: dict) -> bool:
             if m.get("method") != method:
                 return False
-            if kind is not None:
-                return m.get("params", {}).get("meta", {}).get("kind") == kind
-            return True
+            meta = m.get("params", {}).get("meta", {})
+            if kind is not None and meta.get("kind") != kind:
+                return False
+            return where is None or where(m)
 
-        # Check stash first.
-        for m in getattr(self, "_notifs", []):
+        for m in self._notifs:
             if _matches(m):
                 self._notifs.remove(m)
                 return m
@@ -127,8 +150,7 @@ class Bridge:
                 break
             if _matches(msg):
                 return msg
-            # Stash non-matching messages for later retrieval.
-            self._stash_notification(msg)
+            self._notifs.append(msg)
         raise TimeoutError(f"no {method} notification (kind={kind}) within {timeout}s")
 
     def close(self, timeout: float = 3) -> None:

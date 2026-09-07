@@ -10,10 +10,7 @@ from pathlib import Path
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true
 
-
-def _sessions_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    return Path(base) / "repld" / "sessions"
+from repld.sessions import SESSIONS_DIR
 
 
 def _kernel_pid(bridge: Bridge) -> int:
@@ -29,11 +26,10 @@ def phase_13_sessions(kernel: Kernel) -> None:
     """Session file exists while the kernel runs and shows up in list_sessions()."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         pid = _kernel_pid(b)
-        session_file = _sessions_dir() / f"{pid}.json"
+        session_file = SESSIONS_DIR / f"{pid}.json"
         assert_true(session_file.exists(), f"session file exists at {session_file}")
 
         info = json.loads(session_file.read_text())
@@ -88,7 +84,7 @@ def _test_unusable_entry_skipped(b: Bridge, cwd: Path) -> None:
     which is the case that reaches the fallback *and* keeps the file: a dead
     pid's file gets unlinked, so it could never be handed to a caller anyway.
     """
-    planted = _sessions_dir() / f"{os.getpid()}.json"
+    planted = SESSIONS_DIR / f"{os.getpid()}.json"
     try:
         for body, label in _UNUSABLE:
             planted.write_text(body)
@@ -142,13 +138,12 @@ def _test_unregister_on_shutdown() -> None:
     try:
         b = Bridge(tmp)
         try:
-            b.call("initialize", {"protocolVersion": "2024-11-05"})
-            b.send("notifications/initialized", {}, notif=True)
+            b.handshake()
             pid = _kernel_pid(b)
         finally:
             b.close()
 
-        session_file = _sessions_dir() / f"{pid}.json"
+        session_file = SESSIONS_DIR / f"{pid}.json"
         assert_true(session_file.exists(), "session file exists before shutdown")
 
         k.proc.send_signal(signal.SIGTERM)

@@ -348,24 +348,6 @@ def _repld(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _boot_in(tmp: Path) -> Kernel:
-    """A headless kernel in *tmp*, started with no flags at all."""
-    k = Kernel.__new__(Kernel)
-    k.cwd = tmp
-    k.stderr_log = tmp / "kernel.stderr"
-    with open(k.stderr_log, "w") as log:
-        k.proc = subprocess.Popen(
-            ["uv", "run", "--project", str(REPO), "repld", "--no-display"],
-            cwd=str(tmp),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=log,
-            env=os.environ.copy(),
-        )
-    k._wait_lockfile()
-    return k
-
-
 def _exec(tmp: Path, code: str) -> str:
     return _repld(tmp, "exec", code).stdout.strip()
 
@@ -392,12 +374,11 @@ def phase_5_init(_kernel: Kernel) -> None:
         )
 
         # 1. Hand-started kernel, no flags — the file is found by convention.
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             b = Bridge(tmp)
             try:
-                b.call("initialize", {"protocolVersion": "2024-11-05"})
-                b.send("notifications/initialized", {}, notif=True)
+                b.handshake()
                 resp = b.call(
                     "tools/call", {"name": "exec", "arguments": {"code": "print(X)"}}
                 )
@@ -431,7 +412,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         (tmp / "repld_init.py").write_text(
             "X = 1\nraise RuntimeError('intentional bootstrap boom')\n"
         )
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             assert_true(
                 "alive" in _exec(tmp, "print('alive')"),
@@ -450,7 +431,7 @@ def phase_5_init(_kernel: Kernel) -> None:
 
         # 4. No file at all — nothing to detect, boot unaffected.
         (tmp / "repld_init.py").unlink()
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             assert_true("ok" in _exec(tmp, "print('ok')"), "kernel boots with no file")
             print("  ✓ no repld_init.py → clean boot")
@@ -473,7 +454,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         (tmp / "repld_init.py").write_text(
             "import time\ntime.sleep(2)\nSLOW = 'bootstrap finished'\n"
         )
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             out = _exec(tmp, "print(SLOW)")
             assert_true(
@@ -487,7 +468,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         # 6b. …and so must a gist tool, which is the *other* thing that lazily
         #     spawns a kernel. It has no deferral to degrade into — it answers
         #     inline or not at all — so the wait can't live where exec's does.
-        #     No _boot_in here: the bridge does the spawning, which is the shape
+        #     No Kernel(tmp) here: the bridge does the spawning, which is the shape
         #     that actually arrives before a bootstrap has run.
         (tmp / "gists").mkdir(exist_ok=True)
         (tmp / "gists" / "bootstate.py").write_text(
@@ -500,8 +481,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         )
         b = Bridge(tmp)
         try:
-            b.call("initialize", {"protocolVersion": "2024-11-05"})
-            b.send("notifications/initialized", {}, notif=True)
+            b.handshake()
             # Generous: this call pays for the lazy spawn *and* the 2s
             # bootstrap it now has to wait through.
             resp = b.call(
@@ -523,7 +503,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         # 7. A bootstrap that raises must still release exec — a kernel nobody
         #    can run code in is a kernel nobody can repair.
         (tmp / "repld_init.py").write_text("raise RuntimeError('boom')\n")
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             assert_true(
                 "alive" in _exec(tmp, "print('alive')"),
@@ -537,7 +517,7 @@ def phase_5_init(_kernel: Kernel) -> None:
         #    afterwards gets picked up.
         (tmp / "repld_init.py").unlink()
         (tmp / ".env").write_text("PHASE5_LATE=\n")
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             assert_eq(
                 _exec(tmp, "import os; print(repr(os.environ['PHASE5_LATE']))"),
@@ -589,7 +569,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             f"gists.add_search_dir(Path({str(extra)!r}))\n"
         )
 
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             out = _exec(tmp, "import plugin_math; print(plugin_math.add(2, 3))")
             assert_true(
@@ -664,7 +644,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             )
         finally:
             k.stop()
-            (tmp / "gists" / "plugin_math.py").unlink()
+            (tmp / "gists" / "plugin_math.py").unlink(missing_ok=True)
 
         # Shadowing: install() puts global before local; add_search_dir()
         # appends after both, so a project's own gist of the same name wins
@@ -676,7 +656,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
         (tmp / "gists" / "plugin_math.py").write_text(
             "def add(a, b):\n    return 'local'\n"
         )
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             out = _exec(tmp, "import plugin_math; print(plugin_math.add(2, 3))")
             assert_true("local" in out, f"./gists shadows the extra dir (got {out!r})")
@@ -694,7 +674,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             "from repld import gists\n"
             f"gists.add_search_dir(Path({str(gone)!r}))\n"
         )
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             assert_true(
                 "alive" in _exec(tmp, "print('alive')"),
@@ -717,7 +697,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             f"gists.add_search_dir(Path({str(extra)!r}))\n"
             f"gists.add_search_dir(Path({str(extra)!r}))\n"
         )
-        k = _boot_in(tmp)
+        k = Kernel(tmp)
         try:
             out = _exec(
                 tmp,

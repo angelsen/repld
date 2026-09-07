@@ -270,8 +270,7 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
     """resources/list includes one entry per gist; resources/read repld://gists/{name} works."""
     b = Bridge(kernel.cwd)
     try:
-        b.call("initialize", {"protocolVersion": "2024-11-05"})
-        b.send("notifications/initialized", {}, notif=True)
+        b.handshake()
 
         # Write a gist with a class so introspect() has something to parse
         gists_dir = kernel.cwd / "gists"

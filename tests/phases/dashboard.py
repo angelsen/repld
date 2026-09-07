@@ -30,7 +30,7 @@ def _declared_length(port: int, length: int, token: str | None) -> int:
     finally:
         s.close()
     if not data:
-        return 0
+        return -1  # closed without a status line: not the "awaiting body" 0
     return int(data.split(b" ")[1])
 
 

@@ -90,6 +90,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             "and the manifest still points at the original",
         )
         gists.registry = prev_registry
+        shutil.rmtree(elsewhere.parent, ignore_errors=True)
         print("  ✓ add refuses to repoint a name another linked gist depends on")
 
         # --- scan_deps surfaces a linked gist's declared dependency ---
@@ -127,7 +128,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
 
         try:
             subprocess.run = _spy
-            sys.__stdin__ = _FakeStdin(tty=False)  # pyright: ignore[reportAttributeAccessIssue]
+            sys.__stdin__ = _FakeStdin(tty=False)
             assert_true(not gist_deps._can_prompt(), "no tty → cannot prompt")
             assert_eq(gist_deps._prompt_dep_selection(needy), [], "no tty → declines")
             assert_eq(gist_deps.install_deps(needy), False, "no tty → installs nothing")
@@ -135,7 +136,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
 
             # The guard must be a tty check, not a blanket refusal: at a real
             # terminal a bare Enter still means yes.
-            sys.__stdin__ = _FakeStdin(tty=True)  # pyright: ignore[reportAttributeAccessIssue]
+            sys.__stdin__ = _FakeStdin(tty=True)
             assert_true(gist_deps._can_prompt(), "tty → can prompt")
             assert_eq(
                 gist_deps._prompt_dep_selection(needy),
@@ -144,7 +145,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
             )
         finally:
             subprocess.run = orig_run
-            sys.__stdin__ = orig_stdin  # pyright: ignore[reportAttributeAccessIssue]
+            sys.__stdin__ = orig_stdin
         print("  ✓ headless kernel declines gist-dep install; a tty still consents")
 
         # --- _parse_pkg_name splits at the earliest specifier ---
@@ -570,8 +571,7 @@ def phase_12_gist_links(kernel: Kernel) -> None:
         sub = Kernel(proj)
         b = Bridge(proj)
         try:
-            b.call("initialize", {"protocolVersion": "2024-11-05"})
-            b.send("notifications/initialized", {}, notif=True)
+            b.handshake()
             resp = b.call(
                 "tools/call",
                 {
@@ -805,8 +805,8 @@ def _fetch_checks() -> None:
     stub = ("Fixture gist", {"probe_fetched.py": '"""A probe -> dict."""\nX = 1\n'})
     orig_fetch, orig_home, cwd = gist_cmd._fetch_gist, Path.home, os.getcwd()
     try:
-        gist_cmd._fetch_gist = lambda _id, timeout=20.0: stub  # pyright: ignore[reportAttributeAccessIssue]
-        Path.home = staticmethod(lambda: home)                 # pyright: ignore[reportAttributeAccessIssue]
+        gist_cmd._fetch_gist = lambda _id, timeout=20.0: stub
+        Path.home = staticmethod(lambda: home)
         os.chdir(proj)
         fetch = lambda *a: _quiet(gist_cmd._gist_fetch, list(a))
 
@@ -857,14 +857,14 @@ def _fetch_checks() -> None:
         assert_eq(fetch(gid, "--nope"), 2, "unknown flag is an error")
         assert_eq(fetch(), 2, "no ref is an error")
 
-        gist_cmd._fetch_gist = lambda _id, timeout=20.0: ("", {})  # pyright: ignore[reportAttributeAccessIssue]
+        gist_cmd._fetch_gist = lambda _id, timeout=20.0: ("", {})
         assert_eq(
             fetch(gid, "--name", "probe_empty"), 1, "a gist with no .py files errors"
         )
         print("  ✓ gist fetch: header, --force, --name, and all three collision scopes")
     finally:
-        gist_cmd._fetch_gist = orig_fetch  # pyright: ignore[reportAttributeAccessIssue]
-        Path.home = orig_home              # pyright: ignore[reportAttributeAccessIssue]
+        gist_cmd._fetch_gist = orig_fetch
+        Path.home = orig_home
         os.chdir(cwd)
         shutil.rmtree(root, ignore_errors=True)
 
