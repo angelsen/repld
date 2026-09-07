@@ -330,6 +330,7 @@ function render() {
   $('#hdr-uptime').textContent = formatUptime(k.uptime_s);
   $('#ki-tasks').textContent = k.tasks_active ? k.tasks_active + ' task' + (k.tasks_active > 1 ? 's' : '') : '';
   $('#ki-tickers').textContent = k.tickers.length ? k.tickers.map(t => t.label).join(', ') : '';
+  $('#ki-tickers').title = k.tickers.map(t => t.label + ' every ' + t.seconds + 's' + (t.tab ? ' tab=' + t.tab : '')).join('\n');
   $('#ft-socket').textContent = k.socket;
 
   const b = state.browser;

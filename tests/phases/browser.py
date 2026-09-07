@@ -2856,6 +2856,25 @@ def phase_6_every_tab_fusion(kernel: Kernel) -> None:
     if not _chrome_ready("phase 6 every tab fusion"):
         return
     h = _BridgeHarness(kernel)
+
+    def next_tick(pred, desc: str, timeout: float = 8.0) -> dict:
+        # Successful ticks keep pushing every 0.3s between our exec calls, so
+        # the next queued kind=every notification is not necessarily the one a
+        # step is about — an "A" tick in flight when the close lands, or a
+        # second error tick before the replacement tab opens. Consume until
+        # `pred` matches; wait_notification's stash keeps skipped ones from
+        # being lost to other assertions.
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"no every tick matching {desc} within {timeout}s")
+            n = h.b.wait_notification(
+                "notifications/claude/channel", kind="every", timeout=remaining
+            )["params"]
+            if n["meta"].get("label") == "tab_fuse" and pred(n):
+                return n
+
     try:
         pattern = f"*{_MARKER}*"
         h.open_tab("<span id=v>A</span>")
@@ -2875,28 +2894,18 @@ def phase_6_every_tab_fusion(kernel: Kernel) -> None:
             f"tab-fused ticker defined ok: {resp['result']}",
         )
 
-        first = h.b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
-        )["params"]
-        assert_eq(first["meta"]["label"], "tab_fuse", "first tick label")
+        first = next_tick(lambda n: not n["meta"].get("error"), "a success tick")
         assert_eq(first["content"], "A", "first tick reads the live tab's DOM")
         print("  ✓ every(tab=): first tick resolves a live Tab and reads its DOM")
 
         # Close the matched tab out from under the ticker.
         h.exec(f"_t_kill = await browser.get({pattern!r}); await _t_kill.close()")
-        gone = h.b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
-        )["params"]
-        assert_eq(gone["meta"]["label"], "tab_fuse", "post-close tick label")
-        assert_eq(gone["meta"]["error"], "1", "post-close tick errors, doesn't crash")
+        next_tick(lambda n: n["meta"].get("error") == "1", "an error tick")
         print("  ✓ every(tab=): a closed tab errors the tick, doesn't kill the ticker")
 
         # A fresh matching tab appears; the next tick should find it on its own.
         h.open_tab("<span id=v>B</span>")
-        healed = h.b.wait_notification(
-            "notifications/claude/channel", kind="every", timeout=5.0
-        )["params"]
-        assert_eq(healed["meta"]["label"], "tab_fuse", "post-heal tick label")
+        healed = next_tick(lambda n: n.get("content") == "B", "a 'B' success tick")
         assert_eq(healed["content"], "B", "next tick resolves the replacement tab")
         print("  ✓ every(tab=): self-heals to a replacement tab, no ticker restart")
 

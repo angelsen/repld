@@ -332,5 +332,52 @@ def phase_10_every(kernel: Kernel) -> None:
         )
         print("  ✓ every: tick output is ambient, not the registering cell's")
 
+        # --- 8. every(tab=) refuses at registration when browser is absent ---
+        #
+        # `browser` is injected once at boot, so a kernel without it can never
+        # grow one mid-life — a per-tick check would push the same error every
+        # `seconds` forever with no way to self-heal. The dev kernel has the
+        # extra installed, so absence is simulated by deleting the builtin.
+        resp8 = b.call(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {
+                    "code": (
+                        "import __main__ as _m\n"
+                        "_saved_browser = getattr(_m, 'browser', None)\n"
+                        "if _saved_browser is not None:\n"
+                        "    del _m.browser\n"
+                        "try:\n"
+                        "    every(0.2, tab='*nope*')(lambda t: None)\n"
+                        "finally:\n"
+                        "    if _saved_browser is not None:\n"
+                        "        _m.browser = _saved_browser\n"
+                    )
+                },
+            },
+            timeout=5.0,
+        )
+        text8 = resp8["result"]["content"][0]["text"]
+        assert_true(
+            resp8["result"].get("isError", False),
+            f"every(tab=) without browser errors the registering cell (got {text8!r})",
+        )
+        assert_true(
+            "repld browser" in text8,
+            f"the refusal names the fix (got {text8!r})",
+        )
+        resp = b.call(
+            "tools/call",
+            {"name": "exec", "arguments": {"code": "len(every.list())"}},
+            timeout=3.0,
+        )
+        assert_eq(
+            resp["result"]["content"][0]["text"].strip(),
+            "0",
+            "the refused registration left no ticker behind",
+        )
+        print("  ✓ every: tab= without the browser builtin refuses at registration")
+
     finally:
         b.close()

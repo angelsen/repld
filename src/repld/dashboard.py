@@ -67,7 +67,9 @@ def _collect_state() -> dict:
     active = sum(1 for _tid, t in tasks.items() if not t["done_event"].is_set())
     from .kernel import every_snapshot
 
-    tickers = [{"label": h.label, "seconds": h.seconds} for h in every_snapshot()]
+    tickers = [
+        {"label": h.label, "seconds": h.seconds, "tab": h.tab} for h in every_snapshot()
+    ]
     state: dict[str, Any] = {
         "kernel": {
             "pid": os.getpid(),

@@ -698,14 +698,7 @@ async def _start_ticker(
         while True:
             try:
                 if tab is not None:
-                    browser = getattr(__main__, "browser", None)
-                    if browser is None:
-                        raise RuntimeError(
-                            "every(tab=...) needs the browser builtin -- install "
-                            "the `browser` extra, or run `repld browser` instead "
-                            "of `repld`"
-                        )
-                    result = fn(await browser.get(tab))
+                    result = fn(await __main__.browser.get(tab))
                 else:
                     result = fn()
                 if inspect.iscoroutine(result):
@@ -748,12 +741,22 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         `tab=<pattern>` resolves a live Tab via `browser.get(pattern)` on every
         tick and passes it to fn, instead of fn taking no arguments and
         resolving its own tab. Use this for a ticker that acts on a browser
-        tab across hours or days.
+        tab across hours or days. Raises here if the browser builtin is
+        absent.
 
         Returns fn unchanged so @every is a pure decorator. Attaches
         fn._handle (EveryHandle) and fn.cancel() shortcut after the first
         loop tick completes.
         """
+        # `browser` is injected once at boot (_inject_builtins) and never
+        # appears later, so checking per-tick could never self-heal — it just
+        # pushed the same error every `seconds` forever. Refuse the
+        # registration instead, so the registering cell errors once.
+        if tab is not None and getattr(__main__, "browser", None) is None:
+            raise RuntimeError(
+                "every(tab=...) needs the browser builtin — install the "
+                "`browser` extra, or run `repld browser` instead of `repld`"
+            )
 
         def decorator(fn):
             name = label or fn.__name__

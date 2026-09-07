@@ -9,8 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `every(seconds, tab=pattern)(fn)` — resolves `browser.get(pattern)` fresh on every tick and passes the live Tab to `fn`, so a ticker that acts on a browser tab across hours/days doesn't need a captured-once Tab that goes stale across a navigation or crash; a missing match errors that tick (loop survives) and self-heals once a matching tab reappears.
+- The dashboard's ticker chip now carries a tooltip with each ticker's cadence and bound `tab=` pattern (also in the `state` RPC's `tickers` entries).
 
 ### Changed
+
+- `every(tab=...)` on a kernel without the browser builtin now refuses at registration — the registering cell errors once — instead of pushing the same error on every tick forever (the builtin is injected only at boot, so that loop could never self-heal).
 
 ### Fixed
 
