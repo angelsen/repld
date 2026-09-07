@@ -86,6 +86,18 @@ class Bridge:
         self.send("notifications/initialized", {}, notif=True)
         return resp
 
+    def exec(
+        self, code: str, *, timeout: float | None = None, call_timeout: float = 5.0
+    ) -> dict:
+        """`tools/call exec` — the raw response, since callers read text, `_meta`
+        or `isError` from it. `timeout` is the cell's inline budget."""
+        args: dict = {"code": code}
+        if timeout is not None:
+            args["timeout"] = timeout
+        return self.call(
+            "tools/call", {"name": "exec", "arguments": args}, timeout=call_timeout
+        )
+
     def send(
         self, method: str, params: dict | None = None, *, notif: bool = False
     ) -> int | None:
@@ -210,6 +222,11 @@ class Kernel:
                 self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+
+
+def content_text(resp: dict) -> str:
+    """The first text block of a tools/call result."""
+    return resp["result"]["content"][0]["text"]
 
 
 def assert_eq(got, expected, label: str) -> None:
