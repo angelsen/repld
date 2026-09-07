@@ -21,6 +21,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from .core_schemas import error as _error
 from .state import read_lock
 
 Handler = Callable[[dict, "Session"], dict | None]
@@ -211,11 +212,7 @@ class Server:
                 except Exception as e:
                     rid = req.get("id")
                     if rid is not None:
-                        resp = {
-                            "jsonrpc": "2.0",
-                            "id": rid,
-                            "error": {"code": -32603, "message": f"internal: {e!r}"},
-                        }
+                        resp = _error(rid, -32603, f"internal: {e!r}")
                     else:
                         resp = None
                 if resp is not None:
