@@ -8,7 +8,8 @@ and doing only the first is a bug that is invisible until someone goes looking
 for history that was never written.
 
 This lives apart from `kernel.py` for the same reason `paths` / `state` /
-`spawn` do: it needs only `ipc` and `events`, while `kernel` pulls in the
+`spawn` do: it needs only `ipc`, `events` and the `core_schemas` envelope
+builders, while `kernel` pulls in the
 asyncio loop, the dispatcher, gists and the display. Six modules across the
 kernel and the browser stack push to channel, and keeping it here is what lets
 each of them import it at module level rather than reaching for a
@@ -16,6 +17,7 @@ function-local `from .kernel import push_channel` to dodge a cycle.
 """
 
 from . import events, ipc
+from .core_schemas import notification as _notification
 from .events import ChannelPush
 
 
@@ -38,11 +40,9 @@ def push_channel(
     silence, and the local event still reaches `repld log`.
     """
     meta = meta or {}
-    msg = {
-        "jsonrpc": "2.0",
-        "method": "notifications/claude/channel",
-        "params": {"content": content, "meta": meta},
-    }
+    msg = _notification(
+        "notifications/claude/channel", {"content": content, "meta": meta}
+    )
     if session is None:
         ipc.broadcast_channel(msg)
     else:

@@ -431,6 +431,33 @@ def _prompt_dep_selection(missing: list[_DepInfo]) -> list[_DepInfo]:
     return [missing[i] for i in indices]
 
 
+def _merge_manifest(selected: list[_DepInfo]) -> tuple[dict[str, str], list[str]]:
+    """Merge newly-selected deps into the accumulated manifest; return it plus
+    the full requirement argv for the installer.
+
+    The deps dir is shared across every project's gists. Passing only the
+    newly-selected deps would let the resolver work in isolation from what's
+    already installed there, silently skewing shared transitive pins (e.g.
+    pydantic-core) between unrelated installs — so the whole set re-resolves
+    every time.
+    """
+    manifest = _read_manifest()
+    for d in selected:
+        if d.editable:
+            key = f"-e {d.requirement}"
+            manifest[key] = key
+        else:
+            manifest[_parse_pkg_name(d.requirement)] = d.requirement
+
+    req_args: list[str] = []
+    for entry in sorted(manifest.values()):
+        if entry.startswith("-e "):
+            req_args.extend(["-e", entry[3:]])
+        else:
+            req_args.append(entry)
+    return manifest, req_args
+
+
 def install_deps(missing: list[_DepInfo]) -> bool:
     """Prompt user and install missing deps. Returns True if anything was installed."""
     import shutil
@@ -498,25 +525,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     target = _deps_dir()
     target.mkdir(parents=True, exist_ok=True)
 
-    # The deps dir is shared across every project's gists. Passing only the
-    # newly-selected deps would let the resolver work in isolation from what's
-    # already installed there, silently skewing shared transitive pins (e.g.
-    # pydantic-core) between unrelated installs. Merge into the accumulated
-    # manifest and re-resolve the whole set every time instead.
-    manifest = _read_manifest()
-    for d in selected:
-        if d.editable:
-            key = f"-e {d.requirement}"
-            manifest[key] = key
-        else:
-            manifest[_parse_pkg_name(d.requirement)] = d.requirement
-
-    full_req_args: list[str] = []
-    for entry in sorted(manifest.values()):
-        if entry.startswith("-e "):
-            full_req_args.extend(["-e", entry[3:]])
-        else:
-            full_req_args.append(entry)
+    manifest, full_req_args = _merge_manifest(selected)
 
     if uv:
         # --python pins resolution to the interpreter actually running this
