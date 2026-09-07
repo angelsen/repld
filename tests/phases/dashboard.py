@@ -15,13 +15,16 @@ def _declared_length(port: int, length: int, token: str | None) -> int:
     Raw socket rather than `_request`, which derives Content-Length from the
     bytes it is given — the whole point here is a header that lies. Returns 0
     when the server accepted the declaration and is waiting for a body that
-    never comes, which is what "not rejected" looks like from out here.
+    never comes, which is what "not rejected" looks like from out here, and
+    -1 when it closed without a status line.
     """
     req = f"POST /api HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
     if token is not None:
         req += f"Authorization: Bearer {token}\r\n"
     req += f"Content-Length: {length}\r\n\r\n"
-    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    # Well under the server's own 5 s body wait, so a timeout here means it's
+    # still waiting — at 5 s the two raced, and its close read as a crash.
+    s = socket.create_connection(("127.0.0.1", port), timeout=2)
     try:
         s.sendall(req.encode())
         data = s.recv(256)
