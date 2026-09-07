@@ -29,6 +29,7 @@ from phases.browser import (
     phase_6_dialog_policy,
     phase_6_engine_reinjection,
     phase_6_engine_world_tiers,
+    phase_6_every_tab_fusion,
     phase_6_har_redirects,
     phase_6_hover_and_drag,
     phase_6_injected_source_provenance,
@@ -139,6 +140,7 @@ PHASES = {
         phase_6_viewport_param(k),
         phase_6_observation_diff(k),
         phase_6_hover_and_drag(k),
+        phase_6_every_tab_fusion(k),
     ),
     7: phase_7_defer,
     8: lambda k: (

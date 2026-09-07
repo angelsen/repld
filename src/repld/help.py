@@ -82,6 +82,10 @@ _BROWSER_MODEL = (
     "get()/open() capture request/response bodies; watch() attaches lightweight. "
     "Read workflow: network → request → body. "
     "browser object available in exec for chaining. "
+    "every(seconds, tab=pattern)(fn) resolves browser.get(pattern) fresh on "
+    "every tick and passes the live Tab to fn — for a ticker that touches a "
+    "tab across hours/days, since a Tab captured once goes stale across a "
+    "navigation or crash. "
     "For repeated browser interactions, write a gist (gists/*.py) to capture "
     "the API pattern. tab.pin() guards the session; tab.confirm()/choose() "
     "gate mutations in the browser. "
@@ -1423,8 +1427,9 @@ defer(coro, label=None) → task_id
   cell number to bind _/_N to instead). no_display() suppresses the print
   but not the get_task recovery, same as it does for an exec cell.
 
-every(seconds, label=, delay=0)(fn) → fn   periodic ticker; fn.cancel() stops
+every(seconds, label=, delay=0, tab=)(fn) → fn   periodic ticker; fn.cancel() stops
   delay= defers the first tick (default: tick now)
+  tab=pattern resolves browser.get(pattern) fresh each tick, passed to fn(tab)
 every.list()        → list  active EveryHandles
 every.cancel_all()  → None  stop all tickers
 
@@ -2150,6 +2155,11 @@ The kernel persists. One-shot work can become continuous:
   # Stop a ticker:
   check.cancel()
 
+A ticker's registry is in-memory only — `repld restart` starts clean. To
+survive that, register it from repld_init.py, which runs at every boot
+regardless of how the kernel started (see "Live introspection with
+repld_init.py" above).
+
 Combine with project context for dev workflows:
 
   # Monitor your app's error rate (project-local repld)
@@ -2168,12 +2178,13 @@ Combine with project context for dev workflows:
           if count > 10:
               notify(f"{count} errors in last 5 min", kind="alert")
 
-  # Watch a web app for price changes
+  # Watch a web app for price changes. tab= resolves browser.get(pattern)
+  # fresh on every tick and hands price_watch a live Tab, so a reload or
+  # crash between ticks just means the next tick re-resolves it.
   price_history = {}
 
-  @every(300)
-  async def price_watch():
-      tab = await browser.get("*competitor.com*")
+  @every(300, tab="*competitor.com*")
+  async def price_watch(tab):
       products = (await tab.fetch("/api/products"))["body"]
       for p in products:
           prev = price_history.get(p["id"])

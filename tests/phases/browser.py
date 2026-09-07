@@ -2844,3 +2844,62 @@ def phase_6_select_type_filter(kernel: Kernel) -> None:
         print("  ✓ select_option: aria-autocomplete filter reaches virtualized options")
     finally:
         h.close()
+
+
+def phase_6_every_tab_fusion(kernel: Kernel) -> None:
+    """every(tab=pattern) resolves browser.get(pattern) fresh every tick.
+
+    Closing the matched tab mid-run and opening a fresh one in its place is
+    the case a captured-once Tab can't recover from on its own; a fresh
+    resolve each tick self-heals to the replacement with no ticker restart.
+    """
+    if not _chrome_ready("phase 6 every tab fusion"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        pattern = f"*{_MARKER}*"
+        h.open_tab("<span id=v>A</span>")
+
+        resp = h.tool(
+            "exec",
+            {
+                "code": (
+                    f"@every(0.3, tab={pattern!r}, label='tab_fuse')\n"
+                    "async def _tab_fuse(tab):\n"
+                    "    return await tab.js(\"document.getElementById('v').textContent\")\n"
+                )
+            },
+        )
+        assert_true(
+            not resp["result"].get("isError", False),
+            f"tab-fused ticker defined ok: {resp['result']}",
+        )
+
+        first = h.b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )["params"]
+        assert_eq(first["meta"]["label"], "tab_fuse", "first tick label")
+        assert_eq(first["content"], "A", "first tick reads the live tab's DOM")
+        print("  ✓ every(tab=): first tick resolves a live Tab and reads its DOM")
+
+        # Close the matched tab out from under the ticker.
+        h.exec(f"_t_kill = await browser.get({pattern!r}); await _t_kill.close()")
+        gone = h.b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )["params"]
+        assert_eq(gone["meta"]["label"], "tab_fuse", "post-close tick label")
+        assert_eq(gone["meta"]["error"], "1", "post-close tick errors, doesn't crash")
+        print("  ✓ every(tab=): a closed tab errors the tick, doesn't kill the ticker")
+
+        # A fresh matching tab appears; the next tick should find it on its own.
+        h.open_tab("<span id=v>B</span>")
+        healed = h.b.wait_notification(
+            "notifications/claude/channel", kind="every", timeout=5.0
+        )["params"]
+        assert_eq(healed["meta"]["label"], "tab_fuse", "post-heal tick label")
+        assert_eq(healed["content"], "B", "next tick resolves the replacement tab")
+        print("  ✓ every(tab=): self-heals to a replacement tab, no ticker restart")
+
+        h.exec("_tab_fuse.cancel()")
+    finally:
+        h.close()

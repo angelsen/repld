@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `every(seconds, tab=pattern)(fn)` — resolves `browser.get(pattern)` fresh on every tick and passes the live Tab to `fn`, so a ticker that acts on a browser tab across hours/days doesn't need a captured-once Tab that goes stale across a navigation or crash; a missing match errors that tick (loop survives) and self-heals once a matching tab reappears.
+
 ### Changed
 
 ### Fixed

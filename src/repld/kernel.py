@@ -611,6 +611,7 @@ class EveryHandle:
     label: str
     seconds: float
     _task: "asyncio.Task[None]"
+    tab: str | None = None
 
     def cancel(self) -> None:
         self._task.cancel()
@@ -618,7 +619,8 @@ class EveryHandle:
             _every_registry.discard(self)
 
     def __repr__(self) -> str:
-        return f"<every {self.seconds}s: {self.label}>"
+        suffix = f" tab={self.tab!r}" if self.tab else ""
+        return f"<every {self.seconds}s: {self.label}{suffix}>"
 
 
 # Mutated from the asyncio loop thread (_start_ticker) and from sync-cell
@@ -637,12 +639,20 @@ def every_snapshot() -> list[EveryHandle]:
         return list(_every_registry)
 
 
-async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> None:
+async def _start_ticker(
+    fn, seconds: float, label: str, delay: float = 0.0, tab: str | None = None
+) -> None:
     """Coroutine that runs on the shared asyncio loop.
 
     Runs the first tick after `delay` seconds (immediately by default), then
     sleeps `seconds` between ticks. Catches exceptions so one bad tick doesn't
     stop the schedule. Sets fn._handle and fn.cancel once the task is live.
+
+    `tab=` resolves `browser.get(tab)` fresh on every tick and passes the
+    live Tab to `fn`, rather than `fn` closing over one captured at
+    registration — a Tab captured hours ago is exactly what a navigation or
+    crash invalidates. The resolve happens inside the existing per-tick
+    try/except, so a missing page logs and retries next tick.
 
     **A ticker's output is ambient, so it must clear the inherited task id.**
     `_task_scope` is what binds `tasks._current_task`, and it wraps `_run_cell`
@@ -665,7 +675,7 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
     tasks.set_current_task(None)
     task = asyncio.current_task()
     assert task is not None
-    handle = EveryHandle(label, seconds, task)
+    handle = EveryHandle(label, seconds, task, tab=tab)
     with _every_lock:
         _every_registry.add(handle)
     fn._handle = handle
@@ -687,7 +697,17 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
 
         while True:
             try:
-                result = fn()
+                if tab is not None:
+                    browser = getattr(__main__, "browser", None)
+                    if browser is None:
+                        raise RuntimeError(
+                            "every(tab=...) needs the browser builtin -- install "
+                            "the `browser` extra, or run `repld browser` instead "
+                            "of `repld`"
+                        )
+                    result = fn(await browser.get(tab))
+                else:
+                    result = fn()
                 if inspect.iscoroutine(result):
                     result = await result
             except Exception as exc:
@@ -709,7 +729,13 @@ async def _start_ticker(fn, seconds: float, label: str, delay: float = 0.0) -> N
 def _make_every(loop: asyncio.AbstractEventLoop):
     """Return an every(seconds, *, label=None)(fn) decorator bound to the kernel's loop."""
 
-    def every(seconds: float, *, label: str | None = None, delay: float = 0.0):
+    def every(
+        seconds: float,
+        *,
+        label: str | None = None,
+        delay: float = 0.0,
+        tab: str | None = None,
+    ):
         """Schedule fn to run immediately, then every `seconds` on the kernel loop.
 
         `delay` holds the *first* tick back that many seconds. The default of 0
@@ -719,6 +745,11 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         and a false negative there can send a re-raise loop after a resource
         that was about to be fine. `every(60, delay=60)` waits one interval.
 
+        `tab=<pattern>` resolves a live Tab via `browser.get(pattern)` on every
+        tick and passes it to fn, instead of fn taking no arguments and
+        resolving its own tab. Use this for a ticker that acts on a browser
+        tab across hours or days.
+
         Returns fn unchanged so @every is a pure decorator. Attaches
         fn._handle (EveryHandle) and fn.cancel() shortcut after the first
         loop tick completes.
@@ -727,7 +758,7 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         def decorator(fn):
             name = label or fn.__name__
             asyncio.run_coroutine_threadsafe(
-                _start_ticker(fn, seconds, name, delay), loop
+                _start_ticker(fn, seconds, name, delay, tab), loop
             )
             return fn
 
