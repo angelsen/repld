@@ -1,0 +1,5 @@
+{
+  "repld_roster": true,
+  "protected_repos": [],
+  "pane_deploy_patterns": ["uv publish", "uv version --bump", "make deploy"]
+}

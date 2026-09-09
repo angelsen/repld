@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/fredrik/Projects/private/devstack/plugins/devstack/hooks/cc-check-hook python3 checks/narration.py",
+            "timeout": 20
+          }
+        ]
+      }
     ]
   }
 }
