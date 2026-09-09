@@ -13,7 +13,7 @@ import types
 from collections.abc import Iterator
 from pathlib import Path
 
-from harness import Bridge, Kernel, assert_eq, assert_true
+from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
 from repld import gist_cmd, gist_deps, gist_lint, gists
 from repld import gist_links as g
@@ -160,14 +160,8 @@ def _link_manifest_and_boot() -> None:
         b = Bridge(proj)
         try:
             b.handshake()
-            resp = b.call(
-                "tools/call",
-                {
-                    "name": "exec",
-                    "arguments": {"code": "import widget\nprint('VAL=', widget.val())"},
-                },
-            )
-            text = resp["result"]["content"][0]["text"]
+            resp = b.exec("import widget\nprint('VAL=', widget.val())")
+            text = content_text(resp)
             assert_true(
                 "VAL= 7" in text,
                 f"linked gist imports at boot + sibling resolves (got {text!r})",

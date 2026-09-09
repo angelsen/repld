@@ -14,7 +14,7 @@ import re
 import time
 import urllib.request
 
-from harness import Bridge, Kernel, assert_eq, assert_true
+from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
 _CDP = "http://localhost:9222"
 
@@ -1086,15 +1086,8 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
         gist_file.write_text("VALUE = 1\n")
 
         # Import it via exec
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {"code": "import smoke_gist; print(smoke_gist.VALUE)"},
-            },
-            timeout=5.0,
-        )
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("import smoke_gist; print(smoke_gist.VALUE)")
+        content = content_text(resp)
         assert_true(
             "1" in content,
             f"initial gist import VALUE=1 (got {content!r})",
@@ -1106,15 +1099,8 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
         gist_file.write_text("VALUE = 42\n")
 
         # Re-import — auto-reload should detect mtime change
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {"code": "import smoke_gist; print(smoke_gist.VALUE)"},
-            },
-            timeout=5.0,
-        )
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("import smoke_gist; print(smoke_gist.VALUE)")
+        content = content_text(resp)
         assert_true(
             "42" in content,
             f"gist auto-reload VALUE=42 after edit (got {content!r})",
@@ -1122,6 +1108,11 @@ def phase_6_tools_and_gists(kernel: Kernel) -> None:
         print("  ✓ gist auto-reload: VALUE=42 after edit")
     finally:
         b.close()
+
+
+def _exec(b: Bridge, code: str) -> str:
+    """A Chrome-driving cell's text; 20 s inline budget, since a page load is in it."""
+    return content_text(b.exec(code, timeout=20, call_timeout=30.0))
 
 
 def phase_6_label_and_reattach(kernel: Kernel) -> None:
@@ -1139,33 +1130,27 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
     try:
         b.handshake()
 
-        def _exec(code: str) -> str:
-            resp = b.call(
-                "tools/call",
-                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
-                timeout=30.0,
-            )
-            return resp["result"]["content"][0]["text"]
-
         # Label set on one Tab wrapper must be visible on a fresh wrapper for
         # the same target (state lives on CDPSession, Tabs are ephemeral).
         out = _exec(
+            b,
             "import asyncio\n"
             f"_t1 = await browser.open('data:text/html,<p>{_MARKER}-label</p>')\n"
             "_t1.label = 'phase6'\n"
             "await asyncio.sleep(0.5)\n"
             "_t2 = await browser.get(_t1.target_id)\n"
-            "print('LABEL=' + repr(_t2.label))"
+            "print('LABEL=' + repr(_t2.label))",
         )
         assert_true("LABEL='phase6'" in out, f"label survives re-get (got {out!r})")
 
         # Re-labelling via the fresh wrapper must replace the old bar, not
         # orphan it (the old wrapper lost _label_script_id before the fix).
         out = _exec(
+            b,
             "_t2.label = 'phase6b'\n"
             "await asyncio.sleep(0.5)\n"
             "print('BARS=', await _t2.js("
-            "\"document.querySelectorAll('#__repld_label_bar').length\"))"
+            "\"document.querySelectorAll('#__repld_label_bar').length\"))",
         )
         assert_true("BARS= 1" in out, f"single label bar after re-label (got {out!r})")
         print("  ✓ label survives Tab re-wrap; re-label replaces, no orphaned bar")
@@ -1178,6 +1163,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # fine because `runImmediately: True` had already mounted it into the
         # document that was live when the label was set.
         out = _exec(
+            b,
             "await _t2.cdp('Page.navigate',"
             f" url='data:text/html,<p>{_MARKER}-navigated</p>')\n"
             "await _t2._await_ready_signal(\"document.readyState === 'complete'\")\n"
@@ -1185,7 +1171,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             "print('BARS=', await _t2.js("
             "\"document.querySelectorAll('#__repld_label_bar').length\"))\n"
             "print('TEXT=', await _t2.js("
-            "\"(document.getElementById('__repld_label_bar')||{}).textContent\"))"
+            "\"(document.getElementById('__repld_label_bar')||{}).textContent\"))",
         )
         assert_true("BARS= 1" in out, f"label bar re-mounts after navigation ({out!r})")
         assert_true("TEXT= phase6b" in out, f"re-mounted bar keeps its text ({out!r})")
@@ -1195,6 +1181,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # poll is waiting for an element only the *next* document has. The
         # old DOM.getDocument root went stale here and never matched.
         out = _exec(
+            b,
             f"_t3 = await browser.open('data:text/html,<p>{_MARKER}-one</p>')\n"
             "async def _nav():\n"
             "    await asyncio.sleep(0.5)\n"
@@ -1203,7 +1190,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             "_nt = asyncio.create_task(_nav())\n"
             "await _t3._await_ready_signal('#late-el', timeout=8)\n"
             "await _nt\n"
-            "print('READY-OK')"
+            "print('READY-OK')",
         )
         assert_true(
             "READY-OK" in out,
@@ -1216,6 +1203,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # CDPSession, so a hot re-query (no wait at all) preserves the
         # original attach's value rather than resetting on the fresh Tab.
         out = _exec(
+            b,
             f"_rc1 = await browser.open('data:text/html,<p>{_MARKER}-rc1</p>')\n"
             "print('RC1=' + repr(_rc1.ready_confirmed))\n"
             "_rc2 = await browser.open("
@@ -1223,7 +1211,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             " ready='#rc-el')\n"
             "print('RC2=' + repr(_rc2.ready_confirmed))\n"
             "_rc3 = await browser.get(_rc2.target_id)\n"
-            "print('RC3=' + repr(_rc3.ready_confirmed))"
+            "print('RC3=' + repr(_rc3.ready_confirmed))",
         )
         assert_true(
             "RC1=False" in out, f"no ready= -> ready_confirmed=False (got {out!r})"
@@ -1245,6 +1233,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
         # Under the engine this is the strictness policy's ranking half:
         # multiple matches with exactly one visible resolve to it.
         out = _exec(
+            b,
             f"_t4 = await browser.open('data:text/html,<p>{_MARKER}-sel</p>')\n"
             f"await _t4.js({json.dumps(f'document.body.innerHTML = {json.dumps(_SEL_HTML)}')})\n"
             "from repld.browser import inject as _inj\n"
@@ -1252,7 +1241,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
             "    _el = await _inj.resolve_element(_t4, _s)\n"
             "    _r = await _inj.call_engine(_t4, 'function(el){return el.id;}',"
             " [{'objectId': _el.object_id}])\n"
-            "    print('SEL', _s, '->', _r['result']['value'], 'want', _want)\n"
+            "    print('SEL', _s, '->', _r['result']['value'], 'want', _want)\n",
         )
         for sel, want in _SEL_CASES:
             assert_true(
@@ -1284,18 +1273,11 @@ def phase_6_tab_close(kernel: Kernel) -> None:
     try:
         b.handshake()
 
-        def _exec(code: str) -> str:
-            resp = b.call(
-                "tools/call",
-                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
-                timeout=30.0,
-            )
-            return resp["result"]["content"][0]["text"]
-
         out = _exec(
+            b,
             f"_tc = await browser.open('data:text/html,<p>{_MARKER}-close</p>')\n"
             "print('CHROME_ID=' + _tc._chrome_target_id)\n"
-            "await _tc.close()\n"
+            "await _tc.close()\n",
         )
         m = re.search(r"CHROME_ID=([0-9a-fA-F]+)", out)
         assert_true(
@@ -1336,19 +1318,12 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
     try:
         b.handshake()
 
-        def _exec(code: str) -> str:
-            resp = b.call(
-                "tools/call",
-                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
-                timeout=30.0,
-            )
-            return resp["result"]["content"][0]["text"]
-
         html = (
             f"<title>{_MARKER}</title>"
             "<button id=b onclick=window.__clicks=(window.__clicks||0)+1>Go</button>"
         )
         out = _exec(
+            b,
             f"_tk = await browser.open('data:text/html,{html}')\n"
             "await _tk.js('document.getElementById(\"b\").focus()')\n"
             "await _tk.key('Enter')\n"
@@ -1358,7 +1333,7 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
             "print('SPACE', await _tk.js('window.__clicks || 0'))\n"
             "await _tk.js('document.getElementById(\"b\").focus()')\n"
             "await _tk.key('Escape')\n"
-            "print('ESCAPE', await _tk.js('window.__clicks || 0'))\n"
+            "print('ESCAPE', await _tk.js('window.__clicks || 0'))\n",
         )
         assert_true(
             "ENTER 1" in out, f"key('Enter') triggers native click (got {out!r})"
@@ -1377,6 +1352,7 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
         # modifiers bitmask ("Ctrl+A" select-all), and keys([...]) chains a
         # whole flow in one call.
         out = _exec(
+            b,
             f"_te = await browser.open('data:text/html,<title>{_MARKER}</title>"
             "<input id=i value=abcdef>')\n"
             'await _te.js(\'const el = document.getElementById("i");'
@@ -1388,7 +1364,7 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
             "await _te.keys(['Ctrl+A', 'Backspace'])\n"
             "print('CLEARED', repr(await _te.js('document.getElementById(\"i\").value')))\n"
             "await _te.keys(['x', 'y', 'z'])\n"
-            "print('TYPED', await _te.js('document.getElementById(\"i\").value'))\n"
+            "print('TYPED', await _te.js('document.getElementById(\"i\").value'))\n",
         )
         assert_true("BKSP abcde" in out, f"Backspace deletes (got {out!r})")
         assert_true("CARET 4" in out, f"ArrowLeft moves the caret (got {out!r})")
@@ -1417,14 +1393,6 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
     try:
         b.handshake()
 
-        def _exec(code: str) -> str:
-            resp = b.call(
-                "tools/call",
-                {"name": "exec", "arguments": {"code": code, "timeout": 20}},
-                timeout=30.0,
-            )
-            return resp["result"]["content"][0]["text"]
-
         build_js = (
             "(function() {"
             " var outer = document.createElement('div');"
@@ -1437,6 +1405,7 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
             " })()"
         )
         out = _exec(
+            b,
             f"_ts = await browser.open('data:text/html,<p>{_MARKER}-shadow</p>')\n"
             f"await _ts.js({json.dumps(build_js)})\n"
             "from repld.browser import inject as _inj\n"
@@ -1445,7 +1414,7 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
             "    _r = await _inj.call_engine(_ts, 'function(el){return el.id;}',"
             " [{'objectId': _el.object_id}])\n"
             "    _got = _r['result']['value']\n"
-            "    print('SHSEL', _s, '->', _got, 'want', _want)\n"
+            "    print('SHSEL', _s, '->', _got, 'want', _want)\n",
         )
         for sel, want in _SEL_CASES:
             assert_true(
@@ -1520,7 +1489,7 @@ def phase_6(kernel: Kernel) -> None:
             resp = b.call(
                 "tools/call", {"name": "browser_tabs", "arguments": {}}, timeout=5.0
             )
-            text = resp["result"]["content"][0]["text"]
+            text = content_text(resp)
             text = text.split("\n[full output:")[0].strip()
             if text == "(no attached tabs)":
                 return []
@@ -1533,7 +1502,7 @@ def phase_6(kernel: Kernel) -> None:
             {"name": "browser_watch", "arguments": {"pattern": f"*{_MARKER}*"}},
             timeout=10.0,
         )
-        result_text = resp["result"]["content"][0]["text"]
+        result_text = content_text(resp)
         assert_true(
             "attached" in result_text.lower(),
             f"browser_watch returned attach summary (got {result_text!r})",
@@ -1546,7 +1515,7 @@ def phase_6(kernel: Kernel) -> None:
             {"name": "browser_open", "arguments": {"url": _TEST_URL}},
             timeout=20.0,
         )
-        open_text = resp["result"]["content"][0]["text"]
+        open_text = content_text(resp)
         target_line = next(
             (ln for ln in open_text.splitlines() if ln.startswith("target: ")), None
         )
@@ -1576,7 +1545,7 @@ def phase_6(kernel: Kernel) -> None:
             },
             timeout=10.0,
         )
-        js_text = resp["result"]["content"][0]["text"]
+        js_text = content_text(resp)
         js_result = json.loads(js_text)
         assert_true(
             js_result.get("result") == 2,
@@ -1599,7 +1568,7 @@ def phase_6(kernel: Kernel) -> None:
                 },
                 timeout=10.0,
             )
-            js_result = json.loads(resp["result"]["content"][0]["text"])
+            js_result = json.loads(content_text(resp))
             assert_true(
                 js_result.get("result") == expected,
                 f"browser_js {label}: expected {expected!r}, got {js_result!r}",
@@ -1615,7 +1584,7 @@ def phase_6(kernel: Kernel) -> None:
             },
             timeout=5.0,
         )
-        net_text = resp["result"]["content"][0]["text"]
+        net_text = content_text(resp)
         # May be spilled — just verify it contains list-like content
         net_text_raw = net_text.split("\n[full output:")[0].strip()
         try:
@@ -1639,7 +1608,7 @@ def phase_6(kernel: Kernel) -> None:
             {"name": "browser_detach", "arguments": {}},
             timeout=5.0,
         )
-        detach_text = resp["result"]["content"][0]["text"]
+        detach_text = content_text(resp)
         print(f"  ✓ browser_detach: {detach_text[:80]!r}")
 
         assert_eq(_tabs(), [], "browser_tabs after detach is empty")
@@ -1842,12 +1811,9 @@ class _BridgeHarness:
         self.b.handshake()
 
     def exec(self, code: str, timeout: float = 20) -> str:
-        resp = self.b.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": code, "timeout": timeout}},
-            timeout=timeout + 10,
+        return content_text(
+            self.b.exec(code, timeout=timeout, call_timeout=timeout + 10)
         )
-        return resp["result"]["content"][0]["text"]
 
     def tool(self, name: str, args: dict, timeout: float = 30) -> dict:
         """Raw response — callers pick result or error by what they assert."""
@@ -1859,7 +1825,7 @@ class _BridgeHarness:
         """browser_open a data: URL (marker appended), return its target id."""
         url = f"data:text/html,{html}<i>{_MARKER}</i>"
         resp = self.tool("browser_open", {"url": url})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         m = re.search(r"target: (\S+)", text)
         assert m, f"browser_open observation carries no target ({text[:200]!r})"
         return m.group(1)
@@ -1894,7 +1860,7 @@ def phase_6_strict_violation(kernel: Kernel) -> None:
 
         tid = h.open_tab(_SEL_HTML)
         resp = h.tool("browser_click", {"target": tid, "selector": "text=Save"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         first = text.splitlines()[0]
         assert_true(
             first.startswith("clicked:") and "vb" in first,
@@ -1924,7 +1890,7 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
             '<button id=tgt onclick="window.hit=(window.hit||0)+1">Buy</button>'
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("clicked:") and "tgt" in first,
             f"receipt names the element hit (got {first!r})",
@@ -1947,7 +1913,7 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
         # rendered under an SVG diagram was resolvable but never
         # coordinate-clickable.
         resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("clicked via element.click():")
             and "ov" in first
@@ -2096,11 +2062,11 @@ def phase_6_dialog(kernel: Kernel) -> None:
         # Pre-arm accept, then repeat — this time confirm() returns true.
         resp = h.tool("browser_dismiss_dialog", {"target": tid, "accept": True})
         assert_true(
-            "accept" in resp["result"]["content"][0]["text"],
+            "accept" in content_text(resp),
             "pre-arm call confirms the armed outcome",
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#del"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         assert_true(
             text.splitlines()[0].startswith("clicked:"),
             f"pre-armed accept returns a normal receipt (got {text[:200]!r})",
@@ -2119,7 +2085,7 @@ def phase_6_dialog(kernel: Kernel) -> None:
 
         # alert() has no other option — always accepts, never errors.
         resp = h.tool("browser_click", {"target": tid, "selector": "#al"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         assert_true(
             text.splitlines()[0].startswith("clicked:"),
             f"alert() click returns a normal receipt (got {text[:200]!r})",
@@ -2184,7 +2150,7 @@ def phase_6_click_arrival(kernel: Kernel) -> None:
             "</script>"
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#btn"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(first.startswith("clicked:"), f"click receipt (got {first!r})")
         out = h.exec(
             f"_t = await browser.get({tid!r})\nprint('ORDER', await _t.js('window.order'))"
@@ -2271,7 +2237,7 @@ def phase_6_react_controlled_input(kernel: Kernel) -> None:
             "browser_type",
             {"target": tid, "selector": "#ri", "text": "styrbord"},
         )
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             "native-setter fallback" in first,
             f"receipt says the fallback path was taken (got {first!r})",
@@ -2291,7 +2257,7 @@ def phase_6_react_controlled_input(kernel: Kernel) -> None:
         # its own guard pre-engine: selectAll-then-type-nothing left the old
         # value selected but intact.
         resp = h.tool("browser_type", {"target": tid, "selector": "#ri", "text": ""})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         out = h.exec(
             f"_t = await browser.get({tid!r})\n"
             "print('CLEARED', repr(await _t.js(\"document.getElementById('ri').value\")),"
@@ -2338,7 +2304,7 @@ def phase_6_select_option(kernel: Kernel) -> None:
         resp = h.tool(
             "browser_select", {"target": tid, "selector": "#sel", "option": "Sweden"}
         )
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith('selected "Sweden"'),
             f"native select receipt (got {first!r})",
@@ -2355,7 +2321,7 @@ def phase_6_select_option(kernel: Kernel) -> None:
         resp = h.tool(
             "browser_select", {"target": tid, "selector": "#dd", "option": "Bergen"}
         )
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith('selected "Bergen"'),
             f"custom listbox receipt (got {first!r})",
@@ -2393,13 +2359,13 @@ def phase_6_aria_ref_roundtrip(kernel: Kernel) -> None:
     try:
         tid = h.open_tab('<button id=cm onclick="window.hit=1">Click me</button>')
         resp = h.tool("browser_tree", {"target": tid})
-        tree = resp["result"]["content"][0]["text"]
+        tree = content_text(resp)
         m = re.search(r'button "Click me" \[ref=(f\d+e\d+)\]', tree)
         assert_true(m is not None, f"aria snapshot carries a button ref ({tree!r})")
         ref = m.group(1)  # type: ignore[union-attr]
 
         resp = h.tool("browser_click", {"target": tid, "selector": f"aria-ref={ref}"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(first.startswith("clicked:"), f"ref click resolves (got {first!r})")
         out = h.exec(
             f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
@@ -2418,7 +2384,7 @@ def phase_6_aria_ref_roundtrip(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_tree", {"target": tid, "mode": "ax"})
-        ax = resp["result"]["content"][0]["text"]
+        ax = content_text(resp)
         assert_true(
             "[ref=" not in ax,
             f"mode='ax' keeps the ref-less CDP tree (got {ax[:200]!r})",
@@ -2489,7 +2455,7 @@ def phase_6_viewport_param(kernel: Kernel) -> None:
     try:
         url = f"data:text/html,<p>{_MARKER}-viewport</p>"
         resp = h.tool("browser_open", {"url": url, "viewport": "1234x777"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         m = re.search(r"target: (\S+)", text)
         assert_true(
             m is not None, f"open with viewport returns a target ({text[:120]!r})"
@@ -2530,7 +2496,7 @@ def phase_6_observation_diff(kernel: Kernel) -> None:
             "<button id=noop>Noop</button>"
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         assert_true(
             "changes: 3 appeared, 1 gone, 1 changed" in text,
             f"diff header counts the mutation (got {text[:400]!r})",
@@ -2549,7 +2515,7 @@ def phase_6_observation_diff(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_click", {"target": tid, "selector": "#noop"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         assert_true(
             "changes: none" in text,
             f"an inert click says the tree didn't move (got {text[:300]!r})",
@@ -2559,7 +2525,7 @@ def phase_6_observation_diff(kernel: Kernel) -> None:
             "browser_navigate",
             {"target": tid, "url": f"data:text/html,<p>{_MARKER}-nav</p>"},
         )
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         assert_true(
             "changes: (page navigated" in text,
             f"a navigation suppresses the diff instead of dumping it (got {text[:300]!r})",
@@ -2664,7 +2630,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         # tab's origin: (430,35) is jsrev's center, and the reveal it
         # triggers is AX-invisible — both quirks in one call.
         resp = h.tool("browser_hover", {"target": tid, "selector": "430,35"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         first = text.splitlines()[0]
         assert_true(
             first.startswith("hovering: (430,35)"),
@@ -2676,7 +2642,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_hover", {"target": tid, "selector": "#trig"})
-        text = resp["result"]["content"][0]["text"]
+        text = content_text(resp)
         first = text.splitlines()[0]
         assert_true(first.startswith("hovering:"), f"hover receipt (got {first!r})")
         assert_true(
@@ -2694,7 +2660,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_drag", {"target": tid, "from": "#src", "to": "#dst"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("dragged:") and "warning" not in first,
             f"drag receipt names both endpoints cleanly (got {first!r})",
@@ -2715,7 +2681,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_drag", {"target": tid, "from": "#src2", "to": "#dz"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("dragged:"),
             f"deferred-target drag receipt (got {first!r})",
@@ -2730,7 +2696,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_drag", {"target": tid, "from": "#port", "to": "#pdst"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("dragged:"),
             f"small-origin drag receipt (got {first!r})",
@@ -2750,7 +2716,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
             "browser_drag",
             {"target": tid, "from": "#dsrc", "to": "#dtgt", "dwell_ms": 0},
         )
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(first.startswith("dragged:"), f"dwell_ms=0 receipt (got {first!r})")
         out = h.exec(
             f"_t = await browser.get({tid!r})\n"
@@ -2762,7 +2728,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
         )
 
         resp = h.tool("browser_drag", {"target": tid, "from": "#dsrc", "to": "#dtgt"})
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith("dragged:"), f"default-dwell receipt (got {first!r})"
         )
@@ -2816,7 +2782,7 @@ def phase_6_select_type_filter(kernel: Kernel) -> None:
             "browser_select",
             {"target": tid, "selector": "#cb", "option": "Eskalert"},
         )
-        first = resp["result"]["content"][0]["text"].splitlines()[0]
+        first = content_text(resp).splitlines()[0]
         assert_true(
             first.startswith('selected "Eskalert"'),
             f"the below-the-fold option was reached (got {first!r})",

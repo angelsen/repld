@@ -71,16 +71,10 @@ def phase_4(kernel: Kernel) -> None:
         print("  ✓ initialize + notifications/initialized")
 
         # Nudge-and-wait-for-channel
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": "import time; time.sleep(0.5); print('slow done')",
-                    "timeout": 0.1,
-                },
-            },
-            timeout=3.0,
+        resp = b.exec(
+            "import time; time.sleep(0.5); print('slow done')",
+            timeout=0.1,
+            call_timeout=3.0,
         )
         meta = resp["result"]["_meta"]
         assert_eq(meta["done"], False, "nudge meta.done")
@@ -102,14 +96,7 @@ def phase_4(kernel: Kernel) -> None:
         print(f"  ✓ channel task_done: {params['content'][:60]!r}...")
 
         # notify() from user code
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {"code": "notify('ping', kind='user', color='blue')"},
-            },
-            timeout=3.0,
-        )
+        resp = b.exec("notify('ping', kind='user', color='blue')", call_timeout=3.0)
         assert_eq(resp["result"]["_meta"]["done"], True, "notify exec done sync")
 
         notif = b.wait_notification(
@@ -122,16 +109,10 @@ def phase_4(kernel: Kernel) -> None:
         print(f"  ✓ notify(): content={params['content']!r} meta={params['meta']}")
 
         # Error in nudged exec → error="1" + traceback content
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": "import time\ntime.sleep(0.3)\nraise RuntimeError('boom')",
-                    "timeout": 0.1,
-                },
-            },
-            timeout=3.0,
+        resp = b.exec(
+            "import time\ntime.sleep(0.3)\nraise RuntimeError('boom')",
+            timeout=0.1,
+            call_timeout=3.0,
         )
         err_task_id = resp["result"]["_meta"]["task_id"]
         notif = b.wait_notification(
@@ -156,16 +137,10 @@ def phase_4b_pregate(kernel: Kernel) -> None:
         # Do NOT send notifications/initialized yet.
         # Trigger a channel push while the session is pre-init.
         # Use a nudged exec so the push is guaranteed.
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": "import time; time.sleep(0.3); notify('queued push')",
-                    "timeout": 0.1,
-                },
-            },
-            timeout=3.0,
+        resp = b.exec(
+            "import time; time.sleep(0.3); notify('queued push')",
+            timeout=0.1,
+            call_timeout=3.0,
         )
         task_id = resp["result"]["_meta"]["task_id"]
         # Wait for the task to finish. Push should now be queued, not delivered.

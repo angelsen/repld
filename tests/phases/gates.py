@@ -25,11 +25,7 @@ def _gate_cli(kernel: Kernel, *args: str) -> subprocess.CompletedProcess:
 
 def _open_gate(b: Bridge, code: str) -> str:
     """Start a cell that blocks on a gate. Returns its task_id."""
-    resp = b.call(
-        "tools/call",
-        {"name": "exec", "arguments": {"code": code, "timeout": 1.0}},
-        timeout=15.0,
-    )
+    resp = b.exec(code, timeout=1.0, call_timeout=15.0)
     meta = resp["result"]["_meta"]
     assert_eq(meta["done"], False, "gate cell is still running")
     return meta["task_id"]
@@ -218,21 +214,13 @@ def phase_17_gates(kernel: Kernel) -> None:
         # The pill has buttons and no text input, so it can never answer an
         # ask. Routing to it anyway suppressed the "repld gate answer" hint
         # *and* drew nothing — on this kernel, a gate with no surface at all.
-        b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": (
-                        "class _FakePinned:\n"
-                        "    _pinned = True\n"
-                        "    async def _show_gate(self, *a): pass\n"
-                        "defer(ask('token?', tab=_FakePinned()), 'pinned-ask')\n"
-                    ),
-                    "timeout": 5.0,
-                },
-            },
-            timeout=15.0,
+        b.exec(
+            "class _FakePinned:\n"
+            "    _pinned = True\n"
+            "    async def _show_gate(self, *a): pass\n"
+            "defer(ask('token?', tab=_FakePinned()), 'pinned-ask')\n",
+            timeout=5.0,
+            call_timeout=15.0,
         )
         # Every gate above pushed awaiting_human too, and those are still in
         # the stash — an unfiltered wait returns the choose gate's push, which

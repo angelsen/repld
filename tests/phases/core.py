@@ -4,7 +4,7 @@ import socket
 import time
 from pathlib import Path
 
-from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
 
 from repld import core_schemas
 from repld.ipc import Session
@@ -72,27 +72,18 @@ def phase_3(kernel: Kernel) -> None:
         print(f"  ✓ tools/list: {tool_names}")
 
         # Sync exec
-        resp = b.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": "print('hi from exec')"}},
-        )
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("print('hi from exec')")
+        content = content_text(resp)
         meta = resp["result"]["_meta"]
         assert_true("hi from exec" in content, f"sync exec output (got {content!r})")
         assert_eq(meta["done"], True, "sync exec meta.done")
         print(f"  ✓ sync exec: {content.strip()!r}")
 
         # Nudge exec
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": "import time\nfor i in range(3):\n    time.sleep(0.3); print(f'step {i}')",
-                    "timeout": 0.2,
-                },
-            },
-            timeout=3.0,
+        resp = b.exec(
+            "import time\nfor i in range(3):\n    time.sleep(0.3); print(f'step {i}')",
+            timeout=0.2,
+            call_timeout=3.0,
         )
         meta = resp["result"]["_meta"]
         assert_eq(meta["done"], False, "nudge exec meta.done")
@@ -142,14 +133,7 @@ def phase_3(kernel: Kernel) -> None:
 
         # Spill test — every cell with output now spills; large output
         # additionally trips the truncated-preview path.
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {"code": "print('x' * 70000)", "timeout": 5.0},
-            },
-            timeout=10.0,
-        )
+        resp = b.exec("print('x' * 70000)", timeout=5.0, call_timeout=10.0)
         meta = resp["result"]["_meta"]
         assert_eq(meta["done"], True, "spill exec done")
         assert_eq(meta["spilled"], True, "spill exec meta.spilled")
@@ -166,11 +150,8 @@ def phase_3(kernel: Kernel) -> None:
         print(f"  ✓ spill: {spill_path} ({len(head)} chars head, starts with x's)")
 
         # Multi-line str results print verbatim (no repr()-escaping of \n).
-        resp = b.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": "'line one\\nline two'"}},
-        )
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("'line one\\nline two'")
+        content = content_text(resp)
         assert_true(
             "line one\nline two" in content and "\\n" not in content,
             f"multi-line str displayed verbatim (got {content!r})",
@@ -178,17 +159,14 @@ def phase_3(kernel: Kernel) -> None:
         print(f"  ✓ multi-line str display: {content!r}")
 
         # no_display() suppresses the print but still returns/binds the value.
-        resp = b.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": "no_display('quiet result')"}},
-        )
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("no_display('quiet result')")
+        content = content_text(resp)
         assert_true(
             "quiet result" not in content,
             f"no_display() suppressed output (got {content!r})",
         )
-        resp = b.call("tools/call", {"name": "exec", "arguments": {"code": "_"}})
-        content = resp["result"]["content"][0]["text"]
+        resp = b.exec("_")
+        content = content_text(resp)
         assert_true(
             "quiet result" in content,
             f"no_display() still bound to _ (got {content!r})",

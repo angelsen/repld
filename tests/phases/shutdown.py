@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from harness import Bridge, Kernel, assert_true
+from harness import Bridge, Kernel, assert_true, content_text
 
 
 def phase_11_shutdown(kernel: Kernel) -> None:
@@ -55,14 +55,10 @@ def _test_clean_drain() -> None:
             f"        open({str(defer_witness)!r}, 'a').write('defer-cleaned\\n')\n"
             "defer(_slow(), label='witness_defer')\n"
         )
-        resp = bridge.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": code}},
-            timeout=5.0,
-        )
+        resp = bridge.exec(code)
         assert_true(
             not resp["result"].get("isError", False),
-            f"register witness tasks: {resp['result']['content'][0]['text']!r}",
+            f"register witness tasks: {content_text(resp)!r}",
         )
         # Let the first @every tick run and defer schedule onto the loop.
         time.sleep(0.5)
@@ -109,11 +105,7 @@ def _test_budget_enforcement() -> None:
             "    finally:\n"
             "        time.sleep(60)\n"
         )
-        resp = bridge.call(
-            "tools/call",
-            {"name": "exec", "arguments": {"code": code}},
-            timeout=5.0,
-        )
+        resp = bridge.exec(code)
         assert_true(
             not resp["result"].get("isError", False),
             "register stuck ticker",

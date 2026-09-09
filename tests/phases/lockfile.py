@@ -7,7 +7,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
 
 
 def _mode(p: Path) -> str:
@@ -379,10 +379,8 @@ def phase_5_init(_kernel: Kernel) -> None:
             b = Bridge(tmp)
             try:
                 b.handshake()
-                resp = b.call(
-                    "tools/call", {"name": "exec", "arguments": {"code": "print(X)"}}
-                )
-                content = resp["result"]["content"][0]["text"]
+                resp = b.exec("print(X)")
+                content = content_text(resp)
                 assert_true(
                     "42" in content,
                     f"repld_init.py's X=42 visible in __main__ (got {content!r})",
@@ -489,7 +487,7 @@ def phase_5_init(_kernel: Kernel) -> None:
                 {"name": "boot_state", "arguments": {}},
                 timeout=60.0,
             )
-            content = resp["result"]["content"][0]["text"]
+            content = content_text(resp)
             assert_true(
                 "bootstrap finished" in content,
                 f"gist tool waits for a slow bootstrap (got {content!r})",

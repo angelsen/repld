@@ -8,18 +8,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
 
 from repld.sessions import SESSIONS_DIR
 
 
 def _kernel_pid(bridge: Bridge) -> int:
-    resp = bridge.call(
-        "tools/call",
-        {"name": "exec", "arguments": {"code": "print(__import__('os').getpid())"}},
-    )
-    content = resp["result"]["content"][0]["text"]
-    return int(content.strip())
+    resp = bridge.exec("print(__import__('os').getpid())")
+    return int(content_text(resp).strip())
 
 
 def phase_13_sessions(kernel: Kernel) -> None:
@@ -40,19 +36,11 @@ def phase_13_sessions(kernel: Kernel) -> None:
         )
         print(f"  ✓ session file written: {session_file}")
 
-        resp = b.call(
-            "tools/call",
-            {
-                "name": "exec",
-                "arguments": {
-                    "code": (
-                        "from repld import sessions as _s\n"
-                        "print([s['pid'] for s in _s.list_sessions()])"
-                    )
-                },
-            },
+        resp = b.exec(
+            "from repld import sessions as _s\n"
+            "print([s['pid'] for s in _s.list_sessions()])"
         )
-        content = resp["result"]["content"][0]["text"]
+        content = content_text(resp)
         assert_true(
             str(pid) in content,
             f"list_sessions() includes running kernel pid (got {content!r})",
@@ -89,21 +77,13 @@ def _test_unusable_entry_skipped(b: Bridge, cwd: Path) -> None:
         for body, label in _UNUSABLE:
             planted.write_text(body)
 
-            resp = b.call(
-                "tools/call",
-                {
-                    "name": "exec",
-                    "arguments": {
-                        "code": (
-                            "from repld import sessions as _s\n"
-                            "print([type(x).__name__ + ':' + str(x.get('pid'))\n"
-                            "       if isinstance(x, dict) else type(x).__name__\n"
-                            "       for x in _s.list_sessions()])"
-                        )
-                    },
-                },
+            resp = b.exec(
+                "from repld import sessions as _s\n"
+                "print([type(x).__name__ + ':' + str(x.get('pid'))\n"
+                "       if isinstance(x, dict) else type(x).__name__\n"
+                "       for x in _s.list_sessions()])"
             )
-            got = resp["result"]["content"][0]["text"].strip()
+            got = content_text(resp).strip()
             assert_true(
                 "None" not in got and "int" not in got,
                 f"list_sessions() skipped the {label} entry (got {got!r})",

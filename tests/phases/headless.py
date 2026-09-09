@@ -13,22 +13,21 @@ import tempfile
 import time
 from pathlib import Path
 
-from harness import REPO, Bridge, Kernel, assert_eq, assert_true, lock_path_for
+from harness import (
+    REPO,
+    Bridge,
+    Kernel,
+    assert_eq,
+    assert_true,
+    content_text,
+    lock_path_for,
+)
 
 from repld import core_schemas
 
 
 def _handshake(b: Bridge) -> dict:
     return b.handshake(timeout=30)
-
-
-def _exec(
-    b: Bridge, code: str, timeout: float = 5.0, exec_timeout: float | None = None
-) -> dict:
-    args: dict = {"code": code}
-    if exec_timeout is not None:
-        args["timeout"] = exec_timeout
-    return b.call("tools/call", {"name": "exec", "arguments": args}, timeout=timeout)
 
 
 def _lock(cwd: Path) -> dict:
@@ -74,7 +73,7 @@ def _autospawn_and_heal(tmp: Path) -> None:
         )
         print("  ✓ initialize + notifications/initialized spawned no kernel")
 
-        _exec(b, "SENTINEL = 1")
+        b.exec("SENTINEL = 1")
         lock = _wait_lock(tmp)
         first_pid = lock["pid"]
         print(f"  ✓ first real tool call spawned a headless kernel (pid {first_pid})")
@@ -108,23 +107,23 @@ def _autospawn_and_heal(tmp: Path) -> None:
         assert_true(b.proc.poll() is None, "bridge survives kernel death")
 
         # Next request heals: fresh kernel, replayed handshake, working tools.
-        resp = _exec(b, "print('healed')", timeout=40)
-        text = resp["result"]["content"][0]["text"]
+        resp = b.exec("print('healed')", call_timeout=40)
+        text = content_text(resp)
         assert_true("healed" in text, f"exec works after respawn (got {text!r})")
         second_pid = _wait_lock(tmp)["pid"]
         assert_true(second_pid != first_pid, "a new kernel pid took over")
         print(f"  ✓ next request healed onto a fresh kernel (pid {second_pid})")
 
         # State is genuinely new — proves we're talking to a different process.
-        resp = _exec(b, "print('SENTINEL' in dir())")
+        resp = b.exec("print('SENTINEL' in dir())")
         assert_true(
-            "False" in resp["result"]["content"][0]["text"],
+            "False" in content_text(resp),
             "respawned kernel has a fresh namespace",
         )
 
         # Channel push still lands, which only works if the handshake replay
         # marked the new kernel's session initialized.
-        _exec(b, "notify('after respawn')")
+        b.exec("notify('after respawn')")
         b.wait_notification("notifications/claude/channel", timeout=10)
         print("  ✓ channel push arrives after respawn (handshake replayed)")
     finally:
@@ -148,7 +147,7 @@ def _bridge_served_tools(tmp: Path) -> None:
         assert_true("repld_restart" in names, f"bridge tool advertised (got {names})")
         assert_true("exec" in names, "kernel tools still listed alongside it")
 
-        _exec(b, "SENTINEL = 1")
+        b.exec("SENTINEL = 1")
 
         resp = b.call(
             "tools/call", {"name": "repld_restart", "arguments": {}}, timeout=60
@@ -163,12 +162,12 @@ def _bridge_served_tools(tmp: Path) -> None:
         )
         print("  ✓ bridge tool answered in-band (no -31001), kernel replaced")
 
-        resp = _exec(b, "print('SENTINEL' in dir())", timeout=40)
+        resp = b.exec("print('SENTINEL' in dir())", call_timeout=40)
         assert_true(
-            "False" in resp["result"]["content"][0]["text"],
+            "False" in content_text(resp),
             "restarted kernel has a fresh namespace",
         )
-        _exec(b, "notify('after restart')")
+        b.exec("notify('after restart')")
         b.wait_notification("notifications/claude/channel", timeout=10)
         print("  ✓ session survived the restart: handshake replayed, push lands")
 
@@ -265,9 +264,9 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
         )
         print("  ✓ ping + unknown method answered without spawning a kernel")
 
-        resp = _exec(b, "print('post-cache spawn')", timeout=40)
+        resp = b.exec("print('post-cache spawn')", call_timeout=40)
         assert_true(
-            "post-cache spawn" in resp["result"]["content"][0]["text"],
+            "post-cache spawn" in content_text(resp),
             "exec worked after the lazy spawn",
         )
         lock = _wait_lock(tmp)
@@ -315,7 +314,7 @@ def _version_mismatch_cache_discarded(tmp: Path) -> None:
         )
 
         # Leave a live, correctly-versioned kernel behind for later helpers.
-        _exec(b, "SENTINEL2 = 1", timeout=40)
+        b.exec("SENTINEL2 = 1", call_timeout=40)
         _wait_lock(tmp)
     finally:
         b.close()
@@ -405,11 +404,10 @@ def _targeted_push(tmp: Path) -> None:
         _handshake(c)
 
         # Deferred exec from A: exceeds its own timeout, completes later.
-        resp = _exec(
-            a,
+        resp = a.exec(
             "import asyncio\nawait asyncio.sleep(1.5)\nprint('from A')",
-            timeout=10,
-            exec_timeout=0.3,
+            timeout=0.3,
+            call_timeout=10,
         )
         assert_eq(resp["result"]["_meta"]["done"], False, "exec deferred")
 
@@ -429,7 +427,7 @@ def _targeted_push(tmp: Path) -> None:
         print("  ✓ the other session saw nothing (no broadcast fallback)")
 
         # Ambient notify() is genuinely shared state — it still reaches both.
-        _exec(c, "notify('ambient')")
+        c.exec("notify('ambient')")
         for name, b in (("A", a), ("C", c)):
             note = b.wait_notification("notifications/claude/channel", timeout=10)
             assert_true(
@@ -454,12 +452,11 @@ def _no_display_skips_queue(tmp: Path) -> None:
     b = Bridge(tmp)
     try:
         _handshake(b)
-        resp = _exec(
-            b,
+        resp = b.exec(
             "import repld.events as _e\n"
             "print(f'{_e._disabled}:{_e._queue is None}:{len(_e._pre_init_buf)}')",
         )
-        out = resp["result"]["content"][0]["text"]
+        out = content_text(resp)
         assert_true(
             "True:True:0" in out,
             f"headless kernel disabled the queue and dropped the pre-init buffer "
@@ -641,13 +638,13 @@ def phase_15_ephemeral_bridge(_kernel: Kernel) -> None:
                 state.pid_alive(pid), "ephemeral kernel is a real, running process"
             )
 
-            out = _exec(b, "print('alive in the one-off kernel')")
+            out = b.exec("print('alive in the one-off kernel')")
             assert_true(
                 "alive in the one-off kernel" in out["result"]["content"][0]["text"],
                 f"exec runs against the ephemeral kernel (got {out!r})",
             )
 
-            out = _exec(b, "import ephcheck; print(ephcheck.VALUE)")
+            out = b.exec("import ephcheck; print(ephcheck.VALUE)")
             assert_true(
                 "42" in out["result"]["content"][0]["text"],
                 f"./gists resolves for the ephemeral kernel too (got {out!r})",
