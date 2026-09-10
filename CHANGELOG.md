@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Controls observations (`console.debug("__controls__", …)`) now push to the session that drove the tab — a tool call or an exec cell's `tab.invoke()` — instead of broadcasting to every session sharing the kernel; falls back to broadcast only when no session recorded the tab or it's since disconnected.
+
 ### Removed
 
 ## [0.5.7] - 2026-09-07
