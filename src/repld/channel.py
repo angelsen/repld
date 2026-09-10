@@ -26,6 +26,7 @@ def push_channel(
     meta: dict | None = None,
     *,
     session: "ipc.Session | None" = None,
+    fallback_broadcast: bool = False,
 ) -> None:
     """Send a notifications/claude/channel notification AND emit a local
     ChannelPush event so the pane and the event log mirror what the MCP agent
@@ -38,15 +39,19 @@ def push_channel(
     has since disconnected the push is *dropped*, never downgraded to a
     broadcast: leaking one session's output into every other one is worse than
     silence, and the local event still reaches `repld log`.
+
+    `fallback_broadcast=True` is the one deliberate exception: a *best-guess*
+    affinity (e.g. controls observations routed to whichever session last
+    touched the tab) is nobody's specific request the way `origin` is, so a
+    stale guess should degrade to the old broadcast behavior rather than
+    silently vanish.
     """
     meta = meta or {}
     msg = _notification(
         "notifications/claude/channel", {"content": content, "meta": meta}
     )
-    if session is None:
+    if session is None or (not ipc.post_to(session, msg) and fallback_broadcast):
         ipc.broadcast_channel(msg)
-    else:
-        ipc.post_to(session, msg)
     events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
 
 

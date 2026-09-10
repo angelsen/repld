@@ -1814,6 +1814,17 @@ class Tab(TabQueryMixin):
 
     async def invoke(self, control: str, action: str, args: dict | None = None) -> dict:
         """Invoke a control action via window.controls.invoke(). Returns InvokeResult."""
+        # Called straight from exec-cell user code (no session param to thread
+        # through, unlike the browser_invoke tool path — see
+        # browser_dispatch._get_tab), so affinity comes from the cell's own
+        # task context instead.
+        from ..tasks import current_task_id
+        from ..tasks import get as get_task
+
+        task_id = current_task_id()
+        task = get_task(task_id) if task_id else None
+        if task is not None:
+            self._session.last_caller = task.get("origin")
         dialog_start = len(self._session._dialog_log)
         args_js = json.dumps(args) if args else "{}"
         code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"

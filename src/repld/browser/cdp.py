@@ -206,8 +206,13 @@ _CONTROLS_PREFIX = "__controls__"
 _frame_seq_counter = iter(range(1, 1 << 30))
 
 
-def _check_controls_observation(params: dict, target_id: str) -> None:
-    """Detect __controls__ console.debug messages and push as channel notifications."""
+def _check_controls_observation(params: dict, target_id: str, session=None) -> None:
+    """Detect __controls__ console.debug messages and push as channel notifications.
+
+    `session` is `CDPSession.last_caller` — best-guess affinity, not a firm
+    request — so the push falls back to broadcast rather than dropping when
+    it's unset or gone. See `push_channel`'s `fallback_broadcast`.
+    """
     args = params.get("args", [])
     if not args or params.get("type") != "debug":
         return
@@ -244,7 +249,7 @@ def _check_controls_observation(params: dict, target_id: str) -> None:
             meta["stateBefore"] = before
         if after:
             meta["stateAfter"] = after
-        push_channel(line, meta)
+        push_channel(line, meta, session=session, fallback_broadcast=True)
     except Exception:
         pass
 
@@ -407,6 +412,11 @@ class CDPSession:
         self.target_info = target_info
         self.port = port
         self.chrome_target_id = target_info.get("targetId", "")
+
+        # ipc.Session that last drove this tab (tool call or exec cell) — see
+        # Tab.invoke() and browser_dispatch._get_tab. Best-guess affinity for
+        # routing controls observations, not a firm request like tasks.origin.
+        self.last_caller: object | None = None
 
         # In-memory DuckDB.  The main connection is written only from the
         # asyncio loop thread (store_event/_async_prune); query/fetch_body/
@@ -730,7 +740,7 @@ class CDPSession:
                 self._injected = None
 
             if method == "Runtime.consoleAPICalled":
-                _check_controls_observation(params, target_id)
+                _check_controls_observation(params, target_id, self.last_caller)
                 if params.get("type") == "error":
                     _push_console_error(params, target_id, self.port, self._loop)
 

@@ -9,11 +9,18 @@ mixes BrowserDispatchMixin into its Dispatcher class.
 
 import asyncio
 import json
+import threading
 from typing import ClassVar
 
 import __main__
 
 from .kernel_context import KernelContext
+
+# ipc.Session for the tool call currently dispatching on this IPC reader
+# thread, if any — read by `_get_tab` to record `CDPSession.last_caller`.
+# Thread-local because `_browser_tool` runs on the reader thread, one per
+# connection; a module global would let two sessions' calls race each other.
+_dispatch_session = threading.local()
 
 # Wall-clock ceiling on one loop round-trip made from the IPC thread. Bounds
 # every browser tool and every async gist tool — see `_run_async`.
@@ -123,10 +130,11 @@ class BrowserDispatchMixin:
 
     ctx: KernelContext
 
-    def _browser_tool(self, rid, name: str, args: dict) -> dict:
+    def _browser_tool(self, rid, name: str, args: dict, session=None) -> dict:
         """Dispatch a browser_* tool call."""
         from .protocol import _error
 
+        _dispatch_session.current = session
         try:
             result = self._browser_dispatch(name, args)
             if isinstance(result, str):
@@ -136,6 +144,8 @@ class BrowserDispatchMixin:
             return self._spill_response(rid, text, label=name)
         except Exception as exc:
             return _error(rid, -32000, f"{name}: {exc}")
+        finally:
+            _dispatch_session.current = None
 
     def _spill_response(self, rid, text: str, label: str = "output") -> dict:
         """Build a tool/resource response using the unified spill pipeline."""
@@ -210,7 +220,11 @@ class BrowserDispatchMixin:
         return self._run_async(_call())
 
     def _get_tab(self, browser, args):
-        return self._run_async(browser.get(args["target"]))
+        tab = self._run_async(browser.get(args["target"]))
+        session = getattr(_dispatch_session, "current", None)
+        if session is not None:
+            tab._session.last_caller = session
+        return tab
 
     def _browser_dispatch(self, name: str, args: dict):
         """Route to individual browser tool handler.

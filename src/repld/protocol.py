@@ -801,7 +801,7 @@ class Dispatcher(BrowserDispatchMixin):
         # than a race.
         self.ctx.wait_ready()
         if name.startswith("browser_"):
-            return self._browser_tool(rid, name, args)
+            return self._browser_tool(rid, name, args, session=session)
         return self._gist_tool(rid, name, args)
 
     def _exec(self, rid, args: dict, session=None) -> dict:
