@@ -40,6 +40,15 @@ def negotiate_version(requested) -> str:
     return requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
 
 
+# Bridge-identity fields the bridge rides on its `initialize` forward (see
+# bridge._stamp_identity) so the kernel can register the session for
+# notify(session=)/claude_sessions(). Internal wire only, never advertised
+# to the MCP client — `_`-prefixed to signal that alongside the spec's own
+# params.
+BRIDGE_SESSION_ID_KEY = "_claude_session_id"
+BRIDGE_PROJECT_DIR_KEY = "_claude_project_dir"
+
+
 # What `initialize` negotiates, from either side of the socket. Shared for the
 # same reason the tool schemas are: the bridge answers `initialize` itself when
 # no kernel has ever run here, so a capability declared only in `protocol.py`

@@ -1,11 +1,12 @@
-"""Phase 4: Channel notifications — task_done push, notify() from user code, pre-gate queuing."""
+"""Phase 4: Channel notifications — task_done push, notify() from user code,
+pre-gate queuing, notify(session=)/claude_sessions() identity targeting."""
 
 import ast
 import re
 import time
 from queue import Empty
 
-from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
 
 
 def phase_4_push_kind_args(_kernel: Kernel) -> None:
@@ -169,3 +170,82 @@ def phase_4b_pregate(kernel: Kernel) -> None:
         print("  ✓ pre-init channel push queued & flushed on initialized")
     finally:
         b.close()
+
+
+def phase_4c_claude_sessions(kernel: Kernel) -> None:
+    """notify(session=) targets one Claude Code session by id, no broadcast
+    fallback on a miss; claude_sessions() lists connected (id, project_dir)
+    pairs, with (None, None) for a session with no Claude Code identity."""
+    a = Bridge(
+        kernel.cwd,
+        env={"CLAUDE_CODE_SESSION_ID": "sess-A", "CLAUDE_PROJECT_DIR": "/proj/a"},
+    )
+    b = Bridge(
+        kernel.cwd,
+        env={"CLAUDE_CODE_SESSION_ID": "sess-B", "CLAUDE_PROJECT_DIR": "/proj/b"},
+    )
+    try:
+        a.handshake()
+        b.handshake()
+        print("  ✓ two bridges, distinct CLAUDE_CODE_SESSION_ID")
+
+        # Targeted notify reaches only the named session, and reports delivery.
+        resp = b.exec("print(notify('for-A', session='sess-A'))", call_timeout=3.0)
+        assert_true(
+            "True" in content_text(resp), "notify(session=) returns True on hit"
+        )
+
+        notif = a.wait_notification("notifications/claude/channel", timeout=3.0)
+        assert_true(
+            "for-A" in notif["params"]["content"], "targeted session received it"
+        )
+        try:
+            b.wait_notification("notifications/claude/channel", timeout=1.0)
+            raise AssertionError("targeted push leaked to the sender")
+        except TimeoutError:
+            pass
+        print("  ✓ notify(session=) reaches only the named session")
+
+        # A miss returns False — no fallback to broadcast.
+        resp = a.exec("print(notify('nowhere', session='sess-NOPE'))", call_timeout=3.0)
+        assert_true("False" in content_text(resp), "unknown session id returns False")
+        try:
+            b.wait_notification("notifications/claude/channel", timeout=1.0)
+            raise AssertionError("a miss fell back to broadcast")
+        except TimeoutError:
+            pass
+        print("  ✓ notify(session=<unknown>) returns False, no broadcast fallback")
+
+        # claude_sessions() lists both, with their project dirs.
+        resp = a.exec("print(sorted(claude_sessions()))", call_timeout=3.0)
+        out = content_text(resp)
+        assert_true(
+            "sess-A" in out and "/proj/a" in out, f"sess-A listed (got {out!r})"
+        )
+        assert_true(
+            "sess-B" in out and "/proj/b" in out, f"sess-B listed (got {out!r})"
+        )
+        print(f"  ✓ claude_sessions(): {out.strip()}")
+    finally:
+        a.close()
+        b.close()
+
+    # A bridge with no Claude Code env still connects and shows (None, None) —
+    # explicit deletion, since the test process's own env may already carry
+    # CLAUDE_CODE_SESSION_ID (e.g. this suite running inside a Claude Code
+    # session).
+    c = Bridge(
+        kernel.cwd,
+        env={"CLAUDE_CODE_SESSION_ID": None, "CLAUDE_PROJECT_DIR": None},
+    )
+    try:
+        c.handshake()
+        resp = c.exec("print(claude_sessions())", call_timeout=3.0)
+        out = content_text(resp)
+        assert_true(
+            "(None, None)" in out,
+            f"env-less bridge reports (None, None) (got {out!r})",
+        )
+        print("  ✓ a bridge with no CLAUDE_CODE_SESSION_ID env reports (None, None)")
+    finally:
+        c.close()

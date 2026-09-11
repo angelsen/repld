@@ -53,6 +53,10 @@ from . import (
     state,
 )
 from .core_schemas import (
+    BRIDGE_PROJECT_DIR_KEY,
+    BRIDGE_SESSION_ID_KEY,
+)
+from .core_schemas import (
     error as _error,
 )
 from .core_schemas import (
@@ -216,6 +220,10 @@ class Bridge:
         self._generation = 0
         self._client_init: dict | None = None
         self._client_initialized = False
+        # Both absent for a non-Claude-Code MCP client or a hand-run bridge —
+        # _replay_handshake degrades to a plain replay with neither field.
+        self._claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        self._claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         self._inflight: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
@@ -547,6 +555,27 @@ class Bridge:
         if rid is not None:
             self._to_client(_response(rid, result))
 
+    def _stamp_identity(self, msg: dict) -> dict:
+        """Attach this bridge's Claude Code identity to an `initialize` about
+        to reach the kernel — internal wire only, never part of what the
+        client sent. Returns `msg` unchanged if neither env var was read.
+
+        Called from both `_dispatch_client_line`'s plain forward and
+        `_replay_handshake`'s replay onto a fresh kernel — an already-running
+        kernel gets the client's very first `initialize` via the former, so
+        stamping only the latter would leave that common case unregistered.
+        """
+        if self._claude_session_id is None and self._claude_project_dir is None:
+            return msg
+        stamped = dict(msg)
+        params = dict(stamped.get("params") or {})
+        if self._claude_session_id is not None:
+            params[BRIDGE_SESSION_ID_KEY] = self._claude_session_id
+        if self._claude_project_dir is not None:
+            params[BRIDGE_PROJECT_DIR_KEY] = self._claude_project_dir
+        stamped["params"] = params
+        return stamped
+
     def _replay_handshake(self) -> None:
         """Re-run the client's initialize (and initialized, if seen) on a new kernel.
 
@@ -562,7 +591,7 @@ class Bridge:
         assert self._client_init is not None
         replay = dict(self._client_init)
         replay["id"] = BRIDGE_INIT_ID
-        self._to_kernel(replay)
+        self._to_kernel(self._stamp_identity(replay))
         if self._client_initialized:
             self._to_kernel(_notification("notifications/initialized"))
 
@@ -763,6 +792,7 @@ class Bridge:
         # answered. Only a kernel attached from here on is a *fresh* one.
         if method == "initialize":
             self._client_init = msg
+            line = json.dumps(self._stamp_identity(msg)) + "\n"
         # Reaching here (rather than the discovery intercept) means a kernel
         # was already attached, so this is a plain forward — record it the
         # same way, for whatever *next* reconnect's _replay_handshake needs.

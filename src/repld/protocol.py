@@ -11,8 +11,11 @@ from typing import ClassVar
 
 import __main__
 
+from . import ipc
 from .browser_dispatch import BrowserDispatchMixin
 from .core_schemas import (
+    BRIDGE_PROJECT_DIR_KEY,
+    BRIDGE_SESSION_ID_KEY,
     CAPABILITIES,
     CORE_TOOLS,
     DOC_HELP_ATTRS,
@@ -693,7 +696,7 @@ class Dispatcher(BrowserDispatchMixin):
         method = req.get("method")
         rid = req.get("id")
         if method == "initialize":
-            return self._initialize(rid, req.get("params", {}))
+            return self._initialize(rid, req.get("params", {}), session)
         if method == "notifications/initialized":
             session.set_initialized()
             return None
@@ -753,7 +756,15 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, f"gate {gate_id} was already answered")
         return _response(rid, {"gate_id": gate_id, "value": value})
 
-    def _initialize(self, rid, params: dict) -> dict:
+    def _initialize(self, rid, params: dict, session=None) -> dict:
+        # Bridge-identity fields ride on `initialize`'s own params (see
+        # bridge._replay_handshake) rather than a separate round-trip, so a
+        # kernel restart re-identifies the session for free on replay.
+        claude_id = params.get(BRIDGE_SESSION_ID_KEY)
+        if session is not None and claude_id is not None:
+            ipc.register_claude_session(
+                session, claude_id, params.get(BRIDGE_PROJECT_DIR_KEY)
+            )
         return _response(
             rid,
             {

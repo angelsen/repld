@@ -40,8 +40,20 @@ class Bridge:
     Writes requests to stdin, reads NDJSON messages off stdout into a queue.
     """
 
-    def __init__(self, cwd: Path, *extra_args: str):
-        env = os.environ.copy()
+    def __init__(
+        self, cwd: Path, *extra_args: str, env: dict[str, str | None] | None = None
+    ):
+        # A None value deletes the key rather than setting it — the ambient
+        # environment this test process itself runs under (e.g. when this
+        # very suite runs inside a Claude Code session) can already carry
+        # CLAUDE_CODE_SESSION_ID, and a bare os.environ.copy() would leak it
+        # into a bridge a test means to spawn with no Claude Code identity.
+        proc_env = os.environ.copy()
+        for k, v in (env or {}).items():
+            if v is None:
+                proc_env.pop(k, None)
+            else:
+                proc_env[k] = v
         self.proc = subprocess.Popen(
             ["uv", "run", "--project", str(REPO), "repld", "bridge", *extra_args],
             cwd=str(cwd),
@@ -49,7 +61,7 @@ class Bridge:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=proc_env,
         )
         self.inbox: Queue[dict] = Queue()
         self._notifs: list[dict] = []

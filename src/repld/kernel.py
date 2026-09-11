@@ -237,9 +237,34 @@ def _banner(
 # ---------------------------------------------------------------------------
 
 
-def _notify(content, **meta) -> None:
-    """Push a channel notification to all connected MCP sessions. meta keys become XML attributes."""
+def _notify(content, *, session=None, **meta) -> bool | None:
+    """Push a channel notification. meta keys become XML attributes.
+
+    session=None (default) broadcasts to every connected MCP session,
+    returning None. session=<claude_session_id> targets one session by the
+    id claude_sessions() lists — returns True if delivered, False if that
+    session isn't connected. No fallback to broadcast on a miss: that would
+    defeat the point of asking for one session specifically.
+    """
+    if session is not None:
+        target = ipc.find_claude_session(session)
+        if target is None:
+            return False
+        push_channel(str(content), meta, session=target)
+        return True
     push_channel(str(content), meta)
+    return None
+
+
+def _claude_sessions() -> list[tuple[str | None, str | None]]:
+    """List connected MCP sessions as (claude_session_id, claude_project_dir).
+
+    Both are None for a session with no Claude Code identity (a hand-run
+    bridge, or a non-Claude-Code MCP client). Named apart from the existing
+    `repld.sessions` submodule (kernel-*process* registry, `sessions.py`) —
+    setattr-ing `repld.sessions` here would shadow that submodule import.
+    """
+    return ipc.list_claude_sessions()
 
 
 def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
@@ -1115,6 +1140,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         "confirm": gates.confirm,
         "choose": gates.choose,
         "no_display": runtime.no_display,
+        "claude_sessions": _claude_sessions,
     }
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)

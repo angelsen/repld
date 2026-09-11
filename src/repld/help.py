@@ -50,6 +50,10 @@ _EXEC_MODEL = (
     "ask()/confirm()/choose() block the cell on human input; the answer comes "
     "from the kernel's pane, a pinned tab's pill, or `repld gate answer <id>` "
     "when the kernel is headless (the usual case — the push tells you which). "
+    "notify(content, *, session=None, **meta) pushes a channel notification; "
+    "session=<claude_session_id> targets one connected Claude Code session "
+    "(False if it isn't connected, no fallback to broadcast). "
+    "claude_sessions() lists connected (session_id, project_dir) pairs. "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
     "The kernel persists; one-shot work can become background automation."
@@ -1709,8 +1713,17 @@ TimeoutError if no default and timeout expires — pass timeout= for any gate
 that must not park a cell indefinitely.
 Emits awaiting_human channel while blocked.
 
-notify(content, **meta)
-  One-shot channel push to all MCP sessions.
+notify(content, *, session=None, **meta)
+  One-shot channel push. With no session=, broadcasts to all MCP sessions.
+  session=<claude_session_id> targets one Claude Code session by the id
+  claude_sessions() lists — returns True if delivered, False if that
+  session isn't connected (no fallback to broadcast: a miss is dropped,
+  same rule as a task-done push whose originator disconnected).
+
+claude_sessions()
+  Returns a list of (claude_session_id, project_dir) tuples, one per
+  connected MCP session. Both are None for a session with no Claude Code
+  identity — a hand-run `repld bridge`, or another MCP client.
 """,
     "migration": """\
 Why a repld project has no state files (0.1.x → 0.2).
@@ -1953,7 +1966,16 @@ Both the agent and the human see the same live objects.
 
 Injected into __main__:
 
-  notify(content, **meta)      push a channel notification to the agent
+  notify(content, *, session=None, **meta)
+                               push a channel notification. With no session=,
+                               broadcasts to every connected MCP session.
+                               session=<claude_session_id> targets one by the
+                               id claude_sessions() lists — returns False if
+                               it's not connected (no fallback to broadcast),
+                               True if delivered, None on a plain broadcast.
+  claude_sessions()            list connected (session_id, project_dir)
+                               pairs; both None for a session with no Claude
+                               Code identity (hand-run bridge, other client)
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds, delay=0)(fn)  periodic ticker; fn.cancel() stops it.
                                delay= defers the first tick — a watchdog
@@ -2061,7 +2083,8 @@ Template:
 === Conventions ===
 
 Import kernel builtins via `import repld` at module top level. Access as
-repld.browser, repld.notify, repld.defer, repld.every, repld.no_display. Module-level import
+repld.browser, repld.notify, repld.defer, repld.every, repld.no_display,
+repld.claude_sessions. Module-level import
 is auto-reload safe (attribute lookup on each call, not a frozen reference).
 Exception: if this gist might be linked into another project (repld gist add)
 and doesn't otherwise need a kernel to run, keep `import repld` local to the

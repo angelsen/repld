@@ -75,6 +75,11 @@ class Session:
         # threading.Timer(1.0) retry hack.
         self.pending: list[dict] = []
         self._closed = False
+        # Set by Server.register_claude_session once `initialize` carries the
+        # bridge-identity fields (core_schemas.BRIDGE_SESSION_ID_KEY etc.).
+        # None for a non-Claude-Code client or a bridge run by hand.
+        self.claude_session_id: str | None = None
+        self.claude_project_dir: str | None = None
 
     @property
     def closed(self) -> bool:
@@ -157,6 +162,9 @@ class Server:
         self.accept_thread: threading.Thread | None = None
         self.sessions: set[Session] = set()
         self.sessions_lock = threading.Lock()
+        # claude_session_id -> Session, same lock as `sessions` since both
+        # mutate together on register/disconnect.
+        self._claude_sessions: dict[str, Session] = {}
         self._stop = False
 
     def start(self) -> None:
@@ -222,6 +230,13 @@ class Server:
         finally:
             with self.sessions_lock:
                 self.sessions.discard(session)
+                # Only if it's still this session — a reconnect can have
+                # already replaced the entry via register_claude_session.
+                if (
+                    session.claude_session_id is not None
+                    and self._claude_sessions.get(session.claude_session_id) is session
+                ):
+                    del self._claude_sessions[session.claude_session_id]
             session.close()
 
     def broadcast_channel(self, msg: dict) -> None:
@@ -244,6 +259,29 @@ class Server:
         session.post_channel(msg)
         return not session.closed
 
+    def register_claude_session(
+        self, session: Session, session_id: str, project_dir: str | None
+    ) -> None:
+        """Bind a Claude Code session id to this connection.
+
+        Replaces any existing entry for the same id without unregistering
+        it first — a reconnecting bridge (kernel restart) presents the same
+        id on a fresh Session, and the old one is already gone or going.
+        """
+        session.claude_session_id = session_id
+        session.claude_project_dir = project_dir
+        with self.sessions_lock:
+            self._claude_sessions[session_id] = session
+
+    def find_claude_session(self, session_id: str) -> Session | None:
+        with self.sessions_lock:
+            return self._claude_sessions.get(session_id)
+
+    def list_claude_sessions(self) -> list[tuple[str | None, str | None]]:
+        with self.sessions_lock:
+            targets = list(self.sessions)
+        return [(s.claude_session_id, s.claude_project_dir) for s in targets]
+
     def stop(self) -> None:
         if self._stop:
             return
@@ -256,6 +294,7 @@ class Server:
         with self.sessions_lock:
             sessions = list(self.sessions)
             self.sessions.clear()
+            self._claude_sessions.clear()
         for s in sessions:
             s.close()
         try:
@@ -294,3 +333,22 @@ def post_to(session: Session, msg: dict) -> bool:
     if _server is None:
         return False
     return _server.post_to(session, msg)
+
+
+def register_claude_session(
+    session: Session, session_id: str, project_dir: str | None
+) -> None:
+    if _server is not None:
+        _server.register_claude_session(session, session_id, project_dir)
+
+
+def find_claude_session(session_id: str) -> Session | None:
+    if _server is None:
+        return None
+    return _server.find_claude_session(session_id)
+
+
+def list_claude_sessions() -> list[tuple[str | None, str | None]]:
+    if _server is None:
+        return []
+    return _server.list_claude_sessions()
