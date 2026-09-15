@@ -4,6 +4,7 @@ pre-gate queuing, notify(session=)/claude_sessions() identity targeting."""
 import ast
 import re
 import time
+from pathlib import Path
 from queue import Empty
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
@@ -249,3 +250,43 @@ def phase_4c_claude_sessions(kernel: Kernel) -> None:
         print("  ✓ a bridge with no CLAUDE_CODE_SESSION_ID env reports (None, None)")
     finally:
         c.close()
+
+
+def phase_4d_channel_spill(kernel: Kernel) -> None:
+    """push_channel spills oversized content to disk (full text recoverable at
+    its `[full output: ...]` path) rather than losing it to a flat clip; a
+    huge `meta` value still gets the flat clip since it's attribute-shaped."""
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+
+        b.exec("notify('x' * 10000, kind='big')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="big", timeout=3.0
+        )
+        content = notif["params"]["content"]
+        m = re.search(r"\[full output: (.+)\]", content)
+        assert_true(
+            m is not None, f"spilled content carries a marker (got {content!r})"
+        )
+        assert m is not None
+        spill_path = m.group(1)
+        assert_true(Path(spill_path).exists(), f"spill file exists: {spill_path}")
+        with open(spill_path) as f:
+            full = f.read()
+        assert_eq(len(full), 10000, "spill file holds the untruncated content")
+        assert_true(full == "x" * 10000, "spill file content matches exactly")
+        print(f"  ✓ oversized notify() content spilled to {spill_path}")
+
+        b.exec("notify('short', kind='big', blob='y' * 5000)", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="big", timeout=3.0
+        )
+        blob = notif["params"]["meta"]["blob"]
+        assert_true(
+            len(blob) < 5000 and "chars total" in blob,
+            f"oversized meta value is flat-clipped, not spilled (got {len(blob)} chars)",
+        )
+        print(f"  ✓ oversized meta value clipped in place ({len(blob)} chars)")
+    finally:
+        b.close()
