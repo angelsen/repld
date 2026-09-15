@@ -20,6 +20,15 @@ from . import events, ipc
 from .core_schemas import notification as _notification
 from .events import ChannelPush
 
+_CONTENT_LIMIT = 4000
+_META_VALUE_LIMIT = 2000
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"… ({len(text)} chars total)"
+
 
 def push_channel(
     content: str,
@@ -45,14 +54,24 @@ def push_channel(
     touched the tab) is nobody's specific request the way `origin` is, so a
     stale guess should degrade to the old broadcast behavior rather than
     silently vanish.
+
+    `content` and every `meta` value are clipped here (`_CONTENT_LIMIT`,
+    `_META_VALUE_LIMIT`) — the backstop for callers that pass through
+    external or user data unbounded (`notify()`'s content, `@every`'s
+    stringified result, a controls observation's state), so a single huge
+    push can't burn through a receiving session's whole context. A caller
+    with a domain-specific preview shape (e.g. `cdp._check_controls_observation`)
+    should still clip its own way first; this only catches what isn't.
     """
     meta = meta or {}
+    content = _clip(content, _CONTENT_LIMIT)
+    meta = {k: _clip(str(v), _META_VALUE_LIMIT) for k, v in meta.items()}
     msg = _notification(
         "notifications/claude/channel", {"content": content, "meta": meta}
     )
     if session is None or (not ipc.post_to(session, msg) and fallback_broadcast):
         ipc.broadcast_channel(msg)
-    events.emit(ChannelPush(content, {k: str(v) for k, v in meta.items()}))
+    events.emit(ChannelPush(content, meta))
 
 
 def push_kind(content: str, kind: str, *, session=None, **meta: str) -> None:

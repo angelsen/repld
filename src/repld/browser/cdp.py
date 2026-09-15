@@ -199,6 +199,14 @@ def _json_dumps_safe(data: Any) -> str:
 
 
 _CONTROLS_PREFIX = "__controls__"
+_CONTROLS_STATE_LIMIT = 300  # a before/after preview, not the full state
+
+
+def _clip_state(text: str) -> str:
+    if len(text) <= _CONTROLS_STATE_LIMIT:
+        return text
+    return text[:_CONTROLS_STATE_LIMIT] + f"… ({len(text)} chars total)"
+
 
 # Per-session sequence for the injected engine's frameSeq option: it prefixes
 # every aria-ref (f<seq>eN), so refs from different sessions (a tab and its
@@ -227,12 +235,17 @@ def _check_controls_observation(params: dict, target_id: str, session=None) -> N
     control = obs.get("control", "?")
     action = obs.get("action", "?")
     summary = obs.get("summary", f"{control}.{action}()")
-    before = obs.get("stateBefore", "")
-    after = obs.get("stateAfter", "")
+    raw_before = obs.get("stateBefore", "")
+    raw_after = obs.get("stateAfter", "")
+    # A lesson-shaped (or otherwise large) state can be megabytes; clipped here, matching
+    # _push_error_text's text[:300] below, so the line stays a summary, not a dump. Compared
+    # before clipping so a diff past char 300 still shows.
+    before = _clip_state(raw_before)
+    after = _clip_state(raw_after)
     duration = obs.get("duration", 0)
     error = obs.get("error")
     line = f"[controls] {summary}"
-    if before != after:
+    if raw_before != raw_after:
         line += f" — state: {before!r} → {after!r}"
     if duration:
         line += f" ({duration}ms)"

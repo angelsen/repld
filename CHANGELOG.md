@@ -13,6 +13,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `push_channel` now clips `content` (4000 chars) and every `meta` value (2000 chars) as a backstop against unbounded external/user data (`notify()` content, `@every` results, controls-observation state) burning through a session's context. Controls observations additionally preview `stateBefore`/`stateAfter` at 300 chars each before that.
+
 ### Fixed
 
 ### Removed
