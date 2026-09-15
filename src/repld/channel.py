@@ -19,8 +19,9 @@ function-local `from .kernel import push_channel` to dodge a cycle.
 from . import events, ipc
 from .core_schemas import notification as _notification
 from .events import ChannelPush
+from .tasks import spill_marker as _spill_marker
+from .tasks import spill_text as _spill_text
 
-_CONTENT_LIMIT = 4000
 _META_VALUE_LIMIT = 2000
 
 
@@ -55,16 +56,24 @@ def push_channel(
     stale guess should degrade to the old broadcast behavior rather than
     silently vanish.
 
-    `content` and every `meta` value are clipped here (`_CONTENT_LIMIT`,
-    `_META_VALUE_LIMIT`) — the backstop for callers that pass through
-    external or user data unbounded (`notify()`'s content, `@every`'s
-    stringified result, a controls observation's state), so a single huge
-    push can't burn through a receiving session's whole context. A caller
-    with a domain-specific preview shape (e.g. `cdp._check_controls_observation`)
-    should still clip its own way first; this only catches what isn't.
+    `content` is a backstop for callers that pass through external or user
+    data unbounded (`notify()`'s content, `@every`'s stringified result, a
+    controls observation's state): it goes through `tasks.spill_text`, the
+    same head+tail preview and spill-to-disk exec output uses, so a huge push
+    loses nothing — the full text stays reachable at the `[full output: ...]`
+    path instead of being cut off. `meta` values only get the flat
+    `_META_VALUE_LIMIT` clip — they're XML-attribute-shaped (`kind`,
+    `control`, `target`, ...), never a payload worth a spill file of its own.
+    A caller with a domain-specific preview shape (e.g.
+    `cdp._check_controls_observation`) should still clip its own way first;
+    this only catches what isn't.
     """
     meta = meta or {}
-    content = _clip(content, _CONTENT_LIMIT)
+    sp = _spill_text(content, label="channel")
+    content = sp["text"]
+    if sp["truncated"]:
+        marker = _spill_marker(sp["spill_path"])
+        content = f"{content}\n{marker}" if content else marker
     meta = {k: _clip(str(v), _META_VALUE_LIMIT) for k, v in meta.items()}
     msg = _notification(
         "notifications/claude/channel", {"content": content, "meta": meta}
