@@ -1,6 +1,7 @@
 """Phase 9: Gist-registered MCP tools — discovery, dispatch, auto-reload, error handling."""
 
 import json
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _legacy_declaration_inert(b, gists_dir)
         _single_dict_param(b, gists_dir)
         _handler_error(b, gists_dir)
+        _oversized_result_spills(b, gists_dir)
         _bad_tool_calls(b)
     finally:
         b.close()
@@ -93,12 +95,15 @@ def _typed_tool_discovery_and_dispatch(b: Bridge, gists_dir: Path) -> None:
             result,
             "dict return carried as structuredContent too",
         )
-        # No spill metadata — gist tools bypass the spill pipeline.
+        # Small results carry no spill _meta — only the exec/get_task paths
+        # expose spill bookkeeping via _meta; a gist tool's spill marker (when
+        # one fires) lives inline in the text block instead, see
+        # _oversized_result_spills.
         assert_true(
             "_meta" not in resp["result"],
             f"gist tool has no _meta (got {list(resp['result'].keys())})",
         )
-        print(f"  ✓ gist tool call: {text!r} (no spill, structured)")
+        print(f"  ✓ gist tool call: {text!r} (structured, no _meta)")
 
 
 def _annotated_params(b: Bridge, gists_dir: Path) -> None:
@@ -268,6 +273,30 @@ def _handler_error(b: Bridge, gists_dir: Path) -> None:
             f"error message contains exception text (got {resp['error']['message']!r})",
         )
         print(f"  ✓ gist tool error: {resp['error']['message']!r}")
+
+
+def _oversized_result_spills(b: Bridge, gists_dir: Path) -> None:
+    """A gist tool's text result is arbitrary code output, same as exec — it
+    goes through the spill pipeline too, so a large return doesn't dump
+    straight into the response."""
+    source = (
+        '"""Smoketest gist — oversized result."""\n\n'
+        "async def _tool_smoke_big(size: int) -> str:\n"
+        '    """Return a string of the given size."""\n'
+        '    return "x" * size\n'
+    )
+    with _gist(gists_dir, "smoke_tools", source):
+        resp = _call(b, "smoke_big", {"size": 10000})
+        text = content_text(resp)
+        m = re.search(r"\[full output: (.+)\]", text)
+        assert_true(m is not None, f"spilled result carries a marker (got {text!r})")
+        assert m is not None
+        spill_path = m.group(1)
+        assert_true(Path(spill_path).exists(), f"spill file exists: {spill_path}")
+        with open(spill_path) as f:
+            full = f.read()
+        assert_eq(len(full), 10000, "spill file holds the untruncated result")
+        print(f"  ✓ oversized gist tool result spilled to {spill_path}")
 
 
 def _bad_tool_calls(b: Bridge) -> None:

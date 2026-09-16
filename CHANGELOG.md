@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Gist-registered MCP tools (`_tool_*` handlers) now run their text result through `tasks.spill_text` too, so an oversized return doesn't dump straight into the MCP response — the last tool-facing path that had no size backstop (exec, `push_channel`, browser tools, and resource reads already did). `structuredContent` for dict returns is unaffected.
+
 ### Removed
 
 ## [0.5.8] - 2026-09-10

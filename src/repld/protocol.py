@@ -902,8 +902,11 @@ class Dispatcher(BrowserDispatchMixin):
     def _gist_tool(self, rid, name: str, args: dict) -> dict:
         """Dispatch to a gist-registered tool handler.
 
-        Handlers return str or JSON-serializable data.  No spill pipeline —
-        the handler controls output size.
+        Handlers return str or JSON-serializable data; the text block goes
+        through the same spill pipeline as exec/browser tools, since a
+        handler is arbitrary code with no more bound on its output than an
+        exec cell. `structuredContent` carries the dict as-is — it has no
+        text-shaped preview to spill.
         """
         from . import gists
 
@@ -918,15 +921,15 @@ class Dispatcher(BrowserDispatchMixin):
             if inspect.iscoroutine(result):
                 result = self._run_async(result)
             body: dict = {}
-            if not isinstance(result, str):
+            if isinstance(result, dict):
                 # Dict returns ride as structuredContent too — no outputSchema
                 # (nothing to infer one from), which the spec allows; only
                 # objects qualify, since structuredContent is object-typed in
                 # 2025-06-18. The text block stays the canonical fallback.
-                if isinstance(result, dict):
-                    body["structuredContent"] = result
-                result = json.dumps(result, indent=2)
-            body["content"] = [{"type": "text", "text": result}]
+                body["structuredContent"] = result
+            text = result if isinstance(result, str) else json.dumps(result, indent=2)
+            sp = _spill_text(text, label=name)
+            body["content"] = [{"type": "text", "text": _format_spill(sp, text)}]
             return _response(rid, body)
         except Exception as exc:
             return _error(rid, -32000, f"{name}: {exc}")
