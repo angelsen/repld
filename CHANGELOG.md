@@ -24,6 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `push_channel` now runs `content` through `tasks.spill_text` (the same head+tail preview and spill-to-disk exec output uses) rather than a flat clip, so a huge push from unbounded external/user data (`notify()` content, `@every` results, controls-observation state) stays fully recoverable at its `[full output: ...]` path instead of losing its tail. `meta` values still get a flat 2000-char clip — they're XML-attribute-shaped, not payloads. Controls observations additionally preview `stateBefore`/`stateAfter` at 300 chars each, compared before clipping so a diff past that cutoff still shows.
+- The always-loaded exec instructions and `get_task`'s tool description now tell the agent to poll `get_task` itself, in a loop, before ending its turn on deferred work rather than trust a later channel push — confirmed live that a `claude --bg` worker accepts the push at the socket (delivered) but never produces a new turn from it, so a session that's already ended its turn never sees it.
 
 ### Fixed
 
