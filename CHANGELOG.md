@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.5.9] - 2026-09-18
+
+### Added
+
 - `notify(content, *, session=None, **meta)` — `session=<claude_session_id>` targets one connected Claude Code session by id instead of broadcasting; returns `True` if delivered, `False` if that session isn't connected (no fallback to broadcast).
 - `claude_sessions()` builtin — lists connected MCP sessions as `(claude_session_id, project_dir, kind)` tuples, straight from kernel state. The bridge forwards `CLAUDE_CODE_SESSION_ID`/`CLAUDE_PROJECT_DIR`/`CLAUDE_JOB_DIR` from its own environment on the `initialize` it replays to the kernel, so a kernel restart re-identifies the session automatically; `kind` is `"bg"` when `CLAUDE_JOB_DIR` is set (a `claude --bg` worker), else `None` — `CLAUDE_CODE_SESSION_KIND`/`CLAUDE_BG_*` never reach a spawned MCP server's own environment, confirmed live, so `CLAUDE_JOB_DIR` is the only usable signal for this.
 
@@ -19,7 +29,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Gist-registered MCP tools (`_tool_*` handlers) now run their text result through `tasks.spill_text` too, so an oversized return doesn't dump straight into the MCP response — the last tool-facing path that had no size backstop (exec, `push_channel`, browser tools, and resource reads already did). `structuredContent` for dict returns is unaffected.
 
-### Removed
 
 ## [0.5.8] - 2026-09-10
 
