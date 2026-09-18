@@ -55,6 +55,7 @@ from . import (
 from .core_schemas import (
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_SESSION_ID_KEY,
+    BRIDGE_SESSION_KIND_KEY,
 )
 from .core_schemas import (
     error as _error,
@@ -224,6 +225,7 @@ class Bridge:
         # _replay_handshake degrades to a plain replay with neither field.
         self._claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
         self._claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+        self._claude_session_kind = "bg" if os.environ.get("CLAUDE_JOB_DIR") else None
         self._inflight: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
@@ -558,14 +560,18 @@ class Bridge:
     def _stamp_identity(self, msg: dict) -> dict:
         """Attach this bridge's Claude Code identity to an `initialize` about
         to reach the kernel — internal wire only, never part of what the
-        client sent. Returns `msg` unchanged if neither env var was read.
+        client sent. Returns `msg` unchanged if none of the env vars were read.
 
         Called from both `_dispatch_client_line`'s plain forward and
         `_replay_handshake`'s replay onto a fresh kernel — an already-running
         kernel gets the client's very first `initialize` via the former, so
         stamping only the latter would leave that common case unregistered.
         """
-        if self._claude_session_id is None and self._claude_project_dir is None:
+        if (
+            self._claude_session_id is None
+            and self._claude_project_dir is None
+            and self._claude_session_kind is None
+        ):
             return msg
         stamped = dict(msg)
         params = dict(stamped.get("params") or {})
@@ -573,6 +579,8 @@ class Bridge:
             params[BRIDGE_SESSION_ID_KEY] = self._claude_session_id
         if self._claude_project_dir is not None:
             params[BRIDGE_PROJECT_DIR_KEY] = self._claude_project_dir
+        if self._claude_session_kind is not None:
+            params[BRIDGE_SESSION_KIND_KEY] = self._claude_session_kind
         stamped["params"] = params
         return stamped
 

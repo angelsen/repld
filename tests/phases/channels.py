@@ -175,8 +175,10 @@ def phase_4b_pregate(kernel: Kernel) -> None:
 
 def phase_4c_claude_sessions(kernel: Kernel) -> None:
     """notify(session=) targets one Claude Code session by id, no broadcast
-    fallback on a miss; claude_sessions() lists connected (id, project_dir)
-    pairs, with (None, None) for a session with no Claude Code identity."""
+    fallback on a miss; claude_sessions() lists connected (id, project_dir,
+    kind) tuples, with (None, None, None) for a session with no Claude Code
+    identity, and kind='bg' when the bridge's own CLAUDE_JOB_DIR env var is
+    set (a `claude --bg` worker)."""
     a = Bridge(
         kernel.cwd,
         env={"CLAUDE_CODE_SESSION_ID": "sess-A", "CLAUDE_PROJECT_DIR": "/proj/a"},
@@ -244,12 +246,35 @@ def phase_4c_claude_sessions(kernel: Kernel) -> None:
         resp = c.exec("print(claude_sessions())", call_timeout=3.0)
         out = content_text(resp)
         assert_true(
-            "(None, None)" in out,
-            f"env-less bridge reports (None, None) (got {out!r})",
+            "(None, None, None)" in out,
+            f"env-less bridge reports (None, None, None) (got {out!r})",
         )
-        print("  ✓ a bridge with no CLAUDE_CODE_SESSION_ID env reports (None, None)")
+        print(
+            "  ✓ a bridge with no CLAUDE_CODE_SESSION_ID env reports (None, None, None)"
+        )
     finally:
         c.close()
+
+    # CLAUDE_JOB_DIR set (a `claude --bg` worker) reports kind='bg'.
+    d = Bridge(
+        kernel.cwd,
+        env={
+            "CLAUDE_CODE_SESSION_ID": "sess-D",
+            "CLAUDE_PROJECT_DIR": "/proj/d",
+            "CLAUDE_JOB_DIR": "/home/x/.claude/jobs/abc123",
+        },
+    )
+    try:
+        d.handshake()
+        resp = d.exec("print(claude_sessions())", call_timeout=3.0)
+        out = content_text(resp)
+        assert_true(
+            "('sess-D', '/proj/d', 'bg')" in out,
+            f"CLAUDE_JOB_DIR reported as kind='bg' (got {out!r})",
+        )
+        print("  ✓ CLAUDE_JOB_DIR env reports kind='bg'")
+    finally:
+        d.close()
 
 
 def phase_4d_channel_spill(kernel: Kernel) -> None:

@@ -36,13 +36,16 @@ from .state import read_lock
 _EXEC_MODEL = (
     "Execution model: "
     "exec runs code in shared __main__. If it exceeds timeout, returns "
-    "{task_id, done:false} and pushes channel on completion. "
+    "{task_id, done:false} and pushes channel on completion — but a session "
+    "that ends its turn never sees a later push (confirmed for `claude --bg`, "
+    "true by construction for one-shot clients): if you need the result, poll "
+    "get_task(task_id) yourself before finishing rather than trusting the push. "
     "Output: head+tail preview; full at [full output: /path] — use Read/Grep. "
     "_ / _N history. Top-level await. "
     "no_display(value) returns value without re-printing it (still binds _/_N) — "
     "for functions that already print their own output. "
     "defer(coro, label) schedules a background task, returns task_id immediately, "
-    "pushes channel on completion. "
+    "pushes channel on completion — same caveat as exec's deferred case. "
     "every(seconds, delay=0)(fn) schedules fn to run periodically; the first "
     "tick is immediate unless delay= holds it back — use that when watching "
     "something you just started, or the health check races its warmup. "
@@ -53,7 +56,8 @@ _EXEC_MODEL = (
     "notify(content, *, session=None, **meta) pushes a channel notification; "
     "session=<claude_session_id> targets one connected Claude Code session "
     "(False if it isn't connected, no fallback to broadcast). "
-    "claude_sessions() lists connected (session_id, project_dir) pairs. "
+    "claude_sessions() lists connected (session_id, project_dir, kind) tuples "
+    "— kind is 'bg' for a `claude --bg` worker, else None. "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
     "The kernel persists; one-shot work can become background automation."
@@ -1721,9 +1725,10 @@ notify(content, *, session=None, **meta)
   same rule as a task-done push whose originator disconnected).
 
 claude_sessions()
-  Returns a list of (claude_session_id, project_dir) tuples, one per
-  connected MCP session. Both are None for a session with no Claude Code
-  identity — a hand-run `repld bridge`, or another MCP client.
+  Returns a list of (claude_session_id, project_dir, kind) tuples, one per
+  connected MCP session. All three are None for a session with no Claude
+  Code identity — a hand-run `repld bridge`, or another MCP client. kind is
+  "bg" for a `claude --bg` worker, else None.
 """,
     "migration": """\
 Why a repld project has no state files (0.1.x → 0.2).
@@ -1973,9 +1978,10 @@ Injected into __main__:
                                id claude_sessions() lists — returns False if
                                it's not connected (no fallback to broadcast),
                                True if delivered, None on a plain broadcast.
-  claude_sessions()            list connected (session_id, project_dir)
-                               pairs; both None for a session with no Claude
-                               Code identity (hand-run bridge, other client)
+  claude_sessions()            list connected (session_id, project_dir, kind)
+                               tuples; all None for a session with no Claude
+                               Code identity (hand-run bridge, other client).
+                               kind is "bg" for a `claude --bg` worker.
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds, delay=0)(fn)  periodic ticker; fn.cancel() stops it.
                                delay= defers the first tick — a watchdog

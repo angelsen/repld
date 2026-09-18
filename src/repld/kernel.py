@@ -256,13 +256,17 @@ def _notify(content, *, session=None, **meta) -> bool | None:
     return None
 
 
-def _claude_sessions() -> list[tuple[str | None, str | None]]:
-    """List connected MCP sessions as (claude_session_id, claude_project_dir).
+def _claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
+    """List connected MCP sessions as (claude_session_id, claude_project_dir, kind).
 
-    Both are None for a session with no Claude Code identity (a hand-run
-    bridge, or a non-Claude-Code MCP client). Named apart from the existing
-    `repld.sessions` submodule (kernel-*process* registry, `sessions.py`) —
-    setattr-ing `repld.sessions` here would shadow that submodule import.
+    All three are None for a session with no Claude Code identity (a
+    hand-run bridge, or a non-Claude-Code MCP client). kind is "bg" for a
+    `claude --bg` worker, else None — whether such a session actually acts
+    on a later channel push the way an interactive one does is not yet
+    established; this only identifies which sessions are `--bg`. Named
+    apart from the existing `repld.sessions` submodule (kernel-*process*
+    registry, `sessions.py`) — setattr-ing `repld.sessions` here would
+    shadow that submodule import.
     """
     return ipc.list_claude_sessions()
 

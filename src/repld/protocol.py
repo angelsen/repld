@@ -16,6 +16,7 @@ from .browser_dispatch import BrowserDispatchMixin
 from .core_schemas import (
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_SESSION_ID_KEY,
+    BRIDGE_SESSION_KIND_KEY,
     CAPABILITIES,
     CORE_TOOLS,
     DOC_HELP_ATTRS,
@@ -763,7 +764,10 @@ class Dispatcher(BrowserDispatchMixin):
         claude_id = params.get(BRIDGE_SESSION_ID_KEY)
         if session is not None and claude_id is not None:
             ipc.register_claude_session(
-                session, claude_id, params.get(BRIDGE_PROJECT_DIR_KEY)
+                session,
+                claude_id,
+                params.get(BRIDGE_PROJECT_DIR_KEY),
+                params.get(BRIDGE_SESSION_KIND_KEY),
             )
         return _response(
             rid,

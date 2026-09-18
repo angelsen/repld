@@ -47,6 +47,11 @@ def negotiate_version(requested) -> str:
 # params.
 BRIDGE_SESSION_ID_KEY = "_claude_session_id"
 BRIDGE_PROJECT_DIR_KEY = "_claude_project_dir"
+# "bg" when the bridge's own CLAUDE_JOB_DIR env var is set (a `claude --bg`
+# worker), else absent. CLAUDE_CODE_SESSION_KIND/CLAUDE_BG_* never reach a
+# spawned MCP server's environment (confirmed live), so CLAUDE_JOB_DIR is the
+# only usable signal for this.
+BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
 
 
 # What `initialize` negotiates, from either side of the socket. Shared for the
@@ -89,7 +94,10 @@ CORE_TOOLS = [
         "name": "get_task",
         "description": (
             "Fetch current status and a head+tail preview of a task's output. "
-            "Use Read on the returned `spill_path` for full content."
+            "Use Read on the returned `spill_path` for full content. Poll this "
+            "yourself, in a loop, before ending your turn if you need the "
+            "result — a session that ends its turn never sees a later channel "
+            "push (confirmed for `claude --bg`)."
         ),
         "inputSchema": {
             "type": "object",

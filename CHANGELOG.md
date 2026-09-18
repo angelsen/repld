@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `notify(content, *, session=None, **meta)` — `session=<claude_session_id>` targets one connected Claude Code session by id instead of broadcasting; returns `True` if delivered, `False` if that session isn't connected (no fallback to broadcast).
-- `claude_sessions()` builtin — lists connected MCP sessions as `(claude_session_id, project_dir)` pairs, straight from kernel state. The bridge forwards `CLAUDE_CODE_SESSION_ID`/`CLAUDE_PROJECT_DIR` from its own environment on the `initialize` it replays to the kernel, so a kernel restart re-identifies the session automatically.
+- `claude_sessions()` builtin — lists connected MCP sessions as `(claude_session_id, project_dir, kind)` tuples, straight from kernel state. The bridge forwards `CLAUDE_CODE_SESSION_ID`/`CLAUDE_PROJECT_DIR`/`CLAUDE_JOB_DIR` from its own environment on the `initialize` it replays to the kernel, so a kernel restart re-identifies the session automatically; `kind` is `"bg"` when `CLAUDE_JOB_DIR` is set (a `claude --bg` worker), else `None` — `CLAUDE_CODE_SESSION_KIND`/`CLAUDE_BG_*` never reach a spawned MCP server's own environment, confirmed live, so `CLAUDE_JOB_DIR` is the only usable signal for this.
 
 ### Changed
 

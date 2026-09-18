@@ -80,6 +80,7 @@ class Session:
         # None for a non-Claude-Code client or a bridge run by hand.
         self.claude_session_id: str | None = None
         self.claude_project_dir: str | None = None
+        self.claude_session_kind: str | None = None
 
     @property
     def closed(self) -> bool:
@@ -260,7 +261,11 @@ class Server:
         return not session.closed
 
     def register_claude_session(
-        self, session: Session, session_id: str, project_dir: str | None
+        self,
+        session: Session,
+        session_id: str,
+        project_dir: str | None,
+        session_kind: str | None = None,
     ) -> None:
         """Bind a Claude Code session id to this connection.
 
@@ -270,6 +275,7 @@ class Server:
         """
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
+        session.claude_session_kind = session_kind
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
 
@@ -277,10 +283,13 @@ class Server:
         with self.sessions_lock:
             return self._claude_sessions.get(session_id)
 
-    def list_claude_sessions(self) -> list[tuple[str | None, str | None]]:
+    def list_claude_sessions(self) -> list[tuple[str | None, str | None, str | None]]:
         with self.sessions_lock:
             targets = list(self.sessions)
-        return [(s.claude_session_id, s.claude_project_dir) for s in targets]
+        return [
+            (s.claude_session_id, s.claude_project_dir, s.claude_session_kind)
+            for s in targets
+        ]
 
     def stop(self) -> None:
         if self._stop:
@@ -336,10 +345,13 @@ def post_to(session: Session, msg: dict) -> bool:
 
 
 def register_claude_session(
-    session: Session, session_id: str, project_dir: str | None
+    session: Session,
+    session_id: str,
+    project_dir: str | None,
+    session_kind: str | None = None,
 ) -> None:
     if _server is not None:
-        _server.register_claude_session(session, session_id, project_dir)
+        _server.register_claude_session(session, session_id, project_dir, session_kind)
 
 
 def find_claude_session(session_id: str) -> Session | None:
@@ -348,7 +360,7 @@ def find_claude_session(session_id: str) -> Session | None:
     return _server.find_claude_session(session_id)
 
 
-def list_claude_sessions() -> list[tuple[str | None, str | None]]:
+def list_claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
     if _server is None:
         return []
     return _server.list_claude_sessions()
