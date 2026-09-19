@@ -134,6 +134,7 @@ def new_task(origin: object = None) -> tuple[str, dict]:
     task_id = uuid.uuid4().hex[:12]
     task: dict = {
         "done_event": threading.Event(),
+        "started_at": time.time(),  # wall-clock, matching kernel.lock's started_at
         "exception": None,
         # Bounded-repr'd, never the raw object: this dict feeds straight into
         # get_task's `json.dumps(snap)`, and an arbitrary result (a DataFrame,

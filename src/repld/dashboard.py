@@ -99,6 +99,32 @@ async def _collect_state() -> dict:
     return state
 
 
+async def _collect_tasks() -> dict:
+    """Per-item task/ticker listing behind `repld tasks` — `_collect_state`
+    above stays a lightweight count since the dashboard page polls it."""
+    from .kernel import every_snapshot
+
+    task_rows = []
+    for task_id, t in tasks.items():
+        origin = t.get("origin")
+        task_rows.append(
+            {
+                "task_id": task_id,
+                "label": t.get("label"),
+                "started_at": t.get("started_at"),
+                "done": t["done_event"].is_set(),
+                "exception": t.get("exception"),
+                "origin_session": getattr(origin, "claude_session_id", None),
+                "origin_kind": getattr(origin, "claude_session_kind", None),
+            }
+        )
+
+    ticker_rows = [
+        {"label": h.label, "seconds": h.seconds, "tab": h.tab} for h in every_snapshot()
+    ]
+    return {"tasks": task_rows, "tickers": ticker_rows}
+
+
 def _resolve_tab(browser, target_id: str):
     """Find an attached Tab by its raw Chrome targetId."""
     pool = browser.peek()
@@ -318,6 +344,9 @@ def _sessions_with_tokens() -> list[dict]:
 async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "state":
         return await _collect_state()
+
+    if method == "tasks":
+        return await _collect_tasks()
 
     if method == "sessions":
         return _sessions_with_tokens()

@@ -509,6 +509,53 @@ def _event_log(tmp: Path) -> None:
     print("  ✓ repld status read live task/ticker counts without the browser")
 
 
+def _tasks_listing(tmp: Path) -> None:
+    """`repld tasks` lists an in-flight defer() and an active @every ticker."""
+    b = Bridge(tmp)
+    try:
+        b.handshake()
+        b.exec(
+            "import asyncio\n"
+            "async def _slow():\n"
+            "    await asyncio.sleep(5)\n"
+            "tid = defer(_slow(), label='test-tasks')\n"
+        )
+        b.exec("@every(60)\ndef _test_ticker():\n    return 'tick'\n")
+
+        out = subprocess.run(
+            ["uv", "run", "--project", str(REPO), "repld", "tasks", "--json"],
+            cwd=str(tmp),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert_eq(out.returncode, 0, "repld tasks exits 0")
+        data = json.loads(out.stdout)
+        assert_true("tasks" in data, f"response carries tasks (got {data!r})")
+        assert_true("tickers" in data, f"response carries tickers (got {data!r})")
+
+        task = next((t for t in data["tasks"] if t.get("label") == "test-tasks"), None)
+        assert_true(task is not None, f"deferred task listed (got {data['tasks']!r})")
+        if task is not None:  # assert_true isn't a TypeGuard
+            assert_true(
+                task["started_at"] is not None, "listed task carries started_at"
+            )
+            assert_true(not task["done"], "listed task is still in flight")
+
+        ticker = next(
+            (tk for tk in data["tickers"] if tk.get("label") == "_test_ticker"), None
+        )
+        assert_true(ticker is not None, f"ticker listed (got {data['tickers']!r})")
+        if ticker is not None:
+            assert_eq(ticker["seconds"], 60, "listed ticker carries its interval")
+        print("  ✓ repld tasks listed the in-flight defer() and the @every ticker")
+
+        b.exec("_test_ticker.cancel()")
+    finally:
+        b.close()
+
+
 def _concurrent_boots(tmp: Path) -> None:
     """Racing kernel boots in one project yield exactly one survivor."""
     procs = [
@@ -682,6 +729,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _targeted_push(tmp)
         _no_display_skips_queue(tmp)
         _event_log(tmp)
+        _tasks_listing(tmp)
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)
         _concurrent_boots(tmp)

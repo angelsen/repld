@@ -255,6 +255,24 @@ rather than an architectural one — the exact pattern already exists twice in t
   - If this lands upstream, repld's HTTP-bridge item above becomes unnecessary — `push_channel()`
     already speaks the protocol this PR would make OpenCode listen for.
 
+## Observability
+
+- [x] **`repld tasks`** — per-item listing of in-flight `defer()` tasks and active `@every`
+  tickers, requested by the `claude_code_research` session (2026-09-19) for its curses
+  inflight-task viewer. Shipped: `tasks_cmd.py`, `dashboard._collect_tasks()`, `started_at`
+  on the task dict. See the CLAUDE.md subcommand list.
+- [ ] Their optional ask-2: a JSON file beside `kernel.lock` (in the project runtime dir)
+  rewritten on task start/finish, so a hook/viewer can read the roster without a process
+  spawn + MCP handshake (~100–200ms via `repld exec`). Worth doing only if (1) ships and a
+  concrete consumer wants push-free reads — the dashboard RPC above already answers "what's
+  running" in one HTTP round trip, so this is a latency optimization on top of it, not a
+  separate feature.
+- [ ] `repld status --json`'s existing `socket_path` already gives the runtime dir (its
+  parent) for anyone shelling out — that viewer's separate hand-rederivation of
+  `paths.project_slug`'s `{basename}-{sha256(realpath)[:8]}` rule (it can't import repld
+  under system python3) may not need a new `repld paths` command; check whether pointing it
+  at `dirname(socket_path)` from the existing JSON closes that gap before adding one.
+
 ## Infra
 
 - [ ] CI + lint pass — `ruff` and `basedpyright` are trivial to wire; the smoketest is the

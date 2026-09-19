@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld tasks` — per-item listing of in-flight `defer()` tasks and active `@every` tickers, `--json` for the full detail. `repld status`'s counts are the summary of this same data.
+
 ### Changed
 
 ### Fixed
