@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.8.2] - 2026-09-19
+
+### Fixed
+
 - `repld gist lint`'s `shape` rule matched its `dict`/`list`/`any` hints as substrings of the return annotation, so a function returning `Company`, `Playlist` or `Many` was told to document a dict shape it doesn't return. It matches whole identifiers now.
 
-### Removed
 
 ## [0.8.1] - 2026-09-19
 
