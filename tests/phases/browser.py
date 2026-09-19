@@ -239,6 +239,101 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
     print("  ✓ connect races collapse to one socket; fetch lock is re-entry safe")
 
 
+def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
+    """A stale-connected dead pool entry doesn't shadow a live one.
+
+    No Chrome — pure asyncio shapes, same as phase_6_connect_race. `_connected`
+    means "was reachable last time we checked", not "is reachable now": a
+    Browser whose Chrome died without going through `disconnect()` keeps
+    reading as connected forever. `BrowserPool.open()`/`get()` used to trust
+    that flag outright and raise or abort the whole search on the first dead
+    entry instead of trying the next live one — reported live as
+    `browser.open()`/the `browser_*` MCP tools failing with "Cannot reach
+    Chrome on port N" while a freshly connected instance sat later in the
+    same pool.
+    """
+    from repld.browser import Browser, BrowserPool
+    from repld.browser.target import TabNotFoundError
+
+    async def _self_correct() -> tuple[bool, bool]:
+        """Browser._ensure_connected flips _connected to False on a genuine
+        reconnect failure, instead of leaving the stale flag set forever."""
+
+        class _DeadSocket:
+            def _is_connected(self) -> bool:
+                return False
+
+            async def _reconnect(self) -> None:
+                raise RuntimeError("Cannot reach Chrome on port 3333: refused")
+
+        b = Browser(port=3333)
+        b._connected = True         # stale: was connected, Chrome died since
+        b._session = _DeadSocket()  # type: ignore[assignment]
+        try:
+            await b._ensure_connected()
+            raised = False
+        except RuntimeError:
+            raised = True
+        return raised, b._connected
+
+    raised, still_flagged_connected = asyncio.run(_self_correct())
+    assert_true(raised, "a genuinely dead reconnect still raises")
+    assert_true(
+        not still_flagged_connected,
+        "and self-corrects _connected to False rather than leaving it stale",
+    )
+    print("  ✓ Browser._ensure_connected self-corrects _connected on a dead reconnect")
+
+    class _Dead(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = False
+            raise RuntimeError(f"Cannot reach Chrome on port {self.port}: refused")
+
+        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+            raise AssertionError("open() reached the dead browser")
+
+        async def get(self, target: str, **_kw: object) -> str:  # type: ignore[override]
+            raise AssertionError("get() reached the dead browser")
+
+    class _Live(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = True
+
+        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+            return f"opened:{url}"
+
+        async def get(  # type: ignore[override]
+            self,
+            target: str,
+            *,
+            timeout: float | None = None,
+            fresh: bool = False,
+            ready: str | None = None,
+        ) -> str:
+            if target == "*match*":
+                return f"got:{target}"
+            raise TabNotFoundError(target)
+
+    async def _pool_failover() -> tuple[str, str]:
+        pool = BrowserPool()
+        dead = _Dead(port=1111)
+        dead._connected = True  # sorts first, looks connected, isn't
+        live = _Live(port=2222)
+        live._connected = True
+        pool._browsers[1111] = dead
+        pool._browsers[2222] = live
+        opened = await pool.open("http://x")
+        got = await pool.get("*match*")
+        return opened, got  # type: ignore[return-value]
+
+    opened, got = asyncio.run(_pool_failover())
+    assert_eq(
+        opened, "opened:http://x", "pool.open() skips the dead entry for the live one"
+    )
+    assert_eq(got, "got:*match*", "pool.get()'s glob search does too")
+    print("  ✓ BrowserPool.open()/get() skip a dead entry rather than failing on it")
+
+
 def phase_6_reattach_binding(_kernel: Kernel) -> None:
     """A reattached session re-registers the pill's gate binding.
 

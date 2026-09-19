@@ -335,6 +335,14 @@ class BrowserPool:
         for b in list(self._browsers.values()):
             if not b._connected:
                 continue
+            # Same probe-before-trust as open(): b._connected can be stale,
+            # and _get_by_glob's own _ensure_connected() would otherwise
+            # raise RuntimeError here uncaught, aborting the search instead
+            # of falling through to a live browser later in the pool.
+            try:
+                await b._ensure_connected()
+            except RuntimeError:
+                continue
             remaining = (
                 max(0.0, deadline - asyncio.get_running_loop().time())
                 if deadline is not None
@@ -349,12 +357,28 @@ class BrowserPool:
         )
 
     async def open(self, url: str, *, ready: str | None = None) -> Tab:
-        """Open a URL in the first connected browser."""
+        """Open a URL in the first *live* connected browser.
+
+        `_connected` means "was reachable last time we checked", not "is
+        reachable now" — a Browser whose Chrome died without going through
+        `disconnect()` keeps reading as connected forever. Probing with
+        `_ensure_connected()` before committing to a candidate, instead of
+        trusting the flag, is what stops a dead pool entry from shadowing a
+        live one that sorts after it.
+        """
         await self._ensure_any()
-        for b in list(self._browsers.values()):
-            if b._connected:
-                return await b.open(url, ready=ready)
-        raise RuntimeError("No browsers connected")
+        unreachable: list[int] = []
+        for port, b in list(self._browsers.items()):
+            if not b._connected:
+                continue
+            try:
+                await b._ensure_connected()
+            except RuntimeError:
+                unreachable.append(port)  # b._connected is now False too
+                continue
+            return await b.open(url, ready=ready)
+        hint = f" (unreachable: {unreachable})" if unreachable else ""
+        raise RuntimeError(f"No browsers connected{hint}")
 
     async def acquire(
         self,

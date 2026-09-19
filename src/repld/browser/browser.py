@@ -115,7 +115,17 @@ class Browser:
                 # _reconnect takes _reconnect_lock, never _connect_lock, and
                 # nothing under it re-enters here — so holding this across it
                 # can't deadlock.
-                await self._session._reconnect()
+                try:
+                    await self._session._reconnect()
+                except Exception:
+                    # Chrome is genuinely gone, not just a dropped socket:
+                    # self-correct so BrowserPool's _connected-gated reads
+                    # (open/get's first-live routing, connected_ports, tabs,
+                    # patterns) stop trusting this entry on the next look,
+                    # instead of every future call re-attempting and re-
+                    # raising the same dead reconnect.
+                    self._connected = False
+                    raise
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:
         """Called when a new tab is auto-attached."""

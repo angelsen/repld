@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser.open()`/`browser.get()` (and the `browser_open`/`browser_*` MCP tools) no longer fail with `Cannot reach Chrome on port N` when a dead pool entry sorts before a live one. `Browser._connected` meant "was reachable last time we checked", not "is reachable now" — a Browser whose Chrome died without going through `disconnect()` kept reading as connected forever, and `BrowserPool.open()`/`get()` trusted that flag outright instead of probing before committing to a candidate. Fixed at the source (`Browser._ensure_connected` now self-corrects `_connected` to `False` on a genuinely dead reconnect) plus at the two pool-level call sites that pick a browser by iterating `_connected`-flagged entries, which now skip a dead one and try the next live one instead of raising/aborting on the first hit.
+
 ### Removed
 
 ## [0.6.0] - 2026-09-19
