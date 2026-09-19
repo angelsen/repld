@@ -93,6 +93,7 @@ from phases.lockfile import (
     phase_5_sweep,
     phase_5_zombie,
 )
+from phases.pure import phase_2_pure
 from phases.resources import (
     phase_8_doc_surfaces,
     phase_8_gist_resources,
@@ -103,6 +104,7 @@ from phases.shutdown import phase_11_shutdown
 from phases.venv import phase_16_venv_binding
 
 PHASES = {
+    2: lambda k: phase_2_pure(),
     3: lambda k: (
         phase_3(k),
         phase_3_argv_and_registry(k),
