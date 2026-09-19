@@ -5,8 +5,10 @@ Used by smoketest.py and all phase modules.
 
 import json
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
@@ -15,6 +17,97 @@ from pathlib import Path
 from queue import Empty, Queue
 
 REPO = Path(__file__).resolve().parent.parent
+
+# Absolute real-binary paths first, on purpose: a bare name resolved via
+# PATH can hit a personal launcher wrapper ahead of the real binary (this
+# machine's own `google-chrome-stable` on PATH is one — it drops
+# --remote-debugging-port/--user-data-dir and no-ops if something is already
+# listening on 9222, so a throwaway spawn through it silently launches
+# nothing and this class's caller ends up back on the developer's real
+# Chrome). The bare-name fallback stays for a plain PATH-only install.
+_CHROME_CANDIDATES = (
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/opt/google/chrome/chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+)
+
+
+def _find_chrome() -> str | None:
+    for name in _CHROME_CANDIDATES:
+        if "/" in name:
+            if Path(name).exists():
+                return name
+        else:
+            found = shutil.which(name)
+            if found:
+                return found
+    return None
+
+
+class ThrowawayChrome:
+    """Headless Chrome on an ephemeral port and a throwaway profile — isolated
+    from whatever the developer's own debug Chrome (and every other repld
+    kernel on the machine attached to it) is doing at the same time.
+
+    `--user-data-dir` + `--remote-debugging-port=0` makes Chrome write the
+    port it actually bound to `DevToolsActivePort` inside that profile dir —
+    the same resolution `browser.pool.BrowserPool.connect(profile=...)` uses
+    for a hand-launched Chrome, reused here for a spawned one.
+    """
+
+    def __init__(self) -> None:
+        self.binary = _find_chrome()
+        self.proc: subprocess.Popen | None = None
+        self.port: int | None = None
+        self.profile_dir: Path | None = None
+
+    def start(self, timeout: float = 15.0) -> bool:
+        """Launch Chrome and wait for its port. False if unavailable or it
+        never came up — the caller skips phase 6 rather than failing the run,
+        same as `_chrome_ready` already does for an unreachable Chrome."""
+        if self.binary is None:
+            return False
+        self.profile_dir = Path(tempfile.mkdtemp(prefix="repld-test-chrome-"))
+        self.proc = subprocess.Popen(
+            [
+                self.binary,
+                "--headless=new",
+                "--remote-debugging-port=0",
+                f"--user-data-dir={self.profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-extensions",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        port_file = self.profile_dir / "DevToolsActivePort"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                return False
+            try:
+                self.port = int(port_file.read_text().splitlines()[0].strip())
+                return True
+            except (OSError, ValueError, IndexError):
+                time.sleep(0.1)
+        return False
+
+    def stop(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        if self.profile_dir is not None:
+            shutil.rmtree(self.profile_dir, ignore_errors=True)
 
 
 def lock_path_for(cwd: Path) -> Path:

@@ -276,8 +276,11 @@ rather than an architectural one — the exact pattern already exists twice in t
 ## Infra
 
 - [ ] CI + lint pass — `ruff` and `basedpyright` are trivial to wire; the smoketest is the
-  question, since phases 6 and 16 need a live Chrome and a usable systemd user manager
-  respectively and both skip silently without them. A CI run that reports green having
-  skipped them is worse than no CI.
+  question, since phase 16 needs a usable systemd user manager and skips silently without
+  one. A CI run that reports green having skipped it is worse than no CI. Phase 6 is closer
+  to CI-viable now: `smoketest.py` spawns its own throwaway headless Chrome
+  (`harness.ThrowawayChrome`), so a CI image just needs the binary installed, not an
+  already-running debug instance — but it still skips silently if that binary is missing,
+  same open question as phase 16.
 - [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time

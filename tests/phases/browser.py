@@ -1,22 +1,32 @@
 """Phase 6: Tool registration, gist auto-reload, browser integration.
 
-The browser checks run against the developer's own Chrome, so they are careful
-to touch only tabs they created themselves. Every one carries `_MARKER` in its
-URL, which is both how the watch pattern finds it and how `_close_marked_tabs`
-cleans up — including on the failure path, so a broken run can't leave tabs
-behind for the next one to trip over.
+`smoketest.py` spawns a throwaway headless Chrome for this phase (see
+`harness.ThrowawayChrome`), isolated from whatever else is attached to the
+developer's own debug Chrome. `REPLD_CHROME_PORT` still falls back to that
+real one if no Chrome binary was found to spawn — so the checks stay careful
+to touch only tabs they created themselves either way. Every one carries
+`_MARKER` in its URL, which is both how the watch pattern finds it and how
+`_close_marked_tabs` cleans up — including on the failure path, so a broken
+run can't leave tabs behind for the next one to trip over.
 """
 
 import asyncio
 import io
 import json
+import os
 import re
 import time
 import urllib.request
 
 from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
-_CDP = "http://localhost:9222"
+
+def _cdp() -> str:
+    """The CDP HTTP origin — smoketest.py points this at a throwaway Chrome
+    via REPLD_CHROME_PORT before the kernel spawns; the fallback is whatever
+    a developer's own debug Chrome happens to be listening on."""
+    return f"http://localhost:{os.environ.get('REPLD_CHROME_PORT', '9222')}"
+
 
 # Distinctive enough that a watch pattern built from it can't match anything of
 # the developer's. A bare word on purpose: Chrome may hand the URL back
@@ -55,10 +65,10 @@ def _chrome_ready(label: str) -> bool:
         print(f"  - {label}: websockets not installed (uv sync --extra browser), skip")
         return False
     try:
-        with urllib.request.urlopen(f"{_CDP}/json/version", timeout=2) as r:
+        with urllib.request.urlopen(f"{_cdp()}/json/version", timeout=2) as r:
             r.read()
     except Exception:
-        print(f"  - {label}: Chrome not available on port 9222, skipping")
+        print(f"  - {label}: Chrome not available at {_cdp()}, skipping")
         return False
     return True
 
@@ -71,7 +81,7 @@ def _close_marked_tabs() -> None:
     cannot be expanded back into something `/json/close` accepts.
     """
     try:
-        with urllib.request.urlopen(f"{_CDP}/json/list", timeout=2) as r:
+        with urllib.request.urlopen(f"{_cdp()}/json/list", timeout=2) as r:
             targets = json.load(r)
     except Exception:
         return
@@ -79,7 +89,9 @@ def _close_marked_tabs() -> None:
         if _MARKER not in t.get("url", ""):
             continue
         try:
-            with urllib.request.urlopen(f"{_CDP}/json/close/{t['id']}", timeout=2) as r:
+            with urllib.request.urlopen(
+                f"{_cdp()}/json/close/{t['id']}", timeout=2
+            ) as r:
                 r.read()
         except Exception:
             pass
@@ -1288,7 +1300,8 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
     ready_confirmed distinguishes an explicit ready= from the readyState
     fallback and survives Tab re-wrapping the same way label does.
 
-    Requires Chrome with --remote-debugging-port=9222; skips gracefully.
+    Requires a reachable Chrome (`smoketest.py` spawns a throwaway one for
+    this phase); skips gracefully if none is up.
     """
     if not _chrome_ready("phase 6 label/reattach"):
         return
@@ -1453,7 +1466,7 @@ def phase_6_tab_close(kernel: Kernel) -> None:
         assert m is not None
         chrome_id = m.group(1)
 
-        with urllib.request.urlopen(f"{_CDP}/json/list", timeout=2) as r:
+        with urllib.request.urlopen(f"{_cdp()}/json/list", timeout=2) as r:
             targets = json.load(r)
         assert_true(
             all(t.get("id") != chrome_id for t in targets),
@@ -1595,7 +1608,9 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
 
 
 def phase_6(kernel: Kernel) -> None:
-    """Browser integration — requires Chrome with --remote-debugging-port=9222.
+    """Browser integration — against a throwaway Chrome `smoketest.py` spawns
+    for this phase (falls back to a developer's own debug Chrome on
+    REPLD_CHROME_PORT/9222 if no throwaway one came up).
 
     Every assertion runs against a tab this phase opened itself. Watching `*`
     and asserting against whichever tab sorted first made the result depend on

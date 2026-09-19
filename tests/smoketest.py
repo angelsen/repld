@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # and the in-process phases reach it through this very interpreter.
 os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="repld-smoketest-config-")
 
-from harness import Kernel
+from harness import Kernel, ThrowawayChrome
 from phases.browser import (
     phase_6,
     phase_6_actionability,
@@ -194,7 +194,27 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
     kernel = None
+    chrome = None
     try:
+        # Isolated from the developer's own debug Chrome (and every other
+        # repld kernel attached to it) — set before Kernel() spawns, since
+        # the kernel subprocess only reads REPLD_CHROME_PORT from the
+        # environment it inherits at launch. Skipped below phase 6, which is
+        # the only phase that touches a browser at all.
+        if args.phase >= 6:
+            chrome = ThrowawayChrome()
+            if chrome.start():
+                os.environ["REPLD_CHROME_PORT"] = str(chrome.port)
+                print(f"== throwaway chrome on port {chrome.port} ==")
+            else:
+                # Point at a port nothing binds (1 is privileged, always
+                # refused) rather than leaving REPLD_CHROME_PORT unset — unset
+                # falls back to 9222 in `_cdp()`, which is exactly the
+                # developer's own debug Chrome this is meant to stay off of.
+                os.environ["REPLD_CHROME_PORT"] = "1"
+                print("== no chrome binary found, phase 6 will skip ==")
+                chrome = None
+
         print(f"== kernel cwd: {tmp} ==")
         kernel = Kernel(tmp)
         for p in sorted(PHASES):
@@ -219,6 +239,8 @@ def main() -> int:
     finally:
         if kernel is not None:
             kernel.stop()
+        if chrome is not None:
+            chrome.stop()
         # Runtime state lives outside the project dir now — clean up both.
         from harness import runtime_dir_for
 
