@@ -267,11 +267,11 @@ rather than an architectural one — the exact pattern already exists twice in t
   concrete consumer wants push-free reads — the dashboard RPC above already answers "what's
   running" in one HTTP round trip, so this is a latency optimization on top of it, not a
   separate feature.
-- [ ] `repld status --json`'s existing `socket_path` already gives the runtime dir (its
-  parent) for anyone shelling out — that viewer's separate hand-rederivation of
-  `paths.project_slug`'s `{basename}-{sha256(realpath)[:8]}` rule (it can't import repld
-  under system python3) may not need a new `repld paths` command; check whether pointing it
-  at `dirname(socket_path)` from the existing JSON closes that gap before adding one.
+- [x] `repld status --json`'s `socket_path` closes the runtime-dir gap — confirmed by
+  `claude_code_research-5c`: `dirname(socket_path)` is the runtime dir, so their hand-
+  rederivation of `paths.project_slug`'s `{basename}-{sha256(realpath)[:8]}` rule (needed
+  since their hook/viewer can't import repld under system python3) stays as-is; no
+  `repld paths` command needed.
 
 ## Infra
 
