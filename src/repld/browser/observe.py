@@ -282,7 +282,7 @@ async def _discover_iframe_children(tab: Tab, session: BrowserSession) -> list[T
     """
     own_target_id = tab._session.chrome_target_id
     children: list[Tab] = []
-    for cdp_session in list(session._sessions.values()):
+    for cdp_session in session._sessions.values():
         info = cdp_session.target_info
         if info.get("type") != "iframe":
             continue

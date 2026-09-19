@@ -929,6 +929,7 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
 
     from repld import bg
     from repld.browser.cdp import PRUNE_CHECK_INTERVAL, CDPSession
+    from repld.loopguard import LoopOwnershipError
 
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
@@ -961,9 +962,26 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
             loop=loop,
         )
         try:
-            for i in range(3):
-                session.store_event({"method": "X", "params": {}}, "X", str(i))
-            session._inflight["r1"] = time.monotonic()
+
+            async def _seed() -> None:
+                for i in range(3):
+                    session.store_event({"method": "X", "params": {}}, "X", str(i))
+                session._inflight["r1"] = time.monotonic()
+
+            asyncio.run_coroutine_threadsafe(_seed(), loop).result(2)
+
+            for label, write in (
+                ("store_event", lambda: session.store_event({}, "X", "off")),
+                ("_inflight", lambda: session._inflight.pop("r1")),
+            ):
+                try:
+                    write()
+                except LoopOwnershipError:
+                    pass
+                else:
+                    raise AssertionError(f"off-loop {label} write was not refused")
+            assert_eq(session._event_count, 3, "a refused write changes nothing")
+            print("  ✓ loopguard refuses off-loop writes to loop-owned state")
 
             gate = threading.Event()
             loop.call_soon_threadsafe(gate.wait)  # hold the loop
@@ -995,9 +1013,8 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
 
             # On the loop, it stays synchronous — browser_dispatch's
             # _run_sync_on_loop path must not become fire-and-forget.
-            session.store_event({"method": "X", "params": {}}, "X", "9")
-
             async def _on_loop_clear() -> int:
+                session.store_event({"method": "X", "params": {}}, "X", "9")
                 session.clear_events()
                 return session._event_count
 

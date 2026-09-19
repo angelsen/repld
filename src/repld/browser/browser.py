@@ -141,7 +141,7 @@ class Browser:
         """Wrap all attached CDPSessions as Tab objects."""
         return [
             Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-            for cdp in list(self._session._sessions.values())
+            for cdp in self._session._sessions.values()
         ]
 
     # ------------------------------------------------------------------
@@ -187,7 +187,7 @@ class Browser:
         None on miss.
         """
         prefix = prefix.lower()
-        for sid, cdp in list(self._session._sessions.items()):
+        for sid, cdp in self._session._sessions.items():
             chrome_id = cdp.target_info.get("targetId", "")
             if chrome_id[:6].lower() == prefix:
                 return sid, cdp, chrome_id
@@ -281,7 +281,7 @@ class Browser:
         """Short target IDs of all attached sessions, for error messages."""
         return [
             make_target(self.port, cdp.target_info.get("targetId", ""))
-            for cdp in list(self._session._sessions.values())
+            for cdp in self._session._sessions.values()
         ]
 
     async def _get_by_glob(
@@ -442,7 +442,7 @@ class Browser:
 
         # Detach sessions matching this pattern
         to_detach: list[tuple[str, CDPSession]] = []
-        for sid, cdp in list(self._session._sessions.items()):
+        for sid, cdp in self._session._sessions.items():
             url = cdp.target_info.get("url", "")
             if fnmatch(url, pattern):
                 to_detach.append((sid, cdp))
@@ -485,7 +485,7 @@ class Browser:
             cdp.clear_events()
             return f"Cleared events for {target}."
         count = 0
-        for cdp in list(self._session._sessions.values()):
+        for cdp in self._session._sessions.values():
             cdp.clear_events()
             count += 1
         return f"Cleared events for {count} tab(s)."

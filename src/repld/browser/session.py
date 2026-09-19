@@ -19,6 +19,7 @@ from fnmatch import fnmatch
 from typing import Any
 
 from .. import bg
+from ..loopguard import LoopOwned
 from . import inject
 from .cdp import CDPSession
 from .pin import BINDING_NAME, reapply_label
@@ -57,7 +58,9 @@ class BrowserSession:
         self._pending: dict[int, asyncio.Future] = {}
 
         # sessionId → CDPSession
-        self._sessions: dict[str, CDPSession] = {}
+        self._sessions: LoopOwned[str, CDPSession] = LoopOwned(
+            "BrowserSession._sessions"
+        )
 
         # Watch patterns: glob pattern → set of target_ids matched
         self._watched_patterns: dict[str, set[str]] = {}
@@ -147,7 +150,7 @@ class BrowserSession:
         """
         await self._teardown_ws()
 
-        for cdp in list(self._sessions.values()):
+        for cdp in self._sessions.values():
             cdp.cleanup()
         self._sessions.clear()
 
@@ -362,7 +365,7 @@ class BrowserSession:
         sessions. `resolve_tab` already snapshots `_browsers` on its way here
         and then delegated straight into this unguarded walk.
         """
-        for cdp in list(self._sessions.values()):
+        for cdp in self._sessions.values():
             if cdp.target_info.get("targetId") == target_id:
                 return cdp
         return None
@@ -383,7 +386,7 @@ class BrowserSession:
         actually matters instead of inferring the answer from IDs that
         aren't guaranteed to agree.
         """
-        for cdp in list(self._sessions.values()):
+        for cdp in self._sessions.values():
             if cdp.target_info.get("type") != "page":
                 continue
             try:

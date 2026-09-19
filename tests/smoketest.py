@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # precede the phase imports: `gists._REGISTRY_PATH` is bound at import time,
 # and the in-process phases reach it through this very interpreter.
 os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="repld-smoketest-config-")
+# Read once at `repld.loopguard` import, in this process and every kernel it spawns.
+os.environ.setdefault("REPLD_LOOP_GUARD", "raise")
 
 from harness import Kernel, ThrowawayChrome
 from phases.browser import (

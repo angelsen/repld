@@ -28,6 +28,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
+from ..loopguard import LoopOwned
 from .browser import Browser
 from .row import Rows
 from .tab import Tab
@@ -53,7 +54,7 @@ class BrowserPool:
     """
 
     def __init__(self) -> None:
-        self._browsers: dict[int, Browser] = {}
+        self._browsers: LoopOwned[int, Browser] = LoopOwned("BrowserPool._browsers")
         # Guards the registry mutation in `connect`, which is the same
         # check-then-act-across-an-await as Browser._ensure_connected one level
         # up: two callers both missing the port both built a Browser, both
@@ -69,7 +70,7 @@ class BrowserPool:
         already connected and gets the incumbent back. Taking the lock here too
         would just deadlock on the re-entrant call.
         """
-        if not any(b._connected for b in list(self._browsers.values())):
+        if not any(b._connected for b in self._browsers.values()):
             await self.connect()
 
     @staticmethod
@@ -163,7 +164,7 @@ class BrowserPool:
 
     def resolve_tab(self, target_id: str) -> "Tab":
         """Find an attached Tab by its raw Chrome targetId, across all ports."""
-        for port, b in list(self._browsers.items()):
+        for port, b in self._browsers.items():
             if not b._connected:
                 continue
             cdp = b._session.find_by_target_id(target_id)
@@ -183,14 +184,14 @@ class BrowserPool:
         reality too, since it reads the same flag.
         """
         tab_list = []
-        for port, b in list(self._browsers.items()):
+        for port, b in self._browsers.items():
             if not b._connected:
                 continue
             try:
                 await b._ensure_connected()
             except RuntimeError:
                 continue
-            for cdp in list(b._session._sessions.values()):
+            for cdp in b._session._sessions.values():
                 info = cdp.target_info
                 tab_list.append(
                     {
@@ -222,13 +223,13 @@ class BrowserPool:
     @property
     def connected_ports(self) -> list[int]:
         """Ports whose Browser is currently connected (for hint persistence)."""
-        return [p for p, b in list(self._browsers.items()) if b._connected]
+        return [p for p, b in self._browsers.items() if b._connected]
 
     @property
     def tabs(self) -> Rows:
         """Tabs from all connected browsers."""
         all_tabs = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             if b._connected:
                 all_tabs.extend(b.tabs)
         return Rows(all_tabs)
@@ -237,7 +238,7 @@ class BrowserPool:
     def patterns(self) -> list[str]:
         """Watch patterns from all connected browsers."""
         result = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             if b._connected:
                 result.extend(b.patterns)
         return result
@@ -246,7 +247,7 @@ class BrowserPool:
         """All Chrome targets across all connected browsers."""
         await self._ensure_any()
         result = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             if b._connected:
                 result.extend(await b.pages())
         return result
@@ -255,7 +256,7 @@ class BrowserPool:
         """Watch a pattern across all connected browsers."""
         await self._ensure_any()
         results = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             results.append(await b.watch(pattern))
         self._save_hint()
         return "\n".join(results)
@@ -263,7 +264,7 @@ class BrowserPool:
     async def detach(self, pattern: str | None = None) -> str:
         """Detach tabs across all connected browsers."""
         results = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             results.append(await b.detach(pattern))
         self._save_hint()
         return "\n".join(results)
@@ -345,7 +346,7 @@ class BrowserPool:
         deadline = (
             asyncio.get_running_loop().time() + timeout if timeout is not None else None
         )
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             if not b._connected:
                 continue
             # Same probe-before-trust as open(): b._connected can be stale,
@@ -381,7 +382,7 @@ class BrowserPool:
         """
         await self._ensure_any()
         unreachable: list[int] = []
-        for port, b in list(self._browsers.items()):
+        for port, b in self._browsers.items():
             if not b._connected:
                 continue
             try:
@@ -423,7 +424,7 @@ class BrowserPool:
     ) -> dict:
         """In-page fetch using any attached tab (inherits cookies/session)."""
         await self._ensure_any()
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             if not b._connected:
                 continue
             if b._iter_tabs():
@@ -435,7 +436,7 @@ class BrowserPool:
             b = self.browser_for(target)
             return b.clear(target)
         results = []
-        for b in list(self._browsers.values()):
+        for b in self._browsers.values():
             results.append(b.clear())
         return "\n".join(results)
 
@@ -443,7 +444,7 @@ class BrowserPool:
         """Same dead-entry probe as `snapshot()` — see its docstring."""
         parts = []
         unreachable: list[int] = []
-        for port, b in list(self._browsers.items()):
+        for port, b in self._browsers.items():
             if not b._connected:
                 continue
             try:
@@ -461,7 +462,7 @@ class BrowserPool:
 
     @property
     def _connected(self) -> bool:
-        return any(b._connected for b in list(self._browsers.values()))
+        return any(b._connected for b in self._browsers.values())
 
     def help(self) -> None:
         _print_browser_help()
@@ -470,7 +471,7 @@ class BrowserPool:
         if not self._browsers:
             return "<BrowserPool (no connections)>"
         parts = []
-        for port, b in list(self._browsers.items()):
+        for port, b in self._browsers.items():
             n = len(b._session._sessions) if b._connected else 0
             parts.append(f"{port}({n})")
         return f"<BrowserPool [{', '.join(parts)}] patterns={self.patterns}>"

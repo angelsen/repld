@@ -15,6 +15,7 @@ from typing import Any
 
 from .. import bg
 from ..channel import push_channel
+from ..loopguard import LoopOwned, loop_only, on_loop
 from .har import _create_views
 
 __all__ = ["CDPSession"]
@@ -44,23 +45,6 @@ _STREAMING_MIME_TYPES = ("text/event-stream",)
 def _is_streaming(params: dict) -> bool:
     mime = (params.get("response") or {}).get("mimeType") or ""
     return mime.split(";")[0].strip().lower() in _STREAMING_MIME_TYPES
-
-
-def _on_loop(loop: asyncio.AbstractEventLoop | None) -> bool:
-    """Whether the calling thread is running *loop* right now.
-
-    Half this class is reachable from both sides — `browser_dispatch` answers
-    some tools on the IPC reader thread, `runtime._eval` puts every pure-sync
-    exec cell in `asyncio.to_thread`, and the recv handler runs on the loop —
-    so "am I on the loop" is a question two methods here have to ask before
-    deciding how to reach it.
-    """
-    if loop is None:
-        return False
-    try:
-        return asyncio.get_running_loop() is loop
-    except RuntimeError:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +457,7 @@ class CDPSession:
         # no-op discards.  WS never enters (no Network.requestWillBeSent for
         # WebSockets).  The timestamp is what lets inflight_count() age out a
         # response whose body never ends — see _INFLIGHT_MAX_AGE.
-        self._inflight: dict[str, float] = {}
+        self._inflight: LoopOwned[str, float] = LoopOwned("CDPSession._inflight")
 
         # Serializes state-preserving reattach (BrowserSession.reattach_session)
         self._reattach_lock = asyncio.Lock()
@@ -656,6 +640,7 @@ class CDPSession:
     # Event handling (sync — called from recv loop on asyncio thread)
     # ------------------------------------------------------------------
 
+    @loop_only
     def store_event(self, event: dict, method: str, request_id: str | None) -> None:
         """Insert an event row into this session's DuckDB event store.
 
@@ -893,7 +878,7 @@ class CDPSession:
             raise RuntimeError(
                 "CDPSession has no event loop — cannot fetch body via CDP"
             )
-        if _on_loop(self._loop):
+        if on_loop(self._loop):
             # Blocking on fut.result() here would stall the loop the
             # coroutine needs, timing out after 10s. Fail fast instead.
             return {
@@ -931,13 +916,12 @@ class CDPSession:
         if not self._inflight:
             return 0
         cutoff = time.monotonic() - _INFLIGHT_MAX_AGE
-        stale = [
-            rid for rid, started in list(self._inflight.items()) if started < cutoff
-        ]
+        stale = [rid for rid, started in self._inflight.items() if started < cutoff]
         for rid in stale:
             self._inflight.pop(rid, None)
         return len(self._inflight)
 
+    @loop_only
     def _reset_counters(self) -> None:
         """Loop-owned half of `clear_events`. Only ever run on the loop."""
         self._event_count = 0
@@ -968,7 +952,7 @@ class CDPSession:
         """
         with self._cursor() as cur:
             cur.execute("DELETE FROM events")
-        if self._loop is None or _on_loop(self._loop):
+        if self._loop is None or on_loop(self._loop):
             self._reset_counters()
         else:
             self._loop.call_soon_threadsafe(self._reset_counters)
