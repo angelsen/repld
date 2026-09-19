@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.8.4] - 2026-09-19
+
+### Fixed
+
 - `repld status --json --counts` fetched each sibling's dashboard serially, so a few wedged or unreachable ones could push the whole command past a caller's own timeout with no output at all. Siblings are now fetched concurrently — total wall time is bounded by one dashboard timeout (2s), not the sibling count.
 
-### Removed
 
 ## [0.8.3] - 2026-09-19
 
