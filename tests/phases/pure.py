@@ -4,6 +4,7 @@ import ast
 import contextlib
 import io
 import re
+import time
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -17,6 +18,7 @@ from repld import (
     gist_api,
     gist_lint,
     gists,
+    lifecycle_cmd,
     render,
     tasks,
 )
@@ -244,7 +246,7 @@ def _json_types() -> None:
         (list[str], "array"),
         (dict[str, int], "object"),
         (int | None, "integer"),
-        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[list[int]], "array"),  # noqa: UP045 — the typing.Union spelling is the case
         (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
         (int | str, None),
         (Path, None),
@@ -347,6 +349,44 @@ def _lint_helpers() -> None:
     print("  ✓ gist_lint: ignore directives, firstline rule, shape-doc trigger")
 
 
+def _sibling_counts_concurrency() -> None:
+    """`_fetch_sibling_counts` fans siblings out concurrently — a wedged
+    dashboard costs its own delay once, not once per sibling queued behind
+    it in a serial loop (`repld status --json --counts`, reported live
+    against 24 siblings by claude_code_research-5c)."""
+    real = lifecycle_cmd._sibling_counts
+    delay = 0.3
+
+    def fake(sibling: dict):
+        if sibling["cwd"] == "slow":
+            time.sleep(delay)
+            return None  # simulates a dashboard that never answers
+        return (1, 2)
+
+    lifecycle_cmd._sibling_counts = fake
+    try:
+        siblings = [{"cwd": "slow"}] + [{"cwd": f"fast{i}"} for i in range(5)]
+        start = time.monotonic()
+        lifecycle_cmd._fetch_sibling_counts(siblings)
+        elapsed = time.monotonic() - start
+        assert_true(
+            elapsed < delay * 3,
+            f"siblings fanned out concurrently, not serially "
+            f"(took {elapsed:.2f}s for one {delay}s straggler among {len(siblings)})",
+        )
+        assert_true(
+            all(s.get("tasks_active") == 1 for s in siblings if s["cwd"] != "slow"),
+            "fast siblings got their counts",
+        )
+        slow = next(s for s in siblings if s["cwd"] == "slow")
+        assert_true(
+            "tasks_active" not in slow, "unreachable sibling keeps its keys absent"
+        )
+    finally:
+        lifecycle_cmd._sibling_counts = real
+    print("  ✓ _fetch_sibling_counts fans siblings out concurrently, not serially")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -357,3 +397,4 @@ def phase_2_pure() -> None:
     _cli_args()
     _json_types()
     _lint_helpers()
+    _sibling_counts_concurrency()

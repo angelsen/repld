@@ -6,6 +6,7 @@ user-scoped session registry, so headless kernels in other projects are visible
 rather than silently accumulating.
 """
 
+import concurrent.futures
 import json
 import os
 import signal
@@ -221,6 +222,30 @@ def _sibling_counts(sibling: dict) -> tuple[int, int] | None:
     return active, len(live.get("kernel", {}).get("tickers") or [])
 
 
+def _fetch_sibling_counts(siblings: list[dict]) -> None:
+    """Fill in tasks_active/tickers on every sibling dict, concurrently.
+
+    `_sibling_counts` serially would cost up to N × 2s (`urlopen`'s own
+    timeout) for N siblings — a few wedged dashboards push the whole
+    `--counts` round trip past a caller's own subprocess timeout, losing
+    the siblings that *did* answer along with the ones that didn't
+    (reported live against 24 siblings by claude_code_research-5c). Run
+    them in a thread pool instead: wall time is bounded by the slowest
+    single dashboard, not the sibling count. A sibling whose fetch never
+    lands keeps its keys absent, same as before.
+    """
+    if not siblings:
+        return
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(siblings), 32)
+    ) as ex:
+        futures = {ex.submit(_sibling_counts, s): s for s in siblings}
+        for fut, sibling in futures.items():
+            counts = fut.result()
+            if counts is not None:
+                sibling["tasks_active"], sibling["tickers"] = counts
+
+
 def _print_python(lock: dict) -> None:
     """The kernel's interpreter, flagged when it can't import the project.
 
@@ -275,10 +300,7 @@ def run_status(argv: list[str]) -> int:
     siblings = [s for s in sessions.list_sessions() if int(s["pid"]) != mine]
 
     if with_counts:
-        for s in siblings:
-            counts = _sibling_counts(s)
-            if counts is not None:
-                s["tasks_active"], s["tickers"] = counts
+        _fetch_sibling_counts(siblings)
 
     if as_json:
         print(json.dumps({"kernel": here, "siblings": siblings}, indent=2))
@@ -318,8 +340,12 @@ def run_status(argv: list[str]) -> int:
             any_dash = any_dash or bool(port)
             counts = ""
             if s.get("tasks_active") is not None:
-                counts = f"  active: {s['tasks_active']} task(s), {s['tickers']} ticker(s)"
-            print(f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{counts}{_RESET}")
+                counts = (
+                    f"  active: {s['tasks_active']} task(s), {s['tickers']} ticker(s)"
+                )
+            print(
+                f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{counts}{_RESET}"
+            )
         if any_dash:
             # A sibling's dashboard needs *its* token, which lives in its own
             # project's 0600 hint file — so the way in is that project's own
