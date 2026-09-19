@@ -8,15 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.8.0] - 2026-09-19
+
+### Added
+
 - `REPLD_LOOP_GUARD` (`warn` default, `raise`, `off`): the browser stack's loop-owned state — `BrowserPool._browsers`, `BrowserSession._sessions`, `CDPSession._inflight`, and the event counters behind `store_event` — now refuses writes from any thread but the kernel loop's. `warn` logs each offending call site once; `raise` throws `loopguard.LoopOwnershipError`. Nothing in repld trips it; it exists for the next change that would.
 
 ### Changed
 
 - Those three registries are `loopguard.LoopOwned` mappings, whose every iteration is a snapshot. The `list(...)` copy each walker had to remember is gone from 27 sites, and the walks that skipped it on the strength of never awaiting no longer depend on that staying true.
 
-### Fixed
-
-### Removed
 
 ## [0.7.1] - 2026-09-19
 
