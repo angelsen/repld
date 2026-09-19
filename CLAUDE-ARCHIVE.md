@@ -36,6 +36,10 @@ The unabridged text `CLAUDE.md` carried before it was cut to the invariants alon
 wrong at each site, the measurements, and why the alternatives lost. Read the matching entry
 before changing code an invariant in `CLAUDE.md` names.
 
+One entry is history rather than current practice: the `list(...)`-before-walking convention
+for `_sessions`/`_browsers`/`_inflight` is now enforced by `loopguard.LoopOwned`. The entry stays
+for what it says about *why* those walks race.
+
 ### Key subsystems
 
 All source lives under `src/repld/`. Individual files are self-describing; what matters is how they connect:
