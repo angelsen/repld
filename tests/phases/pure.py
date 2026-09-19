@@ -1,11 +1,25 @@
 """Phase 2: pure logic, called directly — no kernel, bridge or Chrome."""
 
 import ast
+import contextlib
+import io
 import re
+from pathlib import Path
+from typing import Annotated, Optional
 
 from harness import assert_eq, assert_true
 
-from repld import gate_cmd, gates, gist_api, render, tasks
+from repld import (
+    cli_args,
+    core_schemas,
+    gate_cmd,
+    gates,
+    gist_api,
+    gist_lint,
+    gists,
+    render,
+    tasks,
+)
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -167,9 +181,179 @@ def _format_args() -> None:
     print("  ✓ gist_api._format_args: positional, keyword-only, variadic, skip_self")
 
 
+def _envelopes() -> None:
+    assert_eq(
+        core_schemas.response(7, {"ok": 1}),
+        {"jsonrpc": "2.0", "id": 7, "result": {"ok": 1}},
+        "response",
+    )
+    assert_eq(
+        core_schemas.error(None, -32601, "nope"),
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32601, "message": "nope"}},
+        "error keeps a null id",
+    )
+    assert_true("params" not in core_schemas.notification("m"), "absent params")
+    # MCP clients tell an absent `params` from an empty one, so {} must survive.
+    assert_eq(core_schemas.notification("m", {})["params"], {}, "empty params kept")
+    assert_true("id" not in core_schemas.notification("m", {"a": 1}), "no id")
+
+    src = [{"uri": "u", "_attr": "GUIDE", "name": "n"}]
+    assert_eq(core_schemas.wire(src), [{"uri": "u", "name": "n"}], "wire strips _keys")
+    assert_true("_attr" in src[0], "wire leaves its input alone")
+    print("  ✓ core_schemas: response/error/notification envelopes, wire()")
+
+
+def _cli_args() -> None:
+    assert_true(cli_args.wants_help(["foo", "--help"]), "help after a positional")
+    assert_true(cli_args.wants_help(["-h"]), "-h")
+    assert_true(not cli_args.wants_help(["--helpful", "help"]), "exact match only")
+
+    def check(argv, **kw) -> tuple[int | None, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = cli_args.check_args("repld x", argv, "usage: x", **kw)
+        return code, err.getvalue()
+
+    assert_eq(check(["a", "--json"], flags=("--json",)), (None, ""), "known flag")
+    code, err = check(["--jsno"], flags=("--json",))
+    assert_true(code == 2 and "'--jsno'" in err and "usage: x" in err, "unknown flag")
+    code, err = check(["a", "b"])
+    assert_true(code == 2 and "unexpected argument 'b'" in err, "surplus positional")
+    assert_eq(check(["a", "b", "c"], positionals=None)[0], None, "any number of names")
+    # Surplus only: a verb that *requires* a positional checks for it itself.
+    assert_eq(check([])[0], None, "a missing positional is the caller's to refuse")
+    code, err = check(["--bad", "a", "b"])
+    assert_true("'--bad'" in err and "'b'" not in err, "unknown flag reported first")
+    print("  ✓ cli_args: wants_help scans every arg; check_args refuses flags, surplus")
+
+
+def _json_types() -> None:
+    parts, resolve = gists._annotation_parts, gists._resolve_json_type
+    assert_eq(parts(int), (int, None), "bare type")
+    assert_eq(parts(Annotated[str, "an id"]), (str, "an id"), "Annotated description")
+    assert_eq(
+        parts(Annotated[str, 3, "late"]), (str, "late"), "non-str metadata skipped"
+    )
+    assert_eq(parts(Annotated[str, 3]), (str, None), "no str metadata")
+
+    for annotation, want in (
+        (str, "string"),
+        (int, "integer"),
+        (float, "number"),
+        (bool, "boolean"),
+        (list[str], "array"),
+        (dict[str, int], "object"),
+        (int | None, "integer"),
+        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
+        (int | str, None),
+        (Path, None),
+        (tuple[int, ...], None),
+    ):
+        assert_eq(resolve(annotation), want, f"_resolve_json_type({annotation!r})")
+
+    def _tool_lookup(
+        org: Annotated[str, "9-digit org number"], limit: int = 5, deep=False
+    ):
+        """Look a company up.
+
+        More prose.
+        """
+
+    schema = gists._schema_from_signature(_tool_lookup, "lookup")
+    assert_eq(schema["description"], "Look a company up.", "docstring first line")
+    assert_eq(
+        schema["inputSchema"],
+        {
+            "type": "object",
+            "properties": {
+                "org": {"type": "string", "description": "9-digit org number"},
+                "limit": {"type": "integer", "default": 5},
+                "deep": {"type": "string", "default": False},
+            },
+            "required": ["org"],
+        },
+        "schema from signature",
+    )
+
+    def _tool_bare():
+        pass
+
+    bare = gists._schema_from_signature(_tool_bare, "bare")
+    assert_eq(bare["description"], "bare", "no docstring falls back to the tool name")
+    assert_true("required" not in bare["inputSchema"], "no required key when empty")
+    print("  ✓ gists: Annotated split, JSON type resolution, schema from signature")
+
+
+def _lint_helpers() -> None:
+    src = (
+        "x = 1  # gistlint: ignore=deps,shape\n"
+        "y = '# gistlint: ignore=all'\n"
+        "# gistlint:ignore=legacy\n"
+        "z = 3\n"
+    )
+    ignores = gist_lint._parse_ignores(src)
+    # Tokenized, not grepped: the directive inside the string on line 2 is not one.
+    assert_eq(ignores, {1: {"deps", "shape"}, 3: {"legacy"}}, "_parse_ignores")
+    assert_true(gist_lint._is_ignored(1, "deps", ignores), "same line")
+    assert_true(gist_lint._is_ignored(4, "legacy", ignores), "line above")
+    assert_true(not gist_lint._is_ignored(5, "legacy", ignores), "two above is too far")
+    assert_true(not gist_lint._is_ignored(1, "legacy", ignores), "other rule")
+    assert_true(gist_lint._is_ignored(9, "x", {9: {"all"}}), "all covers any rule")
+    assert_eq(
+        gist_lint._parse_ignores("x = (  # gistlint: ignore=deps\n"),
+        {1: {"deps"}},
+        "unterminated source keeps what it saw",
+    )
+
+    def firstline(doc: str, ignores: dict | None = None) -> int:
+        tree = ast.parse(f'"""{doc}"""\n')
+        return len(gist_lint._check_firstline(Path("g.py"), tree, ignores or {}))
+
+    assert_eq(
+        firstline("Wraps the thing\nand more."), 1, "unterminated first line continues"
+    )
+    assert_eq(firstline("Wraps the thing.\nMore."), 0, "terminated")
+    assert_eq(firstline("Wraps the thing:\n- a"), 0, "colon terminates")
+    assert_eq(firstline("Wraps the thing"), 0, "single line")
+    assert_eq(firstline("Wraps the thing\n\n"), 0, "nothing after it to truncate")
+    assert_eq(
+        firstline("Wraps\nmore", {40: {"firstline"}}), 0, "ignore applies file-wide"
+    )
+    assert_eq(
+        len(gist_lint._check_firstline(Path("g.py"), ast.parse("x = 1"), {})),
+        0,
+        "no docstring",
+    )
+
+    def needs(sig: str) -> bool:
+        fn = ast.parse(f"{sig}: ...").body[0]
+        assert isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef)
+        return gist_lint._needs_shape_doc(fn)
+
+    for sig, want in (
+        ("def f()", False),
+        ("def f() -> None", False),
+        ("def f() -> str", False),
+        ("def f() -> dict", True),
+        ("async def f() -> list[dict[str, Any]]", True),
+        ("def f() -> 'Rows | None'", False),
+        ("def f() -> Company", False),
+        ("def f() -> Playlist", False),
+        ("def f() -> typing.Any", True),
+        ("def f() -> List[Company]", True),
+    ):
+        assert_eq(needs(sig), want, f"_needs_shape_doc({sig})")
+    print("  ✓ gist_lint: ignore directives, firstline rule, shape-doc trigger")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
     _preview()
     _render()
     _format_args()
+    _envelopes()
+    _cli_args()
+    _json_types()
+    _lint_helpers()
