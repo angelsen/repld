@@ -46,7 +46,7 @@ _IGNORE_RE = re.compile(r"#\s*gistlint:\s*ignore=([\w,]+)")
 # it (the shared kernel namespace, per repld's own gist convention) is never
 # a pip dependency to declare.
 _STDLIB = set(sys.stdlib_module_names) | {"__future__", "__main__"}
-_SHAPE_HINTS = ("dict", "list", "any")
+_SHAPE_HINTS = frozenset({"dict", "list", "any"})
 
 
 @dataclass
@@ -153,7 +153,8 @@ def _needs_shape_doc(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         ret = ast.unparse(node.returns).lower()
     except Exception:
         return False
-    return any(hint in ret for hint in _SHAPE_HINTS)
+    # Whole identifiers: as substrings, `Company` and `Playlist` contain a hint.
+    return not _SHAPE_HINTS.isdisjoint(re.findall(r"[a-z_]\w*", ret))
 
 
 def _check_shape(
