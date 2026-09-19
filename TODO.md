@@ -176,11 +176,6 @@ infinite scroll.
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script
 - [ ] Vite plugin — auto-inject `data-testid` in dev mode (SvelteKit + Astro)
 
-- [ ] **Public accessor for a kernel's own runtime dir** (`repld.runtime_dir()` or `repld.socket_path()`). Code running *in* a kernel
-  has only `repld.paths.project_dir()`, which is not the socket's parent on an `--ephemeral` kernel — so gists writing
-  files for `repld status --json`-driven readers reach for the private `repld.ipc._server.socket_path.parent`
-  (claude_code_research's `gists/inflight.py`, `gists/roster.py`).
-
 ## OpenCode channel support
 
 Researched while comparing Claude Code's Channels feature to other coding agents. `push_channel()`

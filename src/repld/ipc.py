@@ -329,6 +329,18 @@ def start_server(socket_path: Path, handler: Handler) -> Server:
     return _server
 
 
+def socket_path() -> Path:
+    """This kernel's IPC socket — the `socket_path` that `repld status --json` reports.
+
+    Every per-kernel state file is this path with another suffix, so `.parent`
+    is where a gist writes files an outside reader finds by that key. It is not
+    `paths.project_dir()` on a `--socket` or `--ephemeral` kernel.
+    """
+    if _server is None:
+        raise RuntimeError("repld.socket_path() is only available inside a kernel")
+    return _server.socket_path
+
+
 def stop_server() -> None:
     if _server is not None:
         _server.stop()

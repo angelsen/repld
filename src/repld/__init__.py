@@ -9,6 +9,7 @@ __version__ = importlib.metadata.version("repld-tool")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+    from pathlib import Path
     from typing import Any
 
     def notify(content: Any, **meta: Any) -> None: ...
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
         seconds: float, *, label: str | None = None, delay: float = 0.0
     ) -> Callable: ...
     def load_dotenv() -> None: ...
+    def socket_path() -> Path: ...
     async def ask(
         prompt: str,
         *,
@@ -48,7 +50,7 @@ if TYPE_CHECKING:
     browser: _LazyBrowser
 
 
-__all__ = ["load_dotenv", "main"]
+__all__ = ["load_dotenv", "main", "socket_path"]
 
 
 def __getattr__(name: str):
@@ -67,4 +69,8 @@ def __getattr__(name: str):
         from .kernel import load_dotenv
 
         return load_dotenv
+    if name == "socket_path":
+        from .ipc import socket_path
+
+        return socket_path
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

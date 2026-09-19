@@ -2119,6 +2119,12 @@ one function that needs it instead — a module-level import makes the whole
 file fail outside a kernel, even for a caller who only wanted the rest of it.
 `repld gist add` warns when it links a file shaped that way.
 
+Files written for a reader outside the kernel go under
+repld.socket_path().parent — the directory of the socket_path that
+`repld status --json` reports, so a reader that found the kernel that way finds
+the file. Not repld.paths.project_dir(): an --ephemeral or --socket kernel
+lives elsewhere.
+
 Async by default. All methods async def, use await tab.fetch(). Async gists
 yield to the event loop — browser stays responsive, multiple gists can
 interleave, no "loop blocked" warnings.

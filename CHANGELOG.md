@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld.socket_path()` — the running kernel's own IPC socket, the same path `repld status --json` reports. Its `.parent` is where a gist should write files meant for a reader outside the kernel: `repld.paths.project_dir()` is the wrong directory on an `--ephemeral` or `--socket` kernel, which left gists reaching for the private `repld.ipc._server`. Raises `RuntimeError` outside a kernel.
+
 ### Changed
 
 ### Fixed

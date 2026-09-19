@@ -732,6 +732,13 @@ def phase_15_ephemeral_bridge(_kernel: Kernel) -> None:
                 f"exec runs against the ephemeral kernel (got {out!r})",
             )
 
+            out = b.exec("import repld; print(repld.socket_path())")
+            assert_true(
+                str(ephemeral_dir / "kernel.sock")
+                in out["result"]["content"][0]["text"],
+                f"socket_path() names the ephemeral socket, not the project's (got {out!r})",
+            )
+
             out = b.exec("import ephcheck; print(ephcheck.VALUE)")
             assert_true(
                 "42" in out["result"]["content"][0]["text"],
