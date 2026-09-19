@@ -334,6 +334,78 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
     print("  ✓ BrowserPool.open()/get() skip a dead entry rather than failing on it")
 
 
+def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
+    """A stale-connected dead pool entry doesn't leak into tab listings either.
+
+    Companion to phase_6_dead_pool_failover, which covers routing
+    (open()/get() skipping a dead entry). Listing was the other half:
+    `BrowserPool.snapshot()` (the dashboard) and `format_tabs_nested()`
+    (`browser_tabs`) trusted the stale `_connected` flag the same way `open`/
+    `get` used to, surfacing a dead port's tabs as though the Chrome behind
+    them were still reachable. No Chrome — pure asyncio shapes, same as
+    phase_6_dead_pool_failover.
+    """
+    from repld.browser import Browser, BrowserPool
+
+    class _FakeCdp:
+        def __init__(self, target_id: str, url: str) -> None:
+            self.target_info = {
+                "targetId": target_id,
+                "type": "page",
+                "url": url,
+                "title": "t",
+            }
+
+    class _Dead(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = False
+            raise RuntimeError(f"Cannot reach Chrome on port {self.port}: refused")
+
+    class _Live(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = True
+
+    def _stocked_pool() -> "BrowserPool":
+        pool = BrowserPool()
+        dead = _Dead(port=1111)
+        dead._connected = True                           # sorts first, looks connected, isn't
+        dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
+            "dead-target", "http://dead/"
+        )
+        live = _Live(port=2222)
+        live._connected = True
+        live._session._sessions["live-sid"] = _FakeCdp(  # type: ignore[assignment]
+            "live-target", "http://live/"
+        )
+        pool._browsers[1111] = dead
+        pool._browsers[2222] = live
+        return pool
+
+    async def _listing() -> tuple[dict, str]:
+        # Separate pools: `_ensure_connected()` self-corrects `dead._connected`
+        # to False on its first raise, so probing the same pool twice would
+        # skip the second probe outright rather than exercising it.
+        snap = await _stocked_pool().snapshot()
+        text = await _stocked_pool().format_tabs_nested()
+        return snap, text
+
+    snap, text = asyncio.run(_listing())
+    urls = {t["url"] for t in snap["tabs"]}
+    assert_true("http://live/" in urls, "snapshot() lists the live port's tabs")
+    assert_true("http://dead/" not in urls, "and omits the dead port's stale ones")
+    assert_true(
+        "http://live/" in text, "format_tabs_nested() lists the live port's tabs"
+    )
+    assert_true("http://dead/" not in text, "and omits the dead port's stale ones")
+    assert_true(
+        "(unreachable: [1111])" in text,
+        "naming the port it skipped rather than staying silent",
+    )
+    print(
+        "  ✓ BrowserPool.snapshot()/format_tabs_nested() skip a dead entry's stale tabs"
+    )
+
+
 def phase_6_reattach_binding(_kernel: Kernel) -> None:
     """A reattached session re-registers the pill's gate binding.
 

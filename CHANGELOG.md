@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser_tabs` and the dashboard's browser panel no longer list a dead pool entry's stale tabs. `BrowserPool.snapshot()`/`format_tabs_nested()` trusted the `_connected` flag outright at list time the same way `open()`/`get()` used to at routing time (fixed in 0.6.1) — a Browser whose Chrome died without going through `disconnect()` kept showing its old tabs as though still attached, inviting a caller to target a dead port straight from the listing. Both now probe with `_ensure_connected()` before including a browser's tabs and skip (rather than raise on) a dead one; `format_tabs_nested()`'s text output additionally names the port(s) it skipped.
+
 ### Removed
 
 ## [0.6.1] - 2026-09-19

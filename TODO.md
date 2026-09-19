@@ -104,15 +104,16 @@ infinite scroll.
   (pinned to one immutable CDP target → "logically the same tab" across swaps), with more places
   to get subtly wrong (pin state, event bindings, DuckDB event history keyed by the old target
   id). Revisit if a real cross-origin swap actually bites in practice, not preemptively.
-- [ ] **`browser_tabs`/`pool.snapshot()` don't mark or drop unreachable pool entries at list
-  time.** Companion to `3c90ce3` (`BrowserPool.open()`/`get()` now probe before committing to
-  a `_connected`-flagged candidate and skip a dead one instead of raising) — that fix covers
-  *routing*, not *listing*: a tab from a Browser whose Chrome died without an explicit
-  `disconnect()` still shows up in `browser_tabs` with no liveness marker, inviting a caller
-  to `browser_invoke`/target that now-dead port straight from a stale listing. Observed live
-  in claude_code_research's `hypothesis/projects/repld/browser-mcp-default-port.md` (fact 7).
-  Candidate: reuse `3c90ce3`'s self-correcting `_connected` — probe at list time (or surface
-  whatever the last routing attempt already learned) and flag or omit dead entries.
+- [x] **`browser_tabs`/`pool.snapshot()` don't mark or drop unreachable pool entries at list
+  time.** Fixed: both now `await b._ensure_connected()` per browser before trusting its
+  `_connected` flag — the same probe `3c90ce3` gave `open()`/`get()` for routing, reused here
+  for listing. A dead entry's tabs are omitted rather than shown stale; `format_tabs_nested()`
+  (`browser_tabs`'s text output) additionally names the port(s) it skipped. Both methods are
+  now `async def`, so their two call sites (`browser_dispatch._bh_tabs`, which now goes
+  through `_run_async` like every other Chrome-talking handler instead of
+  `_run_sync_on_loop`; `dashboard._collect_state`, now `async def` itself) changed with them.
+  New `phase_6_dead_pool_listing` test (pure asyncio, no real Chrome, companion to
+  `phase_6_dead_pool_failover`).
 
 ## Testing gaps
 

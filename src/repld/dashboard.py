@@ -63,7 +63,7 @@ def _bound_port() -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def _collect_state() -> dict:
+async def _collect_state() -> dict:
     active = sum(1 for _tid, t in tasks.items() if not t["done_event"].is_set())
     from .kernel import every_snapshot
 
@@ -95,7 +95,7 @@ def _collect_state() -> dict:
         }
         return state
 
-    state["browser"] = pool.snapshot()
+    state["browser"] = await pool.snapshot()
     return state
 
 
@@ -317,7 +317,7 @@ def _sessions_with_tokens() -> list[dict]:
 
 async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "state":
-        return _collect_state()
+        return await _collect_state()
 
     if method == "sessions":
         return _sessions_with_tokens()

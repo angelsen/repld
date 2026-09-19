@@ -171,11 +171,24 @@ class BrowserPool:
                 return Tab(cdp, target_id, port)
         raise RuntimeError(f"tab not attached: {target_id}")
 
-    def snapshot(self) -> dict:
-        """Serializable state for the dashboard: connection + tab list."""
+    async def snapshot(self) -> dict:
+        """Serializable state for the dashboard: connection + tab list.
+
+        Probes each candidate with `_ensure_connected()` rather than trusting
+        `_connected` outright — same reasoning as `open()`: a Browser whose
+        Chrome died without an explicit `disconnect()` keeps reading as
+        connected forever, and would otherwise list stale tabs pointing a
+        caller at a dead port. The probe's own self-correction of `_connected`
+        (see `Browser._ensure_connected`) is what then makes `ports` reflect
+        reality too, since it reads the same flag.
+        """
         tab_list = []
         for port, b in list(self._browsers.items()):
             if not b._connected:
+                continue
+            try:
+                await b._ensure_connected()
+            except RuntimeError:
                 continue
             for cdp in list(b._session._sessions.values()):
                 info = cdp.target_info
@@ -426,14 +439,25 @@ class BrowserPool:
             results.append(b.clear())
         return "\n".join(results)
 
-    def format_tabs_nested(self) -> str:
+    async def format_tabs_nested(self) -> str:
+        """Same dead-entry probe as `snapshot()` — see its docstring."""
         parts = []
-        for b in list(self._browsers.values()):
-            if b._connected:
-                text = b.format_tabs_nested()
-                if text != _NO_TABS:
-                    parts.append(text)
-        return "\n".join(parts) if parts else _NO_TABS
+        unreachable: list[int] = []
+        for port, b in list(self._browsers.items()):
+            if not b._connected:
+                continue
+            try:
+                await b._ensure_connected()
+            except RuntimeError:
+                unreachable.append(port)
+                continue
+            text = b.format_tabs_nested()
+            if text != _NO_TABS:
+                parts.append(text)
+        body = "\n".join(parts) if parts else _NO_TABS
+        if unreachable:
+            body += f"\n(unreachable: {unreachable})"
+        return body
 
     @property
     def _connected(self) -> bool:

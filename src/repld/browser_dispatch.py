@@ -198,15 +198,10 @@ class BrowserDispatchMixin:
         """Run a *synchronous* browser call on the kernel loop.
 
         Handlers run on the IPC reader thread, and most reach the browser
-        through `_run_async`, so they land on the loop by construction. The two
-        sync entry points below (`format_tabs_nested`, `clear`) did not, and
-        both walk the session/browser maps the loop mutates on every tab that
-        opens or closes; `clear` also resets `_event_count` and empties
-        `_inflight`, which settle reads from the loop. The snapshots inside
-        `browser/browser.py` and `browser/pool.py` keep the *reads* from
-        crashing wherever they are
-        called from, but a write to loop-owned state belongs on the loop, so
-        these go there too.
+        through `_run_async`, so they land on the loop by construction. `clear`
+        did not: it resets `_event_count` and empties `_inflight`, which settle
+        reads from the loop, and a write to loop-owned state belongs on the
+        loop.
 
         Not for the DuckDB query methods — `tab.network()`, `console()`,
         `body()` and friends are deliberately off-loop on a per-call cursor,
@@ -252,7 +247,7 @@ class BrowserDispatchMixin:
         return result
 
     def _bh_tabs(self, browser, args):
-        return self._run_sync_on_loop(browser.format_tabs_nested)
+        return self._run_async(browser.format_tabs_nested())
 
     def _bh_pages(self, browser, args):
         return self._run_async(browser.pages())
