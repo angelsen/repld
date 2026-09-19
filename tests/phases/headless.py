@@ -4,6 +4,8 @@ Everything here runs in its own tempdir with no kernel started up front: the
 point is that the bridge produces one.
 """
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -556,6 +558,45 @@ def _tasks_listing(tmp: Path) -> None:
         b.close()
 
 
+def _tasks_version_skew(tmp: Path) -> None:
+    """A kernel predating `repld tasks` names itself in the error, not just
+    "could not reach the dashboard" — `POST /api` answers an unknown method
+    with HTTP 200 + a JSON-RPC error body (`dashboard._handle_api`), which
+    `_fetch`'s old bare-`None`-on-anything-but-success return collapsed into
+    the same message as a genuinely unreachable dashboard. A real kernel's
+    lock/hint files are needed to reach `_fetch` at all; only the RPC result
+    is faked — `_fetch` monkeypatched to whatever a 0.6.2 kernel's dashboard
+    would answer for an unknown method."""
+    from repld import paths, tasks_cmd
+
+    b = Bridge(tmp)
+    try:
+        b.handshake()
+        b.exec("1")  # force the lazy spawn so a lock/hint file exists
+
+        real_fetch = tasks_cmd._fetch
+        tasks_cmd._fetch = lambda lock, hint_path: {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32000, "message": "Unknown method: tasks"},
+        }
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = tasks_cmd.run_tasks(["--socket", str(paths.socket_path(tmp))])
+            assert_eq(rc, 1, "run_tasks reports failure on an old kernel")
+            assert_true(
+                "predates" in err.getvalue() and "repld restart" in err.getvalue(),
+                "names the version skew, not a generic unreachable message "
+                f"(got {err.getvalue()!r})",
+            )
+        finally:
+            tasks_cmd._fetch = real_fetch
+        print("  ✓ repld tasks names a pre-`tasks` kernel instead of 'could not reach'")
+    finally:
+        b.close()
+
+
 def _concurrent_boots(tmp: Path) -> None:
     """Racing kernel boots in one project yield exactly one survivor."""
     procs = [
@@ -730,6 +771,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _no_display_skips_queue(tmp)
         _event_log(tmp)
         _tasks_listing(tmp)
+        _tasks_version_skew(tmp)
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)
         _concurrent_boots(tmp)

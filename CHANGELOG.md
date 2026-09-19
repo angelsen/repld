@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `repld tasks` against a kernel that predates it reported "could not reach the dashboard" — indistinguishable from a genuinely dead dashboard. `POST /api` always answers HTTP 200, so an old kernel's "unknown method" came back as a JSON-RPC error body, not a transport failure; `_fetch` collapsed both to the same generic message. Now names the version skew and points at `repld restart`, matching `repld gate`'s existing handling of the same situation.
+
 ### Removed
 
 ## [0.7.0] - 2026-09-19

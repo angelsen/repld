@@ -29,6 +29,12 @@ def _fetch(lock: dict, hint_path: Path) -> dict | None:
 
     Same round trip as `lifecycle_cmd._live_state()`, a different RPC method —
     kept off `"state"` so the dashboard page's frequent poll stays a count.
+
+    Returns the raw JSON-RPC envelope, not just `result`: `POST /api` always
+    answers HTTP 200 (`dashboard._handle_api`), so a kernel that predates this
+    method comes back as `{"error": {...}}`, not a transport failure — the
+    caller has to see that to tell "dashboard unreachable" from "kernel is
+    just older than this command" apart, rather than reporting both alike.
     """
     port = lock.get("dashboard_port")
     if not port:
@@ -50,7 +56,7 @@ def _fetch(lock: dict, hint_path: Path) -> dict | None:
             body = json.loads(resp.read())
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return None
-    return body.get("result") if isinstance(body, dict) else None
+    return body if isinstance(body, dict) else None
 
 
 def _print_tasks(data: dict) -> None:
@@ -100,9 +106,24 @@ def run_tasks(argv: list[str]) -> int:
         )
         return 1
 
-    data = _fetch(lock, paths.hint_for(sock_path))
-    if data is None:
+    body = _fetch(lock, paths.hint_for(sock_path))
+    if body is None:
         print(f"{_LABEL}: could not reach the dashboard", file=sys.stderr)
+        return 1
+    if "error" in body:
+        msg = body["error"].get("message", "unknown error")
+        if "Unknown method" in msg:
+            print(
+                f"{_LABEL}: this kernel predates `repld tasks` — restart it to "
+                "pick the command up (`repld restart`)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"{_LABEL}: {msg}", file=sys.stderr)
+        return 1
+    data = body.get("result")
+    if not isinstance(data, dict):
+        print(f"{_LABEL}: unexpected dashboard response", file=sys.stderr)
         return 1
 
     if as_json:
