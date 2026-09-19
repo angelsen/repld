@@ -8,14 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `repld tasks --json` task rows carry `finished_at` (epoch seconds, `null` while running) — requested by the `claude_code_research` inflight viewer, which had been aging failures out by start time.
-- `repld status --json --counts` fetches `tasks_active`/`tickers` for every sibling kernel too, not just this project's own — one dashboard round trip per sibling with a reachable dashboard; off by default, keys stay absent for an unreachable sibling.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.8.3] - 2026-09-19
+
+### Added
+
+- `repld tasks --json` task rows carry `finished_at` (epoch seconds, `null` while running) — requested by the `claude_code_research` inflight viewer, which had been aging failures out by start time.
+- `repld status --json --counts` fetches `tasks_active`/`tickers` for every sibling kernel too, not just this project's own — one dashboard round trip per sibling with a reachable dashboard; off by default, keys stay absent for an unreachable sibling.
+
 
 ## [0.8.2] - 2026-09-19
 
