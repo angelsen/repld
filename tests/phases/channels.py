@@ -277,6 +277,159 @@ def phase_4c_claude_sessions(kernel: Kernel) -> None:
         d.close()
 
 
+def phase_4e_exclude_and_current_session_id(kernel: Kernel) -> None:
+    """notify(exclude=) skips one session from an otherwise-broadcast push;
+    ignored when session= is also given (targeting and excluding the same
+    session still delivers). current_session_id() reports the calling
+    cell's own id, matching what claude_sessions() lists it as."""
+    a = Bridge(
+        kernel.cwd,
+        env={"CLAUDE_CODE_SESSION_ID": "sess-A", "CLAUDE_PROJECT_DIR": "/proj/a"},
+    )
+    b = Bridge(
+        kernel.cwd,
+        env={"CLAUDE_CODE_SESSION_ID": "sess-B", "CLAUDE_PROJECT_DIR": "/proj/b"},
+    )
+    try:
+        a.handshake()
+        b.handshake()
+
+        # current_session_id() reports the calling session's own id.
+        resp = a.exec("print(current_session_id())", call_timeout=3.0)
+        assert_true(
+            "sess-A" in content_text(resp), "current_session_id() reports sess-A"
+        )
+        print("  ✓ current_session_id() reports the calling session")
+
+        # exclude= skips the named session from the broadcast; the other
+        # connected session still gets it.
+        a.exec("notify('minus-A', exclude='sess-A')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel",
+            timeout=3.0,
+            where=lambda n: "minus-A" in n["params"]["content"],
+        )
+        assert_true(
+            "minus-A" in notif["params"]["content"],
+            "excluded broadcast still reaches sess-B",
+        )
+        try:
+            a.wait_notification(
+                "notifications/claude/channel",
+                timeout=1.0,
+                where=lambda n: "minus-A" in n["params"]["content"],
+            )
+            raise AssertionError("excluded session received its own broadcast")
+        except TimeoutError:
+            pass
+        print("  ✓ notify(exclude=) skips the named session, reaches everyone else")
+
+        # exclude= is a no-op when session= is also given -- targeting and
+        # excluding the same session still delivers to it.
+        resp = a.exec(
+            "print(notify('for-B', session='sess-B', exclude='sess-B'))",
+            call_timeout=3.0,
+        )
+        assert_true(
+            "True" in content_text(resp),
+            "exclude= ignored alongside session=, delivery unaffected",
+        )
+        notif = b.wait_notification(
+            "notifications/claude/channel",
+            timeout=3.0,
+            where=lambda n: "for-B" in n["params"]["content"],
+        )
+        assert_true("for-B" in notif["params"]["content"], "targeted push still lands")
+        print("  ✓ exclude= ignored when session= is also given")
+
+        # An exclude= id that isn't connected is a no-op -- broadcast unaffected.
+        a.exec("notify('plain', exclude='sess-NOPE')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel",
+            timeout=3.0,
+            where=lambda n: "plain" in n["params"]["content"],
+        )
+        assert_true(
+            "plain" in notif["params"]["content"], "unknown exclude= is a no-op"
+        )
+        print("  ✓ exclude=<unknown> is a no-op, broadcast unaffected")
+    finally:
+        a.close()
+        b.close()
+
+
+def phase_4f_meta_augmenter(kernel: Kernel) -> None:
+    """channel.set_meta_augmenter(fn) merges fn()'s dict into every push's
+    meta; explicit per-call meta wins on a key collision; a raising augmenter
+    drops its own contribution rather than taking the push down; clearing it
+    (None) stops the merge."""
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+
+        b.exec(
+            "from repld import channel\n"
+            "channel.set_meta_augmenter(lambda: {'roster': 'sess-A:busy'})",
+            call_timeout=3.0,
+        )
+        b.exec("notify('ping', kind='user')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="user", timeout=3.0
+        )
+        assert_eq(
+            notif["params"]["meta"]["roster"], "sess-A:busy", "augmenter's key merged"
+        )
+        print("  ✓ set_meta_augmenter: augmented key present on an unrelated push")
+
+        # Explicit per-call meta wins over the augmenter on a key collision.
+        b.exec(
+            "from repld import channel\n"
+            "channel.set_meta_augmenter(lambda: {'kind': 'from-augmenter'})",
+            call_timeout=3.0,
+        )
+        b.exec("notify('pong', kind='real')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel",
+            timeout=3.0,
+            where=lambda n: n["params"]["content"] == "pong",
+        )
+        assert_eq(
+            notif["params"]["meta"]["kind"], "real", "explicit meta wins collision"
+        )
+        print("  ✓ explicit per-call meta overrides the augmenter on collision")
+
+        # A raising augmenter drops its own contribution, not the push.
+        b.exec(
+            "from repld import channel\n"
+            "def _boom(): raise RuntimeError('nope')\n"
+            "channel.set_meta_augmenter(_boom)",
+            call_timeout=3.0,
+        )
+        b.exec("notify('still-here', kind='survives')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="survives", timeout=3.0
+        )
+        assert_eq(notif["params"]["content"], "still-here", "push survives a raise")
+        print("  ✓ a raising augmenter drops its contribution, push still lands")
+
+        # Clearing it (None) stops the merge.
+        b.exec(
+            "from repld import channel\nchannel.set_meta_augmenter(None)",
+            call_timeout=3.0,
+        )
+        b.exec("notify('clean', kind='after-clear')", call_timeout=3.0)
+        notif = b.wait_notification(
+            "notifications/claude/channel", kind="after-clear", timeout=3.0
+        )
+        assert_true(
+            "roster" not in notif["params"]["meta"],
+            f"cleared augmenter stops merging (got {notif['params']['meta']!r})",
+        )
+        print("  ✓ set_meta_augmenter(None) clears it")
+    finally:
+        b.close()
+
+
 def phase_4d_channel_spill(kernel: Kernel) -> None:
     """push_channel spills oversized content to disk (full text recoverable at
     its `[full output: ...]` path) rather than losing it to a flat clip; a

@@ -66,6 +66,8 @@ from phases.channels import (
     phase_4b_pregate,
     phase_4c_claude_sessions,
     phase_4d_channel_spill,
+    phase_4e_exclude_and_current_session_id,
+    phase_4f_meta_augmenter,
 )
 from phases.core import phase_3, phase_3_argv_and_registry, phase_3_patch_targets
 from phases.dashboard import phase_14_dashboard
@@ -108,6 +110,8 @@ PHASES = {
         phase_4_push_kind_args(k),
         phase_4c_claude_sessions(k),
         phase_4d_channel_spill(k),
+        phase_4e_exclude_and_current_session_id(k),
+        phase_4f_meta_augmenter(k),
     ),
     5: lambda k: (
         phase_5(k),

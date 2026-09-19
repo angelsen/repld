@@ -53,11 +53,16 @@ _EXEC_MODEL = (
     "ask()/confirm()/choose() block the cell on human input; the answer comes "
     "from the kernel's pane, a pinned tab's pill, or `repld gate answer <id>` "
     "when the kernel is headless (the usual case — the push tells you which). "
-    "notify(content, *, session=None, **meta) pushes a channel notification; "
-    "session=<claude_session_id> targets one connected Claude Code session "
-    "(False if it isn't connected, no fallback to broadcast). "
+    "notify(content, *, session=None, exclude=None, **meta) pushes a channel "
+    "notification; session=<claude_session_id> targets one connected Claude "
+    "Code session (False if it isn't connected, no fallback to broadcast); "
+    "exclude=<claude_session_id> — only with session left None — skips that "
+    "one session from the broadcast (e.g. a self-report that already has the "
+    "result synchronously). "
     "claude_sessions() lists connected (session_id, project_dir, kind) tuples "
     "— kind is 'bg' for a `claude --bg` worker, else None. "
+    "current_session_id() returns the claude_session_id of whoever triggered "
+    "the code currently running, or None if there's nothing to attribute to. "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
     "The kernel persists; one-shot work can become background automation."
@@ -1717,18 +1722,28 @@ TimeoutError if no default and timeout expires — pass timeout= for any gate
 that must not park a cell indefinitely.
 Emits awaiting_human channel while blocked.
 
-notify(content, *, session=None, **meta)
+notify(content, *, session=None, exclude=None, **meta)
   One-shot channel push. With no session=, broadcasts to all MCP sessions.
   session=<claude_session_id> targets one Claude Code session by the id
   claude_sessions() lists — returns True if delivered, False if that
   session isn't connected (no fallback to broadcast: a miss is dropped,
   same rule as a task-done push whose originator disconnected).
+  exclude=<claude_session_id> — only meaningful alongside the broadcast
+  path (session left None; ignored otherwise) — skips that one session,
+  e.g. a self-report whose caller already has the result synchronously.
 
 claude_sessions()
   Returns a list of (claude_session_id, project_dir, kind) tuples, one per
   connected MCP session. All three are None for a session with no Claude
   Code identity — a hand-run `repld bridge`, or another MCP client. kind is
   "bg" for a `claude --bg` worker, else None.
+
+current_session_id()
+  Returns the claude_session_id of whoever triggered the code currently
+  running — the same id claude_sessions() lists and notify()'s session=/
+  exclude= take. None with nothing to attribute to: an ambient context
+  (repld_init.py, an @every tick, a bare kernel REPL) or a connected
+  client with no Claude Code identity.
 """,
     "migration": """\
 Why a repld project has no state files (0.1.x → 0.2).
@@ -1971,17 +1986,23 @@ Both the agent and the human see the same live objects.
 
 Injected into __main__:
 
-  notify(content, *, session=None, **meta)
+  notify(content, *, session=None, exclude=None, **meta)
                                push a channel notification. With no session=,
                                broadcasts to every connected MCP session.
                                session=<claude_session_id> targets one by the
                                id claude_sessions() lists — returns False if
                                it's not connected (no fallback to broadcast),
                                True if delivered, None on a plain broadcast.
+                               exclude=<claude_session_id> — only with session
+                               left None — skips that one session from the
+                               broadcast.
   claude_sessions()            list connected (session_id, project_dir, kind)
                                tuples; all None for a session with no Claude
                                Code identity (hand-run bridge, other client).
                                kind is "bg" for a `claude --bg` worker.
+  current_session_id()         claude_session_id of whoever triggered the
+                               code currently running, or None if there's
+                               nothing to attribute to.
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds, delay=0)(fn)  periodic ticker; fn.cancel() stops it.
                                delay= defers the first tick — a watchdog

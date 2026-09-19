@@ -240,15 +240,22 @@ class Server:
                     del self._claude_sessions[session.claude_session_id]
             session.close()
 
-    def broadcast_channel(self, msg: dict) -> None:
+    def broadcast_channel(self, msg: dict, *, exclude: "Session | None" = None) -> None:
         """Post a server-initiated notification to every connected session.
 
         Sessions that haven't sent notifications/initialized yet queue the
         message and flush it when they do.
+
+        `exclude`: skip this one session — for a self-reported update whose
+        caller already has the result synchronously (its own return value)
+        and doesn't need the broadcast echoed back to itself, without
+        downgrading everyone else's copy to a targeted per-session loop.
         """
         with self.sessions_lock:
             targets = list(self.sessions)
         for s in targets:
+            if s is exclude:
+                continue
             s.post_channel(msg)
 
     def post_to(self, session: Session, msg: dict) -> bool:
@@ -327,9 +334,9 @@ def stop_server() -> None:
         _server.stop()
 
 
-def broadcast_channel(msg: dict) -> None:
+def broadcast_channel(msg: dict, *, exclude: "Session | None" = None) -> None:
     if _server is not None:
-        _server.broadcast_channel(msg)
+        _server.broadcast_channel(msg, exclude=exclude)
 
 
 def post_to(session: Session, msg: dict) -> bool:

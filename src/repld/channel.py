@@ -16,6 +16,8 @@ each of them import it at module level rather than reaching for a
 function-local `from .kernel import push_channel` to dodge a cycle.
 """
 
+from collections.abc import Callable
+
 from . import events, ipc
 from .core_schemas import notification as _notification
 from .events import ChannelPush
@@ -23,6 +25,23 @@ from .tasks import spill_marker as _spill_marker
 from .tasks import spill_text as _spill_text
 
 _META_VALUE_LIMIT = 2000
+
+# Optional single callback, same shape as events.set_sink: a project's
+# repld_init.py registers one so push_channel never has to import anything
+# project-specific.
+_meta_augmenter: "Callable[[], dict[str, str]] | None" = None
+
+
+def set_meta_augmenter(fn: "Callable[[], dict[str, str]] | None") -> None:
+    """Register (or clear) a callback whose returned dict merges into every push's meta.
+
+    Must be synchronous and cheap -- push_channel runs on whatever thread or
+    loop called it, including the kernel's shared asyncio loop. Exceptions
+    are swallowed so a broken augmenter drops its own contribution instead
+    of taking every push in the kernel down with it.
+    """
+    global _meta_augmenter
+    _meta_augmenter = fn
 
 
 def _clip(text: str, limit: int) -> str:
@@ -37,6 +56,7 @@ def push_channel(
     *,
     session: "ipc.Session | None" = None,
     fallback_broadcast: bool = False,
+    exclude: "ipc.Session | None" = None,
 ) -> None:
     """Send a notifications/claude/channel notification AND emit a local
     ChannelPush event so the pane and the event log mirror what the MCP agent
@@ -49,6 +69,12 @@ def push_channel(
     has since disconnected the push is *dropped*, never downgraded to a
     broadcast: leaking one session's output into every other one is worse than
     silence, and the local event still reaches `repld log`.
+
+    `exclude` only applies to the broadcast path (`session=None`): skip one
+    session — the caller's own — that already has this update some other way
+    (a self-report's synchronous return value) and doesn't need it echoed
+    back. Ignored when `session` is set, since targeting one session and
+    excluding another are different requests.
 
     `fallback_broadcast=True` is the one deliberate exception: a *best-guess*
     affinity (e.g. controls observations routed to whichever session last
@@ -68,6 +94,11 @@ def push_channel(
     `cdp._check_controls_observation`) should still clip its own way first;
     this only catches what isn't.
     """
+    if _meta_augmenter is not None:
+        try:
+            meta = {**_meta_augmenter(), **(meta or {})}
+        except Exception:
+            pass  # a broken augmenter must never break the push (events.set_sink's own rule)
     meta = meta or {}
     sp = _spill_text(content, label="channel")
     content = sp["text"]
@@ -79,7 +110,7 @@ def push_channel(
         "notifications/claude/channel", {"content": content, "meta": meta}
     )
     if session is None or (not ipc.post_to(session, msg) and fallback_broadcast):
-        ipc.broadcast_channel(msg)
+        ipc.broadcast_channel(msg, exclude=exclude if session is None else None)
     events.emit(ChannelPush(content, meta))
 
 

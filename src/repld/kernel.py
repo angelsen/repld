@@ -237,7 +237,7 @@ def _banner(
 # ---------------------------------------------------------------------------
 
 
-def _notify(content, *, session=None, **meta) -> bool | None:
+def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
     """Push a channel notification. meta keys become XML attributes.
 
     session=None (default) broadcasts to every connected MCP session,
@@ -245,6 +245,16 @@ def _notify(content, *, session=None, **meta) -> bool | None:
     id claude_sessions() lists — returns True if delivered, False if that
     session isn't connected. No fallback to broadcast on a miss: that would
     defeat the point of asking for one session specifically.
+
+    exclude=<claude_session_id>, only meaningful alongside the broadcast
+    path (session left at its default None — combining it with an explicit
+    session is a contradiction and exclude is silently ignored then): skips
+    that one session. For a self-report that already has this update some
+    other way (its own synchronous return value, e.g. roster.report()) and
+    doesn't need it echoed back to itself — current_session_id() is the id
+    to pass. An id that doesn't resolve to a connected session (already
+    disconnected, never connected) is a no-op — the same as not excluding
+    anyone, since there's nothing to skip.
     """
     if session is not None:
         target = ipc.find_claude_session(session)
@@ -252,7 +262,8 @@ def _notify(content, *, session=None, **meta) -> bool | None:
             return False
         push_channel(str(content), meta, session=target)
         return True
-    push_channel(str(content), meta)
+    excluded = ipc.find_claude_session(exclude) if exclude is not None else None
+    push_channel(str(content), meta, exclude=excluded)
     return None
 
 
@@ -269,6 +280,35 @@ def _claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
     shadow that submodule import.
     """
     return ipc.list_claude_sessions()
+
+
+def _current_session_id() -> str | None:
+    """The Claude Code session id that asked for the code currently running,
+    if any — the same id claude_sessions() lists and notify(session=...) /
+    notify(exclude=...) both take.
+
+    None when there's nothing to attribute to: an ambient context with no
+    originating cell at all (repld_init.py, an @every body's own tick,
+    a bare kernel REPL not run through the exec/deferred-task machinery),
+    or a connected client with no Claude Code identity (a hand-run bridge).
+
+    Reads the SAME `origin` a deferred task already inherits for its own
+    completion push (see tasks.new_task's docstring, and defer()'s own
+    "inherit the calling cell's originating session" comment) — this is the
+    general form of that lookup, usable by any code wanting to know who
+    asked for it, not just the task-completion bookkeeping that motivated
+    tracking `origin` in the first place.
+    """
+    task_id = tasks.current_task_id()
+    if task_id is None:
+        return None
+    task = tasks.get(task_id)
+    if task is None:
+        return None
+    origin = task.get("origin")
+    if origin is None:
+        return None
+    return origin.claude_session_id
 
 
 def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
@@ -1145,6 +1185,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         "choose": gates.choose,
         "no_display": runtime.no_display,
         "claude_sessions": _claude_sessions,
+        "current_session_id": _current_session_id,
     }
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)

@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `notify(exclude=<claude_session_id>)` — only meaningful with `session=` left at its default `None`, skips that one session from an otherwise-broadcast push (e.g. a self-report whose caller already has the result synchronously and doesn't need it echoed back).
+- `current_session_id()` builtin — the `claude_session_id` of whoever triggered the code currently running (the same id `claude_sessions()` lists and `notify()`'s `session=`/`exclude=` take), or `None` with nothing to attribute to.
+- `channel.set_meta_augmenter(fn)` — registers (or clears, with `None`) a single synchronous callback whose returned dict merges into every `push_channel` call's `meta`, same single-slot shape as `events.set_sink`. Lets a project's `repld_init.py` attach lightweight ambient state (e.g. a session roster) to every push without `channel.py` importing anything project-specific. Exceptions from the callback are swallowed so a broken augmenter drops its own contribution rather than the push.
+
 ### Changed
 
 ### Fixed
