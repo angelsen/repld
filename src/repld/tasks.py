@@ -135,6 +135,7 @@ def new_task(origin: object = None) -> tuple[str, dict]:
     task: dict = {
         "done_event": threading.Event(),
         "started_at": time.time(),  # wall-clock, matching kernel.lock's started_at
+        "finished_at": None,        # wall-clock, set by finalize() — public `done_at`
         "exception": None,
         # Bounded-repr'd, never the raw object: this dict feeds straight into
         # get_task's `json.dumps(snap)`, and an arbitrary result (a DataFrame,
@@ -292,6 +293,7 @@ def snapshot(task_id: str) -> dict | None:
         "exception": task["exception"],
         "result": task.get("result"),
         "done": task["done_event"].is_set(),
+        "finished_at": task.get("finished_at"),  # epoch seconds, None while running
         "label": task.get("label"),
     }
 
@@ -354,7 +356,8 @@ def finalize(task_id: str) -> None:
     # `claim_done_push` that follows it, which would strand the push.
     with _tasks_lock:
         task["done_event"].set()
-    task["done_at"] = time.monotonic()
+    task["done_at"] = time.monotonic()  # eviction clock — see _prune_spill_files
+    task["finished_at"] = time.time()   # wall-clock, matching started_at; public `done_at`
     # Drop the asyncio.Task reference now — it's no longer needed once the
     # cell is done, and holding it keeps the whole coroutine frame chain alive.
     task["asyncio_task"] = None

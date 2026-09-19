@@ -272,6 +272,19 @@ rather than an architectural one — the exact pattern already exists twice in t
   rederivation of `paths.project_slug`'s `{basename}-{sha256(realpath)[:8]}` rule (needed
   since their hook/viewer can't import repld under system python3) stays as-is; no
   `repld paths` command needed.
+- [x] **`repld tasks --json` finish time** — shipped: `tasks.py`'s `finalize()` now sets
+  `task["finished_at"] = time.time()` (wall-clock, beside the pre-existing monotonic
+  `done_at` `_prune_spill_files` already owned), threaded through `snapshot()`,
+  `core_schemas.py`'s `get_task` outputSchema, and `dashboard._collect_tasks()` as
+  `finished_at` — epoch seconds, `None` while running. Requested by
+  `claude_code_research-5c`'s inflight viewer, which had been aging failures out by *start*
+  time for lack of one.
+- [x] **`repld status --json --counts`** — shipped: an opt-in flag fetches
+  `tasks_active`/`tickers` for every sibling too, via `lifecycle_cmd._sibling_counts()`
+  reusing `_live_state()`'s dashboard round trip against each sibling's own socket/hint
+  pair. Off by default; a sibling with no dashboard or no readable token keeps the keys
+  absent, never `0`, so a reader can tell "idle" from "unknown". Requested by the same
+  viewer, which Tab-cycles every live kernel (27 on the requester's machine).
 
 ## Infra
 

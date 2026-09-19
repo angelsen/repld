@@ -124,6 +124,10 @@ CORE_TOOLS = [
                     "description": "bounded repr of the awaited value, when one exists",
                 },
                 "done": {"type": "boolean"},
+                "finished_at": {
+                    "type": ["number", "null"],
+                    "description": "epoch seconds the task finished, null while running",
+                },
                 "label": {"type": ["string", "null"]},
             },
             "required": [
@@ -135,6 +139,7 @@ CORE_TOOLS = [
                 "exception",
                 "result",
                 "done",
+                "finished_at",
                 "label",
             ],
         },

@@ -544,6 +544,9 @@ def _tasks_listing(tmp: Path) -> None:
                 task["started_at"] is not None, "listed task carries started_at"
             )
             assert_true(not task["done"], "listed task is still in flight")
+            assert_true(
+                task["finished_at"] is None, "in-flight task carries no finished_at yet"
+            )
 
         ticker = next(
             (tk for tk in data["tickers"] if tk.get("label") == "_test_ticker"), None
@@ -554,8 +557,121 @@ def _tasks_listing(tmp: Path) -> None:
         print("  ✓ repld tasks listed the in-flight defer() and the @every ticker")
 
         b.exec("_test_ticker.cancel()")
+        b.exec("tid2 = defer(asyncio.sleep(0), label='test-tasks-done')")
+
+        # asyncio.sleep(0) finishes on the next loop tick, but finalize() runs
+        # off that same tick — poll rather than assume it's done by the time
+        # the dashboard round trip lands.
+        deadline = time.monotonic() + 5
+        done_task = None
+        while time.monotonic() < deadline:
+            out = subprocess.run(
+                ["uv", "run", "--project", str(REPO), "repld", "tasks", "--json"],
+                cwd=str(tmp),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            data = json.loads(out.stdout)
+            done_task = next(
+                (t for t in data["tasks"] if t.get("label") == "test-tasks-done"), None
+            )
+            if done_task is not None and done_task["done"]:
+                break
+            time.sleep(0.2)
+        assert_true(
+            done_task is not None and done_task["done"],
+            f"quick deferred task finished (got {done_task!r})",
+        )
+        if done_task is not None:
+            assert_true(
+                done_task["finished_at"] is not None
+                and done_task["finished_at"] >= done_task["started_at"],
+                f"finished task carries a wall-clock finished_at (got {done_task!r})",
+            )
+        print(
+            "  ✓ repld tasks carries finished_at (epoch seconds) once a task completes"
+        )
     finally:
         b.close()
+
+
+def _status_counts(tmp: Path) -> None:
+    """`repld status --json --counts` fetches tasks_active/tickers for a
+    sibling kernel too — absent (not 0) without the flag, since a reader
+    needs to tell "idle" from "didn't ask"."""
+    sibling = Path(tempfile.mkdtemp(prefix="repld-status-counts-"))
+    try:
+        b = Bridge(sibling)
+        try:
+            b.handshake()
+            b.exec(
+                "import asyncio\n"
+                "async def _slow():\n"
+                "    await asyncio.sleep(5)\n"
+                "defer(_slow(), label='sibling-task')\n"
+            )
+            b.exec("@every(60)\ndef _sibling_ticker():\n    return 'tick'\n")
+
+            def _status(counts: bool) -> dict:
+                argv = [
+                    "uv",
+                    "run",
+                    "--project",
+                    str(REPO),
+                    "repld",
+                    "status",
+                    "--json",
+                ]
+                if counts:
+                    argv.append("--counts")
+                out = subprocess.run(
+                    argv,
+                    cwd=str(tmp),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                assert_eq(
+                    out.returncode,
+                    0,
+                    f"repld status {'--counts ' if counts else ''}exits 0",
+                )
+                body = json.loads(out.stdout)
+                sib = next(
+                    (s for s in body["siblings"] if s.get("cwd") == str(sibling)), None
+                )
+                assert_true(
+                    sib is not None, f"sibling kernel listed (got {body['siblings']!r})"
+                )
+                return sib or {}
+
+            bare = _status(counts=False)
+            assert_true(
+                "tasks_active" not in bare, "sibling counts absent without --counts"
+            )
+
+            counted = _status(counts=True)
+            assert_eq(
+                counted.get("tasks_active"),
+                1,
+                f"--counts read the sibling's task count (got {counted!r})",
+            )
+            assert_eq(
+                counted.get("tickers"),
+                1,
+                f"--counts read the sibling's ticker count (got {counted!r})",
+            )
+            print(
+                "  ✓ repld status --counts fetches a sibling's live task/ticker counts"
+            )
+        finally:
+            b.close()
+    finally:
+        _stop_kernel(sibling)
+        shutil.rmtree(sibling, ignore_errors=True)
 
 
 def _tasks_version_skew(tmp: Path) -> None:
@@ -778,6 +894,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _no_display_skips_queue(tmp)
         _event_log(tmp)
         _tasks_listing(tmp)
+        _status_counts(tmp)
         _tasks_version_skew(tmp)
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)

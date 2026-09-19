@@ -46,7 +46,11 @@ repld restart — stop this project's kernel and start a fresh headless one
 _STATUS_USAGE = """\
 repld status — this project's kernel plus live siblings
 
-  repld status [--json] [--socket PATH]
+  repld status [--json] [--counts] [--socket PATH]
+
+  --counts   fetch tasks_active/tickers for every sibling too (one dashboard
+             round trip each, ~50ms) — off by default since a plain `status`
+             shouldn't pay for kernels the caller didn't ask about
 """
 
 
@@ -198,6 +202,25 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
     return body.get("result") if isinstance(body, dict) else None
 
 
+def _sibling_counts(sibling: dict) -> tuple[int, int] | None:
+    """(tasks_active, ticker count) for another project's kernel, or None if
+    unreachable — no dashboard, no readable token, or the request fails.
+
+    Same `_live_state` round trip `here` gets, aimed at a sibling's own
+    socket/hint pair instead of the one `status` was invoked against.
+    """
+    sock = sibling.get("socket_path")
+    if not sock:
+        return None
+    live = _live_state(sibling, paths.hint_for(Path(sock)))
+    if not live:
+        return None
+    active = live.get("kernel", {}).get("tasks_active")
+    if active is None:
+        return None
+    return active, len(live.get("kernel", {}).get("tickers") or [])
+
+
 def _print_python(lock: dict) -> None:
     """The kernel's interpreter, flagged when it can't import the project.
 
@@ -230,11 +253,12 @@ def run_status(argv: list[str]) -> int:
         return 0
     sock_path, rest = paths.resolve_socket_path(argv)
     bad = cli_args.check_args(
-        "repld status", rest, _STATUS_USAGE, flags=("--json",), positionals=0
+        "repld status", rest, _STATUS_USAGE, flags=("--json", "--counts"), positionals=0
     )
     if bad is not None:
         return bad
     as_json = "--json" in rest
+    with_counts = "--counts" in rest
 
     lock_path = paths.lock_for(sock_path)
     lock = state.read_lock(lock_path)
@@ -249,6 +273,12 @@ def run_status(argv: list[str]) -> int:
 
     mine = int(here["pid"]) if here else None
     siblings = [s for s in sessions.list_sessions() if int(s["pid"]) != mine]
+
+    if with_counts:
+        for s in siblings:
+            counts = _sibling_counts(s)
+            if counts is not None:
+                s["tasks_active"], s["tickers"] = counts
 
     if as_json:
         print(json.dumps({"kernel": here, "siblings": siblings}, indent=2))
@@ -286,7 +316,10 @@ def run_status(argv: list[str]) -> int:
             port = s.get("dashboard_port")
             dash = f"  dashboard port {port}" if port else ""
             any_dash = any_dash or bool(port)
-            print(f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{_RESET}")
+            counts = ""
+            if s.get("tasks_active") is not None:
+                counts = f"  active: {s['tasks_active']} task(s), {s['tickers']} ticker(s)"
+            print(f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{counts}{_RESET}")
         if any_dash:
             # A sibling's dashboard needs *its* token, which lives in its own
             # project's 0600 hint file — so the way in is that project's own
