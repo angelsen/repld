@@ -107,16 +107,19 @@ async def route_detach(browser, target, port) -> str | None:
 
 def _raise_on_unresolved_dialog(tab, pre) -> None:
     """Fail the call if it (or an iframe child) triggered a confirm()/prompt()
-    that was rejected by default. Belt-and-suspenders with Tab's own action
-    methods, which already raise for a dialog on their own session — this
-    still matters for a dialog fired on a *different* target (a cross-origin
-    iframe) during the same mutation, which a raw `tab.click()` has no way
-    to see.
+    that was rejected by default, or opened a file chooser nobody resolved.
+    Belt-and-suspenders with Tab's own action methods, which already raise
+    for either on their own session — this still matters for one fired on a
+    *different* target (a cross-origin iframe) during the same mutation,
+    which a raw `tab.click()` has no way to see.
     """
-    from .browser.cdp import unresolved_dialog_error
+    from .browser.cdp import unresolved_dialog_error, unresolved_filechooser_error
 
     for t in (tab, *pre.iframe_children):
         exc = unresolved_dialog_error(t._session._dialog_log)
+        if exc is not None:
+            raise exc
+        exc = unresolved_filechooser_error(t._session._filechooser_log)
         if exc is not None:
             raise exc
 
@@ -266,6 +269,20 @@ class BrowserDispatchMixin:
         tab = self._get_tab(browser, args)
         return self._run_async(
             tab.dismiss_dialog(bool(args.get("accept", True)), args.get("prompt_text"))
+        )
+
+    def _bh_expect_file_chooser(self, browser, args):
+        tab = self._get_tab(browser, args)
+        return self._run_async(tab.expect_file_chooser(list(args["paths"])))
+
+    def _bh_expect_auth(self, browser, args):
+        tab = self._get_tab(browser, args)
+        return self._run_async(tab.expect_auth(args["username"], args["password"]))
+
+    def _bh_grant_permissions(self, browser, args):
+        tab = self._get_tab(browser, args)
+        return self._run_async(
+            tab.grant_permissions(list(args["permissions"]), args.get("origin"))
         )
 
     def _bh_invoke(self, browser, args):
@@ -517,6 +534,12 @@ class BrowserDispatchMixin:
             browser, tab, lambda: tab.select_option(args["selector"], args["option"])
         )
 
+    def _bh_set_files(self, browser, args):
+        tab = self._get_tab(browser, args)
+        return self._receipt_mutation(
+            browser, tab, lambda: tab.set_files(list(args["paths"]))
+        )
+
     _BROWSER_DISPATCH: ClassVar[dict] = {
         "browser_watch": _bh_watch,
         "browser_detach": _bh_detach,
@@ -543,4 +566,8 @@ class BrowserDispatchMixin:
         "browser_controls": _bh_controls,
         "browser_invoke": _bh_invoke,
         "browser_dismiss_dialog": _bh_dismiss_dialog,
+        "browser_set_files": _bh_set_files,
+        "browser_expect_file_chooser": _bh_expect_file_chooser,
+        "browser_expect_auth": _bh_expect_auth,
+        "browser_grant_permissions": _bh_grant_permissions,
     }

@@ -840,6 +840,7 @@ class NetworkEntry:
     time_ms: int | None
     size: int
     is_asset: bool
+    state: str = "complete"
 
 
 @dataclass
@@ -854,6 +855,9 @@ class Observation:
     changes: list[str] | None = None
     # Dialogs auto-dismissed during this mutation — see CDPSession._dialog_log.
     dialogs: list[dict] = field(default_factory=list)
+    # File choosers opened during this mutation, resolved or not — see
+    # CDPSession._filechooser_log.
+    filechoosers: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +929,7 @@ async def pre_observe(tab: Tab, session: BrowserSession) -> PreObservation:
     # dialog, already surfaced via its own channel push).
     for t in all_tabs:
         t._session._dialog_log.clear()
+        t._session._filechooser_log.clear()
     tree_sigs: dict[str, TreeSig] | None = {}
     try:
         _, tree_sigs[tab.target_id] = await build_tree_sig(tab, max_depth=8)
@@ -967,7 +972,7 @@ def network_delta(tabs: list[Tab], pre_ids: dict[str, int]) -> list[NetworkEntry
     for tab in tabs:
         min_id = pre_ids.get(tab.target_id, 0)
         rows = tab._session.query(
-            """SELECT method, status, url, time_ms, size, is_asset
+            """SELECT method, status, url, time_ms, size, is_asset, state
                FROM har_summary
                WHERE id > ?
                ORDER BY id ASC""",
@@ -981,6 +986,7 @@ def network_delta(tabs: list[Tab], pre_ids: dict[str, int]) -> list[NetworkEntry
             time_ms = row[3]
             size = row[4] or 0
             is_asset = bool(row[5])
+            state = row[6] or "complete"
 
             path = _truncate_path(url)
 
@@ -993,6 +999,7 @@ def network_delta(tabs: list[Tab], pre_ids: dict[str, int]) -> list[NetworkEntry
                     time_ms=time_ms,
                     size=size,
                     is_asset=is_asset,
+                    state=state,
                 )
             )
 
@@ -1139,6 +1146,22 @@ def format_observation(obs: Observation) -> str:
     if obs.dialogs:
         parts.append("")
 
+    # File choosers opened during this mutation — invisible to the AX/dom
+    # diff below, so without this line a resolved upload looks like nothing
+    # happened and an unresolved one looks like a silent no-op.
+    for f in obs.filechoosers:
+        if f["resolved"]:
+            parts.append(
+                f"filechooser: mode={f['mode']} → {len(f['paths'])} file(s) set"
+            )
+        else:
+            parts.append(
+                f"filechooser: mode={f['mode']} → open, unresolved "
+                "(call tab.set_files(paths))"
+            )
+    if obs.filechoosers:
+        parts.append("")
+
     # Changes — what this mutation did to the AX tree, before the full tree.
     if obs.changes is not None:
         if obs.changes:
@@ -1163,8 +1186,15 @@ def format_observation(obs: Observation) -> str:
         parts.append(f"network ({total} requests):")
         for e in api_entries:
             time_str = f"{e.time_ms}ms" if e.time_ms is not None else "?"
+            # state is dropped for the common 'complete' case — printing it on
+            # every row would bury the one time it matters: a request that
+            # never finished (aborted by navigation, failed, still pending)
+            # otherwise looks identical to a normal one that happened to
+            # return status 0.
+            state_str = f" ({e.state})" if e.state != "complete" else ""
             parts.append(
-                f"  {e.target}  {e.method}  {e.status} {e.path}  {time_str} {size_str(e.size)}"
+                f"  {e.target}  {e.method}  {e.status} {e.path}{state_str}  "
+                f"{time_str} {size_str(e.size)}"
             )
         if asset_entries:
             total_asset_bytes = sum(e.size for e in asset_entries)
@@ -1258,6 +1288,7 @@ async def post_observe(
     )
 
     dialogs = [d for t in all_tabs_post for d in t._session._dialog_log]
+    filechoosers = [f for t in all_tabs_post for f in t._session._filechooser_log]
 
     obs = Observation(
         url=tab.url,
@@ -1267,6 +1298,7 @@ async def post_observe(
         console=console_lines,
         changes=changes,
         dialogs=dialogs,
+        filechoosers=filechoosers,
     )
 
     text = format_observation(obs)

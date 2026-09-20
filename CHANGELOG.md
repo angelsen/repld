@@ -8,6 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Native file choosers, HTTP Basic/Digest auth, and permission prompts are now handled instead of escaping CDP entirely as invisible OS-level UI. `tab.set_files(paths)`/`tab.expect_file_chooser(paths)` (+ `browser_set_files`/`browser_expect_file_chooser`) resolve or pre-arm a real `<input type=file>` chooser — previously a click on one silently opened a native OS picker with no channel push and a cryptic AX-silent dom diff as the only symptom. `tab.expect_auth(username, password)`/`browser_expect_auth` pre-arms HTTP auth credentials (unhandled otherwise, cancelled by default). `tab.grant_permissions(permissions, origin=None)`/`browser_grant_permissions` pre-authorizes camera/mic/geolocation/etc. Downloads now land in a fixed per-project directory instead of opening a native Save-As dialog.
+- Network delta lines in observations now show `state` when it isn't `complete` (e.g. `POST 0 (aborted) /path`) — previously a request aborted by navigation was indistinguishable from a normal one that happened to return status 0.
+
 ### Changed
 
 ### Fixed

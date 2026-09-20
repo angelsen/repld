@@ -357,7 +357,9 @@ def finalize(task_id: str) -> None:
     with _tasks_lock:
         task["done_event"].set()
     task["done_at"] = time.monotonic()  # eviction clock — see _prune_spill_files
-    task["finished_at"] = time.time()   # wall-clock, matching started_at; public `done_at`
+    task["finished_at"] = (
+        time.time()
+    )  # wall-clock, matching started_at; public `done_at`
     # Drop the asyncio.Task reference now — it's no longer needed once the
     # cell is done, and holding it keeps the whole coroutine frame chain alive.
     task["asyncio_task"] = None

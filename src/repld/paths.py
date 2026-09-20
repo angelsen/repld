@@ -107,6 +107,19 @@ def socket_path(cwd: Path | None = None) -> Path:
     return project_dir(cwd) / "kernel.sock"
 
 
+def downloads_dir(cwd: Path | None = None) -> Path:
+    """``<project_dir>/downloads/``, created 0700 — where browser downloads land.
+
+    Under the project's runtime dir, not the project itself: same "runtime
+    state lives under XDG, never in the project" rule everything else here
+    follows, and it survives a kernel restart the way a `Page.setDownloadBehavior`
+    path set per-session wouldn't if it pointed at project-scratch instead.
+    """
+    d = project_dir(cwd) / "downloads"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d
+
+
 def lock_for(sock: Path) -> Path:
     return sock.with_suffix(".lock")
 

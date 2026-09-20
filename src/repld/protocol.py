@@ -600,6 +600,101 @@ TOOLS = [
             "required": ["target"],
         },
     },
+    {
+        "name": "browser_set_files",
+        "description": (
+            "Resolve the most recent unanswered native file-chooser prompt "
+            "on a tab (opened by clicking a real <input type=file>-backed "
+            "control — Page.setInterceptFileChooserDialog stops the real OS "
+            "picker from ever opening, so this is the only way to answer "
+            "it). Pass absolute paths on the machine running repld. Empty "
+            "paths cancels it, same as declining the real picker. Errors if "
+            "no chooser is open."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute file paths to hand the chooser",
+                },
+            },
+            "required": ["target", "paths"],
+        },
+    },
+    {
+        "name": "browser_expect_file_chooser",
+        "description": (
+            "Pre-arm the files to hand the next native file-chooser prompt "
+            "on a tab, so the click that opens it resolves immediately "
+            "instead of leaving the chooser open. One-shot: consumed by the "
+            "next chooser, then reverts to staying open until "
+            "browser_set_files answers it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute file paths to hand the next chooser",
+                },
+            },
+            "required": ["target", "paths"],
+        },
+    },
+    {
+        "name": "browser_expect_auth",
+        "description": (
+            "Pre-arm credentials for the next HTTP Basic/Digest auth "
+            "challenge on a tab. Without this the challenge is cancelled "
+            "outright (a clean failed request, never a guessed login) and "
+            "reported over channel. One-shot: consumed by the next "
+            "challenge. Only fires on a tab with Fetch enabled (get()/"
+            "open(), or explicit capture) — a watch()-attached tab still "
+            "shows Chrome's native credentials modal."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "username": {"type": "string"},
+                "password": {"type": "string"},
+            },
+            "required": ["target", "username", "password"],
+        },
+    },
+    {
+        "name": "browser_grant_permissions",
+        "description": (
+            "Pre-authorize permissions (e.g. 'geolocation', 'notifications', "
+            "'camera', 'microphone' — Chrome's Browser.grantPermissions "
+            "names) for a tab's origin, so a page request never surfaces "
+            "Chrome's native permission bubble. Must be called before the "
+            "page asks — there's no interceptable event to answer "
+            "after the fact, unlike a file chooser or dialog. Nothing is "
+            "pre-authorized by default."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": _TARGET_PARAM,
+                "permissions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Chrome permission names, e.g. ['geolocation']",
+                },
+                "origin": {
+                    "type": "string",
+                    "description": "Origin to grant for; defaults to the tab's own origin",
+                },
+            },
+            "required": ["target", "permissions"],
+        },
+    },
 ]
 
 # MCP tool annotations (2025-03-26), applied by name so the classification
@@ -638,6 +733,10 @@ _TOOL_ANNOTATIONS = {
     "browser_drag": {"openWorldHint": True},
     "browser_invoke": {"openWorldHint": True},
     "browser_dismiss_dialog": {"openWorldHint": True},
+    "browser_set_files": {"openWorldHint": True},
+    "browser_expect_file_chooser": {"openWorldHint": True},
+    "browser_expect_auth": {"openWorldHint": True},
+    "browser_grant_permissions": {"openWorldHint": True},
 }
 
 

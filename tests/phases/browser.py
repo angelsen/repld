@@ -543,6 +543,7 @@ class _EngineFakeSession:
         self._injected_lock = asyncio.Lock()
         self._frame_seq = 1
         self._dialog_log: list[dict] = []
+        self._filechooser_log: list[dict] = []
 
     async def execute(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -1670,6 +1671,10 @@ def phase_6(kernel: Kernel) -> None:
             "browser_controls",
             "browser_invoke",
             "browser_dismiss_dialog",
+            "browser_set_files",
+            "browser_expect_file_chooser",
+            "browser_expect_auth",
+            "browser_grant_permissions",
             "browser_navigate",
             "browser_key",
             "browser_open",
@@ -2312,6 +2317,152 @@ def phase_6_dialog(kernel: Kernel) -> None:
             f"pre-armed accept via raw tab.click() returns normally (got {out[:400]!r})",
         )
         print("  ✓ dialog: raw tab.click() (exec/gist path) carries the same guarantee")
+    finally:
+        h.close()
+
+
+def phase_6_filechooser_policy(_kernel: Kernel) -> None:
+    """`_handle_filechooser`'s resolve/leave-open decision, in isolation — no
+    Chrome. The interception itself is proven live in phase_6_filechooser."""
+
+    class _Cdp:
+        def __init__(self) -> None:
+            self.port = 9222
+            self.chrome_target_id = "abcdef123456"
+            self._filechooser_policy: dict | None = None
+            self._filechooser_pending: dict | None = None
+            self._filechooser_log: list[dict] = []
+            self.sent: list[dict] = []
+
+        async def execute(self, method: str, params: dict | None = None) -> dict:
+            self.sent.append(params or {})
+            return {}
+
+    from repld.browser.cdp import _handle_filechooser
+
+    async def _run() -> None:
+        # No pre-arm: nothing is sent, the chooser is tracked as pending and
+        # logged unresolved — there is no default file selection to guess.
+        cdp = _Cdp()
+        await _handle_filechooser(cdp, {"backendNodeId": 42, "mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(cdp.sent, [], "no CDP command sent when nothing is pre-armed")
+        assert_eq(
+            cdp._filechooser_pending,
+            {"backend_node_id": 42, "mode": "selectSingle"},
+            "left-open chooser tracked as pending",
+        )
+        assert_eq(cdp._filechooser_log[-1]["resolved"], False, "logged as unresolved")
+
+        # Pre-armed: resolved via DOM.setFileInputFiles, consumed, logged.
+        cdp = _Cdp()
+        cdp._filechooser_policy = {"paths": ["/tmp/a.jpg"]}
+        await _handle_filechooser(cdp, {"backendNodeId": 7, "mode": "selectMultiple"})  # type: ignore[arg-type]
+        assert_eq(
+            cdp.sent[-1],
+            {"files": ["/tmp/a.jpg"], "backendNodeId": 7},
+            "pre-armed policy resolves via DOM.setFileInputFiles",
+        )
+        assert_eq(
+            cdp._filechooser_policy, None, "pre-arm is consumed after one chooser"
+        )
+        assert_eq(
+            cdp._filechooser_pending, None, "resolved chooser isn't tracked as pending"
+        )
+        assert_eq(cdp._filechooser_log[-1]["resolved"], True, "logged as resolved")
+        assert_eq(
+            cdp._filechooser_log[-1]["source"], "pre-armed", "logged as pre-armed"
+        )
+
+    asyncio.run(_run())
+    print(
+        "  ✓ filechooser policy: no pre-arm leaves it open+pending, pre-arm resolves it"
+    )
+
+
+def phase_6_filechooser(kernel: Kernel) -> None:
+    """Clicking a real <input type=file>-backed control fires
+    Page.fileChooserOpened instead of opening a native OS picker — the
+    confirmed live-repro regression this covers (see TODO.md's file-upload
+    torture case) — and the resolve/pre-arm round trip lands on the real page.
+    """
+    if not _chrome_ready("phase 6 filechooser"):
+        return
+    import pathlib
+    import tempfile
+
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            "<input type=file id=f style=display:none>"
+            "<button id=go onclick=\"document.getElementById('f').click()\">Pick</button>"
+            "<div id=out></div>"
+            "<script>document.getElementById('f').addEventListener('change', e => "
+            "document.getElementById('out').textContent = "
+            "Array.from(e.target.files).map(x=>x.name).join(','))</script>"
+        )
+
+        # No pre-arm: the click opens the chooser and leaves it unresolved —
+        # the click itself errors, naming the fix, instead of returning a
+        # receipt for a state CDP couldn't otherwise see at all.
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        msg = resp.get("error", {}).get("message", "")
+        assert_true(
+            "file chooser" in msg and "tab.set_files" in msg,
+            f"unresolved file chooser errors, naming the fix (got {msg!r})",
+        )
+
+        # Resolve the one still open.
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"hello")
+            tmp_path = f.name
+        try:
+            resp = h.tool("browser_set_files", {"target": tid, "paths": [tmp_path]})
+            text = content_text(resp)
+            assert_true(
+                f"1 file(s) set on {tid}" in text,
+                f"set_files reports the count (got {text[:200]!r})",
+            )
+            out = h.exec(
+                f"_t = await browser.get({tid!r})\n"
+                "print('TEXT', await _t.js('document.getElementById(\"out\").textContent'))"
+            )
+            assert_true(
+                pathlib.Path(tmp_path).name in out,
+                f"the input actually received the file ({out!r})",
+            )
+        finally:
+            pathlib.Path(tmp_path).unlink(missing_ok=True)
+        print(
+            "  ✓ filechooser: unresolved click errors, set_files resolves it after the fact"
+        )
+
+        # Pre-arm accept, then repeat — this time the click resolves inline.
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"fake")
+            tmp_path2 = f.name
+        try:
+            resp = h.tool(
+                "browser_expect_file_chooser", {"target": tid, "paths": [tmp_path2]}
+            )
+            assert_true(
+                "will receive 1 file" in content_text(resp),
+                "pre-arm call confirms the armed outcome",
+            )
+            resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+            text = content_text(resp)
+            assert_true(
+                text.splitlines()[0].startswith("clicked:"),
+                f"pre-armed chooser returns a normal receipt (got {text[:200]!r})",
+            )
+            assert_true(
+                "filechooser: mode=selectSingle → 1 file(s) set" in text,
+                f"observation names the pre-armed resolve (got {text[:400]!r})",
+            )
+        finally:
+            pathlib.Path(tmp_path2).unlink(missing_ok=True)
+        print(
+            "  ✓ filechooser: pre-arm resolves the chooser inline, observation names it"
+        )
     finally:
         h.close()
 

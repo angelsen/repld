@@ -328,6 +328,130 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     )
 
 
+async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
+    """Resolve or report a native file-chooser prompt.
+
+    `Page.setInterceptFileChooserDialog` (enabled in `_enable_domains`) stops
+    Chrome from ever opening the real OS picker — it reports here instead, so
+    the click that triggered it returns normally with nothing to wait out.
+    Unlike a JS dialog there is no safe default file selection to guess, so
+    with no pre-arm the chooser is left open (tracked in `_filechooser_pending`
+    for `Tab.set_files` to resolve later) rather than auto-answered.
+    """
+    backend_node_id = params.get("backendNodeId")
+    mode = params.get("mode", "selectSingle")
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+
+    policy = cdp._filechooser_policy
+    if policy is not None:
+        paths = policy.get("paths", [])
+        cdp._filechooser_policy = None
+        try:
+            await cdp.execute(
+                "DOM.setFileInputFiles",
+                {"files": paths, "backendNodeId": backend_node_id},
+            )
+        except Exception as exc:
+            logger.debug("setFileInputFiles failed: %s", exc)
+            return
+        cdp._filechooser_log.append(
+            {"mode": mode, "resolved": True, "paths": paths, "source": "pre-armed"}
+        )
+        push_channel(
+            f"[filechooser] {short_id}: opened (mode={mode}) → "
+            f"{len(paths)} file(s) set (pre-armed)",
+            {"kind": "filechooser", "target": short_id, "action": "set"},
+        )
+        return
+
+    cdp._filechooser_pending = {"backend_node_id": backend_node_id, "mode": mode}
+    cdp._filechooser_log.append(
+        {"mode": mode, "resolved": False, "paths": None, "source": "auto"}
+    )
+    push_channel(
+        f"[filechooser] {short_id}: opened (mode={mode}) — "
+        "call tab.set_files(paths) or it stays open",
+        {"kind": "filechooser", "target": short_id, "mode": mode},
+    )
+
+
+def unresolved_filechooser_error(
+    filechooser_log: list[dict], start: int = 0
+) -> RuntimeError | None:
+    """Build the error for an action that opened a file chooser nobody
+    resolved, or None if `filechooser_log[start:]` holds no such entry.
+
+    Every unresolved entry raises (unlike `unresolved_dialog_error`, which
+    only raises for confirm/prompt) — a file chooser has no safe default to
+    accept, so "opened, still open" is always worth surfacing rather than
+    only when a real decision got guessed.
+    """
+    for entry in filechooser_log[start:]:
+        if not entry["resolved"]:
+            return RuntimeError(
+                f"file chooser opened (mode={entry['mode']}) and was left "
+                "unresolved — call tab.set_files(paths) to select files, "
+                "or tab.set_files([]) to cancel it."
+            )
+    return None
+
+
+async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
+    """Resolve or report an HTTP Basic/Digest auth challenge.
+
+    Requires `Fetch.enable` with `handleAuthRequests: True` (capture.enable),
+    so this only fires on a tab that already has Fetch on (get()/open(), or
+    explicit capture) — a watch()-attached tab gets the native credentials
+    modal same as before, the same asymmetry `capture.py` already documents
+    for body capture. With no pre-arm the challenge is cancelled outright:
+    guessing credentials is worse than a clean 401, and CancelAuth — unlike
+    leaving a file chooser open — is a definite, non-hanging outcome.
+    """
+    request_id = params.get("requestId", "")
+    challenge = params.get("authChallenge", {})
+    realm = challenge.get("realm", "")
+    scheme = challenge.get("scheme", "")
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+
+    policy = cdp._auth_policy
+    if policy is not None:
+        cdp._auth_policy = None
+        response = {
+            "response": "ProvideCredentials",
+            "username": policy.get("username", ""),
+            "password": policy.get("password", ""),
+        }
+        source = "pre-armed"
+    else:
+        response = {"response": "CancelAuth"}
+        source = "auto"
+
+    try:
+        await cdp.execute(
+            "Fetch.continueWithAuth",
+            {"requestId": request_id, "authChallengeResponse": response},
+        )
+    except Exception as exc:
+        logger.debug("continueWithAuth failed: %s", exc)
+        return
+
+    cdp._auth_log.append(
+        {
+            "realm": realm,
+            "scheme": scheme,
+            "resolved": source == "pre-armed",
+            "source": source,
+        }
+    )
+    if source == "auto":
+        push_channel(
+            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) — "
+            "call tab.expect_auth(username, password) before retrying, or it "
+            "stays a failed request",
+            {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
+        )
+
+
 def unresolved_dialog_error(
     dialog_log: list[dict], start: int = 0
 ) -> RuntimeError | None:
@@ -491,6 +615,31 @@ class CDPSession:
         # pre_observe, read by post_observe to report them in the observation.
         self._dialog_log: list[dict] = []
 
+        # File-chooser handler — always-on, same reasoning as the dialog
+        # handler: Page.setInterceptFileChooserDialog is part of
+        # _enable_domains(), not opt-in.
+        self._filechooser_handler: Any | None = _handle_filechooser
+        # One-shot pre-arm set by tab.expect_file_chooser(); consumed by the
+        # next Page.fileChooserOpened.
+        self._filechooser_policy: dict | None = None
+        # backendNodeId/mode of the most recent file chooser still waiting on
+        # Tab.set_files() — unlike a dialog there is no default to guess, so
+        # this is never auto-resolved, only tracked until answered.
+        self._filechooser_pending: dict | None = None
+        # File choosers seen during the current observed mutation — cleared by
+        # pre_observe, read by post_observe/unresolved_filechooser_error.
+        self._filechooser_log: list[dict] = []
+
+        # HTTP auth handler — opt-in with Fetch (capture.enable passes
+        # handleAuthRequests=True), unlike dialog/filechooser above.
+        self._auth_handler: Any | None = _handle_auth
+        # One-shot pre-arm set by tab.expect_auth(); consumed by the next
+        # Fetch.authRequired.
+        self._auth_policy: dict | None = None
+        # Auth challenges seen during the current observed mutation — cleared
+        # by pre_observe, read by post_observe.
+        self._auth_log: list[dict] = []
+
         # Pin + label state — lives here (not on Tab) because Tab wrappers
         # are ephemeral (a fresh Tab is constructed on every _iter_tabs()/
         # get() call) while CDPSession persists for the life of the
@@ -543,23 +692,31 @@ class CDPSession:
         WebSocket without awaiting Chrome's ack.  This keeps attach near-instant
         even with many concurrent tabs.  Fetch interception is separate
         (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
+
+        `Page.setInterceptFileChooserDialog` and `Page.setDownloadBehavior` are
+        here rather than opt-in like Fetch: both stop a native OS-level window
+        from ever opening (a real file picker, a real Save-As dialog), and that
+        window is invisible to Page.captureScreenshot and the AX tree alike —
+        there is no "observe it, then decide" for something CDP can't see.
         """
-        for method in (
-            "Inspector.enable",
-            "DOM.enable",
-            "Page.enable",
-            "Network.enable",
-            "Runtime.enable",
-            "Log.enable",
-            "Accessibility.enable",
-            "Page.setLifecycleEventsEnabled",
+        from ..paths import downloads_dir
+
+        for method, params in (
+            ("Inspector.enable", None),
+            ("DOM.enable", None),
+            ("Page.enable", None),
+            ("Network.enable", None),
+            ("Runtime.enable", None),
+            ("Log.enable", None),
+            ("Accessibility.enable", None),
+            ("Page.setLifecycleEventsEnabled", {"enabled": True}),
+            ("Page.setInterceptFileChooserDialog", {"enabled": True}),
+            (
+                "Page.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": str(downloads_dir())},
+            ),
         ):
             try:
-                params = (
-                    {"enabled": True}
-                    if method == "Page.setLifecycleEventsEnabled"
-                    else None
-                )
                 await self.send_nowait(method, params)
             except Exception as exc:
                 logger.debug("Domain enable %s: %s", method, exc)
@@ -729,6 +886,27 @@ class CDPSession:
                 bg.spawn(
                     self._dialog_handler(self, params),
                     name=f"repld-dialog-{params.get('type', '?')}",
+                )
+
+            if (
+                method == "Page.fileChooserOpened"
+                and self._filechooser_handler is not None
+            ):
+                bg.spawn(
+                    self._filechooser_handler(self, params),
+                    name=f"repld-filechooser-{params.get('backendNodeId', '?')}",
+                )
+
+            if method == "Fetch.authRequired" and self._auth_handler is not None:
+                # bg.spawn: this is the only thing that ever answers the
+                # challenge, and the paused request hangs in Chrome until it
+                # does — same reasoning as the Fetch.requestPaused dispatch
+                # above, a distinct branch because authRequired never carries
+                # a networkId/requestId this session's _inflight tracking
+                # would recognise the same way.
+                bg.spawn(
+                    self._auth_handler(self, params),
+                    name=f"repld-auth-{params.get('requestId', '?')[:8]}",
                 )
 
             if method == "Runtime.executionContextsCleared":

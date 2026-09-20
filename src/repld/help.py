@@ -111,6 +111,9 @@ _BROWSER_MODEL = (
     "rather than returning a receipt, since accepting one is never guessed. Pre-arm "
     "browser_dismiss_dialog(target, accept=true) first, then repeat the action, to accept it. "
     "alert() (only one option) and beforeunload (governed by the pin's guard_unload) don't error. "
+    "A native file chooser (clicking an <input type=file> control) is also intercepted rather than "
+    "opened for real — it stays open until tab.set_files(paths) answers it, or pre-arm with "
+    "tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click. "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
@@ -741,6 +744,22 @@ on an already-attached tab still reports the original attach's value.
       already (see "Native JS dialogs" above) — this overrides the default
       for one dialog, e.g. to make a confirm() return true.
 
+  tab.set_files(paths)                                        → str
+      Resolve the most recent unanswered native file-chooser prompt on
+      this tab (see "Native file choosers, HTTP auth, and permissions"
+      below). Empty paths cancels it. Raises if none is open.
+
+  tab.expect_file_chooser(paths)                              → str
+      Pre-arm the files for the next file-chooser prompt — like
+      dismiss_dialog, but for a file input.
+
+  tab.expect_auth(username, password)                         → str
+      Pre-arm credentials for the next HTTP Basic/Digest auth challenge.
+
+  tab.grant_permissions(permissions, origin=None)             → str
+      Pre-authorize camera/mic/geolocation/notifications/etc for this
+      tab's origin. Must be called before the page asks.
+
   tab.screenshot(*, full_page=False, force=False, path=None)  → dict
       Capture a native-resolution PNG. Returns {path, width, height, bytes}.
       Raises if the capture exceeds the vision API's token budget instead
@@ -1083,6 +1102,52 @@ Auto-wait: selectors auto-wait up to 2s (click/type_text) or the specified
   the 2s poll is just a safety net for DOM that lags behind network quiet
   (lazy renders, setTimeout callbacks).  For first interactions or known-slow
   elements, call wait_for(selector, timeout=10) before click/type_text.
+
+== Native file choosers, HTTP auth, and permissions ==
+
+Same blind spot as native JS dialogs above — an OS-level Chrome UI that
+Page.captureScreenshot and the AX tree can't see — three different shapes:
+
+File choosers (clicking a real <input type=file>-backed control):
+  Page.setInterceptFileChooserDialog stops the real OS picker from opening;
+  Chrome reports Page.fileChooserOpened instead, so the triggering click
+  returns normally. There's no safe file selection to guess, so with no
+  pre-arm the chooser is left open rather than auto-answered:
+
+    await tab.expect_file_chooser(["/path/to/photo.jpg"])
+    await tab.click("input[type=file] + button")   # resolves immediately
+
+  Or resolve one already open: `await tab.set_files(["/path.jpg"])` (or
+  `[]` to cancel it). An unresolved chooser shows as `filechooser: mode=...
+  → open, unresolved` in the observation, pushes `[filechooser] target:
+  opened (mode=...) — call tab.set_files(paths) or it stays open` to
+  channel, and raises out of the triggering click/type/navigate/invoke call
+  — the same contract as an auto-rejected confirm().
+
+HTTP Basic/Digest auth (a 401 with WWW-Authenticate):
+  Only intercepted on a tab with Fetch enabled (get()/open(), or explicit
+  capture — see "Network body capture" below); a watch()-attached tab still
+  shows Chrome's native credentials modal. With no pre-arm the challenge is
+  cancelled outright — a clean failed request, never a guessed login:
+
+    await tab.expect_auth("user", "hunter2")
+    await tab.navigate("https://protected.example/")
+
+  An unhandled challenge pushes `[auth] target: {scheme} auth required
+  (realm=...) — call tab.expect_auth(username, password) before retrying`.
+
+Permission prompts (camera/mic/geolocation/notifications):
+  No CDP event reports these opening, so there's nothing to intercept after
+  the fact — pre-authorize before the page ever asks:
+
+    await tab.grant_permissions(["geolocation"])
+
+  Nothing is granted by default; silently handing out camera/mic access is
+  a real change to what the page can do, not a UI blind spot to paper over.
+
+Downloads land in a fixed per-project directory
+($XDG_RUNTIME_DIR/repld/projects/<slug>/downloads/) instead of opening a
+native Save-As dialog — set once per attach via Page.setDownloadBehavior.
 
 == Internals ==
 
@@ -1464,6 +1529,8 @@ Channel kinds:
   controls              window.controls action observation (control, action, state in meta)
   console_error         console.error or uncaught exception from watched tab
   dialog                native JS dialog auto-dismissed (target, dialog_type, action in meta)
+  filechooser           native file chooser opened — resolved (pre-armed) or left open (target, mode in meta)
+  auth                  HTTP Basic/Digest challenge cancelled, no pre-arm (target, scheme, realm in meta)
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
   browser_disconnect    dashboard disconnected a Chrome connection or tab
   venv                  a project venv was adopted onto the running kernel
@@ -1490,6 +1557,10 @@ Tab (async unless noted):
   tab.wait_for(selector, timeout=5)                       → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)                 → int  (network idle; returns settle ms)
   tab.dismiss_dialog(accept=True, prompt_text=)           → str  (pre-arm the next native dialog's outcome, one-shot)
+  tab.set_files(paths)                                    → str  (resolve the most recent open file chooser; [] cancels; raises if none open)
+  tab.expect_file_chooser(paths)                          → str  (pre-arm the next file chooser's files, one-shot)
+  tab.expect_auth(username, password)                     → str  (pre-arm the next HTTP Basic/Digest challenge, one-shot)
+  tab.grant_permissions(permissions, origin=None)         → str  (pre-authorize camera/mic/geolocation/etc; call before the page asks)
   tab.fetch(url, method=, body=, headers=)                → {status, ok, body, base64Encoded}
   tab.navigate(url)                                       → None
   tab.reload()                                            → None

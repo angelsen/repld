@@ -246,7 +246,7 @@ def _json_types() -> None:
         (list[str], "array"),
         (dict[str, int], "object"),
         (int | None, "integer"),
-        (Optional[list[int]], "array"),  # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
         (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
         (int | str, None),
         (Path, None),

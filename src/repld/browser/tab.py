@@ -11,6 +11,7 @@ import base64
 import json
 import pathlib
 import re
+import urllib.parse
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -21,7 +22,7 @@ from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
 from . import inject
 from . import selector as selector_mod
-from .cdp import CDPSession, unresolved_dialog_error
+from .cdp import CDPSession, unresolved_dialog_error, unresolved_filechooser_error
 from .pin import (
     _PIN_JS,
     BINDING_NAME,
@@ -93,6 +94,12 @@ _POST_REATTACH_SETTLE_S = 0.3
 # nothing has actually shown; a wrong/never-satisfied ready= should still
 # fail loud in well under it, not be encouraged to just wait longer.
 _DEFAULT_READY_TIMEOUT_S = 15.0
+
+
+def _origin_of(url: str) -> str:
+    """scheme://host[:port] of *url*, for Browser.grantPermissions' origin param."""
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _format_stack_trace(stack_trace: dict | None) -> str:
@@ -619,12 +626,13 @@ class Tab(TabQueryMixin):
         """Raise this tab's window if Chrome has it backgrounded, then hold
         a per-Chrome-instance lock for the caller's whole action.
 
-        Also the choke point for every input-dispatching method's dialog
-        guarantee: it raises if the action triggered a confirm()/prompt()
-        that got auto-rejected, so `tab.click()` called directly from a gist
-        gets the same "never silently succeed on a declined dialog" contract
+        Also the choke point for every input-dispatching method's dialog and
+        file-chooser guarantees: it raises if the action triggered a
+        confirm()/prompt() that got auto-rejected, or opened a file chooser
+        nobody resolved, so `tab.click()` called directly from a gist gets
+        the same "never silently succeed on a state CDP can't see" contract
         `browser_click` gets via `browser_dispatch._raise_on_unresolved_dialog`
-        — see `cdp.unresolved_dialog_error`.
+        — see `cdp.unresolved_dialog_error`/`cdp.unresolved_filechooser_error`.
 
         `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
         the renderer's real input pipeline, which Chrome silently drops for
@@ -671,14 +679,20 @@ class Tab(TabQueryMixin):
                 and front_target.type != "iframe"
             ):
                 await front_target._exec("Page.bringToFront")
-            # Recorded before yield so the check below only sees dialogs this
-            # call triggered, not ones already sitting in the log from an
-            # earlier action nobody read. Only raised on a clean yield — a
-            # body that already raised (e.g. element not found) propagates
-            # through yield itself and skips straight to finally.
+            # Recorded before yield so the check below only sees dialogs/
+            # choosers this call triggered, not ones already sitting in the
+            # log from an earlier action nobody read. Only raised on a clean
+            # yield — a body that already raised (e.g. element not found)
+            # propagates through yield itself and skips straight to finally.
             dialog_start = len(self._session._dialog_log)
+            filechooser_start = len(self._session._filechooser_log)
             yield
             exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+            if exc is not None:
+                raise exc
+            exc = unresolved_filechooser_error(
+                self._session._filechooser_log, filechooser_start
+            )
             if exc is not None:
                 raise exc
         finally:
@@ -1710,6 +1724,78 @@ class Tab(TabQueryMixin):
         self._session._dialog_policy = policy
         return f"Next dialog on {self.target_id} will be {'accept' if accept else 'reject'}ed"
 
+    async def expect_file_chooser(self, paths: list[str]) -> str:
+        """Pre-arm the files to hand the next native file-chooser prompt on
+        this tab (a real `<input type=file>` click).
+
+        Mirrors dismiss_dialog: there's no safe default file selection to
+        guess, so without this the chooser stays open until set_files()
+        answers it. One-shot: consumed by the next Page.fileChooserOpened.
+        """
+        self._session._filechooser_policy = {"paths": list(paths)}
+        return (
+            f"Next file chooser on {self.target_id} will receive {len(paths)} file(s)"
+        )
+
+    async def set_files(self, paths: list[str]) -> str:
+        """Resolve the most recent unanswered file chooser on this tab.
+
+        Empty paths cancels it — same as declining the real picker.
+        """
+        pending = self._session._filechooser_pending
+        if pending is None:
+            raise RuntimeError(
+                f"no open file chooser on {self.target_id} — trigger one "
+                "first (click the upload control), or call "
+                "expect_file_chooser(paths) before clicking to pre-arm it"
+            )
+        self._session._filechooser_pending = None
+        await self._exec(
+            "DOM.setFileInputFiles",
+            {"files": list(paths), "backendNodeId": pending["backend_node_id"]},
+        )
+        for entry in reversed(self._session._filechooser_log):
+            if not entry["resolved"]:
+                entry["resolved"] = True
+                entry["paths"] = list(paths)
+                entry["source"] = "manual"
+                break
+        return f"{len(paths)} file(s) set on {self.target_id}"
+
+    async def expect_auth(self, username: str, password: str) -> str:
+        """Pre-arm credentials for the next HTTP Basic/Digest auth challenge
+        on this tab. One-shot: consumed by the next Fetch.authRequired, then
+        reverts to cancelling the challenge outright. Only fires on a tab
+        with Fetch enabled (get()/open(), or explicit capture) — see
+        `cdp._handle_auth`.
+        """
+        self._session._auth_policy = {"username": username, "password": password}
+        return f"Next auth challenge on {self.target_id} will use the given credentials"
+
+    async def grant_permissions(
+        self, permissions: list[str], origin: str | None = None
+    ) -> str:
+        """Pre-authorize permissions (e.g. 'geolocation', 'notifications',
+        'camera', 'microphone') for this tab's origin, so a page request
+        never surfaces Chrome's native permission bubble — invisible to CDP
+        the same way a file chooser is, but with no interceptable event to
+        report it after the fact, so this has to be called *before* the
+        page asks. Explicit and opt-in: nothing is pre-authorized by
+        default, since silently granting camera/mic access is a real change
+        to what the page can do, not a UI blind spot to paper over.
+        """
+        browser_session = self._session.browser_session
+        if browser_session is None:
+            raise RuntimeError(
+                f"no browser session to grant permissions on for {self.target_id}"
+            )
+        target_origin = origin or _origin_of(self.url)
+        await browser_session.execute(
+            "Browser.grantPermissions",
+            {"permissions": permissions, "origin": target_origin},
+        )
+        return f"granted {', '.join(permissions)} for {target_origin}"
+
     async def _wait_condition(self, timeout: float = _DEFAULT_READY_TIMEOUT_S) -> None:
         """Resolve and poll the ready signal, then record whether it was an
         explicit ready= (confirmed) or the readyState fallback (a guess) —
@@ -1733,9 +1819,15 @@ class Tab(TabQueryMixin):
     async def navigate(self, url: str) -> None:
         """Navigate to URL, then wait for the ready signal."""
         dialog_start = len(self._session._dialog_log)
+        filechooser_start = len(self._session._filechooser_log)
         await self._exec("Page.navigate", {"url": url})
         await self._wait_ready()
         exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+        if exc is not None:
+            raise exc
+        exc = unresolved_filechooser_error(
+            self._session._filechooser_log, filechooser_start
+        )
         if exc is not None:
             raise exc
 
@@ -1826,6 +1918,7 @@ class Tab(TabQueryMixin):
         if task is not None:
             self._session.last_caller = task.get("origin")
         dialog_start = len(self._session._dialog_log)
+        filechooser_start = len(self._session._filechooser_log)
         args_js = json.dumps(args) if args else "{}"
         code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"
         result = await self._exec(
@@ -1833,6 +1926,11 @@ class Tab(TabQueryMixin):
             {"expression": code, "returnByValue": True, "awaitPromise": True},
         )
         exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+        if exc is not None:
+            raise exc
+        exc = unresolved_filechooser_error(
+            self._session._filechooser_log, filechooser_start
+        )
         if exc is not None:
             raise exc
         value = result.get("result", {}).get("value")
