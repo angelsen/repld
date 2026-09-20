@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.9.1] - 2026-09-20
+
+### Fixed
+
 - `tab.tree(mode='ax')` stopped flat at a bare `Iframe` leaf on a same-process iframe with no CDP target of its own (`Target.getTargets()` never lists it, so `_discover_iframe_children`'s OOPIF path can't help) — found live on a Google Business Profile page nesting a cross-origin sandboxed widget two levels deep. `build_tree_sig` now recurses into any Iframe-role node Chrome leaves childless, resolving its content frameId via `DOM.describeNode` and fetching that frame's own `Accessibility.getFullAXTree`, at any depth. `mode='aria'` can't follow (it evaluates JS in the top frame's own context, blocked by same-origin policy from a cross-origin iframe regardless of process) — docs now point a flat-Iframe result there at `mode='ax'` instead.
 
-### Removed
 
 ## [0.9.0] - 2026-09-20
 
