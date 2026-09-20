@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.9.2] - 2026-09-20
+
+### Fixed
+
 - `tab.click()`/`type_text()`/`select_option()`/`hover()`/`drag()`/`tap()`/`wait_for()` couldn't reach anything inside a nested same-process iframe — `inject.ensure_engine()` injected the Playwright selector engine into the top frame's `Page.getFrameTree` id only, never recursing into `childFrames`, the write-side twin of the `tab.tree(mode='ax')` bug fixed in 0.9.1. Resolution now walks every child frame (any depth, cross-origin included via `grantUniveralAccess`) and searches them alongside the top frame in selector-fallback priority order; a match in more than one frame is reported as ambiguous rather than silently preferring one. A child frame gets isolated-world injection only (no main-world fallback tier, since that needs per-frame execution-context tracking not built yet), and its pre-click hit-test/occlusion check is skipped (the coordinates DOM.getContentQuads returns are top-frame-relative, not usable for `elementFromPoint` inside a child frame's own document) — the click itself still dispatches correctly, since Input/DOM-domain commands already compose iframe offsets regardless of frame.
 
-### Removed
 
 ## [0.9.1] - 2026-09-20
 
