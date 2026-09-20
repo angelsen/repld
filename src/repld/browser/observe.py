@@ -146,34 +146,121 @@ def _build_lines(
         )
 
 
+# Chrome's AX role for an <iframe> element — "Presentational" for one with no
+# accessible name/title, hidden, or tabindex=-1. Either way, Chrome hands it
+# back with no children of its own: the AX domain has no pierce flag (unlike
+# DOM.getDocument), so crossing into the iframe's own document — same-process
+# or not — is this module's job, via _content_frame_id + a recursive fetch.
+_IFRAME_ROLES = frozenset({"Iframe", "IframePresentational"})
+
+# Guards a pathological/cyclic frame graph, not a depth seen in practice —
+# real nesting (an embedded widget inside an embedded widget) runs 2-3 deep.
+_MAX_FRAME_DEPTH = 6
+
+
+async def _content_frame_id(tab: Tab, backend_node_id: int) -> str | None:
+    """The frameId of the document an <iframe> element hosts, or None if it
+    isn't one (detached, or DOM.describeNode carries no frameId for it).
+
+    `DOM.Node.frameId` names the frame *owned by* a frame-owner element —
+    present without needing `pierce`, unlike `contentDocument`.
+    """
+    try:
+        described = await tab._exec(
+            "DOM.describeNode", {"backendNodeId": backend_node_id}
+        )
+    except Exception:
+        return None
+    return described.get("node", {}).get("frameId")
+
+
+async def _fetch_frame_nodes(
+    tab: Tab,
+    frame_id: str | None,
+    depth: int,
+    nodes_by_id: dict[str, dict],
+    children_map: dict[str, list[str]],
+) -> list[dict]:
+    """Fetch one frame's raw AX nodes, splice them into the shared maps
+    (namespaced by `depth` — Chrome's AX nodeIds are scoped per frame, so two
+    frames' otherwise-identical ids would collide once merged), and recurse
+    into every Iframe-role node Chrome left childless: that emptiness is the
+    signal it's a boundary this call hasn't crossed yet, same-process or not
+    (an OOPIF's own frameId here just comes back with no nodes — harmless,
+    and left for `_discover_iframe_children`'s separate-session path instead).
+
+    Returns this frame's own un-namespaced nodes, so the caller can compute
+    root ids exactly as a single-frame call always has.
+    """
+    params = {"frameId": frame_id} if frame_id else {}
+    try:
+        result = await tab._exec("Accessibility.getFullAXTree", params)
+    except Exception:
+        return []
+    nodes = result.get("nodes", [])
+
+    def ns(node_id: str) -> str:
+        return f"{depth}:{node_id}"
+
+    for n in nodes:
+        nid = ns(n["nodeId"])
+        nodes_by_id[nid] = n
+        children_map[nid] = [ns(c) for c in (n.get("childIds") or [])]
+
+    if depth < _MAX_FRAME_DEPTH:
+        for n in nodes:
+            if _node_role(n) not in _IFRAME_ROLES or n.get("childIds"):
+                continue
+            backend_id = n.get("backendDOMNodeId")
+            if backend_id is None:
+                continue
+            child_frame_id = await _content_frame_id(tab, backend_id)
+            if child_frame_id is None:
+                continue
+            child_nodes = await _fetch_frame_nodes(
+                tab, child_frame_id, depth + 1, nodes_by_id, children_map
+            )
+            if not child_nodes:
+                continue
+            child_all_children: set[str] = set()
+            for cn in child_nodes:
+                child_all_children.update(cn.get("childIds") or [])
+            # depth + 1, not `ns` — that closes over *this* frame's depth,
+            # and namespacing the child's own ids with it re-collided them
+            # with this frame's, walking the same two nodes in a cycle.
+            children_map[ns(n["nodeId"])] = [
+                f"{depth + 1}:{cn['nodeId']}"
+                for cn in child_nodes
+                if cn["nodeId"] not in child_all_children
+            ]
+
+    return nodes
+
+
 async def build_tree_sig(tab: Tab, max_depth: int = 6) -> tuple[list[str], TreeSig]:
-    """Compact accessibility tree from CDP Accessibility.getFullAXTree.
+    """Compact accessibility tree from CDP Accessibility.getFullAXTree,
+    recursing across same-process iframe boundaries _fetch_frame_nodes finds
+    Chrome left unexpanded (an OOPIF's separate target is composed in later,
+    by `_discover_iframe_children` — see there).
 
     Returns (indented text lines, signature multiset). The signature counts
     exactly the nodes the lines render — same roles, same depth cap — so a
     diff of two signatures describes what a reader of the two trees would see
     change.
     """
-    result = await tab._exec("Accessibility.getFullAXTree", {})
+    nodes_by_id: dict[str, dict] = {}
+    children_map: dict[str, list[str]] = {}
+    nodes = await _fetch_frame_nodes(tab, None, 0, nodes_by_id, children_map)
 
     sig: TreeSig = Counter()
-    nodes = result.get("nodes", [])
     if not nodes:
         return ["(empty tree)"], sig
 
-    nodes_by_id: dict[str, dict] = {n["nodeId"]: n for n in nodes}
-    children_map: dict[str, list[str]] = {}
-
-    for node in nodes:
-        nid = node["nodeId"]
-        child_ids = node.get("childIds") or []
-        children_map[nid] = child_ids
-
     # Find roots: nodes that are not a child of any other node
     all_children: set[str] = set()
-    for cids in children_map.values():
-        all_children.update(cids)
-    root_ids = [n["nodeId"] for n in nodes if n["nodeId"] not in all_children]
+    for n in nodes:
+        all_children.update(n.get("childIds") or [])
+    root_ids = [f"0:{n['nodeId']}" for n in nodes if n["nodeId"] not in all_children]
 
     lines: list[str] = []
     for root_id in root_ids:

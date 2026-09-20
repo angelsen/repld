@@ -639,6 +639,123 @@ def phase_6_engine_world_tiers(_kernel: Kernel) -> None:
     print("  ✓ both tiers failing is a loud EngineUnavailable, not a fallback")
 
 
+class _FrameFakeSession:
+    """CDPSession stand-in answering Accessibility.getFullAXTree/DOM.describeNode
+    for build_tree_sig's same-process frame splicing — no Chrome needed.
+
+    `frames` maps frameId (None for the top frame) to that frame's raw AX
+    nodes; `iframe_frames` maps an Iframe node's backendDOMNodeId to the
+    frameId its content document lives at, mirroring what DOM.describeNode
+    would report for a real <iframe> element.
+    """
+
+    def __init__(
+        self, frames: dict[str | None, list[dict]], iframe_frames: dict[int, str]
+    ) -> None:
+        self.frames = frames
+        self.iframe_frames = iframe_frames
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def execute(
+        self, method: str, params: dict | None = None, timeout: float = 30
+    ) -> dict:
+        self.calls.append((method, params))
+        params = params or {}
+        if method == "Accessibility.getFullAXTree":
+            return {"nodes": self.frames.get(params.get("frameId"), [])}
+        if method == "DOM.describeNode":
+            frame_id = self.iframe_frames.get(params["backendNodeId"])
+            return {"node": {"frameId": frame_id} if frame_id else {}}
+        raise AssertionError(f"unexpected CDP call {method}")
+
+
+def phase_6_same_process_iframe_ax(_kernel: Kernel) -> None:
+    """mode='ax' pierces a same-process iframe Chrome left childless, at
+    depth — the bug a live Google Business Profile page hit: a two-level
+    nested widget with no separate CDP target for either frame, so
+    _discover_iframe_children's OOPIF path never sees it and the AX tree
+    stopped flat at a bare Iframe leaf. Reproduced here without Chrome:
+    each frame reuses the same nodeId strings ("1", "2") on purpose, since
+    that's what exposed the need for depth-namespaced ids in the first
+    place — two frames merged naively would collide.
+    """
+    from repld.browser.observe import build_tree_sig
+    from repld.browser.tab import Tab
+
+    top_nodes = [
+        {
+            "nodeId": "1",
+            "role": {"value": "RootWebArea"},
+            "name": {"value": "Top"},
+            "childIds": ["2"],
+        },
+        {
+            "nodeId": "2",
+            "role": {"value": "Iframe"},
+            "name": {"value": ""},
+            "backendDOMNodeId": 99,
+        },
+    ]
+    mid_nodes = [
+        {
+            "nodeId": "1",
+            "role": {"value": "RootWebArea"},
+            "name": {"value": "Widget"},
+            "childIds": ["2"],
+        },
+        {
+            "nodeId": "2",
+            "role": {"value": "IframePresentational"},
+            "name": {"value": ""},
+            "backendDOMNodeId": 7,
+        },
+    ]
+    inner_nodes = [
+        {
+            "nodeId": "1",
+            "role": {"value": "RootWebArea"},
+            "name": {"value": "Posts"},
+            "childIds": ["2"],
+        },
+        {"nodeId": "2", "role": {"value": "button"}, "name": {"value": "New post"}},
+    ]
+    session = _FrameFakeSession(
+        frames={None: top_nodes, "mid-frame": mid_nodes, "inner-frame": inner_nodes},
+        iframe_frames={99: "mid-frame", 7: "inner-frame"},
+    )
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+
+    lines, sig = asyncio.run(build_tree_sig(tab))
+    assert_eq(
+        lines,
+        [
+            "RootWebArea 'Top'",
+            "  Iframe",
+            "    RootWebArea 'Widget'",
+            "      IframePresentational",
+            "        RootWebArea 'Posts'",
+            "          button 'New post'",
+        ],
+        f"two levels of same-process iframe spliced in (got {lines!r})",
+    )
+    assert_eq(
+        sig[("button", "New post", "")],
+        1,
+        "the nested button reaches the diff signature too, not just the text",
+    )
+    frame_calls = [
+        (p or {}).get("frameId")
+        for m, p in session.calls
+        if m == "Accessibility.getFullAXTree"
+    ]
+    assert_eq(
+        frame_calls,
+        [None, "mid-frame", "inner-frame"],
+        "one getFullAXTree call per frame, top-down",
+    )
+    print("  ✓ mode='ax' pierces nested same-process iframes Chrome left childless")
+
+
 def phase_6_stale_context_retry(_kernel: Kernel) -> None:
     """A stale engine handle re-ensures and retries exactly once.
 

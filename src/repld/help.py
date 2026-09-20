@@ -691,9 +691,18 @@ on an already-attached tab still reports the original attach's value.
       Accessibility snapshot as text lines.  mode='aria' (default): Playwright
       ariaSnapshot with [ref=eN] handles, reusable as aria-ref=eN selectors
       in click/type_text until the next snapshot, navigation, or reattach.
-      mode='ax': the raw CDP accessibility tree (pierces same-process
-      iframes, no refs).  Crosses OOPIF iframes either way — discovers
-      attached iframe children via DOM.getFrameOwner, inlines their trees.
+      mode='ax': the raw CDP accessibility tree, recursing into a
+      same-process iframe (any depth) via DOM.describeNode's frameId + a
+      fresh Accessibility.getFullAXTree per frame — no refs, but the only
+      mode that reliably sees inside a same-process *cross-origin* iframe
+      (mode='aria' evaluates JS in the top frame's own execution context,
+      and same-origin policy blocks that from reaching a cross-origin
+      iframe's DOM regardless of process — it still pierces a same-origin
+      nested iframe fine, via the engine's own recursion). Both modes
+      cross OOPIF iframes the other way — discovers attached iframe
+      children via DOM.getFrameOwner, inlines their trees. A tree
+      stopping flat at a bare Iframe leaf under mode='aria' is this gap;
+      retry with mode='ax'.
       Standalone read (no settle, no observation pipeline).
       at=(x, y) / 'x,y' hit-tests that point instead (ignores mode) and
       returns a small elided tree rooted at the nearest meaningful ancestor
@@ -1541,7 +1550,7 @@ Channel kinds:
     "browser": """\
 Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=)      → any
-  tab.tree(mode="aria", at=None, in_crop=None)     → list[str] (aria: [ref=eN] snapshot; "ax": raw CDP tree; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
+  tab.tree(mode="aria", at=None, in_crop=None)     → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
   tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
