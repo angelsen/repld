@@ -95,6 +95,12 @@ _POST_REATTACH_SETTLE_S = 0.3
 # fail loud in well under it, not be encouraged to just wait longer.
 _DEFAULT_READY_TIMEOUT_S = 15.0
 
+# _ensure_front's filechooser poll budget: several times the real
+# click-to-log-entry latency (single-digit ms), kept small because it's paid
+# on every input-dispatching call, chooser or not — see that docstring.
+_FILECHOOSER_POLL_ITERS = 4
+_FILECHOOSER_POLL_INTERVAL_S = 0.015
+
 
 def _origin_of(url: str) -> str:
     """scheme://host[:port] of *url*, for Browser.grantPermissions' origin param."""
@@ -634,6 +640,16 @@ class Tab(TabQueryMixin):
         `browser_click` gets via `browser_dispatch._raise_on_unresolved_dialog`
         — see `cdp.unresolved_dialog_error`/`cdp.unresolved_filechooser_error`.
 
+        The filechooser half polls briefly instead of reading the log once:
+        `Page.fileChooserOpened` is genuinely async relative to the
+        `Input.dispatch*Event` that triggers it (unlike a JS dialog, which
+        blocks the renderer — and that command's own ack — until
+        `Page.handleJavaScriptDialog` answers it), so the entry can land
+        after this function's own dispatch already returned. Pairs with
+        `cdp._record_filechooser_opened` logging synchronously rather than
+        via `bg.spawn`, so once the event arrives nothing further delays it
+        reaching the log.
+
         `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
         the renderer's real input pipeline, which Chrome silently drops for
         a tab whose window is occluded or backgrounded
@@ -690,6 +706,10 @@ class Tab(TabQueryMixin):
             exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
             if exc is not None:
                 raise exc
+            for _ in range(_FILECHOOSER_POLL_ITERS):
+                if len(self._session._filechooser_log) > filechooser_start:
+                    break
+                await asyncio.sleep(_FILECHOOSER_POLL_INTERVAL_S)
             exc = unresolved_filechooser_error(
                 self._session._filechooser_log, filechooser_start
             )

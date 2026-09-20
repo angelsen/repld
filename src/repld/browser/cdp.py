@@ -328,42 +328,26 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     )
 
 
-async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
-    """Resolve or report a native file-chooser prompt.
+def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
+    """Log + announce an unresolved file chooser — called directly from
+    `_handle_event`, not through `bg.spawn`.
 
-    `Page.setInterceptFileChooserDialog` (enabled in `_enable_domains`) stops
-    Chrome from ever opening the real OS picker — it reports here instead, so
-    the click that triggered it returns normally with nothing to wait out.
-    Unlike a JS dialog there is no safe default file selection to guess, so
-    with no pre-arm the chooser is left open (tracked in `_filechooser_pending`
-    for `Tab.set_files` to resolve later) rather than auto-answered.
+    Unlike the pre-armed path below, there's no I/O to await here, so this
+    stays synchronous on purpose: a JS dialog blocks the renderer (and the
+    Input.dispatch* that triggered it) until `Page.handleJavaScriptDialog`
+    answers it, which serializes dismissal before the triggering call can
+    even return — a file chooser is explicitly non-blocking (the click
+    returns immediately), so nothing forces a `bg.spawn`ed handler to run
+    before `Tab._ensure_front`'s post-click check reads `_filechooser_log`.
+    Found live: a raw `tab.click()` through `exec` (no settle step) saw the
+    click return with no error, and only after that did the channel push
+    for the opened chooser land — the settle step every MCP tool call makes
+    happened to buy the spawned task enough time to run first, coincidentally
+    masking the race there.
     """
     backend_node_id = params.get("backendNodeId")
     mode = params.get("mode", "selectSingle")
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
-
-    policy = cdp._filechooser_policy
-    if policy is not None:
-        paths = policy.get("paths", [])
-        cdp._filechooser_policy = None
-        try:
-            await cdp.execute(
-                "DOM.setFileInputFiles",
-                {"files": paths, "backendNodeId": backend_node_id},
-            )
-        except Exception as exc:
-            logger.debug("setFileInputFiles failed: %s", exc)
-            return
-        cdp._filechooser_log.append(
-            {"mode": mode, "resolved": True, "paths": paths, "source": "pre-armed"}
-        )
-        push_channel(
-            f"[filechooser] {short_id}: opened (mode={mode}) → "
-            f"{len(paths)} file(s) set (pre-armed)",
-            {"kind": "filechooser", "target": short_id, "action": "set"},
-        )
-        return
-
     cdp._filechooser_pending = {"backend_node_id": backend_node_id, "mode": mode}
     cdp._filechooser_log.append(
         {"mode": mode, "resolved": False, "paths": None, "source": "auto"}
@@ -372,6 +356,41 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
         f"[filechooser] {short_id}: opened (mode={mode}) — "
         "call tab.set_files(paths) or it stays open",
         {"kind": "filechooser", "target": short_id, "mode": mode},
+    )
+
+
+async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
+    """Resolve a pre-armed file-chooser prompt via DOM.setFileInputFiles.
+
+    Only reached when `tab.expect_file_chooser()` armed `_filechooser_policy`
+    — an unresolved chooser is recorded synchronously by
+    `_record_filechooser_opened` instead, from `_handle_event` directly, so
+    it can't race `Tab._ensure_front`'s check (see that function's docstring).
+    """
+    backend_node_id = params.get("backendNodeId")
+    mode = params.get("mode", "selectSingle")
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+
+    policy = cdp._filechooser_policy
+    if policy is None:
+        return  # only reached from _handle_event when a policy is armed
+    paths = policy.get("paths", [])
+    cdp._filechooser_policy = None
+    try:
+        await cdp.execute(
+            "DOM.setFileInputFiles",
+            {"files": paths, "backendNodeId": backend_node_id},
+        )
+    except Exception as exc:
+        logger.debug("setFileInputFiles failed: %s", exc)
+        return
+    cdp._filechooser_log.append(
+        {"mode": mode, "resolved": True, "paths": paths, "source": "pre-armed"}
+    )
+    push_channel(
+        f"[filechooser] {short_id}: opened (mode={mode}) → "
+        f"{len(paths)} file(s) set (pre-armed)",
+        {"kind": "filechooser", "target": short_id, "action": "set"},
     )
 
 
@@ -894,10 +913,14 @@ class CDPSession:
                 method == "Page.fileChooserOpened"
                 and self._filechooser_handler is not None
             ):
-                bg.spawn(
-                    self._filechooser_handler(self, params),
-                    name=f"repld-filechooser-{params.get('backendNodeId', '?')}",
-                )
+                if self._filechooser_policy is not None:
+                    bg.spawn(
+                        self._filechooser_handler(self, params),
+                        name=f"repld-filechooser-{params.get('backendNodeId', '?')}",
+                    )
+                else:
+                    # Synchronous, not bg.spawn: see _record_filechooser_opened.
+                    _record_filechooser_opened(self, params)
 
             if method == "Fetch.authRequired" and self._auth_handler is not None:
                 # bg.spawn: this is the only thing that ever answers the

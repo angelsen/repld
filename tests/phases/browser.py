@@ -2532,8 +2532,15 @@ def phase_6_dialog(kernel: Kernel) -> None:
 
 
 def phase_6_filechooser_policy(_kernel: Kernel) -> None:
-    """`_handle_filechooser`'s resolve/leave-open decision, in isolation — no
-    Chrome. The interception itself is proven live in phase_6_filechooser."""
+    """`_record_filechooser_opened`/`_handle_filechooser`'s resolve/leave-open
+    decision, in isolation — no Chrome. The interception itself is proven
+    live in phase_6_filechooser.
+
+    Split across two functions on purpose (see `_record_filechooser_opened`'s
+    docstring): the unresolved path is synchronous, called directly from
+    `_handle_event`, not through `bg.spawn` like the pre-armed path — closes
+    a real race against `Tab._ensure_front`'s post-click check.
+    """
 
     class _Cdp:
         def __init__(self) -> None:
@@ -2548,13 +2555,13 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             self.sent.append(params or {})
             return {}
 
-    from repld.browser.cdp import _handle_filechooser
+    from repld.browser.cdp import _handle_filechooser, _record_filechooser_opened
 
     async def _run() -> None:
         # No pre-arm: nothing is sent, the chooser is tracked as pending and
         # logged unresolved — there is no default file selection to guess.
         cdp = _Cdp()
-        await _handle_filechooser(cdp, {"backendNodeId": 42, "mode": "selectSingle"})  # type: ignore[arg-type]
+        _record_filechooser_opened(cdp, {"backendNodeId": 42, "mode": "selectSingle"})  # type: ignore[arg-type]
         assert_eq(cdp.sent, [], "no CDP command sent when nothing is pre-armed")
         assert_eq(
             cdp._filechooser_pending,
@@ -2672,6 +2679,29 @@ def phase_6_filechooser(kernel: Kernel) -> None:
             pathlib.Path(tmp_path2).unlink(missing_ok=True)
         print(
             "  ✓ filechooser: pre-arm resolves the chooser inline, observation names it"
+        )
+
+        # Same guarantee via raw exec (no MCP settle step) — the gap that
+        # actually shipped: browser_click's settle incidentally gave the
+        # synchronously-dispatched Page.fileChooserOpened handler time to
+        # log the chooser before browser_dispatch checked; a bare
+        # `await tab.click()` has no such wait, so a lagging log update
+        # used to let the click return with the chooser silently left open.
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "try:\n"
+            "    await _t.click('#go')\n"
+            "    print('NO ERROR')\n"
+            "except RuntimeError as e:\n"
+            "    print('RAISED', e)"
+        )
+        assert_true(
+            "RAISED" in out and "file chooser" in out and "tab.set_files" in out,
+            f"raw tab.click() also raises on an unresolved chooser (got {out!r})",
+        )
+        h.exec(f"_t = await browser.get({tid!r})\nawait _t.set_files([])")
+        print(
+            "  ✓ filechooser: raw tab.click() (exec/gist path) carries the same guarantee"
         )
     finally:
         h.close()
