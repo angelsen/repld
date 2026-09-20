@@ -77,10 +77,11 @@ BRIDGE_TOOLS: dict[str, dict] = {
                 "Restart this project's repld kernel, discarding its in-memory "
                 "state (variables, @every tickers, browser connections). The "
                 "MCP session survives — the bridge respawns the kernel and "
-                "replays the handshake, so tools keep working afterwards. Use "
-                "when the kernel is wedged, or when it needs to pick up a "
-                "changed environment. Not needed for gist edits: those "
-                "auto-reload."
+                "replays the handshake, so tools keep working afterwards. This "
+                "kernel is shared: restarting it also interrupts every other "
+                "session attached to this project, not just yours. Use when "
+                "the kernel is wedged, or when it needs to pick up a changed "
+                "environment. Not needed for gist edits: those auto-reload."
             ),
             "inputSchema": {"type": "object", "properties": {}},
             "annotations": {"destructiveHint": True, "idempotentHint": True},
