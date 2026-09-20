@@ -452,7 +452,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
             self._label_text = label
             self._label_color = "#3b82f6"
             self._label_script_id = "dead-identifier"
-            self._injected = "stale-engine-handle"
+            self._injected = {None: "stale-engine-handle"}
             self.sent: list[str] = []
 
         async def _enable_domains(self) -> None:
@@ -515,8 +515,9 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     # The injected-engine handle is session-scoped the same way, but as cache
     # rather than registration: its objectId died with the old sessionId, so
     # _reattach_core drops it and the next selector call re-instantiates.
-    assert_true(
-        unlabelled._injected is None,
+    assert_eq(
+        unlabelled._injected,
+        {},
         "reattach invalidates the injected-engine handle",
     )
     print("  ✓ reattach drops the stale injected-engine handle")
@@ -539,7 +540,7 @@ class _EngineFakeSession:
         self.fail_bootstrap = False
         self.sent: list[str] = []
         self.target_info = {"url": "fake://page", "targetId": "abcdef0123456789"}
-        self._injected = None
+        self._injected = {}
         self._injected_lock = asyncio.Lock()
         self._frame_seq = 1
         self._dialog_log: list[dict] = []
@@ -754,6 +755,98 @@ def phase_6_same_process_iframe_ax(_kernel: Kernel) -> None:
         "one getFullAXTree call per frame, top-down",
     )
     print("  ✓ mode='ax' pierces nested same-process iframes Chrome left childless")
+
+
+class _NestedFrameFakeSession:
+    """CDPSession stand-in with a top frame and one child frame, each
+    getting its own isolated-world engine instance — exercises click()'s
+    per-frame resolve path (ensure_engine/_child_frame_ids/resolve_engine_selectors)
+    without Chrome. `match_frames` says which real frameId(s) the resolve
+    function reports a hit in.
+    """
+
+    def __init__(self, match_frames: frozenset[str]) -> None:
+        self.match_frames = match_frames
+        self.sent: list[tuple[str, dict | None]] = []
+        self.target_info = {"url": "fake://page", "targetId": "abcdef0123456789"}
+        self._injected: dict[str | None, object] = {}
+        self._injected_lock = asyncio.Lock()
+        self._frame_seq = 1
+        self._engine_frame_by_context: dict[int, str] = {}
+        self._next_context = 1
+
+    async def execute(
+        self, method: str, params: dict | None = None, timeout: float = 30
+    ) -> dict:
+        self.sent.append((method, params))
+        params = params or {}
+        if method == "Page.getFrameTree":
+            return {
+                "frameTree": {
+                    "frame": {"id": "top"},
+                    "childFrames": [{"frame": {"id": "child"}, "childFrames": []}],
+                }
+            }
+        if method == "Page.createIsolatedWorld":
+            ctx = self._next_context
+            self._next_context += 1
+            self._engine_frame_by_context[ctx] = params["frameId"]
+            return {"executionContextId": ctx}
+        if method == "Runtime.evaluate":
+            frame_id = self._engine_frame_by_context[params["contextId"]]
+            return {"result": {"objectId": f"engine@{frame_id}"}}
+        if method == "Runtime.callFunctionOn":
+            receiver_frame = params["objectId"].removeprefix("engine@")
+            fn = params.get("functionDeclaration", "")
+            if "strictModeViolationError" in fn:
+                if receiver_frame in self.match_frames:
+                    return {"result": {"objectId": f"el@{receiver_frame}"}}
+                return {
+                    "exceptionDetails": {
+                        "exception": {"description": "Error: repld:none"}
+                    }
+                }
+            if "__repld_note" in fn:
+                return {"result": {"value": 0}}
+            return {"result": {"value": ""}}
+        return {}
+
+
+def phase_6_nested_frame_resolve(_kernel: Kernel) -> None:
+    """click()/type_text()'s resolve step now searches a nested same-process
+    iframe, not just the top frame — the write-side twin of the tree(mode='ax')
+    fix (phase_6_same_process_iframe_ax) for the bug it left standing: reading
+    a Google Business Profile panel's nested widget worked after that fix,
+    clicking into it didn't. No Chrome — the fake session answers per-frame
+    engine injection and resolution.
+    """
+    from repld.browser import inject
+    from repld.browser.tab import Tab
+
+    # The button only exists in the child frame — resolve_element must fall
+    # through the top frame's clean miss and find it there.
+    session = _NestedFrameFakeSession(match_frames=frozenset({"child"}))
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    el = asyncio.run(inject.resolve_element(tab, "role=button[name='Add post']"))
+    assert_eq(el.frame_id, "child", "resolved in the nested frame, not the top")
+    assert_true(
+        "Page.createIsolatedWorld" in [m for m, _ in session.sent],
+        "the child frame got its own engine injection",
+    )
+
+    # The same selector matching in both frames is genuine cross-frame
+    # ambiguity — same "no single winner" refusal as an in-frame multi-match,
+    # not a silent pick of whichever frame happened to be checked first.
+    session = _NestedFrameFakeSession(match_frames=frozenset({"top", "child"}))
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+    try:
+        asyncio.run(inject.resolve_element(tab, "role=button[name='Add post']"))
+        raise AssertionError("a match in more than one frame must be ambiguous")
+    except inject.AmbiguousSelectorError as exc:
+        assert_true(
+            "more than one frame" in str(exc), f"names the real cause (got {exc})"
+        )
+    print("  ✓ click()/type_text() resolve into a nested same-process iframe")
 
 
 def phase_6_stale_context_retry(_kernel: Kernel) -> None:
@@ -2883,11 +2976,11 @@ def phase_6_engine_reinjection(kernel: Kernel) -> None:
             f"await _t.navigate('data:text/html,<button id=y>Y</button><i>{_MARKER}</i>')\n"
             "await _inj.resolve_element(_t, '#y')\n"
             "_h2 = _t._session._injected\n"
-            "print('NAV', _h1 is not None, _h2 is not None, _h1 is not _h2)\n"
+            "print('NAV', bool(_h1), bool(_h2), _h1 is not _h2)\n"
             "await _t._session.browser_session.reattach_session(_t._session)\n"
-            "print('REATTACH-CLEARED', _t._session._injected is None)\n"
+            "print('REATTACH-CLEARED', _t._session._injected == {})\n"
             "await _inj.resolve_element(_t, '#y')\n"
-            "print('REATTACH-RESOLVED', _t._session._injected is not None)",
+            "print('REATTACH-RESOLVED', bool(_t._session._injected))",
             timeout=30,
         )
         assert_true(

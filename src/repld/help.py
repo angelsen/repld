@@ -584,8 +584,10 @@ on an already-attached tab still reports the original attach's value.
       Playwright's own mouse implementation always moves before pressing
       for the same reason.  Produces isTrusted=true events.  Auto-waits up
       to 2s for the element, then for visible/enabled/stable
-      (actionability).  Strict resolution:
-      a selector matching >1 element with no single visible winner raises
+      (actionability).  Resolution searches the top frame plus every nested
+      same-process iframe (any depth, cross-origin included).  Strict
+      resolution: a selector matching >1 element — in one frame, or once
+      each in more than one frame — with no single visible winner raises
       with a candidate digest instead of guessing.  The Receipt names what
       the click actually hit ("clicked: <button…> — #save (412,133)").  When
       an unrelated element intercepts the point, a plain left-click switches

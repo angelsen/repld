@@ -830,11 +830,15 @@ class Tab(TabQueryMixin):
         qs = quads.get("quads") or []
         if qs:
             return self._quad_center(qs)
+        # Same frame-relative caveat as inject.hit_receipt: for a child-frame
+        # element this returns coordinates relative to that frame, not the
+        # page — accepted here too, since it's the zero-area fallback only.
         result = await inject.call_engine(
             self,
             "function(el) { const r = el.getBoundingClientRect();"
             " return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }",
             [{"objectId": el.object_id}],
+            frame_id=el.frame_id,
         )
         pos = result.get("result", {}).get("value")
         if pos is None:
@@ -912,7 +916,10 @@ class Tab(TabQueryMixin):
             hdesc = " — ".join(p for p in (hit.get("preview"), hit.get("sel")) if p)
             if button == "left" and click_count == 1:
                 await inject.call_engine(
-                    self, "function(el) { el.click(); }", [{"objectId": el.object_id}]
+                    self,
+                    "function(el) { el.click(); }",
+                    [{"objectId": el.object_id}],
+                    frame_id=el.frame_id,
                 )
                 return Receipt(
                     line=(
@@ -1211,6 +1218,7 @@ class Tab(TabQueryMixin):
                 "function(el) { if (el.select) el.select();"
                 " else el.ownerDocument.execCommand('selectAll'); }",
                 [{"objectId": el.object_id}],
+                frame_id=el.frame_id,
             )
 
             before = await inject.read_value(self, el)
@@ -1282,6 +1290,7 @@ class Tab(TabQueryMixin):
                 self,
                 "function(el) { return el.tagName; }",
                 [{"objectId": el.object_id}],
+                frame_id=el.frame_id,
             )
             preview, sel = await inject.describe_element(self, el)
             tdesc = " — ".join(p for p in (preview, sel) if p)
@@ -1310,6 +1319,7 @@ class Tab(TabQueryMixin):
                 " const ac = a && a.getAttribute && a.getAttribute('aria-autocomplete');"
                 " return !!ac && ac !== 'none'; }",
                 [],
+                frame_id=el.frame_id,
             )
             if ac.get("result", {}).get("value"):
                 await self._type_chars(option)
@@ -1327,7 +1337,7 @@ class Tab(TabQueryMixin):
             except inject.AmbiguousSelectorError:
                 raise
             except RuntimeError as exc:
-                names = await inject.list_option_names(self)
+                names = await inject.list_option_names(self, frame_id=el.frame_id)
                 via = " and typing it into the filter" if filtered else ""
                 if names:
                     raise RuntimeError(
@@ -1378,6 +1388,7 @@ class Tab(TabQueryMixin):
                     " const t = (el.value || '') + ' ' + (root.textContent || '');"
                     " return t.includes(opt); }",
                     [{"objectId": el.object_id}, {"value": option}],
+                    frame_id=el.frame_id,
                 )
                 verified = bool(v.get("result", {}).get("value"))
             except Exception:

@@ -68,6 +68,10 @@ class EngineHandle:
 class ResolvedElement:
     object_id: str
     note: str  # "" or "N matches, 1 visible"
+    # None for the top frame, else the child frameId it resolved in — every
+    # call_engine() acting on this element must pass it back: Runtime.callFunctionOn
+    # refuses a receiver/argument pair from different JS worlds.
+    frame_id: str | None = None
 
 
 def _bootstrap(frame_seq: int) -> str:
@@ -93,8 +97,8 @@ def _bootstrap(frame_seq: int) -> str:
 
 
 def invalidate(cdp: Any) -> None:
-    """Drop the cached engine handle; the next selector call re-instantiates."""
-    cdp._injected = None
+    """Drop every cached engine handle; the next selector call re-instantiates."""
+    cdp._injected = {}
 
 
 def _is_stale(exc: Exception) -> bool:
@@ -102,29 +106,45 @@ def _is_stale(exc: Exception) -> bool:
     return any(marker in msg for marker in _STALE_MARKERS)
 
 
-async def ensure_engine(tab: "Tab") -> EngineHandle:
+async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle:
+    """Ensure an engine instance is injected into `frame_id` (None: top frame).
+
+    A child frame only gets the isolated-world tier: main-world fallback
+    needs that frame's own default Runtime execution context, which requires
+    tracking `Runtime.executionContextCreated`/`auxData.frameId` — not done
+    here (v1). `grantUniveralAccess` on `Page.createIsolatedWorld` already
+    bypasses the JS same-origin restriction a main-world eval would hit
+    anyway, so this covers the case that actually motivated it (a
+    cross-origin same-process child) without that extra bookkeeping.
+    """
     cdp = tab._session
-    if cdp._injected is not None:
-        return cdp._injected
+    if frame_id in cdp._injected:
+        return cdp._injected[frame_id]
     async with cdp._injected_lock:
-        if cdp._injected is not None:
-            return cdp._injected
+        if frame_id in cdp._injected:
+            return cdp._injected[frame_id]
         context_id: int | None = None
+        target_frame_id = frame_id
         try:
-            ft = await tab._exec("Page.getFrameTree")
-            frame_id = ft["frameTree"]["frame"]["id"]
+            if target_frame_id is None:
+                ft = await tab._exec("Page.getFrameTree")
+                target_frame_id = ft["frameTree"]["frame"]["id"]
             world = await tab._exec(
                 "Page.createIsolatedWorld",
                 {
-                    "frameId": frame_id,
+                    "frameId": target_frame_id,
                     "worldName": UTILITY_WORLD,
                     "grantUniveralAccess": True,
                 },
             )
             context_id = world["executionContextId"]
-        except Exception:
-            # Tier 2: same engine, main world. Semantics identical — only
-            # tamper-isolation is lost.
+        except Exception as exc:
+            if frame_id is not None:
+                raise EngineUnavailable(
+                    f"cannot inject selector engine into child frame {frame_id}"
+                ) from exc
+            # Tier 2, top frame only: same engine, main world. Semantics
+            # identical — only tamper-isolation is lost.
             context_id = None
         params: dict[str, Any] = {
             "expression": _bootstrap(cdp._frame_seq),
@@ -150,8 +170,31 @@ async def ensure_engine(tab: "Tab") -> EngineHandle:
             world="utility" if context_id is not None else "main",
             context_id=context_id,
         )
-        cdp._injected = handle
+        cdp._injected[frame_id] = handle
         return handle
+
+
+async def _child_frame_ids(tab: "Tab") -> list[str]:
+    """Every non-top frameId in this target's own frame tree, top-down.
+
+    Includes an OOPIF's frameId too — `Page.getFrameTree` lists it, but
+    `Page.createIsolatedWorld` on it simply fails (wrong process) and
+    `ensure_engine` turns that into a skip, same as observe.py's own
+    handling of OOPIFs met this way.
+    """
+    try:
+        ft = await tab._exec("Page.getFrameTree")
+    except Exception:
+        return []
+    ids: list[str] = []
+
+    def walk(node: dict) -> None:
+        for child in node.get("childFrames") or []:
+            ids.append(child["frame"]["id"])
+            walk(child)
+
+    walk(ft.get("frameTree", {}))
+    return ids
 
 
 async def call_engine(
@@ -159,16 +202,22 @@ async def call_engine(
     fn_decl: str,
     args: list[dict],
     *,
+    frame_id: str | None = None,
     await_promise: bool = False,
     return_by_value: bool = True,
     timeout: float = 30,
 ) -> dict:
-    """Runtime.callFunctionOn against the engine handle, re-ensuring once on staleness.
+    """Runtime.callFunctionOn against `frame_id`'s engine handle (top frame
+    if None), re-ensuring once on staleness.
+
+    `frame_id` must match the frame any `{"objectId": ...}` argument (e.g. a
+    ResolvedElement) was resolved in — the receiver and every objectId
+    argument must share one JS world.
 
     `args` entries are CDP CallArguments ({"value": ...} or {"objectId": ...}).
     Returns the raw CDP response (caller inspects result/exceptionDetails).
     """
-    handle = await ensure_engine(tab)
+    handle = await ensure_engine(tab, frame_id)
     params = {
         "objectId": handle.object_id,
         "functionDeclaration": fn_decl,
@@ -182,7 +231,7 @@ async def call_engine(
         if not _is_stale(exc):
             raise
         invalidate(tab._session)
-        handle = await ensure_engine(tab)
+        handle = await ensure_engine(tab, frame_id)
         params["objectId"] = handle.object_id
         return await tab._exec("Runtime.callFunctionOn", params, timeout=timeout)
 
@@ -232,6 +281,61 @@ async def resolve_element(
     )
 
 
+async def _match_in_frame(
+    tab: "Tab", sel: str, frame_id: str | None, describe: str
+) -> ResolvedElement | None:
+    """One selector against one frame. Returns a match or None (no match /
+    frame not injectable — same disposition as no match).
+
+    A within-frame strict-mode violation raises immediately with the JS
+    engine's own candidate digest, same as single-frame resolution always
+    has — cross-frame ambiguity (one clean match in each of two frames) is a
+    separate case the caller detects itself, since neither frame's call
+    alone can see the other.
+
+    A child frame failing to inject (an OOPIF's frameId, a frame that
+    navigated away mid-search) is expected and skipped like a bare miss; the
+    top frame failing to inject is the page-wide EngineUnavailable case and
+    must propagate, or a genuinely uninjectable page reads as a 2s-late
+    "not found" instead of the real error.
+    """
+    try:
+        result = await call_engine(
+            tab,
+            _RESOLVE_FN,
+            [{"value": [sel]}],
+            return_by_value=False,
+            frame_id=frame_id,
+        )
+    except EngineUnavailable:
+        if frame_id is None:
+            raise
+        return None
+    exc_details = result.get("exceptionDetails")
+    if exc_details is None:
+        obj = result.get("result", {})
+        note_r = await call_engine(
+            tab,
+            "function(el) { const n = el.__repld_note; delete el.__repld_note;"
+            " return n || 0; }",
+            [{"objectId": obj["objectId"]}],
+            frame_id=frame_id,
+        )
+        n = note_r.get("result", {}).get("value") or 0
+        note = f"{n} matches, 1 visible" if n else ""
+        return ResolvedElement(object_id=obj["objectId"], note=note, frame_id=frame_id)
+    desc = exc_details.get("exception", {}).get("description", "") or exc_details.get(
+        "text", ""
+    )
+    if "strict mode violation" in desc:
+        raise AmbiguousSelectorError(
+            f"{describe!r} is ambiguous — {_strip_stack(desc)}"
+        )
+    if "repld:none" not in desc:
+        raise RuntimeError(f"selector {sel!r} failed: {_strip_stack(desc)}")
+    return None
+
+
 async def resolve_engine_selectors(
     tab: "Tab",
     selectors: list[str],
@@ -243,41 +347,45 @@ async def resolve_engine_selectors(
 
     `describe` is the caller-facing name used in errors — the repld form, not
     the engine spelling.
+
+    Searches the top frame plus every child frame (nested same-process
+    iframes included, at any depth) — the selector-fallback list is walked in
+    priority order, and for each entry every frame is checked before falling
+    back to the next entry, so a frame doesn't get to win on a lower-priority
+    spelling just because the top frame hasn't been asked yet.
     """
     selector = describe
     deadline = asyncio.get_running_loop().time() + timeout
+    is_ref = selector.startswith("aria-ref=")
     while True:
-        result = await call_engine(
-            tab, _RESOLVE_FN, [{"value": selectors}], return_by_value=False
+        # aria-ref=eN only ever lived in the top frame's engine instance —
+        # aria_snapshot() doesn't cross frames either (see its docstring).
+        frame_ids: list[str | None] = (
+            [None] if is_ref else [None, *await _child_frame_ids(tab)]
         )
-        exc_details = result.get("exceptionDetails")
-        if exc_details is None:
-            obj = result.get("result", {})
-            note_r = await call_engine(
-                tab,
-                "function(el) { const n = el.__repld_note; delete el.__repld_note;"
-                " return n || 0; }",
-                [{"objectId": obj["objectId"]}],
-            )
-            n = note_r.get("result", {}).get("value") or 0
-            note = f"{n} matches, 1 visible" if n else ""
-            return ResolvedElement(object_id=obj["objectId"], note=note)
-        desc = exc_details.get("exception", {}).get(
-            "description", ""
-        ) or exc_details.get("text", "")
-        if "strict mode violation" in desc:
-            raise AmbiguousSelectorError(
-                f"{selector!r} is ambiguous — {_strip_stack(desc)}"
-            )
-        if selector.startswith("aria-ref="):
+        for sel in selectors:
+            matches: list[ResolvedElement] = []
+            for frame_id in frame_ids:
+                outcome = await _match_in_frame(tab, sel, frame_id, selector)
+                if outcome is not None:
+                    matches.append(outcome)
+            if len(matches) > 1:
+                frames_desc = ", ".join(
+                    "top" if m.frame_id is None else m.frame_id for m in matches
+                )
+                raise AmbiguousSelectorError(
+                    f"{selector!r} is ambiguous — matched in more than one frame "
+                    f"({frames_desc})"
+                )
+            if matches:
+                return matches[0]
+        if is_ref:
             # No point polling: a ref only ever resolves against the engine's
             # last-generated snapshot, and waiting can't bring one back.
             raise RuntimeError(
                 f"{selector} not found — refs are from the last browser_tree "
                 "snapshot and die on navigation/reattach; take a fresh snapshot"
             )
-        if "repld:none" not in desc:
-            raise RuntimeError(f"selector {selector!r} failed: {_strip_stack(desc)}")
         if asyncio.get_running_loop().time() >= deadline:
             raise RuntimeError(f"Element not found: {selector}")
         await asyncio.sleep(_POLL_S)
@@ -289,23 +397,41 @@ def _strip_stack(desc: str) -> str:
     return "\n".join(lines).strip()
 
 
+_EXISTS_FN = """
+function(sels) { const injected = this;
+  for (const s of sels) {
+    if (injected.querySelectorAll(injected.parseSelector(s), injected.document).length)
+      return true;
+  }
+  return false;
+}
+"""
+
+
 async def selector_exists(tab: "Tab", selector: str) -> bool:
     """One-shot existence check — no strictness, no visibility, no waiting.
 
     What `ready=` and `wait_for` poll on: "has it appeared", never "is it
     unambiguous" — a ready signal that matched three nodes has still fired.
+    Checks every frame like resolve_element, so a `wait_for` immediately
+    followed by a `click` on the same target agree on "found".
     """
     selectors = selector_mod.translate_fallbacks(selector)
-    result = await call_engine(
-        tab,
-        "function(sels) { const injected = this;"
-        " for (const s of sels) {"
-        "   if (injected.querySelectorAll(injected.parseSelector(s),"
-        " injected.document).length) return true; }"
-        " return false; }",
-        [{"value": selectors}],
-    )
-    return bool(result.get("result", {}).get("value"))
+    for frame_id in [None, *await _child_frame_ids(tab)]:
+        try:
+            result = await call_engine(
+                tab, _EXISTS_FN, [{"value": selectors}], frame_id=frame_id
+            )
+        except EngineUnavailable:
+            # Top frame: a genuinely uninjectable page, must propagate (as it
+            # did before frame search existed). Child frame: expected — an
+            # OOPIF's frameId, or one that navigated away mid-poll — skip it.
+            if frame_id is None:
+                raise
+            continue
+        if result.get("result", {}).get("value"):
+            return True
+    return False
 
 
 async def check_actionable(
@@ -331,6 +457,7 @@ async def check_actionable(
             tab,
             "function(node, states) { return this.checkElementStates(node, states); }",
             [{"objectId": el.object_id}, {"value": list(states)}],
+            frame_id=el.frame_id,
             await_promise=True,
         )
         value = result.get("result", {}).get("value")
@@ -402,7 +529,17 @@ def _to_repld_selector(sel: str) -> str:
 
 
 async def hit_receipt(tab: "Tab", el: ResolvedElement, x: float, y: float) -> dict:
-    """{related, target: {preview, sel}, hit: {preview, sel}|None} for (x, y)."""
+    """{related, target: {preview, sel}, hit: {preview, sel}|None} for (x, y).
+
+    (x, y) come from DOM.getContentQuads and are top-frame-viewport-relative;
+    `elementFromPoint` inside a child frame's own document wants coordinates
+    relative to *that* frame instead, which would need each ancestor
+    iframe's own offset composed in — not done here, so a child-frame
+    element skips the hit test and is trusted outright, same as the existing
+    default below for a hit test that errors.
+    """
+    if el.frame_id is not None:
+        return {"related": True, "target": {"preview": "", "sel": ""}, "hit": None}
     result = await call_engine(
         tab,
         _RECEIPT_FN,
@@ -472,6 +609,7 @@ async def read_value(tab: "Tab", el: ResolvedElement) -> str:
         "function(el) { if ('value' in el) return String(el.value);"
         " return el.textContent || ''; }",
         [{"objectId": el.object_id}],
+        frame_id=el.frame_id,
     )
     return result.get("result", {}).get("value") or ""
 
@@ -503,7 +641,12 @@ function(el, text) {
 
 
 async def set_value_native(tab: "Tab", el: ResolvedElement, text: str) -> None:
-    await call_engine(tab, _SET_VALUE_FN, [{"objectId": el.object_id}, {"value": text}])
+    await call_engine(
+        tab,
+        _SET_VALUE_FN,
+        [{"objectId": el.object_id}, {"value": text}],
+        frame_id=el.frame_id,
+    )
 
 
 # Same prototype-setter rationale as _SET_VALUE_FN, for <select>.
@@ -528,14 +671,21 @@ function(el, option) {
 async def select_native(tab: "Tab", el: ResolvedElement, option: str) -> dict:
     """Set a native <select> by option label (else value). {ok} or {ok: False, options}."""
     result = await call_engine(
-        tab, _SELECT_NATIVE_FN, [{"objectId": el.object_id}, {"value": option}]
+        tab,
+        _SELECT_NATIVE_FN,
+        [{"objectId": el.object_id}, {"value": option}],
+        frame_id=el.frame_id,
     )
     return result.get("result", {}).get("value") or {"ok": False, "options": []}
 
 
-async def list_option_names(tab: "Tab", limit: int = 20) -> list[str]:
+async def list_option_names(
+    tab: "Tab", limit: int = 20, *, frame_id: str | None = None
+) -> list[str]:
     """Accessible names of the visible role=option elements — the digest that
-    makes a select_option miss actionable."""
+    makes a select_option miss actionable. `frame_id`: the frame the
+    dropdown's trigger element resolved in, since that's where its listbox
+    renders too."""
     result = await call_engine(
         tab,
         "function(limit) { const injected = this;"
@@ -545,6 +695,7 @@ async def list_option_names(tab: "Tab", limit: int = 20) -> list[str]:
         "   try { return injected.utils.getElementAccessibleNameText(e, false); }"
         "   catch (err) { return (e.textContent || '').trim(); } }); }",
         [{"value": limit}],
+        frame_id=frame_id,
     )
     return result.get("result", {}).get("value") or []
 
@@ -622,6 +773,7 @@ async def describe_element(tab: "Tab", el: ResolvedElement) -> tuple[str, str]:
         " catch (e) { preview = String(el); }"
         " return { preview, sel }; }",
         [{"objectId": el.object_id}],
+        frame_id=el.frame_id,
     )
     value = result.get("result", {}).get("value") or {}
     return value.get("preview", ""), _to_repld_selector(value.get("sel", ""))

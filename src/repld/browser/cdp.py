@@ -659,11 +659,13 @@ class CDPSession:
         # ephemeral-Tab-vs-persistent-CDPSession reasoning as pin/label above.
         self._ready_confirmed: bool = False
 
-        # Injected-engine handle (inject.EngineHandle) — lives here for the
-        # same reason as pin/label state, and is *cache*, not registration:
-        # per-document (executionContextsCleared drops it) and per-session
-        # (_reattach_core drops it — the objectId dies with its sessionId).
-        self._injected: Any | None = None
+        # Injected-engine handles (inject.EngineHandle), keyed by frameId —
+        # None for the top frame, a real frameId for a child. Lives here for
+        # the same reason as pin/label state, and is *cache*, not
+        # registration: per-document (executionContextsCleared drops the
+        # whole dict) and per-session (_reattach_core drops it — every
+        # objectId dies with its sessionId).
+        self._injected: dict[str | None, Any] = {}
         self._injected_lock = asyncio.Lock()
         self._frame_seq: int = next(_frame_seq_counter)
 
@@ -910,10 +912,12 @@ class CDPSession:
                 )
 
             if method == "Runtime.executionContextsCleared":
-                # Navigation replaced the document; the injected engine (and
-                # every aria-ref inside it) died with the old context. Plain
-                # attribute reset — inject.ensure_engine re-instantiates lazily.
-                self._injected = None
+                # Navigation replaced the document; every injected engine
+                # (and every aria-ref inside it) died with the old context.
+                # The event carries no frameId, so this clears every frame's
+                # handle, not just the one that navigated — inject.ensure_engine
+                # re-instantiates each lazily.
+                self._injected = {}
 
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id, self.last_caller)
