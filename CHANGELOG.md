@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.9.3] - 2026-09-20
+
+### Fixed
+
 - A raw `tab.click()`/`type_text()`/etc. from exec (or a gist) could return normally while a file chooser it just opened was left silently unresolved, since `Page.fileChooserOpened` is genuinely async relative to the triggering `Input.dispatch*Event`'s ack and the unresolved-chooser check in `Tab._ensure_front` read the log with no wait at all; `browser_click`'s own settle step incidentally gave the event enough time to land, masking the gap there. `cdp._handle_filechooser`'s unresolved-chooser bookkeeping is now split out into `_record_filechooser_opened`, called synchronously from `_handle_event` instead of via `bg.spawn`, and `_ensure_front` polls briefly (single-digit ms observed, ~60ms budget) instead of checking once.
 
-### Removed
 
 ## [0.9.2] - 2026-09-20
 
