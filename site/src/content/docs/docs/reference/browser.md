@@ -185,6 +185,17 @@ await tab.choose(prompt, options) → str
 await tab.ask(prompt) → str
 ```
 
+### set_files / expect_file_chooser / expect_auth / grant_permissions
+
+```python
+await tab.set_files(paths) → None                       # resolve an already-open chooser
+await tab.expect_file_chooser(paths) → None              # pre-arm before the action that opens one
+await tab.expect_auth(username, password) → None         # pre-arm HTTP Basic/Digest auth
+await tab.grant_permissions(permissions, origin=None) → None  # camera/mic/geolocation/etc
+```
+
+A native `<input type=file>` click, an HTTP auth challenge, and a camera/mic/geolocation permission prompt are all OS-level UI that escapes CDP entirely by default — the click on a file input silently opens a real picker with no channel push, unhandled auth is cancelled, and permission prompts have nothing to click. These four resolve or pre-arm them through CDP instead: `set_files` answers a chooser already open (empty `paths` cancels it, same as declining); `expect_file_chooser`/`expect_auth` arm the answer before the triggering click. Downloads land in a fixed per-project directory rather than opening a native Save-As dialog.
+
 ### cdp
 
 ```python

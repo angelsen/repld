@@ -43,11 +43,13 @@ Fire-and-forget. The coroutine runs in the background; a `task_done` channel not
 ## @every
 
 ```python
-@every(seconds, label=None, delay=0)
+@every(seconds, label=None, delay=0, tab=None)
 def fn(): ...
 ```
 
 Periodic ticker. The first tick runs immediately unless `delay=` holds it back — use that when you're watching something you just started, or the first check races its warmup and a false negative sends the ticker after something that was about to be fine. The decorated function gets a `.cancel()` method. Errors don't stop the ticker — they push an `every` channel notification with the traceback.
+
+`tab=<pattern>` resolves `browser.get(pattern)` fresh on every tick and passes the live `Tab` to `fn`, so a ticker acting on a browser tab across hours or days doesn't need a captured-once `Tab` that goes stale across a navigation or crash. A missing match errors that tick but the ticker survives, and self-heals once a matching tab reappears. Registering with `tab=` on a kernel with no browser builtin refuses immediately rather than erroring on every tick forever.
 
 A ticker outlives the cell that registered it, so its output is ambient: rendered unattributed and uncapped, not charged against that cell's budget.
 
@@ -59,10 +61,19 @@ every.cancel_all()  # stop all tickers
 ## notify
 
 ```python
-notify(content, **meta)
+notify(content, *, session=None, exclude=None, **meta)
 ```
 
 Push a `user` channel notification to the agent. Metadata appears as extra fields in the notification payload.
+
+`session=<claude_session_id>` targets one connected Claude Code session instead of broadcasting — returns `True` if delivered, `False` if that session isn't connected (no fallback to broadcast). `exclude=<claude_session_id>` — only meaningful with `session` left at its default — skips that one session from an otherwise-broadcast push, e.g. a self-report whose caller already has the result synchronously and doesn't need it echoed back.
+
+```python
+claude_sessions() → [(claude_session_id, project_dir, kind), ...]
+current_session_id() → str | None
+```
+
+`claude_sessions()` lists every connected MCP session. `kind` is `"bg"` for a `claude --bg` worker, else `None`. `current_session_id()` returns the id of whoever triggered the code currently running — the same id `notify()`'s `session=`/`exclude=` take — or `None` with nothing to attribute to.
 
 ## Human gates
 
@@ -122,3 +133,7 @@ cancel(task_id)   → {cancelled: bool}
 ```
 
 `cancel` only works on `await`-yielding code — tight sync loops (`while True: pass`) can't be preempted.
+
+A session that ends its turn never sees a later channel push — confirmed for `claude --bg` workers, and true by construction for any one-shot client. If you need a deferred task's result, poll `get_task(task_id)` yourself in a loop before ending your turn rather than trusting the push to bring you back.
+
+From a terminal instead of the agent, `repld tasks wait <task_id>` blocks on the same task and exits 0 on success or 1 on an exception or unknown id; `repld tasks cancel <task_id>` is the CLI face of `cancel`, exiting 0 if accepted. `repld tasks` alone lists every in-flight task and ticker.

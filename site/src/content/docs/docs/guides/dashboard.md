@@ -17,7 +17,7 @@ That is the intended route, because the page itself is authenticated — see [Se
 ## Layout
 
 - **Sidebar** — every live repld session on the machine, with a link to its own dashboard.
-- **Header** — PID, uptime, active task count, running ticker labels.
+- **Header** — PID, uptime, active task count, running ticker labels (hover one for its cadence and bound `tab=` pattern).
 - **Tabs** — Browser, Connections, Targets, Console, Network (browser-related tabs need `repld[browser]`; see the [browser guide](/repld/docs/guides/browser/)).
 - **Footer** — socket path and a one-line connection summary (e.g. "2 chromes, 5 tabs").
 

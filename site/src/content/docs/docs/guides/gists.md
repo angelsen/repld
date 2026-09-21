@@ -78,6 +78,15 @@ Installs land in a shared, interpreter-versioned directory (`~/.local/share/repl
 The prompt has to be answered at the kernel's own stdin, and since kernels spawn lazily the usual one is headless with stdin on `/dev/null`. It doesn't read that as consent: it reports what's missing and prints the `uv pip install --target …` command to run. Start `repld` in a pane once to be asked instead. `repld exec` can't answer it — that's a separate process talking over the socket, while the install runs in the kernel.
 :::
 
+A gist that needs to write a file for something outside the kernel to read (not another exec cell) should place it next to the kernel's own IPC socket, not guess at the project directory — `--ephemeral` and `--socket` kernels don't use one:
+
+```python
+import repld
+socket_dir = repld.socket_path().parent
+```
+
+Raises `RuntimeError` outside a running kernel.
+
 ## MCP tool registration
 
 A gist can register MCP tools that appear alongside built-in tools. Name a handler `_tool_{name}` with typed parameters and the schema is inferred automatically — no separate declaration needed:
@@ -115,7 +124,7 @@ Gists are tracked in a central registry (`~/.config/repld/gist-registry.json`). 
 repld gist add weather  # resolves from registry, writes ./gists/.links
 repld gist list         # shows local + linked + linkable
 repld gist rm weather   # unlink
-repld gist rm --stale   # clean up broken links
+repld gist rm --stale   # clean up broken links and dead registry entries
 ```
 
 The `.links` manifest records absolute paths and is meant to be committed — stale entries are skipped at load rather than rewritten. Local gists always shadow linked ones of the same name.

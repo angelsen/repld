@@ -29,7 +29,9 @@ claude --dangerously-load-development-channels server:repld
 You don't have to start the kernel yourself: `repld bridge` spawns a headless
 one for the project if none is running, and restarts it if it dies. Run `repld`
 in a terminal when you want the live display instead — either way, `repld log -f`
-tails it, `repld status` shows what's running, and `repld stop` shuts it down.
+tails it, `repld status` shows what's running, `repld tasks` lists in-flight
+`defer()` tasks and `@every` tickers (`repld tasks wait <id>` / `cancel <id>`
+block on or stop one), and `repld stop` shuts it down.
 Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
 project directory and there's nothing to `.gitignore`.
 
@@ -109,6 +111,9 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 | `browser_fetch` | In-page fetch (inherits auth/cookies). |
 | `browser_click` | Click element (auto-waits, returns observation). |
 | `browser_type` | Type into element. |
+| `browser_select` | Select an option in a dropdown or custom listbox widget. |
+| `browser_hover` | Move the mouse over an element and leave it parked there. |
+| `browser_drag` | Press, drag, and release across two selectors or points. |
 | `browser_key` | Send key press (Enter, Escape, etc). |
 | `browser_navigate` | Navigate tab to URL. |
 | `browser_open` | Open new tab and navigate. |
@@ -120,6 +125,11 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 | `browser_detach` | Remove watch pattern, detach tabs. |
 | `browser_controls` | Discover a page's `window.controls` schema. |
 | `browser_invoke` | Invoke a control action, with the full observation pipeline. |
+| `browser_set_files` | Resolve an open native file-chooser prompt with local paths. |
+| `browser_expect_file_chooser` | Pre-arm paths for a file chooser a following action will open. |
+| `browser_expect_auth` | Pre-arm credentials for an HTTP Basic/Digest auth prompt. |
+| `browser_grant_permissions` | Pre-authorize camera/mic/geolocation/etc for an origin. |
+| `browser_dismiss_dialog` | Dismiss or accept a native `alert`/`confirm`/`prompt` dialog. |
 
 Output from every cell spills to `$XDG_RUNTIME_DIR/repld/` — the inline response carries a head/tail preview plus the spill path. Use standard `Read`/`Grep` tools for full output.
 

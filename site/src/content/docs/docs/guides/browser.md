@@ -129,6 +129,10 @@ ok = await tab.confirm("Delete all draft orders?")
 choice = await tab.choose("Which environment?", ["staging", "production"])
 ```
 
+## Native prompts
+
+A click on a real `<input type=file>` opens the OS's own file picker, which sits outside CDP entirely — no channel push, just a page that silently stalls. `tab.expect_file_chooser(paths)` arms the answer before the triggering click; `tab.set_files(paths)` resolves one already open. `tab.expect_auth(username, password)` pre-arms an HTTP Basic/Digest prompt (unhandled otherwise, cancelled by default), and `tab.grant_permissions([...])` pre-authorizes camera/mic/geolocation for an origin instead of leaving a permission dialog with nothing to click. Downloads land in a fixed per-project directory rather than a native Save-As dialog. See the [browser reference](/repld/docs/reference/browser/) for the full signatures.
+
 ## Console errors
 
 Watched tabs push console errors and uncaught exceptions to the channel the instant they happen — no polling. Duplicate errors firing across tabs within 2 seconds collapse into one follow-up message. Mute a noisy pattern (a dev-server HMR warning, a third-party script) with `browser.suppress("substring")`; `browser.unsuppress(...)` un-mutes, `browser.suppressed` lists active patterns.
