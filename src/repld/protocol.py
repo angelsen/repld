@@ -7,6 +7,7 @@ tool call, so every schema and handler below lives on this side of the socket.
 
 import inspect
 import json
+import socket
 from typing import ClassVar
 
 import __main__
@@ -40,6 +41,21 @@ from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
 from .tasks import spill_marker
 from .tasks import spill_text as _spill_text
+
+
+def _peer_gone(sock: socket.socket) -> bool:
+    """Whether the client end of *sock* already hung up.
+
+    Used by `_tasks_wait` while blocked inside `Dispatcher.handle`, where
+    `session.closed` can't yet reflect a mid-wait disconnect (see there).
+    """
+    try:
+        return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
 
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
@@ -822,9 +838,51 @@ class Dispatcher(BrowserDispatchMixin):
             return _response(rid, {"gates": gates.open_gates()})
         if method == "gates/resolve":
             return self._gates_resolve(rid, req.get("params", {}))
+        # `repld tasks wait`/`cancel` — bare JSON-RPC like the gates methods
+        # above, for the same reason: `repld tasks` is the only caller, no MCP
+        # client is ever told these exist, and `cancel` already has an MCP
+        # tool twin (_cancel below) that agents use instead.
+        if method == "tasks/wait":
+            return self._tasks_wait(rid, req.get("params", {}), session)
+        if method == "tasks/cancel":
+            return self._tasks_cancel(rid, req.get("params", {}))
         if rid is None:
             return None
         return _error(rid, -32601, f"method not found: {method}")
+
+    def _tasks_wait(self, rid, params: dict, session) -> dict | None:
+        """Block this connection's reader thread until a task finishes.
+
+        Safe to block here: each IPC connection gets its own reader thread
+        (`ipc.Server._read_loop`), and `done_event.wait()` releases the GIL —
+        the kernel's asyncio loop is never touched. `session.closed` alone
+        can't see the CLI hang up mid-wait, because that flag is only set by
+        the same reader thread's own `for line in session.rfile` loop, which
+        can't take its next turn until this call returns — so `_peer_gone`
+        probes the socket directly instead.
+        """
+        from . import tasks
+
+        tid = params.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
+        task = tasks.get(tid)
+        if task is None:
+            return _error(rid, -32602, f"unknown task_id: {tid}")
+        done_event = task["done_event"]
+        while not done_event.wait(timeout=2.0):
+            if session.closed or _peer_gone(session.sock):
+                return None
+        snap = self.ctx.snapshot(tid)
+        if snap is None:
+            return _error(rid, -32602, f"task evicted: {tid}")
+        return _response(rid, snap)
+
+    def _tasks_cancel(self, rid, params: dict) -> dict:
+        tid = params.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
+        return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
 
     def _gates_resolve(self, rid, params: dict) -> dict:
         """Answer one pending gate, coercing the value the way its kind needs.

@@ -1,8 +1,12 @@
-"""`repld tasks` — per-item listing of in-flight kernel tasks and active tickers.
+"""`repld tasks` — per-item listing of in-flight kernel tasks and active tickers,
+plus `wait`/`cancel` on one by id.
 
-`repld status` reduces these to a count; this is the detail behind it. Reuses
-the same dashboard HTTP round trip `repld status` already makes for its live
-counts — `lifecycle_cmd._live_state()` — rather than opening a second IPC path.
+`repld status` reduces the listing to a count; this is the detail behind it.
+Listing reuses the same dashboard HTTP round trip `repld status` already makes
+for its live counts — `lifecycle_cmd._live_state()` — rather than opening a
+second IPC path. `wait`/`cancel` need the kernel itself (a `threading.Event`
+to block on, `cancel_task` to call), so they go over the same Unix-socket
+JSON-RPC path `repld gate` uses, via `exec_cmd._connect`/`_call`.
 """
 
 import json
@@ -12,16 +16,39 @@ import urllib.request
 from pathlib import Path
 
 from . import cli_args, paths, state
+from .exec_cmd import _call, _connect
 from .lifecycle_cmd import _uptime
-from .render import BOLD, DIM, GREEN, RESET, YELLOW, short_task
+from .render import BOLD, DIM, GREEN, RED, RESET, YELLOW, short_task
 
 _USAGE = """\
 repld tasks — in-flight tasks and active tickers
 
   repld tasks [--json] [--socket PATH]
+  repld tasks wait <task_id> [--json] [--socket PATH]
+  repld tasks cancel <task_id> [--json] [--socket PATH]
 """
 
 _LABEL = "repld tasks"
+
+
+def _err(msg: str) -> None:
+    print(f"{_LABEL}: {msg}", file=sys.stderr, flush=True)
+
+
+def _report_error(err: dict) -> int:
+    """Render a JSON-RPC error, naming version skew when that's what it is.
+
+    Mirrors `gate_cmd._report_error` — `wait`/`cancel` are as new to an old
+    kernel as `gates/list` once was, and get method-not-found the same way.
+    """
+    if err.get("code") == -32601:
+        _err(
+            "this kernel predates `repld tasks wait`/`cancel` — restart it to "
+            "pick the command up (`repld restart`)"
+        )
+        return 1
+    _err(err.get("message", "unknown error"))
+    return 1
 
 
 def _fetch(lock: dict, hint_path: Path) -> dict | None:
@@ -87,15 +114,10 @@ def _print_tasks(data: dict) -> None:
             )
 
 
-def run_tasks(argv: list[str]) -> int:
-    if cli_args.wants_help(argv):
-        print(_USAGE)
-        return 0
-    sock_path, rest = paths.resolve_socket_path(argv)
-    bad = cli_args.check_args(_LABEL, rest, _USAGE, flags=("--json",), positionals=0)
+def _list(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    bad = cli_args.check_args(_LABEL, rest, _USAGE, positionals=0)
     if bad is not None:
         return bad
-    as_json = "--json" in rest
 
     lock_path = paths.lock_for(sock_path)
     lock = state.read_lock(lock_path)
@@ -131,3 +153,125 @@ def run_tasks(argv: list[str]) -> int:
     else:
         _print_tasks(data)
     return 0
+
+
+def _print_wait_result(snap: dict) -> None:
+    task_id = snap.get("task_id", "?")
+    label = snap.get("label")
+    header = f"task {short_task(task_id)}"
+    if label:
+        header += f' "{label}"'
+    exc = snap.get("exception")
+    if exc:
+        print(f"{header}: {RED}{exc}{RESET}", file=sys.stderr)
+    else:
+        result = snap.get("result")
+        print(f"{header}: done" + (f" → {result}" if result is not None else ""))
+    text = snap.get("text", "").rstrip()
+    if text:
+        print(text)
+    if snap.get("truncated") and snap.get("spill_path"):
+        print(f"[full output: {snap['spill_path']}]", file=sys.stderr)
+
+
+def _wait(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    bad = cli_args.check_args(f"{_LABEL} wait", rest, _USAGE, positionals=1)
+    if bad is not None:
+        return bad
+    positionals = [a for a in rest if not a.startswith("-")]
+    if not positionals:
+        print(f"{_LABEL}: wait needs a task_id\n")
+        print(_USAGE)
+        return 2
+    task_id = positionals[0]
+
+    conn = _connect(paths.lock_for(sock_path), label=_LABEL)
+    if conn is None:
+        return 1
+    sock, rfile, wfile, _lock = conn
+    try:
+        resp = _call(
+            rfile, wfile, "tasks/wait", {"task_id": task_id}, json_mode=as_json
+        )
+        if resp is None:
+            _err("kernel disconnected")
+            return 1
+        if "error" in resp:
+            return _report_error(resp["error"])
+        snap = resp.get("result", {})
+        if as_json:
+            print(json.dumps(snap, indent=2))
+        else:
+            _print_wait_result(snap)
+        return 1 if snap.get("exception") else 0
+    except KeyboardInterrupt:
+        _err("interrupted — the task keeps running")
+        return 130
+    finally:
+        sock.close()
+
+
+def _cancel(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    bad = cli_args.check_args(f"{_LABEL} cancel", rest, _USAGE, positionals=1)
+    if bad is not None:
+        return bad
+    positionals = [a for a in rest if not a.startswith("-")]
+    if not positionals:
+        print(f"{_LABEL}: cancel needs a task_id\n")
+        print(_USAGE)
+        return 2
+    task_id = positionals[0]
+
+    conn = _connect(paths.lock_for(sock_path), label=_LABEL)
+    if conn is None:
+        return 1
+    sock, rfile, wfile, _lock = conn
+    try:
+        resp = _call(rfile, wfile, "tasks/cancel", {"task_id": task_id})
+        if resp is None:
+            _err("kernel disconnected")
+            return 1
+        if "error" in resp:
+            return _report_error(resp["error"])
+        result = resp.get("result", {})
+        accepted = bool(result.get("cancelled"))
+        if as_json:
+            print(json.dumps(result, indent=2))
+        else:
+            status = "accepted" if accepted else "no-op (already done, or unknown id)"
+            print(f"cancel {task_id}: {status}")
+        return 0 if accepted else 1
+    finally:
+        sock.close()
+
+
+def _pop_verb(rest: list[str]) -> tuple[str | None, list[str]]:
+    """First non-flag positional, if it's a subverb — removed from *rest*.
+
+    Task ids are single hex tokens, so unlike `gate answer`'s free-text value
+    there's nothing here that needs protecting from flag parsing — the verb
+    can be found and stripped up front, before `check_args` runs.
+    """
+    for i, a in enumerate(rest):
+        if a.startswith("-"):
+            continue
+        if a in ("wait", "cancel"):
+            return a, rest[:i] + rest[i + 1 :]
+        break
+    return None, rest
+
+
+def run_tasks(argv: list[str]) -> int:
+    if cli_args.wants_help(argv):
+        print(_USAGE)
+        return 0
+    sock_path, rest = paths.resolve_socket_path(argv)
+    as_json = "--json" in rest
+    rest = [a for a in rest if a != "--json"]
+
+    verb, rest = _pop_verb(rest)
+    if verb == "wait":
+        return _wait(sock_path, rest, as_json)
+    if verb == "cancel":
+        return _cancel(sock_path, rest, as_json)
+    return _list(sock_path, rest, as_json)

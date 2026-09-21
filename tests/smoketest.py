@@ -105,6 +105,7 @@ from phases.resources import (
 )
 from phases.sessions import phase_13_sessions
 from phases.shutdown import phase_11_shutdown
+from phases.tasks_cli import phase_18_tasks_cli
 from phases.venv import phase_16_venv_binding
 
 PHASES = {
@@ -194,13 +195,14 @@ PHASES = {
     15: lambda k: (phase_15_headless(k), phase_15_ephemeral_bridge(k)),
     16: phase_16_venv_binding,
     17: phase_17_gates,
+    18: phase_18_tasks_cli,
 }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", type=int, default=3, help="highest phase to run (ceiling: 17)"
+        "--phase", type=int, default=3, help="highest phase to run (ceiling: 18)"
     )
     args = ap.parse_args()
 

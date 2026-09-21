@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld tasks wait <task_id>` blocks until a `defer()`/deferred-`exec` task finishes and prints its result, exiting 0 on success or 1 on exception/unknown id. `repld tasks cancel <task_id>` is the CLI face of the `cancel` MCP tool, exiting 0 if accepted, 1 if no-op or unknown id. Both are new `tasks/wait`/`tasks/cancel` JSON-RPC methods on the kernel socket (`repld tasks` alone keeps its existing dashboard-HTTP listing).
+
 ### Changed
 
 ### Fixed
