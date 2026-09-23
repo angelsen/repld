@@ -52,6 +52,9 @@ BRIDGE_PROJECT_DIR_KEY = "_claude_project_dir"
 # spawned MCP server's environment (confirmed live), so CLAUDE_JOB_DIR is the
 # only usable signal for this.
 BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
+# Kernel → bridge only, consumed by the bridge and never relayed to the client:
+# `ipc.rebind_claude_session` telling it the id to stamp from now on.
+BRIDGE_REBIND_METHOD = "notifications/repld/session_rebound"
 
 
 # What `initialize` negotiates, from either side of the socket. Shared for the
@@ -129,6 +132,13 @@ CORE_TOOLS = [
                     "description": "epoch seconds the task finished, null while running",
                 },
                 "label": {"type": ["string", "null"]},
+                "push_delivered": {
+                    "type": ["boolean", "null"],
+                    "description": (
+                        "whether the completion push reached the session that "
+                        "asked; false means nobody saw it, null means no push was owed"
+                    ),
+                },
             },
             "required": [
                 "task_id",
@@ -141,6 +151,7 @@ CORE_TOOLS = [
                 "done",
                 "finished_at",
                 "label",
+                "push_delivered",
             ],
         },
         "annotations": {"readOnlyHint": True},

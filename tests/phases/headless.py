@@ -413,11 +413,31 @@ def _targeted_push(tmp: Path) -> None:
         )
         assert_eq(resp["result"]["_meta"]["done"], False, "exec deferred")
 
+        task_id = resp["result"]["_meta"]["task_id"]
+
         note = a.wait_notification(
             "notifications/claude/channel", kind="task_done", timeout=15
         )
         assert_true("from A" in note["params"]["content"], "originator got its output")
         print("  ✓ deferred exec notified the session that started it")
+
+        snap = _get_task(a, task_id)
+        assert_eq(snap["push_delivered"], True, "delivered push recorded")
+
+        # The originator leaves before its task finishes: the push is dropped,
+        # and get_task says so to whoever looks next.
+        resp = c.exec(
+            "import asyncio\nawait asyncio.sleep(1.5)\nprint('from C')",
+            timeout=0.3,
+            call_timeout=10,
+        )
+        orphan_id = resp["result"]["_meta"]["task_id"]
+        c.close()
+        time.sleep(2.5)
+        snap = _get_task(a, orphan_id)
+        assert_eq(snap["done"], True, "orphaned task finished")
+        assert_eq(snap["push_delivered"], False, "dropped push recorded")
+        print("  ✓ get_task's push_delivered: true when seen, false when dropped")
 
         try:
             c.wait_notification(
@@ -429,6 +449,8 @@ def _targeted_push(tmp: Path) -> None:
         print("  ✓ the other session saw nothing (no broadcast fallback)")
 
         # Ambient notify() is genuinely shared state — it still reaches both.
+        c = Bridge(tmp)
+        _handshake(c)
         c.exec("notify('ambient')")
         for name, b in (("A", a), ("C", c)):
             note = b.wait_notification("notifications/claude/channel", timeout=10)
@@ -437,6 +459,110 @@ def _targeted_push(tmp: Path) -> None:
                 f"session {name} received the ambient notify()",
             )
         print("  ✓ bare notify() still broadcasts to every session")
+    finally:
+        a.close()
+        c.close()
+
+
+def _get_task(b: Bridge, task_id: str) -> dict:
+    resp = b.call("tools/call", {"name": "get_task", "arguments": {"task_id": task_id}})
+    return resp["result"]["structuredContent"]
+
+
+def _session_rebind(tmp: Path) -> None:
+    """`ipc.rebind_claude_session` re-keys a live connection after `/clear`,
+    matched by process tree, and the bridge keeps the new id across a respawn."""
+    a = Bridge(tmp, env={"CLAUDE_CODE_SESSION_ID": "gen-1", "CLAUDE_PROJECT_DIR": None})
+    c = Bridge(tmp, env={"CLAUDE_CODE_SESSION_ID": "other", "CLAUDE_PROJECT_DIR": None})
+    try:
+        _handshake(a)
+        _handshake(c)
+
+        def rebind(new_id: str, pid: int) -> str:
+            code = (
+                "from repld import ipc\n"
+                "try:\n"
+                f"    print('old=', ipc.rebind_claude_session({new_id!r}, {pid}))\n"
+                "except (LookupError, ValueError) as e:\n"
+                "    print(type(e).__name__, e)"
+            )
+            return content_text(a.exec(code, call_timeout=40))
+
+        # This process is an ancestor of both bridges.
+        out = rebind("gen-2", os.getpid())
+        assert_true("ValueError" in out, f"shared ancestor is ambiguous (got {out!r})")
+        out = rebind("gen-2", 1)
+        assert_true(
+            "LookupError" in out, f"unrelated pid matches nothing (got {out!r})"
+        )
+        print("  ✓ rebind refuses an ambiguous or unrelated pid")
+
+        # Started under gen-1, finishes under gen-2 — the /clear-then-continue case.
+        out = content_text(
+            a.exec(
+                "import asyncio\n"
+                "async def _pre_clear():\n"
+                "    await asyncio.sleep(2)\n"
+                "    print('pre-clear done')\n"
+                "print('tid=' + defer(_pre_clear(), 'pre-clear'))"
+            )
+        )
+        pre_clear_id = out.split("tid=", 1)[1].split()[0]
+
+        out = rebind("gen-2", a.proc.pid)
+        assert_true(
+            "old= gen-1" in out, f"rebind returns the replaced id (got {out!r})"
+        )
+        out = content_text(
+            a.exec(
+                "print(current_session_id(), sorted(s for s, _, _ in claude_sessions()),"
+                " notify('x', session='gen-1'))"
+            )
+        )
+        assert_true(
+            "gen-2 ['gen-2', 'other'] False" in out,
+            f"new id live, old id gone (got {out!r})",
+        )
+        print("  ✓ rebind re-keys the matching session; the old id no longer targets")
+
+        note = a.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=10,
+            where=lambda n: n["params"]["meta"].get("task_id") == pre_clear_id,
+        )
+        assert_true(
+            "pre-clear done" in note["params"]["content"],
+            "pre-rebind defer() pushed to the same connection",
+        )
+        assert_eq(
+            _get_task(a, pre_clear_id)["push_delivered"],
+            True,
+            "pre-rebind defer() recorded as delivered",
+        )
+        try:
+            c.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=1,
+                where=lambda n: n["params"]["meta"].get("task_id") == pre_clear_id,
+            )
+            raise AssertionError("pre-rebind task_done leaked to another session")
+        except TimeoutError:
+            pass
+        print("  ✓ defer() started before the rebind still pushes to its connection")
+
+        try:
+            a.wait_notification(core_schemas.BRIDGE_REBIND_METHOD, timeout=1)
+            raise AssertionError("rebind notification leaked to the MCP client")
+        except TimeoutError:
+            pass
+
+        os.kill(int(_lock(tmp)["pid"]), signal.SIGKILL)
+        time.sleep(0.5)
+        out = content_text(a.exec("print(current_session_id())", call_timeout=40))
+        assert_true("gen-2" in out, f"respawned kernel sees the new id (got {out!r})")
+        print("  ✓ bridge replays the rebound id onto a fresh kernel, not its env's")
     finally:
         a.close()
         c.close()
@@ -896,6 +1022,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _tasks_listing(tmp)
         _status_counts(tmp)
         _tasks_version_skew(tmp)
+        _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)
         _concurrent_boots(tmp)

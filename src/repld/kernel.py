@@ -260,8 +260,7 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
         target = ipc.find_claude_session(session)
         if target is None:
             return False
-        push_channel(str(content), meta, session=target)
-        return True
+        return bool(push_channel(str(content), meta, session=target))
     excluded = ipc.find_claude_session(exclude) if exclude is not None else None
     push_channel(str(content), meta, exclude=excluded)
     return None
@@ -496,7 +495,9 @@ def _maybe_push_done(task_id: str) -> None:
     }
     if label:
         meta_dict["label"] = label
-    push_channel("\n".join(parts), meta_dict, session=task.get("origin"))
+    task["push_delivered"] = push_channel(
+        "\n".join(parts), meta_dict, session=task.get("origin")
+    )
 
 
 def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:

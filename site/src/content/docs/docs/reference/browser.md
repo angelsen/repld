@@ -188,9 +188,9 @@ await tab.ask(prompt) → str
 ### set_files / expect_file_chooser / expect_auth / grant_permissions
 
 ```python
-await tab.set_files(paths) → None                       # resolve an already-open chooser
-await tab.expect_file_chooser(paths) → None              # pre-arm before the action that opens one
-await tab.expect_auth(username, password) → None         # pre-arm HTTP Basic/Digest auth
+await tab.set_files(paths) → None                             # resolve an already-open chooser
+await tab.expect_file_chooser(paths) → None                   # pre-arm before the action that opens one
+await tab.expect_auth(username, password) → None              # pre-arm HTTP Basic/Digest auth
 await tab.grant_permissions(permissions, origin=None) → None  # camera/mic/geolocation/etc
 ```
 

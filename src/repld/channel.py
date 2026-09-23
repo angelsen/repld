@@ -57,7 +57,7 @@ def push_channel(
     session: "ipc.Session | None" = None,
     fallback_broadcast: bool = False,
     exclude: "ipc.Session | None" = None,
-) -> None:
+) -> bool | None:
     """Send a notifications/claude/channel notification AND emit a local
     ChannelPush event so the pane and the event log mirror what the MCP agent
     receives. Single source of truth for every channel push.
@@ -93,6 +93,9 @@ def push_channel(
     A caller with a domain-specific preview shape (e.g.
     `cdp._check_controls_observation`) should still clip its own way first;
     this only catches what isn't.
+
+    Returns whether a targeted push reached `session` (False when dropped or
+    downgraded to a broadcast), or None for a broadcast.
     """
     if _meta_augmenter is not None:
         try:
@@ -109,9 +112,15 @@ def push_channel(
     msg = _notification(
         "notifications/claude/channel", {"content": content, "meta": meta}
     )
-    if session is None or (not ipc.post_to(session, msg) and fallback_broadcast):
-        ipc.broadcast_channel(msg, exclude=exclude if session is None else None)
+    delivered = None
+    if session is None:
+        ipc.broadcast_channel(msg, exclude=exclude)
+    else:
+        delivered = ipc.post_to(session, msg)
+        if not delivered and fallback_broadcast:
+            ipc.broadcast_channel(msg)
     events.emit(ChannelPush(content, meta))
+    return delivered
 
 
 def push_kind(content: str, kind: str, *, session=None, **meta: str) -> None:

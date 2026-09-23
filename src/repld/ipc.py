@@ -17,11 +17,14 @@ Scope: this module is the socket layer only. Where state files live is
 import json
 import os
 import socket
+import struct
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from .core_schemas import BRIDGE_REBIND_METHOD
 from .core_schemas import error as _error
+from .core_schemas import notification as _notification
 from .state import read_lock
 
 Handler = Callable[[dict, "Session"], dict | None]
@@ -62,9 +65,38 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     return sock, lock
 
 
+def _peer_pid(sock: socket.socket) -> int | None:
+    """The connecting process's pid via SO_PEERCRED; None where that's unavailable."""
+    opt = getattr(socket, "SO_PEERCRED", None)
+    if opt is None:
+        return None
+    try:
+        pid, _uid, _gid = struct.unpack(
+            "3i", sock.getsockopt(socket.SOL_SOCKET, opt, 12)
+        )
+    except OSError:
+        return None
+    return pid or None
+
+
+def _ancestry(pid: int) -> list[int]:
+    """`pid` and its ancestors, nearest first, via /proc; [] if unreadable."""
+    chain: list[int] = []
+    while pid > 1 and pid not in chain:
+        chain.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        # comm (field 2) may itself contain spaces and parens — split after the last ')'.
+        pid = int(stat.rsplit(")", 1)[1].split()[1])
+    return chain
+
+
 class Session:
     def __init__(self, sock: socket.socket):
         self.sock = sock
+        self.peer_pid = _peer_pid(sock)
         self.rfile = sock.makefile("r", encoding="utf-8")
         self.wfile = sock.makefile("w", encoding="utf-8")
         self.write_lock = threading.Lock()
@@ -286,6 +318,46 @@ class Server:
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
 
+    def rebind_claude_session(self, new_id: str, pid: int) -> str | None:
+        """Re-register the Claude Code session sharing `pid`'s process tree under `new_id`.
+
+        Returns the id it replaced. The match is the connected session whose
+        bridge shares the nearest ancestor with `pid`; raises LookupError on
+        no match and ValueError when that nearest ancestor is shared by two.
+        """
+        with self.sessions_lock:
+            candidates = [
+                (s, set(_ancestry(s.peer_pid)))
+                for s in self.sessions
+                if s.claude_session_id is not None and s.peer_pid is not None
+            ]
+        for ancestor in _ancestry(pid):
+            hits = [s for s, chain in candidates if ancestor in chain]
+            if len(hits) > 1:
+                ids = ", ".join(sorted(str(s.claude_session_id) for s in hits))
+                raise ValueError(
+                    f"pid {pid} is ambiguous: ancestor {ancestor} is shared by {ids}"
+                )
+            if hits:
+                break
+        else:
+            raise LookupError(
+                f"no connected Claude Code session shares a process tree with pid {pid}"
+            )
+        session = hits[0]
+        with self.sessions_lock:
+            old_id = session.claude_session_id
+            if old_id is not None and self._claude_sessions.get(old_id) is session:
+                del self._claude_sessions[old_id]
+            session.claude_session_id = new_id
+            self._claude_sessions[new_id] = session
+        # The bridge re-stamps `initialize` from this on every kernel restart,
+        # or the next kernel would re-register the stale id.
+        session.post_channel(
+            _notification(BRIDGE_REBIND_METHOD, {"session_id": new_id})
+        )
+        return old_id
+
     def find_claude_session(self, session_id: str) -> Session | None:
         with self.sessions_lock:
             return self._claude_sessions.get(session_id)
@@ -371,6 +443,14 @@ def register_claude_session(
 ) -> None:
     if _server is not None:
         _server.register_claude_session(session, session_id, project_dir, session_kind)
+
+
+def rebind_claude_session(new_id: str, pid: int) -> str | None:
+    """See `Server.rebind_claude_session` — for a SessionStart hook after `/clear`,
+    which keeps the MCP connection (and the bridge's env-derived id) alive."""
+    if _server is None:
+        raise LookupError("no IPC server in this process")
+    return _server.rebind_claude_session(new_id, pid)
 
 
 def find_claude_session(session_id: str) -> Session | None:

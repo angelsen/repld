@@ -145,6 +145,9 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         "spill_file": None,
         "spill_path": None,
         "nudged": False,
+        # True/False once a completion push to `origin` was attempted; None if
+        # none was owed (answered inline, still running) or it broadcast.
+        "push_delivered": None,
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
         "label": None,
@@ -295,6 +298,7 @@ def snapshot(task_id: str) -> dict | None:
         "done": task["done_event"].is_set(),
         "finished_at": task.get("finished_at"),  # epoch seconds, None while running
         "label": task.get("label"),
+        "push_delivered": task.get("push_delivered"),
     }
 
 

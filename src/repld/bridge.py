@@ -54,6 +54,7 @@ from . import (
 )
 from .core_schemas import (
     BRIDGE_PROJECT_DIR_KEY,
+    BRIDGE_REBIND_METHOD,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
 )
@@ -683,6 +684,11 @@ class Bridge:
                 rid = msg.get("id")
                 if rid == BRIDGE_INIT_ID:
                     continue  # our replayed handshake — the client must not see it
+                if msg.get("method") == BRIDGE_REBIND_METHOD:
+                    new_id = (msg.get("params") or {}).get("session_id")
+                    if isinstance(new_id, str):
+                        self._claude_session_id = new_id
+                    continue
                 if rid is not None:
                     with self._state_lock:
                         self._inflight.discard(rid)
