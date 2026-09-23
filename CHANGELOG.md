@@ -8,14 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `ipc.rebind_claude_session(new_id, pid)` re-keys a live MCP connection to a new Claude Code session id. `/clear` starts a new conversation but keeps the bridge process, and the bridge reads `CLAUDE_CODE_SESSION_ID` only once at startup, so after a `/clear` `current_session_id()`, `claude_sessions()` and `notify(session=)` all went on using the old conversation's id. Meant for a `SessionStart` hook, which passes its own pid. The kernel matches the connection whose bridge shares the nearest ancestor process with that pid, and refuses a pid that matches no connection or matches two. The bridge adopts the new id, so it survives a kernel respawn too.
-- `get_task` (and `repld tasks --json`) report `push_delivered`: `true`/`false` once a completion push was sent to the session that started the task, `null` when no push was owed. `false` marks a result nobody saw because that session disconnected first. `notify(session=)` now returns `False` when delivery fails, not just when the id is unknown.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.10.1] - 2026-09-23
+
+### Added
+
+- `ipc.rebind_claude_session(new_id, pid)` re-keys a live MCP connection to a new Claude Code session id. `/clear` starts a new conversation but keeps the bridge process, and the bridge reads `CLAUDE_CODE_SESSION_ID` only once at startup, so after a `/clear` `current_session_id()`, `claude_sessions()` and `notify(session=)` all went on using the old conversation's id. Meant for a `SessionStart` hook, which passes its own pid. The kernel matches the connection whose bridge shares the nearest ancestor process with that pid, and refuses a pid that matches no connection or matches two. The bridge adopts the new id, so it survives a kernel respawn too.
+- `get_task` (and `repld tasks --json`) report `push_delivered`: `true`/`false` once a completion push was sent to the session that started the task, `null` when no push was owed. `false` marks a result nobody saw because that session disconnected first. `notify(session=)` now returns `False` when delivery fails, not just when the id is unknown.
+
 
 ## [0.10.0] - 2026-09-21
 
