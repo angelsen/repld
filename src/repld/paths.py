@@ -95,16 +95,23 @@ def project_slug(cwd: Path | None = None) -> str:
     return f"{base}-{digest}"
 
 
+def project_path(cwd: Path | None = None) -> Path:
+    """``$XDG_RUNTIME_DIR/repld/projects/<slug>/``, not created — for lookups."""
+    return PROJECTS_DIR / project_slug(cwd)
+
+
 def project_dir(cwd: Path | None = None) -> Path:
-    """``$XDG_RUNTIME_DIR/repld/projects/<slug>/``, created 0700."""
+    """`project_path`, created 0700 — for callers about to write into it."""
     ensure_runtime_dir()
-    d = PROJECTS_DIR / project_slug(cwd)
+    d = project_path(cwd)
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
 
 
 def socket_path(cwd: Path | None = None) -> Path:
-    return project_dir(cwd) / "kernel.sock"
+    # Pure: `status`/`exec`/`log` resolve this for projects with no kernel, and
+    # must not leave a directory behind. The kernel's flock creates it.
+    return project_path(cwd) / "kernel.sock"
 
 
 def downloads_dir(cwd: Path | None = None) -> Path:

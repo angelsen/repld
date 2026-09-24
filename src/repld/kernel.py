@@ -58,12 +58,10 @@ def _claim_project(socket_path: Path) -> int:
     Ensures the runtime root first. This is the earliest thing in `run_kernel`
     and `state.acquire_lock` does its own `mkdir(parents=True, mode=0o700)` —
     which applies the mode to the *leaf* only, the exact failure
-    `paths.ensure_runtime_dir` exists to prevent. On the default socket path
-    `default_socket_path()` already routes through `project_dir()` and so has
-    ensured it; with `--socket` / `REPLD_SOCKET` pointing under the runtime
-    root it had not, so the root could be brought into being at umask default
-    and skip the foreign-owner refusal, only to be chmod'd back much later in
-    `_boot_runtime`. `state.py` can't call this itself — it imports nothing
+    `paths.ensure_runtime_dir` exists to prevent: the root could be brought
+    into being at umask default and skip the foreign-owner refusal, only to be
+    chmod'd back much later in `_boot_runtime`. The project directory itself
+    is first created here, by `acquire_lock`'s mkdir of the flock's parent. `state.py` can't call this itself — it imports nothing
     from repld on purpose — so it belongs at the caller.
     """
     paths.ensure_runtime_dir()

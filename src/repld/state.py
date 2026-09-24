@@ -256,10 +256,10 @@ def sweep_dead_project_dirs(projects_dir: Path) -> int:
     direction. A directory with no lock yet may be another kernel mid-boot
     (flock taken in `_claim_project`, lock not written until
     `_write_lockfile` much later in `_start_services`); reclaiming it would
-    race that boot. A directory with no lock *ever* (a client resolved
-    `project_dir()` — `repld status`, `repld exec` — but no kernel started
-    there) is left alone too: there's nothing here to say it's abandoned
-    rather than simply unused, and it costs nothing to leave standing.
+    race that boot. A directory with no lock *ever* (a kernel that lost its
+    flock race, or a `paths.project_dir()` writer such as downloads) is left
+    alone too: there's nothing here to say it's abandoned rather than simply
+    unused. Client lookups (`status`, `exec`) never create one.
     """
     removed = 0
     try:

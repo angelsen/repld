@@ -568,6 +568,12 @@ def _session_rebind(tmp: Path) -> None:
         c.close()
 
 
+def _project_path(cwd: Path) -> Path:
+    from repld import paths
+
+    return paths.project_path(cwd)
+
+
 def _project_flags(tmp: Path) -> None:
     """`--project-git` puts a worktree session on the main checkout's kernel,
     spawned from the main checkout; `--project DIR` and REPLD_PROJECT_GIT reach
@@ -627,6 +633,25 @@ def _project_flags(tmp: Path) -> None:
         print(
             "  ✓ --project DIR, --project-git and REPLD_PROJECT_GIT reach the same kernel"
         )
+
+        res = repld("--project", str(main), "restart", cwd=tmp)
+        assert_eq(
+            res.returncode, 0, f"--project restart exits 0 ({res.stderr.strip()})"
+        )
+        assert_true(
+            str(_lock(main)["pid"]) != pid, "--project restart replaced the kernel"
+        )
+        print("  ✓ --project DIR restart works from another cwd")
+
+        empty = tmp / "proj-empty"
+        empty.mkdir()
+        res = repld("--project", str(empty), "status", "--json", cwd=tmp)
+        assert_eq(res.returncode, 0, "status on a kernel-less project exits 0")
+        assert_true(
+            not _project_path(empty).exists(),
+            "status on a kernel-less project leaves no runtime dir behind",
+        )
+        print("  ✓ a read-only status creates no project runtime dir")
 
         for label, res, needle in (
             (

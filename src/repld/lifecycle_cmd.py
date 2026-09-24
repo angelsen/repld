@@ -130,6 +130,10 @@ def run_stop(argv: list[str]) -> int:
             ok = _stop_one(pid, paths.lock_for(Path(sock)), Path(sock), label) and ok
         return 0 if ok else 1
 
+    return _stop_at(sock_path)
+
+
+def _stop_at(sock_path: Path) -> int:
     lock_path = paths.lock_for(sock_path)
     lock = state.read_lock(lock_path)
     if isinstance(lock, str):
@@ -165,7 +169,8 @@ def run_restart(argv: list[str]) -> int:
     bad = cli_args.check_args("repld restart", rest, _RESTART_USAGE, positionals=0)
     if bad is not None:
         return bad
-    rc = run_stop(["--socket", str(sock_path)])
+    # Not run_stop(["--socket", ...]): under --project that argv is refused.
+    rc = _stop_at(sock_path)
     if rc != 0:
         return rc
     rc = _spawn_headless(sock_path)
