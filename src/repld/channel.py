@@ -63,12 +63,12 @@ def push_channel(
     receives. Single source of truth for every channel push.
 
     `session=None` broadcasts — that's the right thing for genuinely ambient
-    output (@every errors, console errors, browser connect/disconnect, bare
-    `notify()` from shared user code) in repld's shared-__main__ model.
-    Passing a session targets the one that asked for the work. If that session
-    has since disconnected the push is *dropped*, never downgraded to a
-    broadcast: leaking one session's output into every other one is worse than
-    silence, and the local event still reaches `repld log`.
+    output (@every errors, browser connect/disconnect, bare `notify()` from
+    shared user code) in repld's shared-__main__ model. Passing a session
+    targets the one that asked for the work. If that session has since
+    disconnected the push is *dropped*, never downgraded to a broadcast:
+    leaking one session's output into every other one is worse than silence,
+    and the local event still reaches `repld log`.
 
     `exclude` only applies to the broadcast path (`session=None`): skip one
     session — the caller's own — that already has this update some other way
@@ -77,8 +77,9 @@ def push_channel(
     excluding another are different requests.
 
     `fallback_broadcast=True` is the one deliberate exception: a *best-guess*
-    affinity (e.g. controls observations routed to whichever session last
-    touched the tab) is nobody's specific request the way `origin` is, so a
+    affinity (e.g. controls observations and console errors/exceptions,
+    routed via `CDPSession.last_caller` to whichever session last touched
+    the tab) is nobody's specific request the way `origin` is, so a
     stale guess should degrade to the old broadcast behavior rather than
     silently vanish.
 

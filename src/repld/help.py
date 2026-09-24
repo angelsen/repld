@@ -979,7 +979,9 @@ Channel push: apps that wire setObservationSink to console.debug('__controls__',
 
 Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
   from watched tabs push as [console:error] channel messages immediately.
-  No polling needed — the agent sees errors the moment they happen.
+  No polling needed — the agent sees errors the moment they happen. Routed to
+  whichever session last drove the tab (a tool call or exec cell); falls back
+  to a broadcast if that session was never set or has since disconnected.
 
     [console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
 

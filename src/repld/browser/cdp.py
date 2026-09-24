@@ -11,12 +11,15 @@ import logging
 import re
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import bg
 from ..channel import push_channel
 from ..loopguard import LoopOwned, loop_only, on_loop
 from .har import _create_views
+
+if TYPE_CHECKING:
+    from ..ipc import Session
 
 __all__ = ["CDPSession"]
 
@@ -71,12 +74,13 @@ _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
 
 class _DedupEntry:
-    __slots__ = ("count", "meta", "text")
+    __slots__ = ("count", "meta", "session", "text")
 
-    def __init__(self, text: str, meta: dict):
+    def __init__(self, text: str, meta: dict, session: "Session | None" = None):
         self.count = 0
         self.text = text
         self.meta = meta
+        self.session = session
 
 
 _dedup_pending: dict[str, _DedupEntry] = {}
@@ -118,7 +122,7 @@ def _flush_dedup(key: str) -> None:
         msg = f"{entry.text} (×{total} tabs)"
         if _hint_counts.get(key, 0) >= _HINT_THRESHOLD:
             msg += _SUPPRESS_HINT
-        push_channel(msg, entry.meta)
+        push_channel(msg, entry.meta, session=entry.session, fallback_broadcast=True)
     except Exception:
         pass
 
@@ -128,6 +132,7 @@ def _dedup_push(
     meta: dict,
     dedup_key: str,
     loop: asyncio.AbstractEventLoop | None,
+    session: "Session | None" = None,
 ) -> None:
     if loop is None:
         # Both windows below are opened by registering a dict entry and closed
@@ -142,7 +147,7 @@ def _dedup_push(
         # loop), which is exactly why it is spelled out rather than left as a
         # falsy check that reads like it was considered.
         try:
-            push_channel(text, meta)
+            push_channel(text, meta, session=session, fallback_broadcast=True)
         except Exception:
             pass
         return
@@ -155,12 +160,12 @@ def _dedup_push(
     try:
         show_hint = _track_hint(dedup_key, loop)
         msg = text + _SUPPRESS_HINT if show_hint else text
-        push_channel(msg, meta)
+        push_channel(msg, meta, session=session, fallback_broadcast=True)
     except Exception:
         return
 
     loop.call_later(_DEDUP_WINDOW, _flush_dedup, dedup_key)
-    _dedup_pending[dedup_key] = _DedupEntry(text, meta)
+    _dedup_pending[dedup_key] = _DedupEntry(text, meta, session)
 
 
 # Regex to strip lone surrogates from JSON strings (DuckDB rejects \uD800-\uDFFF)
@@ -198,7 +203,9 @@ def _clip_state(text: str) -> str:
 _frame_seq_counter = iter(range(1, 1 << 30))
 
 
-def _check_controls_observation(params: dict, target_id: str, session=None) -> None:
+def _check_controls_observation(
+    params: dict, target_id: str, session: "Session | None" = None
+) -> None:
     """Detect __controls__ console.debug messages and push as channel notifications.
 
     `session` is `CDPSession.last_caller` — best-guess affinity, not a firm
@@ -256,6 +263,7 @@ def _push_error_text(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None,
+    session: "Session | None" = None,
 ) -> None:
     """Suppression-check, truncate, and dedup-push a console error line."""
     text = text[:300]
@@ -267,6 +275,7 @@ def _push_error_text(
         {"kind": "console_error", "target": short_id},
         text[:100],
         loop,
+        session,
     )
 
 
@@ -499,6 +508,7 @@ def _push_console_error(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None = None,
+    session: "Session | None" = None,
 ) -> None:
     """Push console.error messages as channel notifications."""
     parts = []
@@ -510,7 +520,7 @@ def _push_console_error(
         )
         if val:
             parts.append(str(val))
-    _push_error_text(" ".join(parts), target_id, port, loop)
+    _push_error_text(" ".join(parts), target_id, port, loop, session)
 
 
 def _push_exception(
@@ -518,12 +528,17 @@ def _push_exception(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None = None,
+    session: "Session | None" = None,
 ) -> None:
     """Push uncaught exceptions as channel notifications."""
     details = params.get("exceptionDetails", {})
     exc = details.get("exception", {})
     _push_error_text(
-        exc.get("description") or details.get("text", ""), target_id, port, loop
+        exc.get("description") or details.get("text", ""),
+        target_id,
+        port,
+        loop,
+        session,
     )
 
 
@@ -556,7 +571,7 @@ class CDPSession:
         # ipc.Session that last drove this tab (tool call or exec cell) — see
         # Tab.invoke() and browser_dispatch._get_tab. Best-guess affinity for
         # routing controls observations, not a firm request like tasks.origin.
-        self.last_caller: object | None = None
+        self.last_caller: Session | None = None
 
         # In-memory DuckDB.  The main connection is written only from the
         # asyncio loop thread (store_event/_async_prune); query/fetch_body/
@@ -945,10 +960,14 @@ class CDPSession:
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id, self.last_caller)
                 if params.get("type") == "error":
-                    _push_console_error(params, target_id, self.port, self._loop)
+                    _push_console_error(
+                        params, target_id, self.port, self._loop, self.last_caller
+                    )
 
             if method == "Runtime.exceptionThrown":
-                _push_exception(params, target_id, self.port, self._loop)
+                _push_exception(
+                    params, target_id, self.port, self._loop, self.last_caller
+                )
 
             # Periodic pruning — async task to avoid blocking the recv loop
             if self._event_count >= self._next_prune_check:
