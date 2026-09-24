@@ -20,6 +20,11 @@ _SUBCOMMANDS = {
         "run_stop",
         "stop this project's kernel (--all for every one)",
     ),
+    "start": (
+        "lifecycle_cmd",
+        "run_start",
+        "start a headless kernel if none is running",
+    ),
     "restart": (
         "lifecycle_cmd",
         "run_restart",
@@ -45,7 +50,7 @@ _SUBCOMMANDS = {
 # Subcommands that end up running a kernel process, and so need to be under
 # the project's interpreter. A bare `repld` (no subcommand, or kernel flags)
 # counts too and is handled separately in main().
-BINDING_COMMANDS = frozenset({"bridge", "restart"})
+BINDING_COMMANDS = frozenset({"bridge", "start", "restart"})
 
 
 def _subcommands_text() -> str:

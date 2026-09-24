@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld start` starts a headless kernel for the project if none is running, and does nothing otherwise. It's for hooks that run before a bridge could start one lazily (e.g. `SessionStart`), where `repld exec` refuses on a cold project. Using it gives up lazy start for that project, since every session then boots a kernel.
+
 ### Changed
 
 ### Fixed

@@ -58,6 +58,7 @@ You don't have to start a kernel by hand, but you can watch and control one from
 repld status     # pid, uptime, socket, active tasks — plus live kernels elsewhere
 repld log -f     # follow the same cells and channel pushes the display renders
 repld tasks      # in-flight defer() tasks and @every tickers, --json for detail
+repld start      # start a headless kernel now (no-op if one is running)
 repld stop       # shut this project's kernel down
 repld dashboard  # open the built-in web control panel
 ```

@@ -38,6 +38,15 @@ repld stop — stop this project's kernel
   --all   stop every live repld kernel, not just this project's
 """
 
+_START_USAGE = """\
+repld start — start this project's headless kernel if none is running
+
+  repld start [--socket PATH]
+
+A no-op (exit 0) when a kernel is already up. For hooks that run before
+any MCP client could lazily spawn one; every other path stays lazy.
+"""
+
 _RESTART_USAGE = """\
 repld restart — stop this project's kernel and start a fresh headless one
 
@@ -147,7 +156,7 @@ def _spawn_headless(sock_path: Path) -> int:
     # already owns the unit — poll for it exactly as for our own spawn, rather
     # than reporting a failure while a healthy kernel comes up.
     if spawn.spawn_headless(sock_path) == spawn.FAILED:
-        print("repld restart: could not start a kernel", file=sys.stderr)
+        print("repld: could not start a kernel", file=sys.stderr)
         return 1
     # 10s, unlike the bridge's 5s: there's a human waiting at a terminal here,
     # not a tool call that would rather fail than hang.
@@ -157,8 +166,28 @@ def _spawn_headless(sock_path: Path) -> int:
         if isinstance(state.read_lock(lock_path), dict):
             return 0
         time.sleep(0.1)
-    print("repld restart: new kernel never came up", file=sys.stderr)
+    print("repld: new kernel never came up", file=sys.stderr)
     return 1
+
+
+def run_start(argv: list[str]) -> int:
+    if cli_args.wants_help(argv):
+        print(_START_USAGE)
+        return 0
+    sock_path, rest = paths.resolve_socket_path(argv)
+    bad = cli_args.check_args("repld start", rest, _START_USAGE, positionals=0)
+    if bad is not None:
+        return bad
+    lock = state.read_lock(paths.lock_for(sock_path))
+    if isinstance(lock, dict):
+        print(f"repld: kernel already running (pid {lock['pid']})")
+        return 0
+    rc = _spawn_headless(sock_path)
+    if rc == 0:
+        lock = state.read_lock(paths.lock_for(sock_path))
+        pid = lock["pid"] if isinstance(lock, dict) else "?"
+        print(f"repld: headless kernel started (pid {pid})")
+    return rc
 
 
 def run_restart(argv: list[str]) -> int:

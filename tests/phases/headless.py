@@ -687,6 +687,45 @@ def _project_flags(tmp: Path) -> None:
         _stop_kernel(main)
 
 
+def _start_cmd(tmp: Path) -> None:
+    """`repld start` spawns a kernel for a cold project so `exec` works with
+    no bridge, and is a no-op once one is running."""
+    proj = tmp / "start-proj"
+    proj.mkdir()
+
+    def repld(*args: str):
+        return subprocess.run(
+            ["uv", "run", "--project", str(REPO), "repld", *args],
+            cwd=str(proj),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    try:
+        res = repld("exec", "print(1)")
+        assert_true(res.returncode != 0, "exec on a cold project still refuses")
+        res = repld("start")
+        assert_eq(res.returncode, 0, f"start exits 0 ({res.stderr.strip()})")
+        assert_true(
+            "started" in res.stdout, f"start reports a spawn (got {res.stdout!r})"
+        )
+        pid = str(_lock(proj)["pid"])
+        res = repld("exec", "print(40 + 2)")
+        assert_true("42" in res.stdout, f"exec works after start (got {res.stdout!r})")
+        res = repld("start")
+        assert_eq(res.returncode, 0, "second start exits 0")
+        assert_true(
+            "already running" in res.stdout and pid in res.stdout,
+            f"second start is a no-op naming the incumbent (got {res.stdout!r})",
+        )
+        assert_eq(str(_lock(proj)["pid"]), pid, "second start left the kernel alone")
+        print("  ✓ repld start: spawns on a cold project, no-op when one is running")
+    finally:
+        _stop_kernel(proj)
+
+
 def _no_display_skips_queue(tmp: Path) -> None:
     """A headless kernel never builds the display queue in the first place.
 
@@ -1142,6 +1181,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _status_counts(tmp)
         _tasks_version_skew(tmp)
         _project_flags(tmp)
+        _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)
