@@ -12,10 +12,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.10.3] - 2026-09-24
+
+### Fixed
+
 - `repld --project DIR restart` refused itself with "--project/--project-git and --socket are mutually exclusive": restart passed its own `--socket` to the stop step.
 - Read-only commands (`status`, `exec`, `log`, …) no longer create `$XDG_RUNTIME_DIR/repld/projects/<slug>/` for a project with no kernel. The directory is now created only when a kernel claims the project.
 
-### Removed
 
 ## [0.10.2] - 2026-09-24
 
