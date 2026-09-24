@@ -568,6 +568,100 @@ def _session_rebind(tmp: Path) -> None:
         c.close()
 
 
+def _project_flags(tmp: Path) -> None:
+    """`--project-git` puts a worktree session on the main checkout's kernel,
+    spawned from the main checkout; `--project DIR` and REPLD_PROJECT_GIT reach
+    the same kernel from anywhere, and conflicting or bogus targets refuse."""
+    main = (tmp / "proj-main").resolve()
+    main.mkdir()
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", str(main)], check=True)
+    subprocess.run(
+        [*git, "-C", str(main), "commit", "-q", "--allow-empty", "-m", "i"], check=True
+    )
+    wt = main / ".claude" / "worktrees" / "w1"
+    subprocess.run(
+        [*git, "-C", str(main), "worktree", "add", "-q", str(wt)], check=True
+    )
+
+    def repld(*args: str, cwd: Path, env: dict[str, str] | None = None):
+        return subprocess.run(
+            ["uv", "run", "--project", str(REPO), "repld", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env={**os.environ, **(env or {})},
+        )
+
+    b = Bridge(wt, global_args=("--project-git",))
+    try:
+        _handshake(b)
+        out = content_text(b.exec("import os\nprint(os.getcwd())", call_timeout=40))
+        assert_true(
+            str(main) in out, f"kernel spawned from the main checkout (got {out!r})"
+        )
+        assert_true(lock_path_for(main).exists(), "kernel keyed on the main checkout")
+        assert_true(not lock_path_for(wt).exists(), "no per-worktree kernel")
+        print(
+            "  ✓ --project-git: a worktree bridge spawns and joins the main checkout's kernel"
+        )
+
+        pid = str(_lock(main)["pid"])
+        for label, res in (
+            ("--project-git", repld("--project-git", "status", "--json", cwd=wt)),
+            (
+                "REPLD_PROJECT_GIT=1",
+                repld("status", "--json", cwd=wt, env={"REPLD_PROJECT_GIT": "1"}),
+            ),
+            (
+                "--project DIR",
+                repld("--project", str(main), "status", "--json", cwd=tmp),
+            ),
+        ):
+            assert_eq(
+                res.returncode, 0, f"{label} status exits 0 ({res.stderr.strip()})"
+            )
+            assert_true(pid in res.stdout, f"{label} status reports pid {pid}")
+        print(
+            "  ✓ --project DIR, --project-git and REPLD_PROJECT_GIT reach the same kernel"
+        )
+
+        for label, res, needle in (
+            (
+                "not a repo",
+                repld("--project-git", "status", cwd=Path("/")),
+                "not in a git repository",
+            ),
+            (
+                "missing dir",
+                repld("--project", str(tmp / "nope"), "status", cwd=tmp),
+                "not a directory",
+            ),
+            (
+                "both flags",
+                repld("--project", str(main), "--project-git", "status", cwd=wt),
+                "mutually exclusive",
+            ),
+            (
+                "with --socket",
+                repld("--project-git", "status", "--socket", "/x", cwd=wt),
+                "mutually exclusive",
+            ),
+        ):
+            assert_true(res.returncode != 0, f"{label}: refused")
+            assert_true(
+                needle in res.stderr, f"{label}: says {needle!r} (got {res.stderr!r})"
+            )
+        print(
+            "  ✓ outside a repo, a missing dir, both flags, or with --socket: refused"
+        )
+    finally:
+        b.close()
+        _stop_kernel(main)
+
+
 def _no_display_skips_queue(tmp: Path) -> None:
     """A headless kernel never builds the display queue in the first place.
 
@@ -1022,6 +1116,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _tasks_listing(tmp)
         _status_counts(tmp)
         _tasks_version_skew(tmp)
+        _project_flags(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _log_renderer_covers_every_event()
         _stop_kernel(tmp)

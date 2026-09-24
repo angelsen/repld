@@ -166,6 +166,14 @@ def default_socket_path() -> Path:
     return Path(override) if override else socket_path()
 
 
+# Set by `cli._apply_project` once --project/--project-git has chdir'd: an
+# explicit --socket would then name a kernel whose cwd isn't the project.
+project_pinned = False
+PROJECT_SOCKET_CONFLICT = (
+    "repld: --project/--project-git and --socket are mutually exclusive"
+)
+
+
 def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
     """Resolve the kernel socket path from --socket flags, REPLD_SOCKET env,
     or the per-project XDG default. Shared by every client subcommand.
@@ -189,6 +197,8 @@ def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
             continue
         rest.append(arg)
         i += 1
+    if sock and project_pinned:
+        raise SystemExit(PROJECT_SOCKET_CONFLICT)
     return (Path(sock) if sock else default_socket_path()), rest
 
 

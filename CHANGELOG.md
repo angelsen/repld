@@ -8,7 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld --project DIR <subcommand>` and `repld --project-git <subcommand>` (env: `REPLD_PROJECT`, `REPLD_PROJECT_GIT=1`) act on another directory's kernel as if run from there, and spawn it from there. `--project-git` resolves the repo's main checkout, so `claude --worktree` sessions registered with `repld --project-git bridge` share its kernel instead of each getting their own. Global options, placed before the subcommand; refused alongside `--socket`, outside a git repo, or in a bare repo.
+
 ### Changed
+
+- Console errors and uncaught exceptions from a watched tab now push to the session that last drove that tab (a tool call or exec cell), not to every session. If that session was never set or has disconnected, they fall back to a broadcast, as controls observations already did.
 
 ### Fixed
 

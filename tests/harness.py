@@ -134,7 +134,11 @@ class Bridge:
     """
 
     def __init__(
-        self, cwd: Path, *extra_args: str, env: dict[str, str | None] | None = None
+        self,
+        cwd: Path,
+        *extra_args: str,
+        env: dict[str, str | None] | None = None,
+        global_args: tuple[str, ...] = (),
     ):
         # A None value deletes the key rather than setting it — the ambient
         # environment this test process itself runs under (e.g. when this
@@ -148,7 +152,16 @@ class Bridge:
             else:
                 proc_env[k] = v
         self.proc = subprocess.Popen(
-            ["uv", "run", "--project", str(REPO), "repld", "bridge", *extra_args],
+            [
+                "uv",
+                "run",
+                "--project",
+                str(REPO),
+                "repld",
+                *global_args,
+                "bridge",
+                *extra_args,
+            ],
             cwd=str(cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

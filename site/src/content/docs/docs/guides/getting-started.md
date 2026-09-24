@@ -30,6 +30,16 @@ claude mcp add repld -- repld bridge
 
 That's the whole setup. repld writes nothing into your project — no `.mcp.json`, no `CLAUDE.md` block, nothing to `.gitignore`. Runtime state lives under `$XDG_RUNTIME_DIR/repld/`.
 
+### Git worktrees
+
+A kernel belongs to the directory it runs in, so a `claude --worktree` session gets its own kernel by default. To have worktrees share the main checkout's kernel instead, register the bridge with `--project-git` (before the subcommand):
+
+```bash
+claude mcp add repld -- repld --project-git bridge
+```
+
+The kernel is then keyed on, and always started from, the repo's main checkout (the first entry of `git worktree list`). Its `./gists`, `.venv`, `.env` and `repld_init.py` all come from there, so a worktree session runs the main checkout's code, not its own branch's. For `repld status`, `log` and friends in a worktree terminal, pass the same flag or set `REPLD_PROJECT_GIT=1`. `--project DIR` / `REPLD_PROJECT=DIR` does the same for any directory. Neither combines with `--socket`.
+
 ## Connect Claude Code
 
 Launch Claude Code with channel support:

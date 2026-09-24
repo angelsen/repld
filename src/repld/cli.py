@@ -1,6 +1,11 @@
 import argparse
+import os
+import subprocess
 import sys
 from importlib import import_module
+from pathlib import Path
+
+from . import paths
 
 # name → (module, func, one-line help). Single source for both dispatch and
 # the --help listing, so they can't drift. Handlers are lazy-imported on match,
@@ -51,8 +56,73 @@ def _subcommands_text() -> str:
     return "\n".join(lines)
 
 
+def _main_worktree(cwd: Path) -> Path:
+    """The main checkout of the git repo containing `cwd` — `git worktree list`'s first entry."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(
+            f"repld: --project-git: {cwd} is not in a git repository ({exc})"
+        )
+    lines = out.splitlines()
+    if len(lines) > 1 and lines[1] == "bare":
+        raise SystemExit("repld: --project-git: a bare repository has no main checkout")
+    return Path(lines[0].removeprefix("worktree "))
+
+
+def _apply_project(argv: list[str]) -> list[str]:
+    """Consume leading `--project DIR` / `--project-git` (or REPLD_PROJECT /
+    REPLD_PROJECT_GIT) and chdir there, returning the rest of argv.
+
+    Before the subcommand only, so no flag parser ever enters `gate answer`'s
+    verbatim region. The chdir is the whole mechanism: identity (`paths`),
+    binding (`bind`), spawn cwd, gists and `repld_init.py` all follow cwd.
+    """
+    project: str | None = None
+    use_git = False
+    while argv and (
+        argv[0] in ("--project", "--project-git") or argv[0].startswith("--project=")
+    ):
+        flag = argv.pop(0)
+        if flag == "--project-git":
+            use_git = True
+        elif flag == "--project":
+            if not argv:
+                raise SystemExit("repld: --project needs a directory")
+            project = argv.pop(0)
+        else:
+            project = flag.split("=", 1)[1]
+    if project is None and not use_git:
+        project = os.environ.get("REPLD_PROJECT") or None
+        use_git = os.environ.get("REPLD_PROJECT_GIT", "") not in ("", "0")
+    if project is None and not use_git:
+        return argv
+    if project is not None and use_git:
+        raise SystemExit("repld: --project and --project-git are mutually exclusive")
+    if os.environ.get("REPLD_SOCKET"):
+        raise SystemExit(paths.PROJECT_SOCKET_CONFLICT)
+    if project is None:
+        target = _main_worktree(Path.cwd())
+    else:
+        target = Path(project).expanduser()
+        if not target.is_dir():
+            raise SystemExit(f"repld: --project: {target} is not a directory")
+    os.chdir(target.resolve())
+    paths.project_pinned = True
+    # Applied once: the cwd now carries it to re-execs and spawned kernels,
+    # where a relative REPLD_PROJECT would resolve against the new cwd.
+    os.environ.pop("REPLD_PROJECT", None)
+    os.environ.pop("REPLD_PROJECT_GIT", None)
+    return argv
+
+
 def main() -> None:
-    argv = sys.argv[1:]
+    argv = _apply_project(sys.argv[1:])
     if argv and argv[0] in ("--version", "-V"):
         from importlib.metadata import version
 
@@ -97,11 +167,25 @@ def main() -> None:
         help="Unix socket path (default: $XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.sock)",
     )
     parser.add_argument(
+        "--project",
+        metavar="DIR",
+        help="Act on DIR's kernel as if run from DIR; before any subcommand "
+        "(`repld --project DIR bridge`). Env: REPLD_PROJECT.",
+    )
+    parser.add_argument(
+        "--project-git",
+        action="store_true",
+        help="--project for this git repo's main checkout, so worktrees share "
+        "its kernel. Env: REPLD_PROJECT_GIT=1.",
+    )
+    parser.add_argument(
         "--no-display",
         action="store_true",
         help="Skip the display thread (headless/CI mode; kernel still runs IPC).",
     )
     args = parser.parse_args(argv)
+    if args.socket and paths.project_pinned:
+        raise SystemExit(paths.PROJECT_SOCKET_CONFLICT)
 
     from .kernel import run_kernel
 
