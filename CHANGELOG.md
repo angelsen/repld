@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld help`'s channel-kind list includes `browser_warning`, sent when a drag endpoint is occluded.
 - `loop_unblocked` channel push closing every `loop_blocked`, with how long the loop was held (`blocked_s`).
 
 ### Changed

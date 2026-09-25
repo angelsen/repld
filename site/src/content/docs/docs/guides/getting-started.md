@@ -59,10 +59,13 @@ repld status     # pid, uptime, socket, active tasks — plus live kernels elsew
 repld log -f     # follow the same cells and channel pushes the display renders
 repld tasks      # in-flight defer() tasks and @every tickers, --json for detail
 repld start      # start a headless kernel now (no-op if one is running)
-repld stop       # shut this project's kernel down
+repld restart    # stop, then start a fresh headless kernel
+repld stop       # shut this project's kernel down (--all: every kernel on the machine)
 repld dashboard  # open the built-in web control panel
 ```
 
+`repld status --json` gives the same as JSON; add `--counts` for each sibling
+kernel's active task and ticker counts.
 `repld tasks wait <task_id>` blocks until that task finishes and prints its
 result, exiting 0 on success or 1 on an exception or unknown id.
 `repld tasks cancel <task_id>` stops a running one — the CLI face of the

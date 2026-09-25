@@ -43,7 +43,7 @@ Coming from 0.1.x, that last part is new, and the files the old version wrote
 into your projects are still there — see
 [Upgrading to 0.2](https://angelsen.github.io/repld/docs/guides/upgrading/).
 
-For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` extra (`duckdb`, `websockets`, `pillow`) for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
+For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` and `http` extras (`duckdb`, `websockets`, `pillow`, `httpx`) for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
 
 ## Quick example
 
@@ -53,6 +53,7 @@ import httpx
 httpx.get("https://api.example.com/status").json()
 
 # long-running — returns task_id, pushes channel notification on completion
+import asyncio
 await asyncio.sleep(30)
 notify("done", kind="migration")
 ```
@@ -140,12 +141,15 @@ Output from every cell spills to `$XDG_RUNTIME_DIR/repld/` — the inline respon
 ## Kernel builtins
 
 ```python
-notify(content, **meta)        # channel push to the agent
+notify(content, **meta)        # channel push to the agent (session=/exclude= to target)
 await ask(prompt)              # block on free-form human input
 await confirm(prompt)          # block on yes/no
 await choose(prompt, options)  # block on pick-one
 defer(coro, label=None)        # fire-and-forget, channel push on completion
-@every(seconds)                # periodic ticker, fn.cancel() to stop
+@every(seconds, delay=0)       # periodic ticker, fn.cancel() to stop
+no_display(value)              # return a value without re-printing it
+claude_sessions()              # connected Claude Code sessions
+current_session_id()           # the session that triggered the running code
 ```
 
 A kernel you started with `repld` takes gate answers in its own pane, and a

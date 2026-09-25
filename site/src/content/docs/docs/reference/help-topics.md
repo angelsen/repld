@@ -64,7 +64,7 @@ every.cancel_all()  # stop all tickers
 notify(content, *, session=None, exclude=None, **meta)
 ```
 
-Push a `user` channel notification to the agent. Metadata appears as extra fields in the notification payload.
+Push a channel notification to the agent. Metadata appears as extra fields in the notification payload.
 
 `session=<claude_session_id>` targets one connected Claude Code session instead of broadcasting — returns `True` if delivered, `False` if that session isn't connected (no fallback to broadcast). `exclude=<claude_session_id>` — only meaningful with `session` left at its default — skips that one session from an otherwise-broadcast push, e.g. a self-report whose caller already has the result synchronously and doesn't need it echoed back.
 
@@ -120,11 +120,17 @@ Gates are deliberately **not** MCP tools — an agent able to answer its own `co
 | `console_error`                                                                | `console.error` or uncaught exception from a watched tab  |
 | `pin_lost`                                                                     | a pinned tab navigated cross-origin                       |
 | `controls`                                                                     | `window.controls` action observation                      |
+| `dialog`                                                                       | native JS dialog auto-dismissed                           |
+| `filechooser`                                                                  | native file chooser opened                                |
+| `auth`                                                                         | HTTP auth challenge cancelled (no pre-arm)                |
+| `browser_warning`                                                              | a drag endpoint was occluded                              |
 | `browser_connect` / `browser_disconnect` / `browser_watch` / `browser_unwatch` | dashboard browser actions                                 |
+
+`loop_blocked` fires once a probe on the kernel loop misses `REPLD_LOOP_BLOCK_THRESHOLD` (default 5 s). It names the task holding the loop and the top of its stack, and a `loop_unblocked` with `blocked_s` follows when the block ends. Past `REPLD_LOOP_KILL_THRESHOLD` (default 30 s; `0` disables) the watchdog asks that task to cancel. The cancel can't interrupt synchronous code; it lands at the task's next `await`.
 
 A bare `notify("...")` carries **no** kind at all — meta is whatever keywords you passed. Pass `kind=` yourself if you want to filter on it.
 
-A task's completion is pushed to the session that started it; ambient output (`@every`, console errors, browser connect/disconnect, bare `notify()`) is broadcast.
+A task's completion is pushed to the session that started it; ambient output (`@every`, browser connect/disconnect, bare `notify()`) is broadcast. Console errors and `controls` observations go to the session that last drove that tab, and `loop_blocked`/`loop_kill`/`loop_unblocked` to the session whose task holds the loop; both broadcast when that session is gone.
 
 ## get_task / cancel
 
@@ -132,6 +138,8 @@ A task's completion is pushed to the session that started it; ambient output (`@
 get_task(task_id) → {done, text, spill_path, ...}
 cancel(task_id)   → {cancelled: bool}
 ```
+
+The snapshot's `push_delivered` is `true`/`false` once a completion push was sent to the session that started the task, and `null` when none was owed. `false` means that session had disconnected, so nobody has seen the result.
 
 `cancel` only works on `await`-yielding code — tight sync loops (`while True: pass`) can't be preempted.
 

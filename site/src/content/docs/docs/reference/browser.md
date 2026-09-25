@@ -146,7 +146,7 @@ Closes this tab (`Target.closeTarget`). Session cleanup follows from the resulti
 await tab.tree(mode="aria", *, at=None, in_crop=None) → list[str]
 ```
 
-Accessibility snapshot as text lines. Crosses iframes. The default `aria` mode is Playwright's LLM-oriented snapshot with `[ref=eN]` handles — each ref is usable as an `aria-ref=eN` selector in `click`/`type_text` until the next snapshot, navigation, or reattach. `mode="ax"` returns the raw CDP accessibility tree (pierces same-process iframes, no refs).
+Accessibility snapshot as text lines. Crosses iframes. The default `aria` mode is Playwright's LLM-oriented snapshot with `[ref=eN]` handles — each ref is usable as an `aria-ref=eN` selector in `click`/`type_text` until the next snapshot, navigation, or reattach. `aria` can't see into a cross-origin iframe that shares the page's process, because same-origin policy blocks its engine there. `mode="ax"` returns the raw CDP accessibility tree, which recurses into same-process iframes at any depth, cross-origin included, but has no refs.
 
 `at=(x, y)` / `'x,y'` hit-tests that point instead (ignores `mode`) and returns a small elided tree rooted at the nearest meaningful ancestor of the hit, rendered through the same engine as `mode="aria"` so its nodes carry real `[ref=eN]` handles too — for "what's actually here" from a coordinate rather than a selector. Always also captures a screenshot cropped to the hit (its path is in the result's `screenshot` line) — the tree's text isn't always enough to disambiguate visual-only state or near-identical rows. A hit landing on an iframe reports the redirect (target id + translated local coordinate) instead of a tree.
 

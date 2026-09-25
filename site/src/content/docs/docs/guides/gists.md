@@ -87,6 +87,18 @@ socket_dir = repld.socket_path().parent
 
 Raises `RuntimeError` outside a running kernel.
 
+## Extra gist directories
+
+`repld_init.py` can add a directory of gist files beyond `./gists` and `~/.repld/gists`, for example a Claude Code plugin's bundled gists:
+
+```python
+from pathlib import Path
+from repld import gists
+gists.add_search_dir(Path("~/plugins/devstack/gists").expanduser())
+```
+
+It is searched after the other two, so a project gist of the same name still wins. The call is idempotent across boots, and a missing directory warns instead of failing the boot. `gists.search_dirs()` and `gists.resolve(name)` show the resulting precedence.
+
 ## MCP tool registration
 
 A gist can register MCP tools that appear alongside built-in tools. Name a handler `_tool_{name}` with typed parameters and the schema is inferred automatically — no separate declaration needed:

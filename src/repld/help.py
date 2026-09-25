@@ -1545,6 +1545,7 @@ Channel kinds:
   dialog                native JS dialog auto-dismissed (target, dialog_type, action in meta)
   filechooser           native file chooser opened — resolved (pre-armed) or left open (target, mode in meta)
   auth                  HTTP Basic/Digest challenge cancelled, no pre-arm (target, scheme, realm in meta)
+  browser_warning       a drag endpoint was occluded by another element (target in meta)
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
   browser_disconnect    dashboard disconnected a Chrome connection or tab
   venv                  a project venv was adopted onto the running kernel
