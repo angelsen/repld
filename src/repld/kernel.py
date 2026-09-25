@@ -19,6 +19,7 @@ import itertools
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 import threading
@@ -1337,6 +1338,43 @@ def _report_boot_failure() -> None:
         pass
 
 
+def _proc_start(pid: int) -> str | None:
+    """`pid`'s start time from /proc (field 22), or None if it's gone or unreadable."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # comm (field 2) may contain spaces and parens — split after the last ')'.
+    return stat.rsplit(")", 1)[1].split()[19]
+
+
+def _watch_owner(pid: int, stop: threading.Event) -> None:
+    """Set `stop` once process `pid` exits — an --ephemeral kernel's bridge.
+
+    Polls pid *and* start time: the kernel is a systemd unit, not the bridge's
+    child, and a bare pid check would be fooled by a recycled pid forever.
+    Not `os.pidfd_open`, which some Python builds lack.
+    """
+
+    def wait() -> None:
+        born = _proc_start(pid)
+        if born is None:
+            while state.pid_alive(pid):  # no /proc: best effort
+                time.sleep(2.0)
+        else:
+            while _proc_start(pid) == born:
+                time.sleep(2.0)
+        stop.set()
+
+    threading.Thread(target=wait, daemon=True, name="repld-owner-watch").start()
+
+
+def _reclaim_ephemeral_dir(sock_path: Path) -> None:
+    # Only ever the private dir `bridge._ephemeral_socket_path` made.
+    if sock_path.parent.parent == paths.RUNTIME_DIR / "ephemeral":
+        shutil.rmtree(sock_path.parent, ignore_errors=True)
+
+
 def run_kernel(
     socket_path: str | None = None,
     *,
@@ -1344,6 +1382,12 @@ def run_kernel(
 ) -> int:
     sock_path = Path(socket_path) if socket_path else default_socket_path()
     _claim_project(sock_path)
+    # Set by an --ephemeral bridge: this kernel dies with that process however
+    # it dies, not only when its bridge exits cleanly (`_teardown_ephemeral`).
+    owner = os.environ.pop("REPLD_OWNER_PID", None)
+    if owner:
+        # Registered first, so atexit runs it after every handler that writes here.
+        atexit.register(_reclaim_ephemeral_dir, sock_path)
 
     loop = _start_loop()
     try:
@@ -1375,6 +1419,8 @@ def run_kernel(
     # 8. Main thread: display or headless.
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
+    if owner:
+        _watch_owner(int(owner), stop)
 
     if display:
         from .display import run_display

@@ -1161,6 +1161,38 @@ def phase_15_ephemeral_bridge(_kernel: Kernel) -> None:
             "  ✓ repld bridge --ephemeral: spawned eagerly, "
             "killed + reclaimed on stdin close"
         )
+
+        # A bridge killed outright never runs `_teardown_ephemeral`; the kernel
+        # must notice on its own (`kernel._watch_owner`) and reclaim its dir.
+        before = set(ephemeral_root.iterdir()) if ephemeral_root.is_dir() else set()
+        b = Bridge(tmp, "--ephemeral")
+        try:
+            _handshake(b)
+            after = set(ephemeral_root.iterdir()) if ephemeral_root.is_dir() else set()
+            (ephemeral_dir,) = after - before
+            pid = json.loads((ephemeral_dir / "kernel.lock").read_text())["pid"]
+            out = content_text(
+                b.exec(
+                    "from repld import tasks\n"
+                    "print('bridge=', tasks.get(tasks.current_task_id())['origin'].peer_pid)"
+                )
+            )
+            bridge_pid = int(out.split("bridge=", 1)[1].split()[0])
+            os.kill(bridge_pid, signal.SIGKILL)
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and (
+                state.pid_alive(pid) or ephemeral_dir.exists()
+            ):
+                time.sleep(0.1)
+            assert_true(
+                not state.pid_alive(pid), "ephemeral kernel outlived a SIGKILLed bridge"
+            )
+            assert_true(not ephemeral_dir.exists(), "orphaned ephemeral dir reclaimed")
+            print(
+                "  ✓ --ephemeral kernel exits and reclaims its dir when its bridge is SIGKILLed"
+            )
+        finally:
+            b.close(timeout=5)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

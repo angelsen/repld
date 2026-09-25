@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `--ephemeral` kernels no longer outlive a bridge that dies without cleaning up (SIGKILL, a timeout, the OOM killer). The bridge passes its pid as `REPLD_OWNER_PID`. The kernel watches that pid (checking the process start time, so a reused pid can't fool it), shuts down when the bridge is gone, and removes its own ephemeral directory. Previously only a clean bridge exit stopped it, and orphans piled up.
+
 ### Removed
 
 ## [0.10.4] - 2026-09-24

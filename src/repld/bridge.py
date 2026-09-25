@@ -915,6 +915,9 @@ def run_bridge(argv: list[str]) -> int:
         bad = cli_args.check_args("repld bridge", rest, _BRIDGE_USAGE, positionals=0)
         if bad is not None:
             return bad
+        # Inherited by every kernel this bridge spawns (systemd --setenv too);
+        # `kernel._watch_owner` stops it when this process is gone.
+        os.environ["REPLD_OWNER_PID"] = str(os.getpid())
         return Bridge(_ephemeral_socket_path(), ephemeral=True).run()
     socket_path, rest = paths.resolve_socket_path(argv)
     bad = cli_args.check_args("repld bridge", rest, _BRIDGE_USAGE, positionals=0)
