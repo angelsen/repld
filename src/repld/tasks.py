@@ -13,6 +13,7 @@ applies the same bound to the runtime files that have no task entry to hang
 off — resource spills and browser screenshots.
 """
 
+import asyncio
 import contextvars
 import io
 import os
@@ -128,6 +129,11 @@ def current_task_id() -> str | None:
     so a background task's completion push lands where the work was asked for.
     """
     return _current_task.get()
+
+
+def task_id_of(atask: asyncio.Task[object]) -> str | None:
+    """The repld task *atask* runs on behalf of — callable from any thread."""
+    return atask.get_context().get(_current_task)
 
 
 def new_task(origin: object = None) -> tuple[str, dict]:

@@ -1,9 +1,11 @@
 """Phase 2: pure logic, called directly — no kernel, bridge or Chrome."""
 
 import ast
+import asyncio
 import contextlib
 import io
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Annotated, Optional
@@ -18,6 +20,7 @@ from repld import (
     gist_api,
     gist_lint,
     gists,
+    kernel,
     lifecycle_cmd,
     render,
     tasks,
@@ -387,6 +390,127 @@ def _sibling_counts_concurrency() -> None:
     print("  ✓ _fetch_sibling_counts fans siblings out concurrently, not serially")
 
 
+def _hold_loop_synchronously(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _watchdog_run(scenario, *, threshold: float, kill: float | None) -> list[dict]:
+    """Run `kernel._loop_watchdog` against a private loop while *scenario*
+    (a coroutine function) runs there; return the pushes it made."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    assert thread.ident is not None
+    pushes: list[dict] = []
+    real = kernel.push_channel
+    kernel.push_channel = lambda content, meta, **kw: pushes.append(
+        {"content": content, **meta, "session": kw.get("session")}
+    )
+    stop = threading.Event()
+    dog = threading.Thread(
+        target=kernel._loop_watchdog,
+        args=(loop, thread.ident, stop, threshold, kill, 0.05),
+        daemon=True,
+    )
+    try:
+        dog.start()
+        asyncio.run_coroutine_threadsafe(scenario(), loop).result(timeout=10)
+        # Let the watchdog observe the unblock before stopping it.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not any(
+            p["kind"] == "loop_unblocked" for p in pushes
+        ):
+            time.sleep(0.02)
+    finally:
+        stop.set()
+        dog.join(2)
+        kernel.push_channel = real
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(2)
+    return pushes
+
+
+def _kinds(pushes: list[dict]) -> list[str]:
+    return [p["kind"] for p in pushes]
+
+
+def _loop_watchdog() -> None:
+    """The watchdog names the task holding the loop, not bystanders; one wedge
+    is one `loop_blocked` + one `loop_unblocked`; the kill cancels only the
+    holder, never a `repld-` task; `REPLD_LOOP_KILL_THRESHOLD` has an off switch."""
+    for raw, want in (("30", 30.0), ("0", None), ("-1", None), ("inf", None)):
+        assert_eq(kernel._kill_threshold(raw), want, f"kill threshold {raw!r}")
+
+    task_id, _ = tasks.new_task()
+    outcome: dict = {}
+
+    async def named_holder() -> None:
+        bystander = asyncio.create_task(asyncio.sleep(30), name="bystander")
+        await asyncio.sleep(0.1)  # let a probe land before the block
+
+        async def holder() -> None:
+            tasks.set_current_task(task_id)
+            # Longer than threshold + several intervals: a re-probing
+            # watchdog would warn more than once.
+            _hold_loop_synchronously(0.8)
+
+        await asyncio.create_task(holder(), name="holder")
+        outcome["bystander_cancelled"] = bystander.cancelled()
+        bystander.cancel()
+
+    pushes = _watchdog_run(named_holder, threshold=0.15, kill=None)
+    assert_eq(
+        _kinds(pushes), ["loop_blocked", "loop_unblocked"], "one wedge, one report"
+    )
+    blocked = pushes[0]
+    assert_eq(blocked["task"], "holder", "names the task holding the loop")
+    assert_eq(blocked["task_id"], task_id, "and the repld task it runs for")
+    assert_true(
+        "_hold_loop_synchronously" in blocked["content"], "stack names the blocker"
+    )
+    assert_true("bystander" not in blocked["content"], "bystanders go unnamed")
+    assert_true("asyncio/" not in blocked["content"], "loop machinery is trimmed")
+    assert_true(float(pushes[1]["blocked_s"]) >= 0.5, "unblocked carries the duration")
+
+    async def killable() -> None:
+        bystander = asyncio.create_task(asyncio.sleep(30), name="bystander")
+        await asyncio.sleep(0.1)
+
+        async def holder() -> None:
+            _hold_loop_synchronously(0.5)
+            await asyncio.sleep(30)  # the cancel lands here
+
+        victim = asyncio.create_task(holder(), name="holder")
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(victim), 2)
+        await asyncio.sleep(0)
+        outcome["victim_cancelled"] = victim.cancelled()
+        outcome["bystander_cancelled"] = bystander.cancelled()
+        bystander.cancel()
+
+    pushes = _watchdog_run(killable, threshold=0.1, kill=0.25)
+    assert_eq(
+        _kinds(pushes), ["loop_blocked", "loop_kill", "loop_unblocked"], "kill sequence"
+    )
+    assert_eq(pushes[1]["task"], "holder", "loop_kill names the holder")
+    assert_eq(outcome["victim_cancelled"], True, "the holder is cancelled")
+    assert_eq(outcome["bystander_cancelled"], False, "the bystander is not")
+
+    async def internal() -> None:
+        await asyncio.sleep(0.1)
+
+        async def holder() -> None:
+            _hold_loop_synchronously(0.5)
+
+        await asyncio.create_task(holder(), name="repld-internal")
+
+    pushes = _watchdog_run(internal, threshold=0.1, kill=0.25)
+    assert_eq(
+        _kinds(pushes), ["loop_blocked", "loop_unblocked"], "repld- holder is spared"
+    )
+    print("  ✓ loop watchdog names the holder, reports once, kills only the holder")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -398,3 +522,4 @@ def phase_2_pure() -> None:
     _json_types()
     _lint_helpers()
     _sibling_counts_concurrency()
+    _loop_watchdog()

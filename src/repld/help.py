@@ -1532,8 +1532,9 @@ Channel kinds:
   every                 periodic tick result or error (kind=every, label=fn_name)
   awaiting_human        ask/confirm/choose pending
   bg_task_error         uncaught exception in background task
-  loop_blocked          asyncio loop blocked > 5s
-  loop_kill             watchdog cancelled a stuck task
+  loop_blocked          asyncio loop blocked > 5s (task + stack holding it in meta/content)
+  loop_kill             watchdog requested cancellation of the task holding the loop
+  loop_unblocked        a reported block ended (blocked_s in meta)
   init_loaded           repld_init.py ran at boot (__main__ pre-populated)
   init_error            repld_init.py raised
   browser_connect       dashboard connected to Chrome (port in meta)

@@ -112,7 +112,8 @@ Gates are deliberately **not** MCP tools — an agent able to answer its own `co
 | `awaiting_human`                                                               | ask/confirm/choose pending                                |
 | `bg_task_error`                                                                | uncaught exception in background task                     |
 | `loop_blocked`                                                                 | asyncio loop blocked > 5s                                 |
-| `loop_kill`                                                                    | watchdog cancelled a stuck task                           |
+| `loop_kill`                                                                    | watchdog cancelled the task holding the loop              |
+| `loop_unblocked`                                                               | a reported block ended                                    |
 | `init_loaded`                                                                  | `repld_init.py` ran at boot — `__main__` is pre-populated |
 | `init_error`                                                                   | `repld_init.py` raised                                    |
 | `venv`                                                                         | a project venv was adopted onto the running kernel        |

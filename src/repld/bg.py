@@ -70,11 +70,10 @@ def spawn(
     outright RuntimeError under `PYTHONASYNCIODEBUG=1`.
 
     `call_soon_threadsafe` rather than `run_coroutine_threadsafe`, which would
-    otherwise be the obvious answer: it gives the task no name, and an unnamed
-    loop task is exactly what `kernel._pick_victim` treats as fair game when
-    the watchdog escalates. Every task spawned here is named `repld-…` so it is
-    excluded; going through `ensure_future` would hand the watchdog our own
-    fire-and-forget work as the thing to cancel.
+    otherwise be the obvious answer: it gives the task no name, and the
+    watchdog's escalation (`kernel._watch_block`) spares only `repld-…`-named
+    holders. Every task spawned here is named so; going through
+    `ensure_future` would let the watchdog cancel our own fire-and-forget work.
     """
     if loop is None:
         return _track(asyncio.create_task(coro, name=name))

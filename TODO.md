@@ -257,14 +257,12 @@ rather than an architectural one — the exact pattern already exists twice in t
 
 ## Observability
 
-- [ ] **`loop_blocked` names bystanders; make it name the blocking frame.**
-  `_loop_watchdog` pushes the active task ids when the probe misses `threshold`, but
-  those are whatever was in flight, not what holds the loop -- five pushes on 2026-09-25
-  each named a different sibling's dispatch task while the culprit was a synchronous
-  173 MB receipt-log read in a gist (`claude_code_research`, dispatch-loop `LEDGER.md`).
-  Capture `sys._current_frames()[<loop thread id>]` at the miss and put the top frames in
-  the push; then `_pick_victim` can cancel the task that owns that frame instead of the
-  oldest non-internal task, which today is a live dispatch worker that did nothing wrong.
+- [x] **`loop_blocked` names the task holding the loop** — requested by
+  `claude_code_research` (2026-09-25) after five pushes named bystanders while a gist's
+  synchronous 173 MB read held the loop. Shipped: `kernel._loop_holder` (`asyncio.current_task`
+  + the loop thread's frames), push routed to the holder's session, one `loop_blocked` per
+  wedge closed by `loop_unblocked`, the kill cancels only the holder, and
+  `REPLD_LOOP_KILL_THRESHOLD=0` disables it (`inf` used to crash the watchdog thread).
 
 - [x] **`repld tasks`** — per-item listing of in-flight `defer()` tasks and active `@every`
   tickers, requested by the `claude_code_research` session (2026-09-19) for its curses

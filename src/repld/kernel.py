@@ -17,8 +17,8 @@ import contextlib
 import inspect
 import itertools
 import json
+import math
 import os
-import re
 import shutil
 import signal
 import sys
@@ -199,7 +199,7 @@ def _cleanup_lockfile() -> None:
 def _banner(
     socket_path: Path,
     watchdog_threshold: float,
-    kill_threshold: float,
+    kill_threshold: float | None,
     dashboard_port: int | None = None,
 ) -> str:
     lines = [
@@ -209,8 +209,10 @@ def _banner(
             f"{watchdog_threshold}s (REPLD_LOOP_BLOCK_THRESHOLD)"
         ),
         (
-            f"  kill:      longest-running task cancelled if loop blocked > "
+            f"  kill:      task holding the loop cancelled if blocked > "
             f"{kill_threshold}s (REPLD_LOOP_KILL_THRESHOLD)"
+            if kill_threshold is not None
+            else "  kill:      disabled (REPLD_LOOP_KILL_THRESHOLD)"
         ),
     ]
     if dashboard_port is not None:
@@ -341,10 +343,7 @@ def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future
     """Schedule the watchdog's no-op liveness probe under a repld- name.
 
     Named at task-creation time (not from inside the coroutine) so it's
-    already excluded from _pick_victim's candidate filter even while
-    pending — a plain run_coroutine_threadsafe(asyncio.sleep(0), loop)
-    creates an anonymous Task that the fallback victim search can select
-    instead of the actual offending task.
+    already spared by `_watch_block`'s cancellation even while pending.
     """
     fut: concurrent.futures.Future[None] = concurrent.futures.Future()
 
@@ -358,63 +357,126 @@ def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future
     return fut
 
 
-def _pick_victim(loop: asyncio.AbstractEventLoop) -> "asyncio.Task[object] | None":
-    """Pick a wedged user task to cancel — oldest where that is knowable.
+_STACK_DEPTH = 6
+# Frames from these files are loop machinery, never what holds the loop.
+_LOOP_MACHINERY = (
+    os.path.dirname(asyncio.__file__) + os.sep,
+    threading.__file__,
+)
 
-    Tracked cell/defer tasks come first and are genuinely oldest-first:
-    `tasks.items()` is insertion-ordered and each entry references its
-    asyncio.Task directly.
 
-    The fallback — typically an `@every` ticker — is *not* ordered by age, and
-    the docstrings here and on `_loop_watchdog` both used to claim it was. It
-    sorted by `task.get_name()`, and asyncio names anonymous tasks `Task-N`
-    without zero-padding, so `Task-10` sorted ahead of `Task-2`: once `Task-1`
-    had finished, the watchdog cancelled an arbitrary ticker while reporting it
-    as the longest-running one — precisely when a human is debugging a wedged
-    loop and trusting the name in that push. Sorting by the numeric suffix
-    makes the claim true, since asyncio allocates those names from a
-    monotonic counter, so a lower N is an older task. Anything named some other
-    way sorts last rather than being silently reordered against them.
-    """
+@dataclass
+class _Holder:
+    """What holds a wedged loop, read from the watchdog thread."""
 
-    def _age_key(t: "asyncio.Task[object]") -> tuple[int, int | str]:
-        name = t.get_name()
-        m = re.fullmatch(r"Task-(\d+)", name)
-        return (0, int(m.group(1))) if m else (1, name)
+    task: "asyncio.Task[object] | None"  # None: a plain callback, not a task
+    task_id: str | None                  # the repld task it runs for, if any
+    stack: list[str]                     # innermost last
 
-    # tasks.items() is the module's lock-held snapshot, not a dict — there is
-    # no .values() sibling.
-    for _tid, task in tasks.items():  # noqa: PERF102
-        if task["done_event"].is_set():
-            continue
-        atask = task.get("asyncio_task")
-        if atask is not None and not atask.done():
-            return atask
-    candidates = sorted(
-        (t for t in asyncio.all_tasks(loop) if not t.get_name().startswith("repld-")),
-        key=_age_key,
+    @property
+    def name(self) -> str:
+        return self.task.get_name() if self.task is not None else "a loop callback"
+
+    @property
+    def origin(self) -> "ipc.Session | None":
+        entry = tasks.get(self.task_id) if self.task_id else None
+        return entry.get("origin") if entry else None
+
+    def describe(self) -> str:
+        who = self.name + (f" (task {self.task_id})" if self.task_id else "")
+        if not self.stack:
+            return who
+        return who + "\n" + "\n".join(f"  {line}" for line in self.stack)
+
+
+def _loop_holder(loop: asyncio.AbstractEventLoop, thread_id: int) -> _Holder:
+    task = asyncio.current_task(loop)
+    frame = sys._current_frames().get(thread_id)
+    stack = []
+    if frame is not None:
+        for fs in traceback.extract_stack(frame):
+            if not fs.filename.startswith(_LOOP_MACHINERY):
+                stack.append(f"{fs.filename}:{fs.lineno} in {fs.name}")
+    return _Holder(
+        task=task,
+        task_id=tasks.task_id_of(task) if task is not None else None,
+        stack=stack[-_STACK_DEPTH:],
     )
-    return candidates[0] if candidates else None
+
+
+def _push_holder(content: str, kind: str, holder: _Holder, **meta: str) -> None:
+    # Call-scoped when the holder runs for a session; a miss broadcasts, since a
+    # wedged loop stalls every session on the kernel.
+    push_channel(
+        content,
+        {"kind": kind, "task": holder.name, "task_id": holder.task_id or "", **meta},
+        session=holder.origin,
+        fallback_broadcast=True,
+    )
+
+
+def _watch_block(
+    loop: asyncio.AbstractEventLoop,
+    thread_id: int,
+    probe: "concurrent.futures.Future[None]",
+    probed_at: float,
+    stop: threading.Event,
+    threshold: float,
+    kill_threshold: float | None,
+) -> None:
+    """Report one wedge from the missed probe until the loop runs it: a single
+    `loop_blocked`, at most one `loop_kill`, then `loop_unblocked`."""
+    holder = _loop_holder(loop, thread_id)
+    _push_holder(
+        f"[repld] event loop blocked > {threshold}s by {holder.describe()}\n"
+        "— likely sync I/O on the shared loop; wrap blocking calls in "
+        "asyncio.to_thread()",
+        "loop_blocked",
+        holder,
+        threshold_s=str(threshold),
+    )
+    if kill_threshold is not None:
+        try:
+            probe.result(timeout=max(0.0, kill_threshold - threshold))
+        except concurrent.futures.TimeoutError:
+            holder = _loop_holder(loop, thread_id)
+            victim = holder.task
+            # Only the holder is ever cancelled: any other task is a bystander.
+            # Internal tasks are left alone, as is a holder that is a callback.
+            if victim is not None and not victim.get_name().startswith("repld-"):
+                loop.call_soon_threadsafe(victim.cancel)
+                # "requested", not "killed": `cancel()` can't interrupt sync code;
+                # it lands at the holder's next await, once the loop is free.
+                _push_holder(
+                    f"[repld] cancellation requested for {holder.describe()}\n"
+                    "(takes effect when the loop unblocks)",
+                    "loop_kill",
+                    holder,
+                )
+    while not probe.done():
+        if stop.wait(0.2):
+            return
+    blocked_s = time.monotonic() - probed_at
+    _push_holder(
+        f"[repld] event loop unblocked after {blocked_s:.1f}s ({holder.name})",
+        "loop_unblocked",
+        holder,
+        blocked_s=f"{blocked_s:.1f}",
+    )
 
 
 def _loop_watchdog(
     loop: asyncio.AbstractEventLoop,
+    thread_id: int,
     stop: threading.Event,
     threshold: float,
-    kill_threshold: float,
+    kill_threshold: float | None,
     interval: float,
 ) -> None:
     """Daemon thread that detects when the bg asyncio loop is wedged.
 
-    Common cause: a cell that does sync I/O (e.g. `urlopen`) while uvicorn
-    or similar lives on the same loop — both deadlock. We schedule a no-op
-    coroutine each `interval`s; if it doesn't return within `threshold`s
-    we push a channel notification with the active task ids so the agent
-    knows what's stuck.
-
-    After the warn at `threshold`, we wait up to `kill_threshold` total. If
-    the loop is still blocked by then, we cancel the longest-running
-    non-internal asyncio task.
+    Schedules a no-op probe every `interval`s; a probe that misses `threshold`
+    starts `_watch_block`. `kill_threshold=None` disables the cancellation.
     """
     while not stop.is_set():
         # Piggy-backed on the one thread that ticks whether or not the kernel
@@ -424,41 +486,14 @@ def _loop_watchdog(
         tasks.maybe_prune()
         # Probe first so `threshold` is the actual hang-detection time
         # (not threshold + interval).
+        probed_at = time.monotonic()
         future = _probe_future(loop)
         try:
             future.result(timeout=threshold)
         except concurrent.futures.TimeoutError:
-            active = [tid for tid, t in tasks.items() if not t["done_event"].is_set()]
-            active_str = ",".join(active) if active else "none"
-            _push(
-                f"[repld] event loop blocked > {threshold}s "
-                f"(active tasks: {active_str}) — likely sync I/O on the "
-                "shared loop; wrap blocking calls in asyncio.to_thread()",
-                "loop_blocked",
-                threshold_s=str(threshold),
-                active_tasks=active_str,
+            _watch_block(
+                loop, thread_id, future, probed_at, stop, threshold, kill_threshold
             )
-            # Escalate: wait up to kill_threshold total, then cancel the
-            # longest-running non-internal task.
-            remaining = kill_threshold - threshold
-            try:
-                future.result(timeout=remaining)
-            except concurrent.futures.TimeoutError:
-                victim = _pick_victim(loop)
-                if victim is not None:
-                    victim_name = victim.get_name()
-                    loop.call_soon_threadsafe(victim.cancel)
-                    # "requested", not "killed": the cancellation is a callback
-                    # on the loop we just declared wedged, so it cannot run
-                    # until the loop moves again. Reporting a completed kill
-                    # would tell the agent a task is gone while it may keep
-                    # running for minutes.
-                    _push(
-                        f"[repld] cancellation requested for blocked task: "
-                        f"{victim_name} (takes effect when the loop unblocks)",
-                        "loop_kill",
-                        task=victim_name,
-                    )
         if stop.wait(interval):
             return
 
@@ -754,11 +789,9 @@ async def _start_ticker(
     # `await` that can be cancelled. It was the latter, and the await a ticker
     # spends nearly all its life in — the inter-tick sleep — was the one
     # missing it: `EveryHandle.cancel()` discards first so the user-facing
-    # path looked fine, but the watchdog cancels by task (`_pick_victim`
-    # treats an unnamed loop task as fair game and names an @every as the
-    # typical one), which left `every.list()` and the dashboard reporting a
-    # ticker that no longer existed, exactly when someone is debugging a
-    # wedged loop. `except Exception` below cannot swallow the cancellation
+    # path looked fine, but the watchdog cancels by task (`_watch_block`
+    # cancels whichever task holds a wedged loop), which left `every.list()`
+    # and the dashboard reporting a ticker that no longer existed. `except Exception` below cannot swallow the cancellation
     # on its way here — `CancelledError` is a `BaseException`.
     try:
         if delay > 0:
@@ -1083,12 +1116,16 @@ def _restore_browser_state(
 # ---------------------------------------------------------------------------
 
 
-def _start_loop() -> asyncio.AbstractEventLoop:
-    """1. Start the asyncio loop on a daemon thread."""
+def _start_loop() -> tuple[asyncio.AbstractEventLoop, int]:
+    """1. Start the asyncio loop on a daemon thread; returns it and the thread's ident."""
     loop = asyncio.new_event_loop()
     loop.set_exception_handler(_asyncio_exception_handler)
-    threading.Thread(target=loop.run_forever, daemon=True, name="repld-asyncio").start()
-    return loop
+    thread = threading.Thread(
+        target=loop.run_forever, daemon=True, name="repld-asyncio"
+    )
+    thread.start()
+    assert thread.ident is not None
+    return loop, thread.ident
 
 
 def _boot_runtime(sock_path: Path, display: bool) -> None:
@@ -1280,17 +1317,28 @@ def _start_services(
     return dashboard_port
 
 
+def _kill_threshold(raw: str) -> float | None:
+    """REPLD_LOOP_KILL_THRESHOLD: 0, negative or non-finite disables the kill."""
+    value = float(raw)
+    return value if math.isfinite(value) and value > 0 else None
+
+
 def _start_watchdog(
-    loop: asyncio.AbstractEventLoop, sock_path: Path, dashboard_port: int | None
+    loop: asyncio.AbstractEventLoop,
+    loop_thread_id: int,
+    sock_path: Path,
+    dashboard_port: int | None,
 ) -> threading.Event:
     """5+6. Loop watchdog + banner. Returns the kernel's stop event."""
     # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
-    #    Kill threshold: cancel longest-running task after REPLD_LOOP_KILL_THRESHOLD (default 30s).
+    #    Kill threshold: cancel the holding task after REPLD_LOOP_KILL_THRESHOLD (default 30s).
     stop = threading.Event()
     threshold = float(os.environ.get("REPLD_LOOP_BLOCK_THRESHOLD", "5.0"))
-    kill_threshold = float(os.environ.get("REPLD_LOOP_KILL_THRESHOLD", "30.0"))
+    kill_threshold = _kill_threshold(
+        os.environ.get("REPLD_LOOP_KILL_THRESHOLD", "30.0")
+    )
 
     # 6. Print banner (goes to sys.__stderr__ directly so it's visible even
     #    in --no-display mode before the tee is fully wired). Includes the
@@ -1303,7 +1351,7 @@ def _start_watchdog(
         stderr.flush()
     threading.Thread(
         target=_loop_watchdog,
-        args=(loop, stop, threshold, kill_threshold, 1.0),
+        args=(loop, loop_thread_id, stop, threshold, kill_threshold, 1.0),
         daemon=True,
         name="repld-watchdog",
     ).start()
@@ -1389,13 +1437,13 @@ def run_kernel(
         # Registered first, so atexit runs it after every handler that writes here.
         atexit.register(_reclaim_ephemeral_dir, sock_path)
 
-    loop = _start_loop()
+    loop, loop_thread_id = _start_loop()
     try:
         _boot_runtime(sock_path, display)
         _inject_builtins(loop)
         dashboard_port = _start_services(loop, sock_path, display)
         _write_cache(sock_path)
-        stop = _start_watchdog(loop, sock_path, dashboard_port)
+        stop = _start_watchdog(loop, loop_thread_id, sock_path, dashboard_port)
 
         # 7. Project bootstrap, if this project has one. Deliberately *after*
         #    `_start_services` bound the socket: the bridge gives a spawn 5s to

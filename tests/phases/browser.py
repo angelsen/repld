@@ -1160,8 +1160,8 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
         handle = bg.spawn(_work(), name="repld-offloop-probe", loop=loop)
         assert_true(ran.wait(2.0), "bg.spawn(loop=) runs the coroutine on an idle loop")
         assert_eq(handle, None, "the off-loop spawn returns no handle to this thread")
-        # An unnamed loop task is what kernel._pick_victim treats as fair game
-        # when the watchdog escalates, so the name has to survive the hop.
+        # kernel._watch_block spares only repld-named holders from cancellation,
+        # so the name has to survive the hop.
         assert_eq(seen_name, ["repld-offloop-probe"], "the task keeps its repld- name")
         print("  ✓ bg.spawn(loop=) wakes an idle loop and keeps the task's name")
 

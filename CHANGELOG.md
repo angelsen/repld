@@ -8,9 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `loop_unblocked` channel push closing every `loop_blocked`, with how long the loop was held (`blocked_s`).
+
 ### Changed
 
+- `loop_blocked` now names the task actually holding the loop and the top of its stack, instead of listing every in-flight task. It goes to the session that started that task, and broadcasts when there is none. A block that outlasts the kill threshold is reported once, not again every few seconds.
+- The watchdog's kill (`REPLD_LOOP_KILL_THRESHOLD`) now cancels only the task holding the loop. It used to cancel the oldest running task, usually one that did nothing wrong. It still never cancels a `repld-` internal task, and does nothing when the loop is held by a plain callback.
+
 ### Fixed
+
+- `REPLD_LOOP_KILL_THRESHOLD=0` (or any non-positive or non-finite value) now disables the kill. Previously `inf` crashed the watchdog thread silently, and a value at or below `REPLD_LOOP_BLOCK_THRESHOLD` cancelled a task the moment the warning fired.
 
 ### Removed
 
