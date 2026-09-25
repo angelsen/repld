@@ -228,6 +228,14 @@ def phase_3_argv_and_registry(_kernel: Kernel) -> None:
     assert_true("--sockett" in out, f"…naming it (got {out[:120]!r})")
     print("  ✓ repld bridge validates argv like every other subcommand")
 
+    code, out = _repld("--socket", "/x/kernel.sock", "stop")
+    assert_eq(code, 1, "a subcommand after a kernel flag is refused")
+    assert_true(
+        "repld stop --socket /x/kernel.sock" in out,
+        f"…with the corrected order (got {out[:160]!r})",
+    )
+    print("  ✓ `repld --socket S stop` names the subcommand-first order")
+
     code, out = _repld("gist", "badverb", "--help")
     assert_eq(code, 0, "repld gist badverb --help asks for usage, not the verb")
     print("  ✓ `gist <unknown> --help` prints usage (wants_help scans every arg)")

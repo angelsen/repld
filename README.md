@@ -31,7 +31,11 @@ one for the project if none is running, and restarts it if it dies. Run `repld`
 in a terminal when you want the live display instead — either way, `repld log -f`
 tails it, `repld status` shows what's running, `repld tasks` lists in-flight
 `defer()` tasks and `@every` tickers (`repld tasks wait <id>` / `cancel <id>`
-block on or stop one), and `repld stop` shuts it down.
+block on or stop one), and `repld stop` shuts it down. `repld start` spawns the
+headless kernel eagerly (a no-op if one is up), for hooks like SessionStart that
+run before any bridge would. Git worktrees get their own kernel by default;
+register `repld --project-git bridge` to have them share the main checkout's
+([details](https://angelsen.github.io/repld/docs/guides/getting-started/#git-worktrees)).
 Runtime state lives under `$XDG_RUNTIME_DIR/repld/`, so nothing lands in your
 project directory and there's nothing to `.gitignore`.
 

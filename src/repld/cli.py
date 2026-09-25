@@ -126,6 +126,20 @@ def _apply_project(argv: list[str]) -> list[str]:
     return argv
 
 
+def _refuse_late_subcommand(argv: list[str]) -> None:
+    """`repld --socket S stop` would otherwise reach the kernel's argparse and
+    print its usage; only --project/--project-git may precede a subcommand."""
+    if not argv or not argv[0].startswith("-"):
+        return
+    for i, arg in enumerate(argv):
+        if arg in _SUBCOMMANDS and argv[i - 1] != "--socket":
+            rest = " ".join(a for j, a in enumerate(argv) if j != i)
+            raise SystemExit(
+                f"repld: the subcommand comes first, its options after it: "
+                f"repld {arg} {rest}"
+            )
+
+
 def main() -> None:
     argv = _apply_project(sys.argv[1:])
     if argv and argv[0] in ("--version", "-V"):
@@ -133,6 +147,7 @@ def main() -> None:
 
         print(f"repld-tool {version('repld-tool')}")
         return
+    _refuse_late_subcommand(argv)
 
     # Commands that *become* a kernel, or spawn one, may re-exec under the
     # project's interpreter here and never return. Everything else is left
