@@ -54,6 +54,16 @@ from myapp import MyApp  # picks up changes
 
 The kernel tracks mtimes and evicts stale modules from `sys.modules`.
 
+A reload executes the edited file as a fresh module, so module-level state does not survive it — not even behind `globals().get("STATE", {})`, since the new module's globals start empty. State that should outlive an edit belongs in `__main__`, which the kernel keeps for its whole life:
+
+```python
+import __main__
+
+STATE = __main__.__dict__.setdefault("_myapp_state", {})  # same dict across reloads
+```
+
+Namespace the key after the gist; `__main__` is shared with every cell and every other gist.
+
 ## Dependencies
 
 Declare external dependencies:

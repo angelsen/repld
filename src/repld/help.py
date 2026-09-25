@@ -1503,6 +1503,9 @@ exec(code, timeout=2.0)
   _ / __ / ___          last three results
   _N                    result of cell N
   Top-level await       supported
+  Where a cell runs     with top-level await: on the shared loop, so sync I/O
+                        there stalls every session (loop_blocked); without:
+                        a worker thread, where sync I/O stalls nothing
 
 no_display(value) → value
   Return a value from a cell without auto-display re-printing it (still
@@ -1702,6 +1705,8 @@ Paths:
   ./gists/             per-project
 
 Both on sys.path at kernel startup. Auto-reload: edit file, re-import → fresh module.
+Module-level state does not survive a reload; keep it in __main__:
+  STATE = __main__.__dict__.setdefault("_<gist>_state", {})
 
 Discovery:
   Module docstring first line → shown in MCP instructions automatically.

@@ -22,6 +22,7 @@ import os
 import shutil
 import signal
 import sys
+import sysconfig
 import threading
 import time
 import traceback
@@ -365,6 +366,21 @@ _LOOP_MACHINERY = (
 )
 
 
+def _is_library(filename: str) -> bool:
+    """Stdlib, installed packages and gist deps: code a block passes through,
+    rarely the code that chose to block."""
+    from .gist_deps import _deps_dir
+
+    lib_dirs = {
+        sysconfig.get_paths()[key] + os.sep
+        for key in ("stdlib", "platstdlib", "purelib", "platlib")
+    }
+    lib_dirs.add(str(_deps_dir()) + os.sep)
+    return filename.startswith(tuple(lib_dirs)) or any(
+        f"{os.sep}{d}{os.sep}" in filename for d in ("site-packages", "dist-packages")
+    )
+
+
 @dataclass
 class _Holder:
     """What holds a wedged loop, read from the watchdog thread."""
@@ -372,6 +388,7 @@ class _Holder:
     task: "asyncio.Task[object] | None"  # None: a plain callback, not a task
     task_id: str | None                  # the repld task it runs for, if any
     stack: list[str]                     # innermost last
+    culprit: str | None = None           # innermost non-library frame, when not innermost
 
     @property
     def name(self) -> str:
@@ -383,24 +400,37 @@ class _Holder:
         return entry.get("origin") if entry else None
 
     def describe(self) -> str:
-        who = self.name + (f" (task {self.task_id})" if self.task_id else "")
-        if not self.stack:
-            return who
-        return who + "\n" + "\n".join(f"  {line}" for line in self.stack)
+        lines = [self.name + (f" (task {self.task_id})" if self.task_id else "")]
+        if self.culprit:
+            lines.append(f"  blocked at: {self.culprit}")
+        lines += [f"  {line}" for line in self.stack]
+        return "\n".join(lines)
 
 
 def _loop_holder(loop: asyncio.AbstractEventLoop, thread_id: int) -> _Holder:
     task = asyncio.current_task(loop)
     frame = sys._current_frames().get(thread_id)
-    stack = []
+    frames = []
     if frame is not None:
-        for fs in traceback.extract_stack(frame):
-            if not fs.filename.startswith(_LOOP_MACHINERY):
-                stack.append(f"{fs.filename}:{fs.lineno} in {fs.name}")
+        frames = [
+            fs
+            for fs in traceback.extract_stack(frame)
+            if not fs.filename.startswith(_LOOP_MACHINERY)
+        ]
+    culprit = next(
+        (fs for fs in reversed(frames) if not _is_library(fs.filename)), None
+    )
     return _Holder(
         task=task,
         task_id=tasks.task_id_of(task) if task is not None else None,
-        stack=stack[-_STACK_DEPTH:],
+        stack=[
+            f"{fs.filename}:{fs.lineno} in {fs.name}" for fs in frames[-_STACK_DEPTH:]
+        ],
+        culprit=(
+            f"{culprit.filename}:{culprit.lineno} in {culprit.name}"
+            if culprit is not None and frames and culprit is not frames[-1]
+            else None
+        ),
     )
 
 

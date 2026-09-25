@@ -22,7 +22,7 @@ Output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1. The inlin
 | `__`, `___` | Previous two     |
 | `_N`        | Result of cell N |
 
-Top-level `await` is supported.
+Top-level `await` is supported, and it decides where the cell runs. A cell with a top-level `await` runs on the kernel's shared loop, so sync I/O in it (a big file read, `requests.get`) stalls every session and cell until it returns, and triggers `loop_blocked`. A cell without one runs in a worker thread, where the same sync I/O stalls nothing.
 
 ## no_display
 
@@ -126,7 +126,7 @@ Gates are deliberately **not** MCP tools — an agent able to answer its own `co
 | `browser_warning`                                                              | a drag endpoint was occluded                              |
 | `browser_connect` / `browser_disconnect` / `browser_watch` / `browser_unwatch` | dashboard browser actions                                 |
 
-`loop_blocked` fires once a probe on the kernel loop misses `REPLD_LOOP_BLOCK_THRESHOLD` (default 5 s). It names the task holding the loop and the top of its stack, and a `loop_unblocked` with `blocked_s` follows when the block ends. Past `REPLD_LOOP_KILL_THRESHOLD` (default 30 s; `0` disables) the watchdog asks that task to cancel. The cancel can't interrupt synchronous code; it lands at the task's next `await`.
+`loop_blocked` fires once a probe on the kernel loop misses `REPLD_LOOP_BLOCK_THRESHOLD` (default 5 s). It names the task holding the loop and the top of its stack, led by a `blocked at:` line naming the innermost frame outside the stdlib and installed packages (the call that chose to block), and a `loop_unblocked` with `blocked_s` follows when the block ends. Past `REPLD_LOOP_KILL_THRESHOLD` (default 30 s; `0` disables) the watchdog asks that task to cancel. The cancel can't interrupt synchronous code; it lands at the task's next `await`.
 
 A bare `notify("...")` carries **no** kind at all — meta is whatever keywords you passed. Pass `kind=` yourself if you want to filter on it.
 

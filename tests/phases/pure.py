@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import io
 import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -495,6 +496,24 @@ def _loop_watchdog() -> None:
     assert_eq(pushes[1]["task"], "holder", "loop_kill names the holder")
     assert_eq(outcome["victim_cancelled"], True, "the holder is cancelled")
     assert_eq(outcome["bystander_cancelled"], False, "the bystander is not")
+
+    async def in_stdlib() -> None:
+        await asyncio.sleep(0.1)
+
+        async def holder() -> None:
+            subprocess.run(["sleep", "0.5"], check=True)  # noqa: ASYNC221 -- the block under test
+
+        await asyncio.create_task(holder(), name="stdlib-holder")
+
+    pushes = _watchdog_run(in_stdlib, threshold=0.15, kill=None)
+    blocked_at = next(
+        (ln for ln in pushes[0]["content"].splitlines() if "blocked at:" in ln), ""
+    )
+    assert_true(
+        "pure.py" in blocked_at and "in holder" in blocked_at,
+        f"blocked at: names the caller, not subprocess.py (got {blocked_at!r})",
+    )
+    assert_true("subprocess.py" in pushes[0]["content"], "library frames stay listed")
 
     async def internal() -> None:
         await asyncio.sleep(0.1)
