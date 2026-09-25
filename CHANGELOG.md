@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.10.6] - 2026-09-25
+
+### Added
+
 - `repld help`'s channel-kind list includes `browser_warning`, sent when a drag endpoint is occluded.
 - `loop_unblocked` channel push closing every `loop_blocked`, with how long the loop was held (`blocked_s`).
 
@@ -21,7 +31,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `repld --socket S stop` (any subcommand after a kernel flag) now says the subcommand goes first and prints the corrected command. Previously it printed the kernel's own usage.
 - `REPLD_LOOP_KILL_THRESHOLD=0` (or any non-positive or non-finite value) now disables the kill. Previously `inf` crashed the watchdog thread silently, and a value at or below `REPLD_LOOP_BLOCK_THRESHOLD` cancelled a task the moment the warning fired.
 
-### Removed
 
 ## [0.10.5] - 2026-09-25
 
