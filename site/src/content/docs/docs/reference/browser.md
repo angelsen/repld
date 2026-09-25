@@ -218,7 +218,7 @@ All cookies for this tab via `Network.getCookies`.
 await tab.http_client(*, base_url=None, **kwargs) → httpx.AsyncClient
 ```
 
-Copies this tab's current cookies into a plain `httpx.AsyncClient`. Requires the `http` extra (`uv tool install repld-tool[http]`) — raises `RuntimeError` with an install hint if missing. `base_url` defaults to the tab's own origin; extra `kwargs` pass through to `httpx.AsyncClient`. Use this once a site's data lives behind cookie-authenticated JSON — the tab establishes the session, then every read after that is a plain concurrent-safe HTTP call, with none of `tab.fetch()`'s per-call CDP round trip or shared-tab-state races.
+Copies this tab's current cookies into a plain `httpx.AsyncClient`. Requires the `http` extra — `repld browser` loads it; a permanent install is `uv tool install repld-tool[browser,http]` (both extras: a tool install names the whole set, so `[http]` alone drops `browser`). Raises `RuntimeError` with that install hint if missing. `base_url` defaults to the tab's own origin; extra `kwargs` pass through to `httpx.AsyncClient`. Use this once a site's data lives behind cookie-authenticated JSON — the tab establishes the session, then every read after that is a plain concurrent-safe HTTP call, with none of `tab.fetch()`'s per-call CDP round trip or shared-tab-state races.
 
 ### controls / invoke
 

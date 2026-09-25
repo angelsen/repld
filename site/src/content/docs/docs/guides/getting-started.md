@@ -15,10 +15,10 @@ For browser integration (CDP + DuckDB), run the kernel with `repld browser` inst
 repld browser
 ```
 
-Or install the extra permanently:
+Or install the extras permanently — both, because a `uv tool install` names the whole set and `[http]` (what `tab.http_client()` needs) on its own would drop `browser`:
 
 ```bash
-uv tool install repld-tool[browser]
+uv tool install repld-tool[browser,http]
 ```
 
 ## Set up a project
@@ -50,6 +50,16 @@ claude --dangerously-load-development-channels server:repld
 
 Claude Code spawns `repld bridge` as a stdio subprocess. If a kernel for this project is already running, the bridge attaches to it; if not, MCP discovery is answered from a cache and a headless kernel is spawned lazily on the first real tool call — so a session that never touches repld never pays for one. The agent can now call `exec` to run Python.
 
+### Throwaway sessions
+
+That sharing is the point of a kernel: a second session in the same directory sees the same `__main__`, and the kernel outlives every bridge. For a session that should get neither — a CI job, a `claude -p` one-shot, an experiment whose state you don't want left behind — register the bridge with `--ephemeral`:
+
+```bash
+claude mcp add repld-scratch -- repld bridge --ephemeral
+```
+
+It inverts both halves. The kernel starts the moment the bridge does, at a private socket under `$XDG_RUNTIME_DIR/repld/ephemeral/` that no other bridge can resolve, so nothing attaches to it and it attaches to nothing. When the bridge's stdin closes it sends the kernel SIGTERM (giving `@every` tickers and `defer()` tasks their usual shutdown drain), and removes the directory. If the bridge dies without closing stdin — a kill, a timeout — the kernel notices on its own and exits the same way. The kernel still runs in your cwd, so `./gists`, `repld_init.py`, `.env` and `.venv` binding all apply as usual. It can't be combined with `--socket` (and ignores `REPLD_SOCKET`): the flag's whole point is a path nothing else could already be using.
+
 ## Watching the kernel
 
 You don't have to start a kernel by hand, but you can watch and control one from any terminal:
@@ -72,6 +82,23 @@ result, exiting 0 on success or 1 on an exception or unknown id.
 `cancel` MCP tool.
 
 Run `repld` in a terminal instead when you want the live TUI display. Either way the kernel writes its PID and socket path to `$XDG_RUNTIME_DIR/repld/projects/<slug>/kernel.lock` and stays up until stopped. See the [dashboard guide](/repld/docs/guides/dashboard/) for the control panel.
+
+### Where the headless kernel runs
+
+On a systemd system, a spawned kernel runs as a transient user service, `repld-<slug>-<hash>.service`, rather than as a child of the bridge or `repld start` that spawned it — its own cgroup, its own lifetime, and its output in the journal, which is the only place a boot failure of a bridge-spawned kernel can be read:
+
+```bash
+journalctl --user -u 'repld-<slug>-*'
+```
+
+Without systemd, or if the unit can't be created, it falls back to a detached child process.
+
+The service gets no resource limits by default: a cell that loads several gigabytes of model weights on purpose is a legitimate use, and the user manager's own OOM policy applies unchanged. Two environment variables, read by whatever spawns the kernel (the bridge, `repld start`, `repld restart`), opt in:
+
+- `REPLD_MEMORY_HIGH` — a systemd `MemoryHigh=` value (`4G`, `50%`), the throttle-then-reclaim ceiling.
+- `REPLD_OOM_SCORE_ADJUST` — a systemd `OOMScoreAdjust=` value. It can't go below the user manager's own adjustment without extra privilege, and systemd clamps rather than failing, so a value under that floor is silently raised to it.
+
+Both are systemd-only; the fallback path ignores them.
 
 ## Your own REPL
 

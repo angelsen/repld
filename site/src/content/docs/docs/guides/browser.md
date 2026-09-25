@@ -13,7 +13,7 @@ repld's browser integration attaches to your real Chrome via CDP. No headless au
 google-chrome --remote-debugging-port=9222
 ```
 
-Run the kernel via the `browser` subcommand — it re-execs under `uv run` with `duckdb`, `websockets` and `pillow` for this invocation, so browser tools work without adding anything to your project's dependencies:
+Run the kernel via the `browser` subcommand — it re-execs under `uv run` with the `browser` and `http` extras (`duckdb`, `websockets`, `pillow`, `httpx`) for this invocation, so browser tools work without adding anything to your project's dependencies:
 
 ```bash
 repld browser
@@ -22,10 +22,14 @@ repld browser
 For a permanent global install instead:
 
 ```bash
-uv tool install repld-tool[browser]
+uv tool install repld-tool[browser,http]
 ```
 
-All three packages are required and all three are imported eagerly, so a two-of-three install doesn't degrade to "everything but screenshots" — the whole extra reads as absent and no `browser` object appears in the kernel.
+Name both extras. `http` is only `httpx`, which `tab.http_client()` needs, but a `uv tool install` names the *whole* set of extras — running it later with `[http]` alone reinstalls without `browser`.
+
+The three `browser` packages are required and all three are imported eagerly, so a two-of-three install doesn't degrade to "everything but screenshots" — the whole extra reads as absent and no `browser` object appears in the kernel.
+
+Chrome's port defaults to 9222. If yours listens elsewhere, set `REPLD_CHROME_PORT` in the kernel's environment — `browser.connect()` with no port, and every `browser.get()` / `open()` / `watch()` that connects lazily, read it — or pass the port to `browser.connect()` explicitly.
 
 ## Getting tabs
 

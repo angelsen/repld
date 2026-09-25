@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tab.http_client()`'s missing-`httpx` error suggested `uv tool install repld-tool[http]`, which reinstalls the tool with only that extra and drops `browser`. It now suggests `repld-tool[browser,http]`, and the README and site install lines say the same. The production guide (`repld://docs/production`) now adds `repld-tool[browser,http]` for the same reason.
+
 ### Removed
 
 ## [0.10.6] - 2026-09-25

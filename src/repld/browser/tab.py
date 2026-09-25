@@ -1989,7 +1989,9 @@ class Tab(TabQueryMixin):
         except ImportError:
             raise RuntimeError(
                 "tab.http_client() requires the `http` extra. "
-                "Install with: uv tool install repld-tool[http]"
+                "Install with: uv tool install repld-tool[browser,http] "
+                "(both extras: a tool install names the whole set, and "
+                "[http] alone would drop browser)"
             ) from None
         if base_url is None:
             from urllib.parse import urlsplit

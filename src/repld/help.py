@@ -389,7 +389,7 @@ credential. Use the fetch= callable pattern above.
   Browser-backed (repld dependency):
     Gist relies on browser session auth. Production service runs alongside
     repld + Chrome.
-    Production deps: uv add repld-tool[browser]
+    Production deps: uv add repld-tool[browser,http]
 
   Hybrid (token + browser fallback):
     Token auth when available, browser fallback when not. The fetch=
@@ -441,7 +441,7 @@ Same core function, different framework. Data in, data out.
   uv add httpx                           # each package the gist declared
 
   # 4. If browser-backed:
-  uv add repld-tool[browser]
+  uv add repld-tool[browser,http]
 
   # 5. Copy gists (vendor them)
   mkdir -p gists

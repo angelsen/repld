@@ -43,7 +43,7 @@ Coming from 0.1.x, that last part is new, and the files the old version wrote
 into your projects are still there — see
 [Upgrading to 0.2](https://angelsen.github.io/repld/docs/guides/upgrading/).
 
-For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` and `http` extras (`duckdb`, `websockets`, `pillow`, `httpx`) for that invocation, so no project changes are needed. Or install the extra permanently with `uv tool install repld-tool[browser]`.
+For browser integration, start the kernel with `repld browser` instead of `repld` — it re-execs under `uv run` with the `browser` and `http` extras (`duckdb`, `websockets`, `pillow`, `httpx`) for that invocation, so no project changes are needed. Or install both extras permanently with `uv tool install repld-tool[browser,http]` — `http` is what `tab.http_client()` needs, and a `uv tool install` names the *whole* set of extras, so installing `[http]` alone later would drop `browser`.
 
 ## Quick example
 
@@ -102,7 +102,7 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 
 `repld_restart` is served by the bridge rather than the kernel, since a kernel can't answer "restart yourself" without the reply dying in flight.
 
-**Browser** (run `repld browser` instead of `repld`, or `uv tool install repld-tool[browser]`):
+**Browser** (run `repld browser` instead of `repld`, or `uv tool install repld-tool[browser,http]`):
 
 | Tool | What it does |
 |------|-------------|
