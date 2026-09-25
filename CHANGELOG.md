@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.10.8] - 2026-09-25
+
+### Added
+
 - `repld help exec` says where a cell runs: with a top-level `await` on the shared loop, where sync I/O stalls every session; without one in a worker thread, where it stalls nothing.
 - `repld help gists` and the gists guide say where state that must outlive a gist reload belongs: `__main__.__dict__.setdefault(...)`. A reload runs the edited file as a fresh module, so module-level state, `globals().get(...)` included, starts empty.
 
@@ -15,9 +25,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `loop_blocked` leads its stack with a `blocked at:` line, the innermost frame outside the stdlib, installed packages and gist deps. When the loop is blocked inside a library call (`pathlib`, `subprocess`), that names the caller instead of the library.
 
-### Fixed
-
-### Removed
 
 ## [0.10.7] - 2026-09-25
 
