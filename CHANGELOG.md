@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.10.9] - 2026-09-26
+
+### Fixed
+
 - A tab's console errors and exceptions now go to the session that drove it, not to every session on the kernel. The tab recorded who drove it only for tools that take a `target` and for `tab.invoke()`. A tab opened with `browser_open`, or opened and driven from exec cells (`browser.open`/`get`, `tab.js`, `navigate`, `click`), recorded no session, so its errors went to everyone. Now every CDP command from a cell or `defer()` task records its session, and so does `browser_open`.
 
-### Removed
 
 ## [0.10.8] - 2026-09-25
 
