@@ -21,12 +21,15 @@ import sys
 import threading
 import time
 import uuid
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from . import state
 from .events import StderrChunk, StdoutChunk, emit
 from .paths import RUNTIME_DIR, ensure_runtime_dir
 from .state import open_private
+
+if TYPE_CHECKING:
+    from .ipc import Session
 
 # Inline preview budget. Full output is always on disk; preview bounds only
 # what's returned in the `exec` / `get_task` response body.
@@ -129,6 +132,13 @@ def current_task_id() -> str | None:
     so a background task's completion push lands where the work was asked for.
     """
     return _current_task.get()
+
+
+def current_origin() -> "Session | None":
+    """The session that asked for the running cell or defer() task, if any."""
+    task_id = _current_task.get()
+    task = get(task_id) if task_id is not None else None
+    return task.get("origin") if task is not None else None
 
 
 def task_id_of(atask: asyncio.Task[object]) -> str | None:

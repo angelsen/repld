@@ -13,7 +13,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from .. import bg
+from .. import bg, tasks
 from ..channel import push_channel
 from ..loopguard import LoopOwned, loop_only, on_loop
 from .har import _create_views
@@ -568,9 +568,10 @@ class CDPSession:
         self.port = port
         self.chrome_target_id = target_info.get("targetId", "")
 
-        # ipc.Session that last drove this tab (tool call or exec cell) — see
-        # Tab.invoke() and browser_dispatch._get_tab. Best-guess affinity for
-        # routing controls observations, not a firm request like tasks.origin.
+        # ipc.Session that last drove this tab: set by `execute` for a cell or
+        # defer() task, by browser_dispatch for a tool call. Best-guess affinity
+        # for routing console errors and controls observations, not a firm
+        # request like tasks.origin.
         self.last_caller: Session | None = None
 
         # In-memory DuckDB.  The main connection is written only from the
@@ -819,6 +820,11 @@ class CDPSession:
         timeout: float = 30,
     ) -> dict:
         """Execute a CDP command on this session."""
+        # Ambient code (tickers, the dashboard, tool calls) has no origin and
+        # leaves the affinity alone; tool calls record theirs in browser_dispatch.
+        origin = tasks.current_origin()
+        if origin is not None:
+            self.last_caller = origin
         return await self._send(method, params, self._session_id, timeout)
 
     async def send_nowait(

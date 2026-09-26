@@ -1709,6 +1709,59 @@ def phase_6_tab_close(kernel: Kernel) -> None:
         b.close()
 
 
+def phase_6_tab_affinity(kernel: Kernel) -> None:
+    """A tab records the session that drove it, on every path, so its console
+    errors go to that session instead of broadcasting to the whole kernel.
+
+    Only a `target`-taking tool and `tab.invoke()` used to record it: a tab from
+    `browser_open`, or opened and driven from exec cells, had none.
+    """
+    if not _chrome_ready("phase 6 tab affinity"):
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+        out = _exec(
+            b,
+            f"_ta = await browser.open('data:text/html,<p>{_MARKER}-affinity-cell</p>')\n"
+            "from repld import tasks as _tasks\n"
+            "print('CELL_AFFINITY=', _ta._session.last_caller is not None and "
+            "_ta._session.last_caller is _tasks.current_origin())\n",
+        )
+        assert_true(
+            "CELL_AFFINITY= True" in out,
+            f"a tab driven from a cell records that cell's session (got {out!r})",
+        )
+
+        b.call(
+            "tools/call",
+            {
+                "name": "browser_open",
+                "arguments": {"url": f"data:text/html,<p>{_MARKER}-affinity-tool</p>"},
+            },
+            timeout=20.0,
+        )
+        # A sync cell issues no CDP command, so it reads the affinity the tool
+        # left rather than recording its own.
+        out = _exec(
+            b,
+            "_hits = [c for _b in browser.peek()._browsers.values() "
+            "for c in _b._session._sessions.values() "
+            f"if '{_MARKER}-affinity-tool' in c.target_info.get('url', '')]\n"
+            "print('TOOL_AFFINITY=', len(_hits), "
+            "all(c.last_caller is not None for c in _hits))\n",
+        )
+        assert_true(
+            "TOOL_AFFINITY= 1 True" in out,
+            f"a tab from browser_open records the calling session (got {out!r})",
+        )
+        print("  ✓ tab affinity recorded for cell-driven and browser_open tabs")
+    finally:
+        _close_marked_tabs()
+        b.close()
+
+
 def phase_6_key_native_activation(kernel: Kernel) -> None:
     """tab.key("Enter") / tab.key("Space") trigger native button activation.
 

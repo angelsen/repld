@@ -17,7 +17,7 @@ import __main__
 from .kernel_context import KernelContext
 
 # ipc.Session for the tool call currently dispatching on this IPC reader
-# thread, if any — read by `_get_tab` to record `CDPSession.last_caller`.
+# thread, if any — read by `_note_caller` to record `CDPSession.last_caller`.
 # Thread-local because `_browser_tool` runs on the reader thread, one per
 # connection; a module global would let two sessions' calls race each other.
 _dispatch_session = threading.local()
@@ -218,7 +218,10 @@ class BrowserDispatchMixin:
         return self._run_async(_call())
 
     def _get_tab(self, browser, args):
-        tab = self._run_async(browser.get(args["target"]))
+        return self._note_caller(self._run_async(browser.get(args["target"])))
+
+    @staticmethod
+    def _note_caller(tab):
         session = getattr(_dispatch_session, "current", None)
         if session is not None:
             tab._session.last_caller = session
@@ -464,7 +467,7 @@ class BrowserDispatchMixin:
     def _bh_open(self, browser, args):
         from .browser.observe import PreObservation, post_observe
 
-        tab = self._run_async(browser.open(args["url"]))
+        tab = self._note_caller(self._run_async(browser.open(args["url"])))
         if args.get("viewport"):
             w, _, h = str(args["viewport"]).lower().partition("x")
             self._run_async(tab.set_viewport(int(w), int(h)))
