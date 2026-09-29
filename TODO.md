@@ -257,6 +257,17 @@ rather than an architectural one — the exact pattern already exists twice in t
 
 ## Observability
 
+- [x] **`loop_blocked` distinguishes OS starvation from a real callback hold** —
+  reported live by `claude-code-research-6d` against a wedged kernel under swap
+  pressure: the fix's own `asyncio.to_thread()` advice was firing on wedges
+  where the loop thread was never scheduled at all. `_is_starved` catches two
+  frame-shape signatures (the whole stack is `selectors.*.select`, or a frame
+  is `subprocess.py`'s `_execute_child` — fork/exec already on the loop by
+  necessity); `_Pressure`/`_read_pressure()` additionally classify by load-
+  past-core-count or swap-past-80% for the third case, an ordinary-looking
+  frame (a DuckDB insert documented in microseconds) made genuinely slow by
+  real thrashing. All three now read "loop thread descheduled by the OS" with
+  a load/RAM/swap line instead of advice to rewrite already-async code.
 - [x] **`loop_blocked` names the task holding the loop** — requested by
   `claude_code_research` (2026-09-25) after five pushes named bystanders while a gist's
   synchronous 173 MB read held the loop. Shipped: `kernel._loop_holder` (`asyncio.current_task`

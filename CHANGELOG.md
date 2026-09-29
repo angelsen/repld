@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The `loop_blocked` watchdog push no longer tells you to wrap a starved loop thread in `asyncio.to_thread()`. Two stack signatures mean the OS never scheduled the loop, not that a callback held it: the whole sampled stack is `selectors.*.select` (the loop was idling, nothing running), or a frame is `subprocess.py`'s `_execute_child` (the fork/exec inside an already-async `create_subprocess_exec`, unavoidably on the loop). A third case has no distinct frame at all — a normally-microsecond call (a DuckDB insert on the loop by design) made genuinely slow by the machine thrashing — so the classification also weighs load past core count or swap past 80% full, not just stack shape. All three now read "loop thread descheduled by the OS" with a load/RAM/swap line, not advice to rewrite code that's already async. Flagged live by another session against a wedged kernel under swap pressure.
+
 ### Removed
 
 ## [0.10.9] - 2026-09-26

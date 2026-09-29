@@ -366,6 +366,79 @@ _LOOP_MACHINERY = (
 )
 
 
+def _is_starved(frames: "list[traceback.FrameSummary]") -> bool:
+    """True when the sampled stack means the OS never scheduled the loop
+    thread, not that a callback held it. Two signatures, both stdlib:
+    - the whole (post-`_LOOP_MACHINERY`-filter) stack is `selectors.*.select`
+      — the loop was idling in its own wait, no task or callback running.
+    - any frame is `subprocess.py`'s `_execute_child` — the fork/exec inside
+      an *already-async* `create_subprocess_exec`, unavoidably on the loop
+      and not fixable by wrapping in `asyncio.to_thread()`.
+    """
+    if len(frames) == 1:
+        fs = frames[0]
+        if os.path.basename(fs.filename) == "selectors.py" and fs.name == "select":
+            return True
+    return any(
+        os.path.basename(fs.filename) == "subprocess.py" and fs.name == "_execute_child"
+        for fs in frames
+    )
+
+
+@dataclass
+class _Pressure:
+    """One /proc/meminfo + getloadavg sample."""
+
+    load1: float
+    cores: int
+    mem_used: int
+    mem_total: int
+    swap_used: int
+    swap_total: int
+
+    @property
+    def overloaded(self) -> bool:
+        """Load past core count, or swap past 80% full: thresholds a normal
+        dev machine doesn't cross by accident. Past either, even normally-fast
+        repld-internal code (a DuckDB insert documented in microseconds) can
+        take seconds — every syscall pays for page faults under real
+        thrashing, thread pool included, so it's not a to_thread fix either."""
+        swap_frac = self.swap_used / self.swap_total if self.swap_total else 0.0
+        return self.load1 > self.cores or swap_frac > 0.8
+
+    def describe(self) -> str:
+        gib = 1024**3
+        return (
+            f"load {self.load1:.1f}, {self.mem_used / gib:.1f}/{self.mem_total / gib:.1f} GB RAM, "
+            f"{self.swap_used / gib:.1f}/{self.swap_total / gib:.1f} GB swap"
+        )
+
+
+def _read_pressure() -> _Pressure | None:
+    """Best-effort load/RAM/swap sample. Linux only (reads /proc/meminfo
+    directly rather than adding a dependency for it — stdlib only in core);
+    None anywhere the read fails."""
+    try:
+        load1, _, _ = os.getloadavg()
+        fields = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                if key in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                    fields[key] = int(rest.split()[0]) * 1024  # kB -> bytes
+        mem_total = fields["MemTotal"]
+        return _Pressure(
+            load1=load1,
+            cores=os.cpu_count() or 1,
+            mem_used=mem_total - fields["MemAvailable"],
+            mem_total=mem_total,
+            swap_used=fields["SwapTotal"] - fields["SwapFree"],
+            swap_total=fields["SwapTotal"],
+        )
+    except (OSError, KeyError, ValueError, IndexError):
+        return None
+
+
 def _is_library(filename: str) -> bool:
     """Stdlib, installed packages and gist deps: code a block passes through,
     rarely the code that chose to block."""
@@ -389,6 +462,9 @@ class _Holder:
     task_id: str | None                  # the repld task it runs for, if any
     stack: list[str]                     # innermost last
     culprit: str | None = None           # innermost non-library frame, when not innermost
+    starved: bool = (
+        False  # frame-shape signal only; _watch_block also weighs _read_pressure
+    )
 
     @property
     def name(self) -> str:
@@ -426,6 +502,7 @@ def _loop_holder(loop: asyncio.AbstractEventLoop, thread_id: int) -> _Holder:
         stack=[
             f"{fs.filename}:{fs.lineno} in {fs.name}" for fs in frames[-_STACK_DEPTH:]
         ],
+        starved=_is_starved(frames),
         culprit=(
             f"{culprit.filename}:{culprit.lineno} in {culprit.name}"
             if culprit is not None and frames and culprit is not frames[-1]
@@ -457,10 +534,22 @@ def _watch_block(
     """Report one wedge from the missed probe until the loop runs it: a single
     `loop_blocked`, at most one `loop_kill`, then `loop_unblocked`."""
     holder = _loop_holder(loop, thread_id)
+    pressure = _read_pressure()
+    # Frame shape alone misses the third case: a normally-microsecond repld-
+    # internal call (a DuckDB insert on the loop by design) made genuinely
+    # slow by the machine thrashing, not by anything the stack names.
+    starved = holder.starved or (pressure is not None and pressure.overloaded)
+    if starved:
+        advice = "— loop thread descheduled by the OS, not blocked by a callback" + (
+            f" ({pressure.describe()})" if pressure else ""
+        )
+    else:
+        advice = (
+            "— likely sync I/O on the shared loop; wrap blocking calls in "
+            "asyncio.to_thread()"
+        )
     _push_holder(
-        f"[repld] event loop blocked > {threshold}s by {holder.describe()}\n"
-        "— likely sync I/O on the shared loop; wrap blocking calls in "
-        "asyncio.to_thread()",
+        f"[repld] event loop blocked > {threshold}s by {holder.describe()}\n{advice}",
         "loop_blocked",
         holder,
         threshold_s=str(threshold),

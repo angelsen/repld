@@ -8,6 +8,7 @@ import re
 import subprocess
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -530,6 +531,116 @@ def _loop_watchdog() -> None:
     print("  ✓ loop watchdog names the holder, reports once, kills only the holder")
 
 
+def _starvation_classification() -> None:
+    """A wedge where the loop was never scheduled reads differently from one
+    a callback actually held — misdirecting the first to `asyncio.to_thread()`
+    sends people to rewrite code that's already async (flagged live by
+    claude-code-research-6d against the claude_code_research kernel: a
+    single-frame `selectors.*.select` wedge and a `subprocess.py
+    _execute_child` wedge inside an already-async `create_subprocess_exec`,
+    both under real swap pressure, both got the to_thread advice). A third
+    report from the same session: `cdp.py`'s `store_event`, a DuckDB insert
+    documented in microseconds, took 7.6s under swap at 27/31 GB and load
+    18.9 — a normal-looking frame that no shape-based rule catches, so
+    `_watch_block` also weighs `_read_pressure().overloaded` regardless of
+    the frame."""
+    frame = lambda path, name: traceback.FrameSummary(path, 1, name)
+
+    assert_true(
+        kernel._is_starved([frame("/usr/lib/python3.12/selectors.py", "select")]),
+        "the whole stack is the loop's own select() — nothing else was running",
+    )
+    assert_true(
+        not kernel._is_starved(
+            [
+                frame("/gists/x.py", "holder"),
+                frame("/usr/lib/python3.12/selectors.py", "select"),
+            ]
+        ),
+        "select() below a real frame is a callback that itself calls select, not idling",
+    )
+    assert_true(
+        kernel._is_starved(
+            [
+                frame("/gists/android.py", "_check"),
+                frame("/usr/lib/python3.12/subprocess.py", "_execute_child"),
+            ]
+        ),
+        "fork/exec itself is on the loop by necessity, even from create_subprocess_exec",
+    )
+    assert_true(
+        not kernel._is_starved(
+            [
+                frame("/gists/x.py", "holder"),
+                frame("/usr/lib/python3.12/subprocess.py", "_wait"),
+            ]
+        ),
+        "waiting on an already-spawned child is a real block, not fork/exec",
+    )
+
+    _pressure_defaults = {
+        "load1": 1.0,
+        "cores": 8,
+        "mem_used": 1,
+        "mem_total": 10,
+        "swap_used": 0,
+        "swap_total": 10,
+    }
+    pressure = lambda **kw: kernel._Pressure(**{**_pressure_defaults, **kw})
+    assert_true(not pressure().overloaded, "1.0 load on 8 cores, no swap: fine")
+    assert_true(pressure(load1=9.0).overloaded, "load past core count is overloaded")
+    assert_true(
+        pressure(swap_used=9, swap_total=10).overloaded, "swap past 80% is overloaded"
+    )
+    assert_true(
+        not pressure(load1=7.9, swap_used=7, swap_total=10).overloaded,
+        "under both thresholds is not overloaded",
+    )
+
+    async def blocked() -> None:
+        await asyncio.sleep(0.05)
+        _hold_loop_synchronously(0.3)
+
+    real_holder, real_pressure = kernel._loop_holder, kernel._read_pressure
+    try:
+        kernel._loop_holder = lambda loop, thread_id: kernel._Holder(
+            task=None, task_id=None, stack=["s.py:1 in select"], starved=True
+        )
+        kernel._read_pressure = lambda: None
+        pushes = _watchdog_run(blocked, threshold=0.15, kill=None)
+    finally:
+        kernel._loop_holder, kernel._read_pressure = real_holder, real_pressure
+    content = pushes[0]["content"]
+    assert_true(
+        "descheduled" in content and "to_thread" not in content,
+        f"a starved wedge gets the descheduled line, not the to_thread advice (got {content!r})",
+    )
+
+    try:
+        kernel._loop_holder = lambda loop, thread_id: kernel._Holder(
+            task=None,
+            task_id=None,
+            stack=["cdp.py:979 in _handle_event", "cdp.py:859 in store_event"],
+            starved=False,
+        )
+        kernel._read_pressure = lambda: pressure(
+            load1=18.9, swap_used=27, swap_total=31
+        )
+        pushes = _watchdog_run(blocked, threshold=0.15, kill=None)
+    finally:
+        kernel._loop_holder, kernel._read_pressure = real_holder, real_pressure
+    content = pushes[0]["content"]
+    assert_true(
+        "descheduled" in content and "to_thread" not in content,
+        f"an ordinary-looking frame under severe pressure is still starved, not "
+        f"blamed on the callback (got {content!r})",
+    )
+    print(
+        "  ✓ starvation classification: frame shape and system pressure both "
+        "override the to_thread advice"
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -542,3 +653,4 @@ def phase_2_pure() -> None:
     _lint_helpers()
     _sibling_counts_concurrency()
     _loop_watchdog()
+    _starvation_classification()
