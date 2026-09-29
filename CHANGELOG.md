@@ -8,13 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `ipc.park_pushes(session_id, timeout_s=120)` holds channel pushes bound for a connection instead of writing them — for the gap between a session's own handoff recap and the `/clear` that rebinds it, where a push landing early would wake the conversation that already decided to leave. `ipc.rebind_claude_session` releases the park and flushes in order; an unrebound park still force-delivers once its own timeout elapses. Requested by a `claude_code_research` session's handoff-supervisor flow.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.10.12] - 2026-09-29
+
+### Added
+
+- `ipc.park_pushes(session_id, timeout_s=120)` holds channel pushes bound for a connection instead of writing them — for the gap between a session's own handoff recap and the `/clear` that rebinds it, where a push landing early would wake the conversation that already decided to leave. `ipc.rebind_claude_session` releases the park and flushes in order; an unrebound park still force-delivers once its own timeout elapses. Requested by a `claude_code_research` session's handoff-supervisor flow.
+
 
 ## [0.10.11] - 2026-09-29
 
