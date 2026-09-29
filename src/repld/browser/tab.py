@@ -1842,10 +1842,27 @@ class Tab(TabQueryMixin):
         await self._wait_condition(timeout)
         await self.wait_for_idle(timeout=2.0, quiet=0.3)
 
+    async def _refresh_target_info(self) -> None:
+        """Sync `target_info` with Chrome immediately, rather than waiting on
+        the async `Target.targetInfoChanged` broadcast that normally updates
+        it (`session.py`'s `_handle_browser_event`). That event can lag a
+        navigate by a couple hundred ms behind what the page itself already
+        reports, and `_glob_target_id`'s fast path (`browser.py`) reads this
+        field directly — a `browser.get(url)` for the tab that just navigated
+        there could still miss it.
+        """
+        result = await self._exec(
+            "Target.getTargetInfo", {"targetId": self._chrome_target_id}
+        )
+        info = result.get("targetInfo")
+        if info:
+            self._session.target_info = info
+
     async def reload(self) -> None:
         """Reload the page, then wait for the ready signal."""
         await self._exec("Page.reload")
         await self._wait_ready()
+        await self._refresh_target_info()
 
     async def navigate(self, url: str) -> None:
         """Navigate to URL, then wait for the ready signal."""
@@ -1853,6 +1870,7 @@ class Tab(TabQueryMixin):
         filechooser_start = len(self._session._filechooser_log)
         await self._exec("Page.navigate", {"url": url})
         await self._wait_ready()
+        await self._refresh_target_info()
         exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
         if exc is not None:
             raise exc

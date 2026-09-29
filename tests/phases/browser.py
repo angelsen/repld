@@ -523,6 +523,82 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
     print("  ✓ reattach drops the stale injected-engine handle")
 
 
+def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
+    """`navigate()`/`reload()` refresh `target_info` synchronously instead of
+    only via the async `Target.targetInfoChanged` broadcast.
+
+    TODO.md's stale-cache bug: `_glob_target_id` (`browser.py`) reads
+    `cdp.target_info` directly, which used to update only when that event
+    arrived — `browser.get(url, timeout=0)` right after `tab.navigate(url)`
+    could still see the pre-navigation URL, reproduced live 2026-08-10. The
+    first half needs no Chrome: `Tab._refresh_target_info()` in isolation,
+    against a fake session that only answers `Target.getTargetInfo`. The
+    second is the real path against a throwaway Chrome; skips gracefully if
+    none is up.
+    """
+    from repld.browser.tab import Tab
+
+    class _Cdp:
+        """CDPSession stand-in: only what _refresh_target_info touches."""
+
+        def __init__(self) -> None:
+            self.target_info = {"targetId": "abc123", "url": "about:blank"}
+            self.sent: list[str] = []
+            self.reply: dict = {
+                "targetInfo": {"targetId": "abc123", "url": "https://example.com/new"}
+            }
+
+        async def execute(
+            self, method: str, params: dict | None = None, timeout: float = 30
+        ) -> dict:
+            self.sent.append(method)
+            assert method == "Target.getTargetInfo"
+            assert params == {"targetId": "abc123"}
+            return self.reply
+
+    cdp = _Cdp()
+    asyncio.run(Tab(cdp, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
+    assert_eq(cdp.sent, ["Target.getTargetInfo"], "one synchronous round trip")
+    assert_eq(
+        cdp.target_info.get("url"),
+        "https://example.com/new",
+        "target_info reflects the new URL without waiting on Target.targetInfoChanged",
+    )
+
+    cdp_empty = _Cdp()
+    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
+    asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
+    assert_eq(
+        cdp_empty.target_info.get("url"),
+        "about:blank",
+        "a missing targetInfo in the reply leaves the cached one alone",
+    )
+    print("  ✓ Tab._refresh_target_info() syncs target_info synchronously (no Chrome)")
+
+    if not _chrome_ready("phase 6 navigate target_info sync"):
+        return
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+        out = _exec(
+            b,
+            f"_tn = await browser.open('data:text/html,<p>{_MARKER}-nav-a</p>')\n"
+            f"await _tn.navigate('data:text/html,<p>{_MARKER}-nav-b</p>')\n"
+            f"_got = await browser.get('*{_MARKER}-nav-b*', timeout=0)\n"
+            "print('FOUND=' + str(_got.target_id == _tn.target_id))",
+        )
+        assert_true(
+            "FOUND=True" in out,
+            f"browser.get() finds the tab by its post-navigate URL with no "
+            f"sleep (got {out!r})",
+        )
+        print("  ✓ browser.get() sees the new URL immediately after navigate()")
+    finally:
+        _close_marked_tabs()
+        b.close()
+
+
 class _EngineFakeSession:
     """CDPSession stand-in that answers the injected-engine protocol.
 

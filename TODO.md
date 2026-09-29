@@ -80,22 +80,24 @@ infinite scroll.
   fixture two shadow roots deep. Verified live against the actual repro
   (2026-08-10's `chrome://extensions`, `text=Reload` on a `<cr-icon-button aria-label
   ="Reload">` with no visible text) via `mcp__repld__exec` and `browser_click` end to end.
-- [ ] **`browser.get()`'s attached-session fast path can read a stale `target_info` cache.**
-  `_get_by_glob` (`browser.py:293`) matches currently-attached sessions against
-  `cdp.target_info.get("url", "")` before falling through to the polling loop. That field
-  updates via the async `Target.targetInfoChanged` CDP event, which can lag a
-  `tab.navigate(url)` call by a couple hundred ms behind what `location.href` already
-  reports in-page — reproduced twice live (2026-08-10, same extension-dev gist session):
-  a tab that had just navigated via `tab.navigate()` and was confirmed loaded
-  (`await tab.js("location.href")` matched) still failed an immediate `browser.get(glob,
-  timeout=0)` for its own URL; a ~0.3s sleep after the navigate made it reliably findable.
-  `_get_by_id`/`_attach_racing` may have the same exposure — not checked. Deferred rather
-  than fixed blind: it's core event-ordering logic and, per the "Testing gaps" item below,
-  `browser/`'s reconnect/reattach paths are only exercised incidentally, so a fix here has
-  nothing to catch a regression. Candidate fix: on a `tab.navigate()` (or after any call
-  that changes a target's URL), await the actual `Target.targetInfoChanged` event for that
-  target instead of returning as soon as the page-level load signal is satisfied — makes
-  the cache change synchronous with the observable navigation instead of racing it.
+- [x] **`browser.get()`'s attached-session fast path could read a stale `target_info`
+  cache.** Fixed: `Tab._refresh_target_info()` (new, `tab.py`) issues one synchronous
+  `Target.getTargetInfo` round trip and updates `self._session.target_info` directly,
+  called from both `navigate()` and `reload()` right after `_wait_ready()` — the cache
+  no longer depends on the async `Target.targetInfoChanged` broadcast (`session.py`'s
+  `_handle_browser_event`) ever being dequeued before the next `browser.get()`, which is
+  what `_glob_target_id`'s fast path (`browser.py`) reads. `_get_by_id`/`_attach_racing`
+  checked and confirmed unaffected: `_find_by_prefix` matches on `targetId`, which is
+  immutable across a navigation, never on `url`. Added `phase_6_navigate_target_info_sync`
+  (`tests/phases/browser.py`) — a no-Chrome unit test of `_refresh_target_info()` against
+  a fake session (including the empty-reply no-op case), plus a live-Chrome check that
+  `browser.get(url, timeout=0)` finds a tab by its post-navigate URL with no sleep.
+  Caveat: this closes repld's own event-delivery lag, the mechanism the original two live
+  repros (2026-08-10, `chrome://extensions` reload) pointed at; if Chrome's own
+  browser-process-side `TargetInfo` update itself lags a renderer's `document.readyState`
+  on some page class, a single immediate `getTargetInfo` call could still race it the same
+  way the event did — not reproducible on demand to confirm either way, and `chrome://`-page
+  reloads are a plausible special case worth re-checking if this resurfaces.
 - [ ] `Tab._reattach()` auto-remap across a genuine target swap — currently (session 019) a
   destroyed-and-replaced target (cross-origin/site-isolation process swap) surfaces a clear error
   pointing at `browser_tabs` rather than silently recovering. Considered and deferred:

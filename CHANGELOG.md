@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser.get()` could miss a tab right after `tab.navigate()`/`reload()`: the fast path matched already-attached sessions against a cached `target_info.url` that only updated on the async `Target.targetInfoChanged` broadcast, which can lag a navigate by a couple hundred ms. `navigate()`/`reload()` now refresh it with a synchronous `Target.getTargetInfo` call instead of waiting on that event. Reproduced live twice (2026-08-10).
+
 ### Removed
 
 ## [0.10.10] - 2026-09-29
