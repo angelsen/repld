@@ -8,7 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ipc.unpark_pushes(session_id)` releases a `park_pushes` hold directly, for a handoff that gets called off — the same conversation continues and shouldn't have to wait out the park's own timeout to get its held pushes.
+
 ### Changed
+
+- `ipc.park_pushes`' default `timeout_s` is now 300, up from 120 — a live handoff-supervisor run measured actual `/clear` gaps of 197s and 228s under a *supervised* (non-human) clear, and 120 would have force-delivered both before the rebind arrived.
+- `push_delivered` (and `push_channel`'s own return value, for a targeted push) reads null while the target connection is parked, rather than true — a caller previously had no way to tell "held" from "on the wire." It flips to true/false once the park actually releases (rebind, `unpark_pushes`, or the timeout). `notify(session=...)`'s boolean return still can't carry the distinction and reports a parked target as `False`.
 
 ### Fixed
 

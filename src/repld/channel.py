@@ -57,6 +57,7 @@ def push_channel(
     session: "ipc.Session | None" = None,
     fallback_broadcast: bool = False,
     exclude: "ipc.Session | None" = None,
+    on_parked_flush: "Callable[[bool], None] | None" = None,
 ) -> bool | None:
     """Send a notifications/claude/channel notification AND emit a local
     ChannelPush event so the pane and the event log mirror what the MCP agent
@@ -96,7 +97,11 @@ def push_channel(
     this only catches what isn't.
 
     Returns whether a targeted push reached `session` (False when dropped or
-    downgraded to a broadcast), or None for a broadcast.
+    downgraded to a broadcast), None for a broadcast — OR, for a targeted
+    push, None when `session` is currently parked (`ipc.park_pushes`):
+    queued, not yet on the wire, and not a drop, so `fallback_broadcast`
+    does not fire for it. `on_parked_flush`, ignored unless `session` is
+    set, reports the eventual outcome once the park releases.
     """
     if _meta_augmenter is not None:
         try:
@@ -117,8 +122,8 @@ def push_channel(
     if session is None:
         ipc.broadcast_channel(msg, exclude=exclude)
     else:
-        delivered = ipc.post_to(session, msg)
-        if not delivered and fallback_broadcast:
+        delivered = ipc.post_to(session, msg, on_parked_flush=on_parked_flush)
+        if delivered is False and fallback_broadcast:
             ipc.broadcast_channel(msg)
     events.emit(ChannelPush(content, meta))
     return delivered

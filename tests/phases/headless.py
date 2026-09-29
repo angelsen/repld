@@ -589,6 +589,12 @@ def _session_rebind(tmp: Path) -> None:
             raise AssertionError("parked push reached the connection before unpark")
         except TimeoutError:
             pass
+        assert_eq(
+            _get_task(a, parked_id)["push_delivered"],
+            None,
+            "push_delivered reads null while parked, not true — a caller "
+            "can't otherwise tell held from delivered",
+        )
         print("  ✓ park_pushes holds a completion push off the wire")
 
         out = rebind("gen-3", a.proc.pid)
@@ -604,6 +610,11 @@ def _session_rebind(tmp: Path) -> None:
         assert_true(
             "parked done" in note["params"]["content"],
             "rebind flushes the parked push to the same connection",
+        )
+        assert_eq(
+            _get_task(a, parked_id)["push_delivered"],
+            True,
+            "push_delivered flips true once the park's flush actually lands",
         )
         print("  ✓ rebind releases the park and flushes in order")
 
@@ -636,6 +647,11 @@ def _session_rebind(tmp: Path) -> None:
             )
         except TimeoutError:
             pass
+        assert_eq(
+            _get_task(a, unrebound_id)["push_delivered"],
+            None,
+            "still null this side of the timeout",
+        )
         note = a.wait_notification(
             "notifications/claude/channel",
             kind="task_done",
@@ -646,7 +662,62 @@ def _session_rebind(tmp: Path) -> None:
             "unrebound done" in note["params"]["content"],
             "an unrebound park still delivers once its own timeout elapses",
         )
+        assert_eq(
+            _get_task(a, unrebound_id)["push_delivered"],
+            True,
+            "push_delivered flips true on a timeout-forced flush too",
+        )
         print("  ✓ park_pushes' own timeout force-delivers with no rebind")
+
+        # unpark_pushes releases a park directly, for a handoff that gets
+        # called off — the same conversation continues and shouldn't have
+        # to wait out the park's own timeout to get its held pushes.
+        out = content_text(
+            a.exec("from repld import ipc\nprint(ipc.unpark_pushes('nonexistent-id'))")
+        )
+        assert_true(
+            "False" in out, f"unpark_pushes on an unknown id is a no-op (got {out!r})"
+        )
+        content_text(
+            a.exec(
+                "from repld import ipc\nprint(ipc.park_pushes('gen-3', timeout_s=30))"
+            )
+        )
+        out = content_text(
+            a.exec(
+                "import asyncio\n"
+                "async def _called_off():\n"
+                "    await asyncio.sleep(0.05)\n"
+                "    print('called off done')\n"
+                "print('tid=' + defer(_called_off(), 'called-off'))"
+            )
+        )
+        called_off_id = out.split("tid=", 1)[1].split()[0]
+        try:
+            a.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=0.3,
+                where=lambda n: n["params"]["meta"].get("task_id") == called_off_id,
+            )
+            raise AssertionError("called-off push reached the connection while parked")
+        except TimeoutError:
+            pass
+        out = content_text(
+            a.exec("from repld import ipc\nprint(ipc.unpark_pushes('gen-3'))")
+        )
+        assert_true("True" in out, f"unpark_pushes finds the session (got {out!r})")
+        note = a.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=5,
+            where=lambda n: n["params"]["meta"].get("task_id") == called_off_id,
+        )
+        assert_true(
+            "called off done" in note["params"]["content"],
+            "unpark_pushes flushes without needing a rebind",
+        )
+        print("  ✓ unpark_pushes releases a park with no rebind")
 
         os.kill(int(_lock(tmp)["pid"]), signal.SIGKILL)
         time.sleep(0.5)

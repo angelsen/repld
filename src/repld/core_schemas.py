@@ -136,7 +136,9 @@ CORE_TOOLS = [
                     "type": ["boolean", "null"],
                     "description": (
                         "whether the completion push reached the session that "
-                        "asked; false means nobody saw it, null means no push was owed"
+                        "asked; false means nobody saw it, null means no push was "
+                        "owed, or the session was parked (ipc.park_pushes) at "
+                        "push time and hasn't been released yet"
                     ),
                 },
             },

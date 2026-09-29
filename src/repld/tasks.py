@@ -161,8 +161,11 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         "spill_file": None,
         "spill_path": None,
         "nudged": False,
-        # True/False once a completion push to `origin` was attempted; None if
-        # none was owed (answered inline, still running) or it broadcast.
+        # True/False once a completion push to `origin` was attempted; None
+        # if none was owed (answered inline, still running), it broadcast,
+        # or `origin` was parked (ipc.park_pushes) at push time — that last
+        # case flips to True/False later, via mark_push_delivered(), once
+        # the park releases.
         "push_delivered": None,
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
@@ -181,6 +184,19 @@ def get(task_id: str) -> dict | None:
     instead of reaching into `_tasks` directly."""
     with _tasks_lock:
         return _tasks.get(task_id)
+
+
+def mark_push_delivered(task_id: str, delivered: bool) -> None:
+    """Update `push_delivered` once a parked completion push actually
+    flushes — `kernel._maybe_push_done`'s own synchronous set only knows
+    "parked" (recorded as `None`, same as "not attempted") at push time, not
+    the eventual outcome. `ipc.Session`'s `on_parked_flush` callback is the
+    caller; a no-op if the task is gone by the time it fires.
+    """
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task is not None:
+            task["push_delivered"] = delivered
 
 
 def items() -> list[tuple[str, dict]]:

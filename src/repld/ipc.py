@@ -110,7 +110,7 @@ class Session:
         # Channel notifications are held here instead of written while
         # `parked` is set — see `park()`.
         self.parked = False
-        self.parked_queue: list[dict] = []
+        self.parked_queue: list[tuple[dict, Callable[[bool], None] | None]] = []
         self.park_deadline: float | None = None
         self._park_timer: threading.Timer | None = None
         self._closed = False
@@ -125,16 +125,20 @@ class Session:
     def closed(self) -> bool:
         return self._closed
 
-    def _write_msg(self, msg: dict) -> None:
+    def _write_msg(self, msg: dict) -> bool:
         """Write one NDJSON line + flush; close the session on I/O failure.
 
-        Caller must hold write_lock.
+        Caller must hold write_lock. Returns whether the write succeeded —
+        `_unpark_and_flush` needs this to know which queued messages actually
+        went out before reporting outcomes through `on_parked_flush`.
         """
         try:
             self.wfile.write(json.dumps(msg) + "\n")
             self.wfile.flush()
+            return True
         except (BrokenPipeError, OSError, ValueError):
             self._close_locked()
+            return False
 
     def write(self, msg: dict) -> None:
         with self.write_lock:
@@ -142,23 +146,36 @@ class Session:
                 return
             self._write_msg(msg)
 
-    def post_channel(self, msg: dict) -> None:
+    def post_channel(
+        self, msg: dict, *, on_parked_flush: "Callable[[bool], None] | None" = None
+    ) -> bool:
         """Server-initiated notification (channel push).
 
         Queued until the session is marked initialized, then queued again
         (separately) while parked. Normal responses (to client requests)
         should use write() directly.
+
+        Returns False only when the message was queued because this
+        connection is currently parked — the caller's usual "delivered"
+        reading (True otherwise: written now, or queued only pending
+        notifications/initialized, which is a startup-only gap nothing has
+        ever needed to distinguish from delivered) would otherwise say a push
+        landed when it is still held. `on_parked_flush`, if given, fires
+        with whether the write actually succeeded once the park releases
+        (`unpark()` or its own timeout) — not called at all for any other
+        path, including a session that's already closed.
         """
         with self.write_lock:
             if self._closed:
-                return
+                return True
             if not self.initialized:
                 self.pending.append(msg)
-                return
+                return True
             if self.parked:
-                self.parked_queue.append(msg)
-                return
+                self.parked_queue.append((msg, on_parked_flush))
+                return False
             self._write_msg(msg)
+            return True
 
     def park(self, timeout_s: float) -> None:
         """Hold channel pushes destined for this connection instead of
@@ -192,7 +209,13 @@ class Session:
         """Shared body of `unpark()` and the park timeout: whichever runs
         first does the flush, the other's guard makes it a no-op — both can
         race in from different threads (an explicit rebind vs. the Timer).
+
+        Callbacks fire after `write_lock` is released — they run arbitrary
+        caller code (`tasks.mark_push_delivered` today), and calling that
+        while still holding a lock this module's own `write()`/`post_channel`
+        need is an unnecessary way to invite a deadlock later.
         """
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
         with self.write_lock:
             if self._closed or not self.parked:
                 return
@@ -202,10 +225,15 @@ class Session:
                 self._park_timer.cancel()
                 self._park_timer = None
             queued, self.parked_queue = self.parked_queue, []
-            for msg in queued:
-                self._write_msg(msg)
-                if self._closed:
-                    return
+            for msg, cb in queued:
+                ok = (not self._closed) and self._write_msg(msg)
+                if cb is not None:
+                    callbacks.append((cb, ok))
+        for cb, ok in callbacks:
+            try:
+                cb(ok)
+            except Exception:
+                pass  # a broken callback must not break the flush
 
     def set_initialized(self) -> None:
         with self.write_lock:
@@ -351,14 +379,26 @@ class Server:
                 continue
             s.post_channel(msg)
 
-    def post_to(self, session: Session, msg: dict) -> bool:
-        """Post to one session. True if delivered, False if it's gone."""
+    def post_to(
+        self,
+        session: Session,
+        msg: dict,
+        *,
+        on_parked_flush: "Callable[[bool], None] | None" = None,
+    ) -> bool | None:
+        """Post to one session. False if it's gone; None if it's currently
+        parked (queued, not yet on the wire — see `Session.park`;
+        `on_parked_flush` reports the eventual outcome); True otherwise
+        (written now, or queued only pending notifications/initialized).
+        """
         with self.sessions_lock:
             live = session in self.sessions
         if not live or session.closed:
             return False
-        session.post_channel(msg)
-        return not session.closed
+        delivered = session.post_channel(msg, on_parked_flush=on_parked_flush)
+        if session.closed:
+            return False
+        return True if delivered else None
 
     def register_claude_session(
         self,
@@ -488,16 +528,22 @@ def broadcast_channel(msg: dict, *, exclude: "Session | None" = None) -> None:
         _server.broadcast_channel(msg, exclude=exclude)
 
 
-def post_to(session: Session, msg: dict) -> bool:
+def post_to(
+    session: Session,
+    msg: dict,
+    *,
+    on_parked_flush: "Callable[[bool], None] | None" = None,
+) -> bool | None:
     """Deliver a server-initiated notification to one session only.
 
     False means the session disconnected — callers drop the message rather
     than falling back to a broadcast, which would leak one session's output
-    into every other one.
+    into every other one. None means it's parked instead (see `Server.post_to`)
+    — also not a broadcast case, just not yet on the wire.
     """
     if _server is None:
         return False
-    return _server.post_to(session, msg)
+    return _server.post_to(session, msg, on_parked_flush=on_parked_flush)
 
 
 def register_claude_session(
@@ -518,17 +564,38 @@ def rebind_claude_session(new_id: str, pid: int) -> str | None:
     return _server.rebind_claude_session(new_id, pid)
 
 
-def park_pushes(session_id: str, timeout_s: float = 120) -> bool:
+def park_pushes(session_id: str, timeout_s: float = 300) -> bool:
     """Hold channel pushes bound for the connection registered under
     `session_id` — see `Session.park`. Keyed on the connection rather than
     the id itself, since a push is addressed to the `Session` object;
-    `rebind_claude_session` releases it. False if no connected session
-    currently carries that id.
+    `rebind_claude_session` releases it, or call `unpark_pushes` directly if
+    the handoff gets called off. False if no connected session currently
+    carries that id.
+
+    The default was 120 until a live handoff-supervisor run measured actual
+    `/clear` gaps of 197s and 228s under a *supervised* (non-human) clear —
+    120 would have force-delivered both before the rebind arrived. 300
+    leaves headroom above what's been observed; pass a larger `timeout_s`
+    (the reporting session's own skill uses 600) for a slower handoff.
     """
     session = find_claude_session(session_id)
     if session is None:
         return False
     session.park(timeout_s)
+    return True
+
+
+def unpark_pushes(session_id: str) -> bool:
+    """Release a park early for the connection registered under
+    `session_id`, without a rebind — for a handoff that gets called off: the
+    same conversation continues and should get its held pushes at once
+    rather than wait out the park's timeout. False if no connected session
+    currently carries that id; a no-op (still True) if nothing is parked.
+    """
+    session = find_claude_session(session_id)
+    if session is None:
+        return False
+    session.unpark()
     return True
 
 
