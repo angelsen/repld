@@ -558,10 +558,100 @@ def _session_rebind(tmp: Path) -> None:
         except TimeoutError:
             pass
 
+        # ipc.park_pushes holds a completion push off the wire until the next
+        # rebind releases it — the handoff gap between a recap and /clear.
+        # Park first, so there's no race with the defer's own push.
+        out = content_text(
+            a.exec(
+                "from repld import ipc\nprint(ipc.park_pushes('gen-2', timeout_s=30))"
+            )
+        )
+        assert_true(
+            "True" in out, f"park_pushes finds the connected session (got {out!r})"
+        )
+        out = content_text(
+            a.exec(
+                "import asyncio\n"
+                "async def _parked():\n"
+                "    await asyncio.sleep(0.05)\n"
+                "    print('parked done')\n"
+                "print('tid=' + defer(_parked(), 'parked'))"
+            )
+        )
+        parked_id = out.split("tid=", 1)[1].split()[0]
+        try:
+            a.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=1,
+                where=lambda n: n["params"]["meta"].get("task_id") == parked_id,
+            )
+            raise AssertionError("parked push reached the connection before unpark")
+        except TimeoutError:
+            pass
+        print("  ✓ park_pushes holds a completion push off the wire")
+
+        out = rebind("gen-3", a.proc.pid)
+        assert_true(
+            "old= gen-2" in out, f"rebind returns the replaced id (got {out!r})"
+        )
+        note = a.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=5,
+            where=lambda n: n["params"]["meta"].get("task_id") == parked_id,
+        )
+        assert_true(
+            "parked done" in note["params"]["content"],
+            "rebind flushes the parked push to the same connection",
+        )
+        print("  ✓ rebind releases the park and flushes in order")
+
+        # No rebind at all this time — the park's own timeout is the
+        # backstop, so a handoff that never gets its /clear loses nothing.
+        content_text(
+            a.exec(
+                "from repld import ipc\nprint(ipc.park_pushes('gen-3', timeout_s=0.6))"
+            )
+        )
+        out = content_text(
+            a.exec(
+                "import asyncio\n"
+                "async def _unrebound():\n"
+                "    await asyncio.sleep(0.05)\n"
+                "    print('unrebound done')\n"
+                "print('tid=' + defer(_unrebound(), 'unrebound'))"
+            )
+        )
+        unrebound_id = out.split("tid=", 1)[1].split()[0]
+        try:
+            a.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=0.3,
+                where=lambda n: n["params"]["meta"].get("task_id") == unrebound_id,
+            )
+            raise AssertionError(
+                "unrebound push reached the connection before the timeout"
+            )
+        except TimeoutError:
+            pass
+        note = a.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=5,
+            where=lambda n: n["params"]["meta"].get("task_id") == unrebound_id,
+        )
+        assert_true(
+            "unrebound done" in note["params"]["content"],
+            "an unrebound park still delivers once its own timeout elapses",
+        )
+        print("  ✓ park_pushes' own timeout force-delivers with no rebind")
+
         os.kill(int(_lock(tmp)["pid"]), signal.SIGKILL)
         time.sleep(0.5)
         out = content_text(a.exec("print(current_session_id())", call_timeout=40))
-        assert_true("gen-2" in out, f"respawned kernel sees the new id (got {out!r})")
+        assert_true("gen-3" in out, f"respawned kernel sees the new id (got {out!r})")
         print("  ✓ bridge replays the rebound id onto a fresh kernel, not its env's")
     finally:
         a.close()

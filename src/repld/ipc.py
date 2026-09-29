@@ -19,6 +19,7 @@ import os
 import socket
 import struct
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -106,6 +107,12 @@ class Session:
         # set_initialized() is called. Replaces the prototype's
         # threading.Timer(1.0) retry hack.
         self.pending: list[dict] = []
+        # Channel notifications are held here instead of written while
+        # `parked` is set — see `park()`.
+        self.parked = False
+        self.parked_queue: list[dict] = []
+        self.park_deadline: float | None = None
+        self._park_timer: threading.Timer | None = None
         self._closed = False
         # Set by Server.register_claude_session once `initialize` carries the
         # bridge-identity fields (core_schemas.BRIDGE_SESSION_ID_KEY etc.).
@@ -138,8 +145,9 @@ class Session:
     def post_channel(self, msg: dict) -> None:
         """Server-initiated notification (channel push).
 
-        Queued until the session is marked initialized. Normal responses
-        (to client requests) should use write() directly.
+        Queued until the session is marked initialized, then queued again
+        (separately) while parked. Normal responses (to client requests)
+        should use write() directly.
         """
         with self.write_lock:
             if self._closed:
@@ -147,7 +155,57 @@ class Session:
             if not self.initialized:
                 self.pending.append(msg)
                 return
+            if self.parked:
+                self.parked_queue.append(msg)
+                return
             self._write_msg(msg)
+
+    def park(self, timeout_s: float) -> None:
+        """Hold channel pushes destined for this connection instead of
+        writing them, until `unpark()` or `timeout_s` elapses.
+
+        For the gap between a session's handoff recap and the `/clear` that
+        rebinds it (`Server.rebind_claude_session` calls `unpark()`): a push
+        landing in that gap would otherwise wake the conversation that has
+        already decided to leave, in a context about to be dropped. On
+        timeout with no rebind, delivers anyway to whatever conversation the
+        connection currently has — a handoff that never gets its clear must
+        not lose the push outright. Re-parking an already-parked connection
+        is a no-op; it keeps the original deadline.
+        """
+        with self.write_lock:
+            if self._closed or self.parked:
+                return
+            self.parked = True
+            self.park_deadline = time.monotonic() + timeout_s
+            timer = threading.Timer(timeout_s, self._unpark_and_flush)
+            timer.daemon = True
+            self._park_timer = timer
+        timer.start()
+
+    def unpark(self) -> None:
+        """Release a park early and flush whatever queued while it held, in
+        order. A no-op if nothing is parked."""
+        self._unpark_and_flush()
+
+    def _unpark_and_flush(self) -> None:
+        """Shared body of `unpark()` and the park timeout: whichever runs
+        first does the flush, the other's guard makes it a no-op — both can
+        race in from different threads (an explicit rebind vs. the Timer).
+        """
+        with self.write_lock:
+            if self._closed or not self.parked:
+                return
+            self.parked = False
+            self.park_deadline = None
+            if self._park_timer is not None:
+                self._park_timer.cancel()
+                self._park_timer = None
+            queued, self.parked_queue = self.parked_queue, []
+            for msg in queued:
+                self._write_msg(msg)
+                if self._closed:
+                    return
 
     def set_initialized(self) -> None:
         with self.write_lock:
@@ -164,6 +222,9 @@ class Session:
         if self._closed:
             return
         self._closed = True
+        if self._park_timer is not None:
+            self._park_timer.cancel()
+            self._park_timer = None
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -351,6 +412,10 @@ class Server:
                 del self._claude_sessions[old_id]
             session.claude_session_id = new_id
             self._claude_sessions[new_id] = session
+        # Release before posting anything: a park held for the handoff this
+        # rebind completes must flush to the successor, and unconditionally
+        # calling it costs nothing when nothing was parked (unpark() no-ops).
+        session.unpark()
         # The bridge re-stamps `initialize` from this on every kernel restart,
         # or the next kernel would re-register the stale id.
         session.post_channel(
@@ -451,6 +516,20 @@ def rebind_claude_session(new_id: str, pid: int) -> str | None:
     if _server is None:
         raise LookupError("no IPC server in this process")
     return _server.rebind_claude_session(new_id, pid)
+
+
+def park_pushes(session_id: str, timeout_s: float = 120) -> bool:
+    """Hold channel pushes bound for the connection registered under
+    `session_id` — see `Session.park`. Keyed on the connection rather than
+    the id itself, since a push is addressed to the `Session` object;
+    `rebind_claude_session` releases it. False if no connected session
+    currently carries that id.
+    """
+    session = find_claude_session(session_id)
+    if session is None:
+        return False
+    session.park(timeout_s)
+    return True
 
 
 def find_claude_session(session_id: str) -> Session | None:
