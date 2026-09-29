@@ -566,7 +566,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
