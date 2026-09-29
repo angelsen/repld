@@ -22,6 +22,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 from .core_schemas import BRIDGE_REBIND_METHOD
 from .core_schemas import error as _error
@@ -92,6 +93,11 @@ def _ancestry(pid: int) -> list[int]:
         # comm (field 2) may itself contain spaces and parens — split after the last ')'.
         pid = int(stat.rsplit(")", 1)[1].split()[1])
     return chain
+
+
+class Rebind(NamedTuple):
+    old_id: str | None
+    flushed: int  # parked pushes this rebind delivered to the successor
 
 
 class Session:
@@ -200,12 +206,13 @@ class Session:
             self._park_timer = timer
         timer.start()
 
-    def unpark(self) -> None:
+    def unpark(self) -> int:
         """Release a park early and flush whatever queued while it held, in
-        order. A no-op if nothing is parked."""
-        self._unpark_and_flush()
+        order. Returns how many pushes this call wrote; 0 if nothing is
+        parked (including a park the timeout already released)."""
+        return self._unpark_and_flush()
 
-    def _unpark_and_flush(self) -> None:
+    def _unpark_and_flush(self) -> int:
         """Shared body of `unpark()` and the park timeout: whichever runs
         first does the flush, the other's guard makes it a no-op — both can
         race in from different threads (an explicit rebind vs. the Timer).
@@ -216,9 +223,10 @@ class Session:
         need is an unnecessary way to invite a deadlock later.
         """
         callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        flushed = 0
         with self.write_lock:
             if self._closed or not self.parked:
-                return
+                return 0
             self.parked = False
             self.park_deadline = None
             if self._park_timer is not None:
@@ -227,6 +235,7 @@ class Session:
             queued, self.parked_queue = self.parked_queue, []
             for msg, cb in queued:
                 ok = (not self._closed) and self._write_msg(msg)
+                flushed += ok
                 if cb is not None:
                     callbacks.append((cb, ok))
         for cb, ok in callbacks:
@@ -234,6 +243,7 @@ class Session:
                 cb(ok)
             except Exception:
                 pass  # a broken callback must not break the flush
+        return flushed
 
     def set_initialized(self) -> None:
         with self.write_lock:
@@ -419,10 +429,12 @@ class Server:
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
 
-    def rebind_claude_session(self, new_id: str, pid: int) -> str | None:
+    def rebind_claude_session(self, new_id: str, pid: int) -> Rebind:
         """Re-register the Claude Code session sharing `pid`'s process tree under `new_id`.
 
-        Returns the id it replaced. The match is the connected session whose
+        Returns the id it replaced and how many parked pushes the rebind
+        flushed to the successor (0 when nothing was parked, or when the park
+        timeout had already delivered them). The match is the connected session whose
         bridge shares the nearest ancestor with `pid`; raises LookupError on
         no match and ValueError when that nearest ancestor is shared by two.
         """
@@ -455,13 +467,13 @@ class Server:
         # Release before posting anything: a park held for the handoff this
         # rebind completes must flush to the successor, and unconditionally
         # calling it costs nothing when nothing was parked (unpark() no-ops).
-        session.unpark()
+        flushed = session.unpark()
         # The bridge re-stamps `initialize` from this on every kernel restart,
         # or the next kernel would re-register the stale id.
         session.post_channel(
             _notification(BRIDGE_REBIND_METHOD, {"session_id": new_id})
         )
-        return old_id
+        return Rebind(old_id, flushed)
 
     def find_claude_session(self, session_id: str) -> Session | None:
         with self.sessions_lock:
@@ -556,7 +568,7 @@ def register_claude_session(
         _server.register_claude_session(session, session_id, project_dir, session_kind)
 
 
-def rebind_claude_session(new_id: str, pid: int) -> str | None:
+def rebind_claude_session(new_id: str, pid: int) -> Rebind:
     """See `Server.rebind_claude_session` — for a SessionStart hook after `/clear`,
     which keeps the MCP connection (and the bridge's env-derived id) alive."""
     if _server is None:

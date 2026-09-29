@@ -305,19 +305,6 @@ rather than an architectural one — the exact pattern already exists twice in t
   pair. Off by default; a sibling with no dashboard or no readable token keeps the keys
   absent, never `0`, so a reader can tell "idle" from "unknown". Requested by the same
   viewer, which Tab-cycles every live kernel (27 on the requester's machine).
-- [ ] **`ipc.rebind_claude_session()` doesn't report how many parked pushes it
-  flushed.** Requested by `claude-code-research-ac`'s handoff-supervisor hook
-  (`session-roster.py`'s SessionStart `clear` branch, `claude_code_research`'s
-  `docs/features/handoff-supervisor.md`, section C2): after a supervised `/clear` it
-  sends the successor a `continue` push only when no flushed push will already start
-  it, so it needs to know whether the rebind flushed anything. Today it reads
-  `ipc._server.sessions`/`Session.parked_queue` directly (both private) before the
-  rebind and diffs by `id()` afterward — which races a push landing between that read
-  and the rebind call. Candidate fix: `rebind_claude_session` returns the flushed
-  count alongside the replaced id (its current return, still needed for the
-  predecessor line) — a separate pre-rebind `ipc.parked_count(session_id)`, as also
-  suggested, can't close the race by itself since a push can land in the gap between
-  that call and the rebind. Measured on 0.10.13, 2026-09-29; not blocking them today.
 
 ## Infra
 

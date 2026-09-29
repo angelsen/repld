@@ -247,9 +247,8 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
     id claude_sessions() lists — returns True if delivered, False if that
     session isn't connected. No fallback to broadcast on a miss: that would
     defeat the point of asking for one session specifically. A parked
-    target (ipc.park_pushes) also reads False here — held, not dropped, but
-    this builtin has no way to say "queued". A caller that needs the
-    distinction calls push_channel directly with on_parked_flush=, the way
+    target (ipc.park_pushes) returns None — held, not dropped; the eventual
+    outcome is only observable via push_channel's on_parked_flush=, the way
     _maybe_push_done does for task completions.
 
     exclude=<claude_session_id>, only meaningful alongside the broadcast
@@ -266,7 +265,7 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
         target = ipc.find_claude_session(session)
         if target is None:
             return False
-        return bool(push_channel(str(content), meta, session=target))
+        return push_channel(str(content), meta, session=target)
     excluded = ipc.find_claude_session(exclude) if exclude is not None else None
     push_channel(str(content), meta, exclude=excluded)
     return None

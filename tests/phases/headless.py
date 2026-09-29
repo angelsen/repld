@@ -482,7 +482,8 @@ def _session_rebind(tmp: Path) -> None:
             code = (
                 "from repld import ipc\n"
                 "try:\n"
-                f"    print('old=', ipc.rebind_claude_session({new_id!r}, {pid}))\n"
+                f"    r = ipc.rebind_claude_session({new_id!r}, {pid})\n"
+                "    print('old=', r.old_id, 'flushed=', r.flushed)\n"
                 "except (LookupError, ValueError) as e:\n"
                 "    print(type(e).__name__, e)"
             )
@@ -511,7 +512,8 @@ def _session_rebind(tmp: Path) -> None:
 
         out = rebind("gen-2", a.proc.pid)
         assert_true(
-            "old= gen-1" in out, f"rebind returns the replaced id (got {out!r})"
+            "old= gen-1 flushed= 0" in out,
+            f"rebind returns the replaced id, nothing parked (got {out!r})",
         )
         out = content_text(
             a.exec(
@@ -599,7 +601,8 @@ def _session_rebind(tmp: Path) -> None:
 
         out = rebind("gen-3", a.proc.pid)
         assert_true(
-            "old= gen-2" in out, f"rebind returns the replaced id (got {out!r})"
+            "old= gen-2 flushed= 1" in out,
+            f"rebind returns the replaced id and the one push it flushed (got {out!r})",
         )
         note = a.wait_notification(
             "notifications/claude/channel",
@@ -693,6 +696,10 @@ def _session_rebind(tmp: Path) -> None:
             )
         )
         called_off_id = out.split("tid=", 1)[1].split()[0]
+        out = content_text(a.exec("print(repr(notify('held', session='gen-3')))"))
+        assert_true(
+            "None" in out, f"notify(session=) on a parked target is None (got {out!r})"
+        )
         try:
             a.wait_notification(
                 "notifications/claude/channel",
