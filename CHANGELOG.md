@@ -10,12 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `ipc.rebind_claude_session` returns `Rebind(old_id, flushed)` instead of the bare replaced id. `flushed` is how many parked pushes the rebind delivered to the successor (0 if nothing was parked, or the park timeout already delivered them), so a handoff hook no longer reads `Session.parked_queue` and races a push landing before the rebind. Callers using the return as a string must read `.old_id`.
-- `notify(session=<id>)` returns `None` for a target held by `ipc.park_pushes` instead of `False`, matching `push_channel`; `False` now means only "not connected".
-
 ### Fixed
 
 ### Removed
+
+## [0.11.0] - 2026-09-29
+
+### Changed
+
+- `ipc.rebind_claude_session` returns `Rebind(old_id, flushed)` instead of the bare replaced id. `flushed` is how many parked pushes the rebind delivered to the successor (0 if nothing was parked, or the park timeout already delivered them), so a handoff hook no longer reads `Session.parked_queue` and races a push landing before the rebind. Callers using the return as a string must read `.old_id`.
+- `notify(session=<id>)` returns `None` for a target held by `ipc.park_pushes` instead of `False`, matching `push_channel`; `False` now means only "not connected".
+
 
 ## [0.10.13] - 2026-09-29
 
