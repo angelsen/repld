@@ -10,13 +10,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.11.4] - 2026-09-30
+
+### Changed
+
 - `ipc.rebind_claude_session` no longer raises "ambiguous" when a pane and a nested Claude Code process it launched (a `claude -p` skill run, a background agent) both have a repld connection: among the connections sharing the hook's nearest ancestor it takes the one closest to that ancestor, which is the pane's own bridge. Only two connections equally close still raise. This covers a human-typed `/clear`, where the hook has no `old_id=`.
 - The `kernel_crashed` push now carries a `reason` (meta and message text) read from the kernel's systemd unit journal, for example `systemd result oom-kill, main process KILL`, and omits it off systemd or when the journal has nothing.
 - The systemd unit a kernel is spawned into now sets `OOMPolicy=continue`. With the default `stop`, the OOM killer taking one child process (for example a check suite's eslint) stopped the whole service and every task and connection with it; now that child is a failed subprocess and the kernel survives. `REPLD_MEMORY_HIGH` and `REPLD_OOM_SCORE_ADJUST` stay opt-in.
 
-### Fixed
-
-### Removed
 
 ## [0.11.3] - 2026-09-30
 
