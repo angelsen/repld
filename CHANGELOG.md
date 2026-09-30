@@ -8,13 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `ipc.rebind_claude_session(new_id, pid, old_id=None)`: `old_id` names the connection being replaced, so a pid whose nearest shared ancestor also carries a background subagent's own repld connection no longer raises "ambiguous" after `/clear`. The connection must still share `pid`'s process tree.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.11.1] - 2026-09-30
+
+### Added
+
+- `ipc.rebind_claude_session(new_id, pid, old_id=None)`: `old_id` names the connection being replaced, so a pid whose nearest shared ancestor also carries a background subagent's own repld connection no longer raises "ambiguous" after `/clear`. The connection must still share `pid`'s process tree.
+
 
 ## [0.11.0] - 2026-09-29
 
