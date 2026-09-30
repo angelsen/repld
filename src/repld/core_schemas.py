@@ -55,6 +55,9 @@ BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
 # Kernel → bridge only, consumed by the bridge and never relayed to the client:
 # `ipc.rebind_claude_session` telling it the id to stamp from now on.
 BRIDGE_REBIND_METHOD = "notifications/repld/session_rebound"
+# Kernel → bridge only: the last frame of a clean shutdown. A socket EOF with no
+# goodbye before it is a crash, and the bridge says so to its own client.
+BRIDGE_GOODBYE_METHOD = "notifications/repld/goodbye"
 
 
 # What `initialize` negotiates, from either side of the socket. Shared for the

@@ -25,7 +25,7 @@ from harness import (
     lock_path_for,
 )
 
-from repld import core_schemas
+from repld import core_schemas, state
 
 
 def _handshake(b: Bridge) -> dict:
@@ -108,6 +108,14 @@ def _autospawn_and_heal(tmp: Path) -> None:
 
         assert_true(b.proc.poll() is None, "bridge survives kernel death")
 
+        note = b.wait_notification(
+            "notifications/claude/channel", kind="kernel_crashed", timeout=10
+        )
+        assert_eq(
+            note["params"]["meta"]["pid"], str(first_pid), "crash push names the pid"
+        )
+        print("  ✓ a SIGKILLed kernel pushes kernel_crashed to the idle session")
+
         # Next request heals: fresh kernel, replayed handshake, working tools.
         resp = b.exec("print('healed')", call_timeout=40)
         text = content_text(resp)
@@ -128,6 +136,29 @@ def _autospawn_and_heal(tmp: Path) -> None:
         b.exec("notify('after respawn')")
         b.wait_notification("notifications/claude/channel", timeout=10)
         print("  ✓ channel push arrives after respawn (handshake replayed)")
+    finally:
+        b.close()
+
+
+def _clean_stop_is_not_a_crash(tmp: Path) -> None:
+    """A SIGTERMed kernel sends a goodbye, so its bridge stays quiet."""
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        b.exec("pass", call_timeout=40)
+        pid = int(_wait_lock(tmp)["pid"])
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and state.pid_alive(pid):
+            time.sleep(0.1)
+        try:
+            b.wait_notification(
+                "notifications/claude/channel", kind="kernel_crashed", timeout=3
+            )
+        except TimeoutError:
+            print("  ✓ a SIGTERMed kernel sends a goodbye; no kernel_crashed push")
+        else:
+            raise AssertionError("clean shutdown was announced as a crash")
     finally:
         b.close()
 
@@ -1393,6 +1424,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _log_renderer_covers_every_event()
+        _clean_stop_is_not_a_crash(tmp)
         _stop_kernel(tmp)
         _concurrent_boots(tmp)
     finally:

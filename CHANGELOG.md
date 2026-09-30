@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A bridge now tells its own Claude Code session when the kernel dies. On socket EOF with no preceding goodbye frame it pushes one `kind=kernel_crashed` channel message (naming the pid and what is lost), so an idle session learns at once instead of at its next tool call, with no ticker and no race against a restart. The kernel sends the goodbye (`notifications/repld/goodbye`, consumed by the bridge, never relayed) as the last frame of a clean stop, so `repld stop`/`restart` stay quiet. The bridge still respawns lazily.
 ### Changed
 
 ### Fixed

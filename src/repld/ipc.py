@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from .core_schemas import BRIDGE_REBIND_METHOD
+from .core_schemas import BRIDGE_GOODBYE_METHOD, BRIDGE_REBIND_METHOD
 from .core_schemas import error as _error
 from .core_schemas import notification as _notification
 from .state import read_lock
@@ -285,6 +285,13 @@ class Session:
         with self.write_lock:
             self._close_locked()
 
+    def say_goodbye(self) -> None:
+        """Mark the coming EOF as a clean shutdown. Skips `pending`/park on purpose:
+        it is addressed to the bridge, never the client."""
+        with self.write_lock:
+            if not self._closed:
+                self._write_msg(_notification(BRIDGE_GOODBYE_METHOD, {}))
+
 
 class Server:
     def __init__(self, socket_path: Path, handler: Handler):
@@ -509,6 +516,7 @@ class Server:
             self.sessions.clear()
             self._claude_sessions.clear()
         for s in sessions:
+            s.say_goodbye()
             s.close()
         try:
             self.socket_path.unlink()

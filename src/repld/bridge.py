@@ -53,6 +53,7 @@ from . import (
     state,
 )
 from .core_schemas import (
+    BRIDGE_GOODBYE_METHOD,
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_REBIND_METHOD,
     BRIDGE_SESSION_ID_KEY,
@@ -222,6 +223,11 @@ class Bridge:
         self._generation = 0
         self._client_init: dict | None = None
         self._client_initialized = False
+        # Generation whose kernel sent BRIDGE_GOODBYE_METHOD; an EOF from any
+        # other generation is a crash. `_closing` is set once stdin hits EOF so
+        # our own socket close isn't reported as one.
+        self._goodbye_gen: int | None = None
+        self._closing = False
         # Both absent for a non-Claude-Code MCP client or a hand-run bridge —
         # _replay_handshake degrades to a plain replay with neither field.
         self._claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
@@ -538,7 +544,7 @@ class Bridge:
                 if not state.pid_alive(old_pid):
                     break
                 time.sleep(WAIT_STEP_SECONDS)
-        self._on_kernel_gone()
+        self._on_kernel_gone(expected=True)
         if not self._reconnect(exclude_pid=old_pid):
             return old_pid, None
         return old_pid, self._kernel_pid
@@ -604,7 +610,9 @@ class Bridge:
         if self._client_initialized:
             self._to_kernel(_notification("notifications/initialized"))
 
-    def _on_kernel_gone(self, gen: int | None = None) -> None:
+    def _on_kernel_gone(
+        self, gen: int | None = None, *, expected: bool = False
+    ) -> None:
         """Tear down the current kernel attachment and orphan its in-flight ids.
 
         `gen` makes the teardown *conditional*, and the condition is checked
@@ -623,13 +631,24 @@ class Bridge:
         Callers with no generation to name (a send failure in `_to_kernel`, an
         explicit `restart_kernel`) pass None and always tear down: they are
         acting on whatever is current by definition.
+
+        The client is told of a crash here — the one place every death path
+        (reader EOF, failed send) funnels through — and only when this call
+        is the one that took a live socket, so a death is announced once.
+        `expected` (our own `restart_kernel`) and a goodbye frame suppress it.
         """
         with self._state_lock:
             if gen is not None and gen != self._generation:
                 return
             sock, self._sock = self._sock, None
-            self._kernel_pid = None
+            pid, self._kernel_pid = self._kernel_pid, None
             orphans, self._inflight = self._inflight, set()
+            crashed = (
+                sock is not None
+                and not expected
+                and not self._closing
+                and self._goodbye_gen != self._generation
+            )
         if sock is not None:
             # shutdown() before close(): the reader thread holds a makefile,
             # which keeps its own reference to the fd, so close() alone leaves
@@ -647,6 +666,28 @@ class Bridge:
             self._to_client(
                 _error(rid, KERNEL_GONE, "repld kernel restarted; request was lost")
             )
+        if crashed and self._client_initialized:
+            self._announce_crash(pid)
+
+    def _announce_crash(self, pid: int | None) -> None:
+        """Push one channel message into this bridge's own client. A kernel that
+        dies takes its task table and namespace with it, and nothing else
+        would tell a session that isn't mid-call."""
+        who = f" (pid {pid})" if pid is not None else ""
+        self._to_client(
+            _notification(
+                "notifications/claude/channel",
+                {
+                    "content": (
+                        f"repld kernel{who} died without a clean shutdown at "
+                        f"{time.strftime('%H:%M:%S')}. Its tasks, tickers, gates and "
+                        "in-memory state are gone; the next repld call starts a fresh "
+                        "kernel. Anything you were waiting on from it will not arrive."
+                    ),
+                    "meta": {"kind": "kernel_crashed", "pid": str(pid or "")},
+                },
+            )
+        )
 
     # -- kernel I/O ---------------------------------------------------------
 
@@ -684,6 +725,9 @@ class Bridge:
                 rid = msg.get("id")
                 if rid == BRIDGE_INIT_ID:
                     continue  # our replayed handshake — the client must not see it
+                if msg.get("method") == BRIDGE_GOODBYE_METHOD:
+                    self._goodbye_gen = gen
+                    continue
                 if msg.get("method") == BRIDGE_REBIND_METHOD:
                     new_id = (msg.get("params") or {}).get("session_id")
                     if isinstance(new_id, str):
@@ -867,6 +911,7 @@ class Bridge:
         # Client-side EOF is the only thing that ends this process. Drain first:
         # a client that closes stdin right after its last request is still owed
         # those replies, and the reader thread writes them to stdout.
+        self._closing = True
         self._drain_inflight()
         # The kernel keeps running — its state is meant to outlive the session.
         # --ephemeral inverts that: it dies with the bridge that spawned it.
