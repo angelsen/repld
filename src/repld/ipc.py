@@ -429,8 +429,14 @@ class Server:
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
 
-    def rebind_claude_session(self, new_id: str, pid: int) -> Rebind:
+    def rebind_claude_session(
+        self, new_id: str, pid: int, old_id: str | None = None
+    ) -> Rebind:
         """Re-register the Claude Code session sharing `pid`'s process tree under `new_id`.
+
+        `old_id` names the connection being replaced; it disambiguates a pid
+        whose nearest shared ancestor also carries a subagent's own connection.
+        It must still share `pid`'s tree, else LookupError.
 
         Returns the id it replaced and how many parked pushes the rebind
         flushed to the successor (0 when nothing was parked, or when the park
@@ -446,6 +452,8 @@ class Server:
             ]
         for ancestor in _ancestry(pid):
             hits = [s for s, chain in candidates if ancestor in chain]
+            if old_id is not None:
+                hits = [s for s in hits if s.claude_session_id == old_id]
             if len(hits) > 1:
                 ids = ", ".join(sorted(str(s.claude_session_id) for s in hits))
                 raise ValueError(
@@ -568,12 +576,12 @@ def register_claude_session(
         _server.register_claude_session(session, session_id, project_dir, session_kind)
 
 
-def rebind_claude_session(new_id: str, pid: int) -> Rebind:
+def rebind_claude_session(new_id: str, pid: int, old_id: str | None = None) -> Rebind:
     """See `Server.rebind_claude_session` — for a SessionStart hook after `/clear`,
     which keeps the MCP connection (and the bridge's env-derived id) alive."""
     if _server is None:
         raise LookupError("no IPC server in this process")
-    return _server.rebind_claude_session(new_id, pid)
+    return _server.rebind_claude_session(new_id, pid, old_id)
 
 
 def park_pushes(session_id: str, timeout_s: float = 300) -> bool:

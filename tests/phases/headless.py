@@ -478,11 +478,11 @@ def _session_rebind(tmp: Path) -> None:
         _handshake(a)
         _handshake(c)
 
-        def rebind(new_id: str, pid: int) -> str:
+        def rebind(new_id: str, pid: int, old_id: str | None = None) -> str:
             code = (
                 "from repld import ipc\n"
                 "try:\n"
-                f"    r = ipc.rebind_claude_session({new_id!r}, {pid})\n"
+                f"    r = ipc.rebind_claude_session({new_id!r}, {pid}, {old_id!r})\n"
                 "    print('old=', r.old_id, 'flushed=', r.flushed)\n"
                 "except (LookupError, ValueError) as e:\n"
                 "    print(type(e).__name__, e)"
@@ -496,7 +496,16 @@ def _session_rebind(tmp: Path) -> None:
         assert_true(
             "LookupError" in out, f"unrelated pid matches nothing (got {out!r})"
         )
-        print("  ✓ rebind refuses an ambiguous or unrelated pid")
+        out = rebind("gen-1", os.getpid(), old_id="nope")
+        assert_true(
+            "LookupError" in out, f"old_id matching nothing refuses (got {out!r})"
+        )
+        # Same-id rebind keeps later steps' state while proving old_id picks one of two.
+        out = rebind("gen-1", os.getpid(), old_id="gen-1")
+        assert_true(
+            "old= gen-1" in out, f"old_id disambiguates a shared pid (got {out!r})"
+        )
+        print("  ✓ rebind refuses an ambiguous or unrelated pid; old_id disambiguates")
 
         # Started under gen-1, finishes under gen-2 — the /clear-then-continue case.
         out = content_text(
