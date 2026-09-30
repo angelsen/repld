@@ -584,11 +584,8 @@ def park_pushes(session_id: str, timeout_s: float = 300) -> bool:
     the handoff gets called off. False if no connected session currently
     carries that id.
 
-    The default was 120 until a live handoff-supervisor run measured actual
-    `/clear` gaps of 197s and 228s under a *supervised* (non-human) clear —
-    120 would have force-delivered both before the rebind arrived. 300
-    leaves headroom above what's been observed; pass a larger `timeout_s`
-    (the reporting session's own skill uses 600) for a slower handoff.
+    The 300s default clears the recap-to-`/clear` gaps a supervised clear
+    takes (~200-230s); pass a larger `timeout_s` for a slower handoff.
     """
     session = find_claude_session(session_id)
     if session is None:
