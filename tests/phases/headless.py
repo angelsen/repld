@@ -811,6 +811,37 @@ def _session_rebind(tmp: Path) -> None:
         c.close()
 
 
+def _rebind_prefers_nearest_bridge(tmp: Path) -> None:
+    """A pane's bridge and a nested one (a `claude -p` the pane ran) share the
+    hook's ancestor; the rebind takes the pane's, the shallower of the two."""
+    env = {"CLAUDE_PROJECT_DIR": None}
+    pane = Bridge(tmp, env={**env, "CLAUDE_CODE_SESSION_ID": "pane-old"})
+    nested = Bridge(
+        tmp, env={**env, "CLAUDE_CODE_SESSION_ID": "nested-sdk"}, nested=True
+    )
+    try:
+        _handshake(pane)
+        _handshake(nested)
+        out = content_text(
+            pane.exec(
+                "from repld import ipc\n"
+                f"r = ipc.rebind_claude_session('pane-new', {os.getpid()})\n"
+                "print('old=', r.old_id)\n"
+                "print(sorted(s for s, _, _ in claude_sessions()))",
+                call_timeout=40,
+            )
+        )
+        assert_true("old= pane-old" in out, f"nearest bridge rebound (got {out!r})")
+        assert_true(
+            "nested-sdk" in out and "pane-new" in out,
+            f"the nested session keeps its own id (got {out!r})",
+        )
+        print("  ✓ rebind picks the pane's bridge over a nested one under the same pid")
+    finally:
+        pane.close()
+        nested.close()
+
+
 def _project_path(cwd: Path) -> Path:
     from repld import paths
 
@@ -1458,6 +1489,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _project_flags(tmp)
         _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
+        _rebind_prefers_nearest_bridge(tmp)
         _log_renderer_covers_every_event()
         _bridge_reattaches_to_successor(tmp)
         _clean_stop_is_not_a_crash(tmp)

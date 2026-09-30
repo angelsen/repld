@@ -448,21 +448,31 @@ class Server:
         Returns the id it replaced and how many parked pushes the rebind
         flushed to the successor (0 when nothing was parked, or when the park
         timeout had already delivered them). The match is the connected session whose
-        bridge shares the nearest ancestor with `pid`; raises LookupError on
-        no match and ValueError when that nearest ancestor is shared by two.
+        bridge shares the nearest ancestor with `pid`, the one closest to that
+        ancestor if several do; raises LookupError on no match and ValueError
+        when two are equally close.
         """
         with self.sessions_lock:
             candidates = [
-                (s, set(_ancestry(s.peer_pid)))
+                (s, _ancestry(s.peer_pid))
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
         for ancestor in _ancestry(pid):
-            hits = [s for s, chain in candidates if ancestor in chain]
+            hits = [
+                (s, chain.index(ancestor))
+                for s, chain in candidates
+                if ancestor in chain
+            ]
             if old_id is not None:
-                hits = [s for s in hits if s.claude_session_id == old_id]
+                hits = [(s, d) for s, d in hits if s.claude_session_id == old_id]
+            # A pane's bridge hangs directly off its claude; a nested one (a
+            # `claude -p` the pane ran) is deeper under the same ancestor.
             if len(hits) > 1:
-                ids = ", ".join(sorted(str(s.claude_session_id) for s in hits))
+                nearest = min(d for _, d in hits)
+                hits = [(s, d) for s, d in hits if d == nearest]
+            if len(hits) > 1:
+                ids = ", ".join(sorted(str(s.claude_session_id) for s, _ in hits))
                 raise ValueError(
                     f"pid {pid} is ambiguous: ancestor {ancestor} is shared by {ids}"
                 )
@@ -472,7 +482,7 @@ class Server:
             raise LookupError(
                 f"no connected Claude Code session shares a process tree with pid {pid}"
             )
-        session = hits[0]
+        session = hits[0][0]
         with self.sessions_lock:
             old_id = session.claude_session_id
             if old_id is not None and self._claude_sessions.get(old_id) is session:

@@ -96,6 +96,11 @@ def _systemd_run_argv(
         "--collect",
         f"--unit={_systemd_unit_name(sock_path)}",
         f"--working-directory={cwd}",
+        # Unlike the two opt-ins below this overrides no policy: the default,
+        # `stop`, tears the whole service down when the OOM killer takes one
+        # child (a check suite's eslint), losing every task and connection.
+        "-p",
+        "OOMPolicy=continue",
     ]
     # Both opt-in, and for the same reason: they override deliberate policy.
     # A default memory ceiling would break the legitimate case of loading

@@ -641,6 +641,41 @@ def _starvation_classification() -> None:
     )
 
 
+def _crash_reason() -> None:
+    from repld import bridge
+
+    oom = (
+        "Main process exited, code=killed, status=9/KILL\n"
+        "repld-x.service: Failed with result 'oom-kill'.\n"
+    )
+    assert_eq(
+        bridge._reason_from_journal(oom),
+        "systemd result oom-kill, main process KILL",
+        "an OOM-killed kernel names both the result and the signal",
+    )
+    assert_eq(
+        bridge._reason_from_journal("Main process exited, code=killed, status=9/KILL"),
+        "main process killed by KILL",
+        "a bare SIGKILL is still reported",
+    )
+    assert_eq(
+        bridge._reason_from_journal("Main process exited, code=exited, status=15/TERM"),
+        None,
+        "a SIGTERM is a deliberate stop, not a cause",
+    )
+    # The child-only OOM line fires while the kernel survives, so it is no cause.
+    assert_eq(
+        bridge._reason_from_journal(
+            "The kernel OOM killer killed some processes in this unit."
+        ),
+        None,
+        "a killed child alone names no cause",
+    )
+    print(
+        "  ✓ bridge._reason_from_journal: oom-kill / SIGKILL named, TERM and child-only OOM ignored"
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -654,3 +689,4 @@ def phase_2_pure() -> None:
     _sibling_counts_concurrency()
     _loop_watchdog()
     _starvation_classification()
+    _crash_reason()

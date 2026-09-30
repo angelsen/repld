@@ -35,7 +35,9 @@ Two rules that fall out of running arbitrary user code:
 
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -212,6 +214,20 @@ def _rid_of(line: str) -> object | None:
     except json.JSONDecodeError:
         return None
     return msg.get("id") if isinstance(msg, dict) else None
+
+
+def _reason_from_journal(text: str) -> str | None:
+    """One-phrase cause from a repld unit's journal lines: systemd's own result
+    (`oom-kill`, `signal`), else the signal that ended the main process."""
+    m = re.search(r"Failed with result '([^']+)'", text)
+    sig = re.search(r"status=(\d+)/([A-Z]+)", text)
+    if m and sig:
+        return f"systemd result {m.group(1)}, main process {sig.group(2)}"
+    if m:
+        return f"systemd result {m.group(1)}"
+    if sig and sig.group(2) not in ("TERM", "INT"):
+        return f"main process killed by {sig.group(2)}"
+    return None
 
 
 class Bridge:
@@ -680,25 +696,61 @@ class Bridge:
                 _error(rid, KERNEL_GONE, "repld kernel restarted; request was lost")
             )
         if crashed and self._client_initialized:
-            self._announce_crash(pid)
+            # Off-thread: the journal lookup can take a second and this runs on
+            # the reader thread or the request path.
+            threading.Thread(
+                target=self._announce_crash,
+                args=(pid,),
+                daemon=True,
+                name="repld-bridge-crash-push",
+            ).start()
         return sock is not None
+
+    def _crash_reason(self) -> str | None:
+        """Why the kernel's systemd unit ended, from its journal; None off
+        systemd or when the journal says nothing. The unit is gone from
+        `systemctl` by then (`--collect`), so the journal is the only record."""
+        unit = spawn._systemd_unit_name(self.socket_path)
+        for _ in range(4):  # the unit's closing lines can trail the socket EOF
+            try:
+                out = subprocess.run(
+                    ["journalctl", "--user", "-u", unit, "--since", "-2min"]
+                    + ["-o", "cat", "--no-pager", "-n", "40"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                return None
+            reason = _reason_from_journal(out)
+            if reason:
+                return reason
+            time.sleep(0.3)
+        return None
 
     def _announce_crash(self, pid: int | None) -> None:
         """Push one channel message into this bridge's own client. A kernel that
         dies takes its task table and namespace with it, and nothing else
         would tell a session that isn't mid-call."""
         who = f" (pid {pid})" if pid is not None else ""
+        reason = self._crash_reason()
+        why = f" Cause: {reason}." if reason else ""
+        meta = {"kind": "kernel_crashed", "pid": str(pid or "")}
+        if reason:
+            meta["reason"] = reason
         self._to_client(
             _notification(
                 "notifications/claude/channel",
                 {
                     "content": (
                         f"repld kernel{who} died without a clean shutdown at "
-                        f"{time.strftime('%H:%M:%S')}. Its tasks, tickers, gates and "
-                        "in-memory state are gone; the next repld call starts a fresh "
-                        "kernel. Anything you were waiting on from it will not arrive."
+                        f"{time.strftime('%H:%M:%S')}.{why} Its tasks, tickers, gates "
+                        "and in-memory state are gone; the next repld call starts a "
+                        "fresh kernel. Anything you were waiting on from it will not "
+                        "arrive."
                     ),
-                    "meta": {"kind": "kernel_crashed", "pid": str(pid or "")},
+                    "meta": meta,
                 },
             )
         )

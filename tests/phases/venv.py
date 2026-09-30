@@ -102,6 +102,10 @@ def _systemd_spawn_argv(tmp: Path) -> None:
         not any("OOMScoreAdjust" in x for x in argv),
         "and the manager's OOM policy is left alone unless asked",
     )
+    assert_true(
+        "OOMPolicy=continue" in argv,
+        "a killed child must not stop the kernel's whole unit",
+    )
     tuned = spawn._systemd_run_argv(
         ["python"],
         a_sock,
