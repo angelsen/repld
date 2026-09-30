@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://angelsen.github.io/repld/sitemap-index.xml
