@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A bridge whose kernel died (clean stop or crash) now re-attaches on its own to the replacement kernel for up to 30 s, never spawning one, and replays its handshake. Before, it reattached only at its session's next tool call, so in the gap the connection was absent from the new kernel: `rebind_claude_session` raised `LookupError` after a `/clear`, `park_pushes` returned False, and targeted pushes found no session.
+
 ### Changed
 
 ### Fixed

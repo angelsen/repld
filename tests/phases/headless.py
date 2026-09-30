@@ -140,6 +140,41 @@ def _autospawn_and_heal(tmp: Path) -> None:
         b.close()
 
 
+def _bridge_reattaches_to_successor(tmp: Path) -> None:
+    """After its kernel dies, an idle bridge re-registers with the replacement
+    kernel on its own, so its connection exists before its session's next call."""
+    a = Bridge(
+        tmp, env={"CLAUDE_CODE_SESSION_ID": "reattach-a", "CLAUDE_PROJECT_DIR": None}
+    )
+    c = Bridge(
+        tmp, env={"CLAUDE_CODE_SESSION_ID": "reattach-c", "CLAUDE_PROJECT_DIR": None}
+    )
+    try:
+        _handshake(a)
+        _handshake(c)
+        a.exec("pass", call_timeout=40)
+        os.kill(int(_wait_lock(tmp)["pid"]), signal.SIGKILL)
+        # `a` stays idle from here; `c`'s call spawns the successor.
+        c.exec("pass", call_timeout=40)
+        deadline = time.monotonic() + 15
+        ids = ""
+        while time.monotonic() < deadline:
+            out = content_text(
+                c.exec("print(sorted(s for s, _, _ in claude_sessions()))")
+            )
+            ids = out
+            if "reattach-a" in out:
+                break
+            time.sleep(0.5)
+        assert_true(
+            "reattach-a" in ids, f"idle bridge re-attached on its own (got {ids!r})"
+        )
+        print("  ✓ an idle bridge re-attaches to the replacement kernel without a call")
+    finally:
+        a.close()
+        c.close()
+
+
 def _clean_stop_is_not_a_crash(tmp: Path) -> None:
     """A SIGTERMed kernel sends a goodbye, so its bridge stays quiet."""
     b = Bridge(tmp)
@@ -1424,6 +1459,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _log_renderer_covers_every_event()
+        _bridge_reattaches_to_successor(tmp)
         _clean_stop_is_not_a_crash(tmp)
         _stop_kernel(tmp)
         _concurrent_boots(tmp)

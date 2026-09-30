@@ -82,6 +82,10 @@ WAIT_STEP_SECONDS = 0.1
 # 5s window well past 5s of wall clock. It exists only to catch the moment the
 # dying kernel drops its flock, which nothing is timing to 100ms.
 _RESPAWN_EVERY = 5
+# How long a bridge whose kernel just died keeps trying to re-attach (never
+# spawning) before going back to reconnecting on its session's next call.
+_REATTACH_WINDOW_S = 30.0
+_REATTACH_POLL_S = 0.5
 
 # Outside JSON-RPC's reserved -32768..-32000 range, per the MCP spec's guidance
 # for implementation-defined codes.
@@ -491,6 +495,13 @@ class Bridge:
 
     def _attach(self, sock: socket.socket, lock: dict) -> None:
         with self._state_lock:
+            if self._sock is not None:
+                # `_reattach_watch` and a lazy `_reconnect` can both succeed.
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                return
             self._sock = sock
             self._kernel_pid = lock.get("pid")
             self._generation += 1
@@ -612,7 +623,9 @@ class Bridge:
 
     def _on_kernel_gone(
         self, gen: int | None = None, *, expected: bool = False
-    ) -> None:
+    ) -> bool:
+        """Returns whether this call took a live socket (False: already torn
+        down, or a superseded generation)."""
         """Tear down the current kernel attachment and orphan its in-flight ids.
 
         `gen` makes the teardown *conditional*, and the condition is checked
@@ -639,7 +652,7 @@ class Bridge:
         """
         with self._state_lock:
             if gen is not None and gen != self._generation:
-                return
+                return False
             sock, self._sock = self._sock, None
             pid, self._kernel_pid = self._kernel_pid, None
             orphans, self._inflight = self._inflight, set()
@@ -668,6 +681,7 @@ class Bridge:
             )
         if crashed and self._client_initialized:
             self._announce_crash(pid)
+        return sock is not None
 
     def _announce_crash(self, pid: int | None) -> None:
         """Push one channel message into this bridge's own client. A kernel that
@@ -704,6 +718,7 @@ class Bridge:
 
     def _read_kernel(self, sock: socket.socket, gen: int) -> None:
         """Pump one kernel generation's replies to the client."""
+        pid = self._kernel_pid
         rfile = None
         try:
             rfile = sock.makefile("r", encoding="utf-8")
@@ -749,7 +764,34 @@ class Bridge:
         # a superseded reader is just finishing its own closed socket. The
         # check happens inside `_on_kernel_gone`, under the lock that does the
         # teardown, so a reconnect can't land between deciding and acting.
-        self._on_kernel_gone(gen)
+        if self._on_kernel_gone(gen) and self._client_init is not None:
+            self._start_reattach_watch(pid)
+
+    def _start_reattach_watch(self, dead_pid: int | None) -> None:
+        if self._ephemeral or self._closing:
+            return
+        threading.Thread(
+            target=self._reattach_watch,
+            args=(dead_pid,),
+            daemon=True,
+            name="repld-bridge-reattach",
+        ).start()
+
+    def _reattach_watch(self, dead_pid: int | None) -> None:
+        """Re-attach, without ever spawning, to the kernel that replaces the
+        one that just died. Without this a pane's connection stays absent from
+        the kernel until its session's next tool call, and everything keyed on
+        the connection (`rebind_claude_session`, `park_pushes`, targeted
+        pushes) finds nothing in the gap."""
+        deadline = time.monotonic() + _REATTACH_WINDOW_S
+        while time.monotonic() < deadline and not self._closing:
+            if self._sock is not None:
+                return  # a lazy reconnect got there first
+            result = self._connect_excluding(dead_pid)
+            if not isinstance(result, str):
+                self._attach(*result)
+                return
+            time.sleep(_REATTACH_POLL_S)
 
     # -- main loop ----------------------------------------------------------
 
