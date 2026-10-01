@@ -36,6 +36,9 @@ from .core_schemas import (
     response as _response,
 )
 from .core_schemas import (
+    tool_error as _tool_error,
+)
+from .core_schemas import (
     wire as _wire,
 )
 from .help import build_instructions as _build_instructions
@@ -1095,7 +1098,7 @@ class Dispatcher(BrowserDispatchMixin):
             body["content"] = [{"type": "text", "text": _format_spill(sp, text)}]
             return _response(rid, body)
         except Exception as exc:
-            return _error(rid, -32000, f"{name}: {exc}")
+            return _tool_error(rid, f"{name}: {exc}")
 
     # ------------------------------------------------------------------
     # Resource dispatch
@@ -1242,6 +1245,26 @@ def _compute_resources() -> list[dict]:
             }
         )
     return resources
+
+
+def listing_state() -> tuple[tuple, tuple]:
+    """Cheap fingerprints of what `tools/list` and `resources/list` would say.
+
+    Import-free, unlike `_compute_tools`: `scan_tools` imports the owning gist,
+    which must not happen on the poller's thread. A gist file's mtime stands in
+    for its inferred schema, so an edit to a tool's signature changes it.
+    """
+    from . import gists
+
+    has_browser = _has_browser()
+    tool_files = []
+    for p in gists._iter_gist_files():
+        if gists._declared_tools(p):
+            try:
+                tool_files.append((str(p), p.stat().st_mtime_ns))
+            except OSError:
+                continue
+    return (has_browser, tuple(tool_files)), (has_browser, tuple(gists.scan()))
 
 
 def build_discovery_cache() -> dict:

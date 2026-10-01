@@ -287,6 +287,13 @@ def error(rid, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
+def tool_error(rid, text: str) -> dict:
+    """A tool *execution* failure: an `isError` result the model can read and
+    retry on. Protocol errors (`error`) are for malformed requests and unknown
+    tools; clients may never show those to the model."""
+    return response(rid, {"content": [{"type": "text", "text": text}], "isError": True})
+
+
 def notification(method: str, params: dict | None = None) -> dict:
     """An id-less JSON-RPC notification. `params` omitted when None, because
     MCP clients distinguish an absent `params` from an empty one."""

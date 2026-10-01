@@ -2346,6 +2346,12 @@ def phase_6_since_time_base(_kernel: Kernel) -> None:
     print("  ✓ since= is epoch seconds across network/console/sse/lifecycle")
 
 
+def _tool_error_text(resp: dict) -> str:
+    """The text of an `isError` tools/call result, else ''."""
+    res = resp.get("result", {})
+    return res["content"][0]["text"] if res.get("isError") else ""
+
+
 class _BridgeHarness:
     """Initialize-and-exec boilerplate shared by the engine's Chrome tests."""
 
@@ -2394,7 +2400,7 @@ def phase_6_strict_violation(kernel: Kernel) -> None:
     try:
         tid = h.open_tab("<button id=s1>Save</button><button id=s2>Save</button>")
         resp = h.tool("browser_click", {"target": tid, "selector": "text=Save"})
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "resolved to 2 elements" in msg and "s1" in msg and "s2" in msg,
             f"two visible matches error with both candidates (got {msg[:200]!r})",
@@ -2588,7 +2594,7 @@ def phase_6_dialog(kernel: Kernel) -> None:
         assert_true(
             elapsed < 5, f"click returned promptly, not after a hang ({elapsed:.1f}s)"
         )
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "confirm" in msg and "Delete?" in msg and "browser_dismiss_dialog" in msg,
             f"rejected confirm() errors, naming the dialog (got {msg!r})",
@@ -2751,7 +2757,7 @@ def phase_6_filechooser(kernel: Kernel) -> None:
         # the click itself errors, naming the fix, instead of returning a
         # receipt for a state CDP couldn't otherwise see at all.
         resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "file chooser" in msg and "tab.set_files" in msg,
             f"unresolved file chooser errors, naming the fix (got {msg!r})",
@@ -2905,7 +2911,7 @@ def phase_6_actionability(kernel: Kernel) -> None:
             '<button id=slow disabled onclick="window.went=1">Go slow</button>'
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#dead"})
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "not enabled" in msg,
             f"a disabled control errors naming the missing state (got {msg!r})",
@@ -3059,7 +3065,7 @@ def phase_6_select_option(kernel: Kernel) -> None:
             "browser_select",
             {"target": tid, "selector": "#dd", "option": "Trondheim"},
         )
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "Oslo" in msg and "Bergen" in msg,
             f"a miss lists the visible options (got {msg[:200]!r})",
@@ -3096,7 +3102,7 @@ def phase_6_aria_ref_roundtrip(kernel: Kernel) -> None:
             {"target": tid, "url": f"data:text/html,<p>{_MARKER}-next</p>"},
         )
         resp = h.tool("browser_click", {"target": tid, "selector": f"aria-ref={ref}"})
-        msg = resp.get("error", {}).get("message", "")
+        msg = _tool_error_text(resp)
         assert_true(
             "fresh snapshot" in msg,
             f"a dead ref explains itself instead of a bare miss (got {msg!r})",

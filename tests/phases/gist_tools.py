@@ -26,6 +26,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _handler_error(b, gists_dir)
         _oversized_result_spills(b, gists_dir)
         _bad_tool_calls(b)
+        _list_changed(b, gists_dir)
     finally:
         b.close()
 
@@ -267,12 +268,26 @@ def _handler_error(b: Bridge, gists_dir: Path) -> None:
     )
     with _gist(gists_dir, "smoke_tools", source):
         resp = _call(b, "smoke_greet", {"name": "world"})
-        assert_true("error" in resp, f"handler exception → MCP error (got {resp!r})")
         assert_true(
-            "intentional boom" in resp["error"]["message"],
-            f"error message contains exception text (got {resp['error']['message']!r})",
+            "error" not in resp, f"handler exception is not a protocol error: {resp!r}"
         )
-        print(f"  ✓ gist tool error: {resp['error']['message']!r}")
+        res = resp["result"]
+        assert_true(
+            res.get("isError") is True,
+            f"handler exception → isError result (got {res!r})",
+        )
+        text = res["content"][0]["text"]
+        assert_true(
+            "intentional boom" in text,
+            f"result text carries the exception (got {text!r})",
+        )
+        # Bad arguments are execution errors too (spec 2025-11-25, SEP-1303).
+        resp = _call(b, "smoke_greet", {"nope": 1})
+        assert_true(
+            resp.get("result", {}).get("isError") is True,
+            f"bad arguments → isError result (got {resp!r})",
+        )
+        print(f"  ✓ gist tool error: {text!r}")
 
 
 def _oversized_result_spills(b: Bridge, gists_dir: Path) -> None:
@@ -312,3 +327,28 @@ def _bad_tool_calls(b: Bridge) -> None:
         f"error says 'missing tool name' (got {resp['error']['message']!r})",
     )
     print("  ✓ missing tool name → MCP error")
+
+
+def _list_changed(b: Bridge, gists_dir: Path) -> None:
+    """A gist gaining or losing a `_tool_*` pushes `tools/list_changed` — both are
+    advertised with `listChanged`, and nothing else tells a client to re-list."""
+    method = "notifications/tools/list_changed"
+    # Outlast one poll so an earlier scenario's change has already fired.
+    time.sleep(3.0)
+    while True:
+        try:
+            b.wait_notification(method, timeout=0.2)
+        except TimeoutError:
+            break
+    source = (
+        '"""Smoketest gist: list_changed."""\n\n'
+        "def _tool_smoke_changed() -> str:\n"
+        '    """Appears mid-session."""\n'
+        '    return "x"\n'
+    )
+    with _gist(gists_dir, "smoke_changed", source):
+        b.wait_notification(method, timeout=6.0)
+        assert_true("smoke_changed" in _tool_names(b), "tool listed after the push")
+    b.wait_notification(method, timeout=6.0)
+    assert_true("smoke_changed" not in _tool_names(b), "tool gone after removal")
+    print("  ✓ tools/list_changed on gist tool add and remove")

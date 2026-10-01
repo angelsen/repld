@@ -73,7 +73,7 @@ Phases:
 - **6:** Tool registration, gist auto-reload, browser integration (Chrome 140+; `smoketest.py` spawns a throwaway headless instance via `harness.ThrowawayChrome`, `REPLD_CHROME_PORT` falls back to the developer's own debug Chrome on 9222 if none was found), in `tests/phases/browser.py` — PNG/HAR/selector/injected-engine/Chrome-backed coverage; full case-by-case rationale in `CLAUDE-ARCHIVE.md`.
 - **7:** `defer()` — fire-and-forget with channel push on completion; the coroutine's return value recoverable both via the push and `get_task`'s `result`; `no_display()` suppresses the print but not the recovery.
 - **8:** Gist resources — `resources/list`/`resources/read repld://gists/{name}`; two AST-only doc-drift guards (agent-facing `help.py` API surface, hand-written docs' API usage).
-- **9:** Gist-registered MCP tools — `_tool_*` discovery, schema inference, dispatch, auto-reload, error handling, stale `__repld_tools__` reading as inert.
+- **9:** Gist-registered MCP tools — `_tool_*` discovery, schema inference, dispatch, auto-reload, error handling, stale `__repld_tools__` reading as inert, `tools/list_changed` on tool add/remove.
 - **10:** `@every(seconds)` decorator — periodic ticker, immediate first tick, `delay=`, error survival, `cancel()`/`cancel_all()`, exec-cell ticker attribution, `every(tab=)` refusing registration with no browser builtin.
 - **11:** Graceful shutdown — `_shutdown` drains `@every` + `defer()` `try/finally` blocks within a 2s budget.
 - **12:** Cross-project gist links — `add_link` (registry + AST sibling co-link), `./gists/.links` manifest, stale-entry skip/prune, co-link refusal, registry `(already here)` marking, `gist lint`'s `deps` rule recognizing linked siblings, `add_link`'s kernel-only-import warning.

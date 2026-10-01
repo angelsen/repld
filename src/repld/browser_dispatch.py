@@ -135,7 +135,7 @@ class BrowserDispatchMixin:
 
     def _browser_tool(self, rid, name: str, args: dict, session=None) -> dict:
         """Dispatch a browser_* tool call."""
-        from .protocol import _error
+        from .protocol import _tool_error
 
         _dispatch_session.current = session
         try:
@@ -146,7 +146,7 @@ class BrowserDispatchMixin:
             text = json.dumps(result, default=str, indent=2)
             return self._spill_response(rid, text, label=name)
         except Exception as exc:
-            return _error(rid, -32000, f"{name}: {exc}")
+            return _tool_error(rid, f"{name}: {exc}")
         finally:
             _dispatch_session.current = None
 

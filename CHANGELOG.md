@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The kernel now sends `notifications/tools/list_changed` and `notifications/resources/list_changed` when a gist gains, loses or edits a `_tool_*` or its docstring, or when `browser` appears in `__main__` (polled every 2 s). Both were advertised with `listChanged` but only fired on kernel respawn.
+- Gist-tool and `browser_*` tool failures (including bad arguments) now return an `isError` result with the message instead of a JSON-RPC `-32000` error, so the model sees them and can retry (MCP tools spec, SEP-1303). Unknown tool names stay `-32602`.
+
 ### Fixed
 
 ### Removed

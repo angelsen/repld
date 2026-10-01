@@ -1556,6 +1556,41 @@ def _watch_owner(pid: int, stop: threading.Event) -> None:
     threading.Thread(target=wait, daemon=True, name="repld-owner-watch").start()
 
 
+def _watch_listings(stop: threading.Event, interval: float = 2.0) -> None:
+    """Tell every client when `tools/list`/`resources/list` would answer differently.
+
+    Both are advertised with `listChanged`, and gist `_tool_*` edits and a
+    bootstrap-created `browser` change them mid-session. Polls rather than
+    hooking the import system so a gist edited on disk is seen before anything
+    imports it. The baseline is taken at start, so boot itself never fires.
+    """
+    from .core_schemas import notification
+    from .protocol import listing_state
+
+    def poll() -> None:
+        try:
+            last = listing_state()
+        except Exception:
+            last = None
+        while not stop.wait(interval):
+            try:
+                now = listing_state()
+            except Exception:
+                continue  # a half-written gist must not kill the watcher
+            if last is not None and now != last:
+                if now[0] != last[0]:
+                    ipc.broadcast_channel(
+                        notification("notifications/tools/list_changed")
+                    )
+                if now[1] != last[1]:
+                    ipc.broadcast_channel(
+                        notification("notifications/resources/list_changed")
+                    )
+            last = now
+
+    threading.Thread(target=poll, daemon=True, name="repld-listing-watch").start()
+
+
 def _reclaim_ephemeral_dir(sock_path: Path) -> None:
     # Only ever the private dir `bridge._ephemeral_socket_path` made.
     if sock_path.parent.parent == paths.RUNTIME_DIR / "ephemeral":
@@ -1597,6 +1632,7 @@ def run_kernel(
         # bootstrap that fails, times out, or doesn't exist must still let exec
         # through — a kernel nobody can run code in cannot be repaired.
         loop.call_soon_threadsafe(_init_done.set)
+        _watch_listings(stop)
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.
