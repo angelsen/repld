@@ -167,6 +167,10 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         # case flips to True/False later, via mark_push_delivered(), once
         # the park releases.
         "push_delivered": None,
+        # What `push_delivered`'s None hides: "none" (no push owed: inline,
+        # still running, ambient), "broadcast", "held" (parked), then
+        # "written" or "failed" once known. Always a string.
+        "push_state": "none",
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
         "label": None,
@@ -197,6 +201,7 @@ def mark_push_delivered(task_id: str, delivered: bool) -> None:
         task = _tasks.get(task_id)
         if task is not None:
             task["push_delivered"] = delivered
+            task["push_state"] = "written" if delivered else "failed"
 
 
 def items() -> list[tuple[str, dict]]:
@@ -331,6 +336,7 @@ def snapshot(task_id: str) -> dict | None:
         "finished_at": task.get("finished_at"),  # epoch seconds, None while running
         "label": task.get("label"),
         "push_delivered": task.get("push_delivered"),
+        "push_state": task.get("push_state", "none"),
     }
 
 

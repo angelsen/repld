@@ -116,6 +116,7 @@ async def _collect_tasks() -> dict:
                 "finished_at": t.get("finished_at"),
                 "exception": t.get("exception"),
                 "push_delivered": t.get("push_delivered"),
+                "push_state": t.get("push_state", "none"),
                 "origin_session": getattr(origin, "claude_session_id", None),
                 "origin_kind": getattr(origin, "claude_session_kind", None),
             }

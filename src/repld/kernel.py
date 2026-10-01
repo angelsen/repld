@@ -245,7 +245,8 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
     session=None (default) broadcasts to every connected MCP session,
     returning None. session=<claude_session_id> targets one session by the
     id claude_sessions() lists — returns True if delivered, False if that
-    session isn't connected. No fallback to broadcast on a miss: that would
+    session isn't connected or the write failed (a `bg` session's inbox socket
+    is gone). No fallback to broadcast on a miss: that would
     defeat the point of asking for one session specifically. A parked
     target (ipc.park_pushes) returns None — held, not dropped; the eventual
     outcome is only observable via push_channel's on_parked_flush=, the way
@@ -651,14 +652,24 @@ def _maybe_push_done(task_id: str) -> None:
     }
     if label:
         meta_dict["label"] = label
-    task["push_delivered"] = push_channel(
+    origin = task.get("origin")
+    task["push_delivered"] = delivered = push_channel(
         "\n".join(parts),
         meta_dict,
-        session=task.get("origin"),
+        session=origin,
         # None (parked, not yet on the wire) flips to True/False here once
         # the park releases -- push_channel's synchronous return only knows
         # "parked" at call time, same as "not attempted".
         on_parked_flush=lambda ok: tasks.mark_push_delivered(task_id, ok),
+    )
+    task["push_state"] = (
+        "broadcast"
+        if origin is None
+        else "held"
+        if delivered is None
+        else "written"
+        if delivered
+        else "failed"
     )
 
 

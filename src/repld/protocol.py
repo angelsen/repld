@@ -15,6 +15,7 @@ import __main__
 from . import ipc
 from .browser_dispatch import BrowserDispatchMixin
 from .core_schemas import (
+    BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
@@ -925,6 +926,7 @@ class Dispatcher(BrowserDispatchMixin):
                 claude_id,
                 params.get(BRIDGE_PROJECT_DIR_KEY),
                 params.get(BRIDGE_SESSION_KIND_KEY),
+                params.get(BRIDGE_INBOX_SOCKET_KEY),
             )
         return _response(
             rid,

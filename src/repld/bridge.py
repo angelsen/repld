@@ -56,6 +56,7 @@ from . import (
 )
 from .core_schemas import (
     BRIDGE_GOODBYE_METHOD,
+    BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_REBIND_METHOD,
     BRIDGE_SESSION_ID_KEY,
@@ -253,6 +254,7 @@ class Bridge:
         self._claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
         self._claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         self._claude_session_kind = "bg" if os.environ.get("CLAUDE_JOB_DIR") else None
+        self._claude_inbox_socket = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
         self._inflight: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
@@ -605,6 +607,7 @@ class Bridge:
             self._claude_session_id is None
             and self._claude_project_dir is None
             and self._claude_session_kind is None
+            and self._claude_inbox_socket is None
         ):
             return msg
         stamped = dict(msg)
@@ -615,6 +618,8 @@ class Bridge:
             params[BRIDGE_PROJECT_DIR_KEY] = self._claude_project_dir
         if self._claude_session_kind is not None:
             params[BRIDGE_SESSION_KIND_KEY] = self._claude_session_kind
+        if self._claude_inbox_socket is not None:
+            params[BRIDGE_INBOX_SOCKET_KEY] = self._claude_inbox_socket
         stamped["params"] = params
         return stamped
 

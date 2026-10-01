@@ -489,6 +489,7 @@ def _targeted_push(tmp: Path) -> None:
 
         snap = _get_task(a, task_id)
         assert_eq(snap["push_delivered"], True, "delivered push recorded")
+        assert_eq(snap["push_state"], "written", "and spelled out as written")
 
         # The originator leaves before its task finishes: the push is dropped,
         # and get_task says so to whoever looks next.
@@ -503,6 +504,7 @@ def _targeted_push(tmp: Path) -> None:
         snap = _get_task(a, orphan_id)
         assert_eq(snap["done"], True, "orphaned task finished")
         assert_eq(snap["push_delivered"], False, "dropped push recorded")
+        assert_eq(snap["push_state"], "failed", "and spelled out as failed")
         print("  ✓ get_task's push_delivered: true when seen, false when dropped")
 
         try:
@@ -672,6 +674,11 @@ def _session_rebind(tmp: Path) -> None:
             "push_delivered reads null while parked, not true — a caller "
             "can't otherwise tell held from delivered",
         )
+        assert_eq(
+            _get_task(a, parked_id)["push_state"],
+            "held",
+            "push_state names the held push that push_delivered leaves null",
+        )
         print("  ✓ park_pushes holds a completion push off the wire")
 
         out = rebind("gen-3", a.proc.pid)
@@ -693,6 +700,11 @@ def _session_rebind(tmp: Path) -> None:
             _get_task(a, parked_id)["push_delivered"],
             True,
             "push_delivered flips true once the park's flush actually lands",
+        )
+        assert_eq(
+            _get_task(a, parked_id)["push_state"],
+            "written",
+            "push_state flips to written with it",
         )
         print("  ✓ rebind releases the park and flushes in order")
 
@@ -840,6 +852,163 @@ def _rebind_prefers_nearest_bridge(tmp: Path) -> None:
     finally:
         pane.close()
         nested.close()
+
+
+def _bg_inbox_fallback(tmp: Path) -> None:
+    """A `bg` session's pushes go to its inbox socket, not the channel; a
+    non-`bg` session, or a `bg` one with a non-inbox path, stays on the channel."""
+    import socket as _socket
+    import threading as _threading
+
+    root = Path(tempfile.mkdtemp(prefix="repld-inbox-"))
+    (root / "cc-socks").mkdir()
+    got: list[dict] = []
+
+    def listen(path: Path) -> _socket.socket:
+        srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        srv.bind(str(path))
+        srv.listen(4)
+
+        def serve() -> None:
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                with conn:
+                    data = b""
+                    while chunk := conn.recv(4096):
+                        data += chunk
+                for ln in data.decode().splitlines():
+                    got.append(json.loads(ln))
+
+        _threading.Thread(target=serve, daemon=True).start()
+        return srv
+
+    inbox = root / "cc-socks" / "4242.sock"
+    srv = listen(inbox)
+    base = {"CLAUDE_PROJECT_DIR": None, "CLAUDE_JOB_DIR": None}
+    bg = Bridge(
+        tmp,
+        env={
+            **base,
+            "CLAUDE_CODE_SESSION_ID": "bg-sess",
+            "CLAUDE_JOB_DIR": str(root),
+            "CLAUDE_CODE_MESSAGING_SOCKET": str(inbox),
+        },
+    )
+    # Same socket env but no job dir: an interactive session, so it must stay on the channel.
+    pane = Bridge(
+        tmp,
+        env={
+            **base,
+            "CLAUDE_CODE_SESSION_ID": "pane-sess",
+            "CLAUDE_CODE_MESSAGING_SOCKET": str(inbox),
+        },
+    )
+    # A bg session whose path is not a cc-socks inbox is refused at registration.
+    rogue = Bridge(
+        tmp,
+        env={
+            **base,
+            "CLAUDE_CODE_SESSION_ID": "rogue-sess",
+            "CLAUDE_JOB_DIR": str(root),
+            "CLAUDE_CODE_MESSAGING_SOCKET": str(root / "elsewhere.sock"),
+        },
+    )
+    try:
+        for b in (bg, pane, rogue):
+            _handshake(b)
+        out = content_text(
+            pane.exec(
+                "r = [notify('hello bg', session=s, kind='probe', task_id='t1', roster='x' * 50)"
+                " for s in ('bg-sess', 'pane-sess', 'rogue-sess')]\nprint(r)",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "[True, True, True]" in out, f"all three report delivered (got {out!r})"
+        )
+        deadline = time.monotonic() + 5
+        while not got and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert_eq(len(got), 1, "exactly the bg session's push reached the inbox")
+        text = got[0]["message"]["content"]
+        assert_true(
+            text.startswith('[repld push kind="probe" task_id="t1"]')
+            and "hello bg" in text
+            and "roster" not in text,
+            f"kind/task_id lead the text, roster stays out (got {text!r})",
+        )
+        assert_eq(got[0]["type"], "user", "the bare inbox wire form")
+        pane.wait_notification("notifications/claude/channel", kind="probe", timeout=10)
+        rogue.wait_notification(
+            "notifications/claude/channel", kind="probe", timeout=10
+        )
+        try:
+            bg.wait_notification(
+                "notifications/claude/channel", kind="probe", timeout=2
+            )
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("a bg session also got the channel push")
+        print(
+            "  ✓ a bg session's push goes to its inbox socket; others stay on the channel"
+        )
+
+        srv.close()
+        inbox.unlink()
+        out = content_text(
+            pane.exec(
+                "print(notify('gone', session='bg-sess', kind='probe'))\n"
+                "print(sorted(s for s, _, _ in claude_sessions()))",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            out.lstrip().startswith("False") and "bg-sess" in out,
+            f"a dead inbox reports False and leaves the session connected (got {out!r})",
+        )
+        print("  ✓ a dead inbox socket reports False without closing the session")
+    finally:
+        srv.close()
+        for b in (bg, pane, rogue):
+            b.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _push_state_broadcast() -> None:
+    """A `defer()` from `repld_init.py` has no calling cell, so no origin
+    session: its completion push is a broadcast, and get_task says so."""
+    tmp = Path(tempfile.mkdtemp(prefix="repld-pushstate-"))
+    (tmp / "repld_init.py").write_text(
+        "import asyncio\n"
+        "async def _job():\n"
+        "    await asyncio.sleep(0.5)\n"
+        "    print('init job done')\n"
+        "INIT_TID = defer(_job(), 'init-job')\n"
+    )
+    b = Bridge(
+        tmp, env={"CLAUDE_CODE_SESSION_ID": "pushstate", "CLAUDE_PROJECT_DIR": None}
+    )
+    try:
+        _handshake(b)
+        tid = content_text(b.exec("print(INIT_TID)", call_timeout=40)).strip()
+        b.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=15,
+            where=lambda n: n["params"]["meta"].get("task_id") == tid,
+        )
+        snap = _get_task(b, tid)
+        assert_eq(snap["push_state"], "broadcast", "an origin-less push is a broadcast")
+        assert_eq(snap["push_delivered"], None, "and push_delivered still reads null")
+        print("  ✓ push_state names an origin-less completion push as broadcast")
+    finally:
+        b.close()
+        _stop_kernel(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _project_path(cwd: Path) -> Path:
@@ -1490,6 +1659,8 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _rebind_prefers_nearest_bridge(tmp)
+        _bg_inbox_fallback(tmp)
+        _push_state_broadcast()
         _log_renderer_covers_every_event()
         _bridge_reattaches_to_successor(tmp)
         _clean_stop_is_not_a_crash(tmp)

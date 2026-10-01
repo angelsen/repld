@@ -52,6 +52,11 @@ BRIDGE_PROJECT_DIR_KEY = "_claude_project_dir"
 # spawned MCP server's environment (confirmed live), so CLAUDE_JOB_DIR is the
 # only usable signal for this.
 BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
+# The bridge's CLAUDE_CODE_MESSAGING_SOCKET: the session's own inbox socket. A
+# `--bg` worker drops channel pushes but accepts a line there, so the kernel
+# delivers `bg` sessions' pushes through it (`ipc.Session._write_inbox`).
+BRIDGE_INBOX_SOCKET_KEY = "_claude_inbox_socket"
+CHANNEL_METHOD = "notifications/claude/channel"
 # Kernel → bridge only, consumed by the bridge and never relayed to the client:
 # `ipc.rebind_claude_session` telling it the id to stamp from now on.
 BRIDGE_REBIND_METHOD = "notifications/repld/session_rebound"
@@ -144,6 +149,16 @@ CORE_TOOLS = [
                         "push time and hasn't been released yet"
                     ),
                 },
+                "push_state": {
+                    "type": "string",
+                    "enum": ["none", "broadcast", "held", "written", "failed"],
+                    "description": (
+                        "what push_delivered's null hides: none = no push owed "
+                        "(answered inline, still running, ambient), broadcast = "
+                        "sent to every session, held = parked and not yet on the "
+                        "wire; written/failed once the push's outcome is known"
+                    ),
+                },
             },
             "required": [
                 "task_id",
@@ -157,6 +172,7 @@ CORE_TOOLS = [
                 "finished_at",
                 "label",
                 "push_delivered",
+                "push_state",
             ],
         },
         "annotations": {"readOnlyHint": True},

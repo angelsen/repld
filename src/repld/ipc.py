@@ -14,6 +14,7 @@ Scope: this module is the socket layer only. Where state files live is
 `paths.py`; how they're written and validated is `state.py`.
 """
 
+import enum
 import json
 import os
 import socket
@@ -24,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from .core_schemas import BRIDGE_GOODBYE_METHOD, BRIDGE_REBIND_METHOD
+from .core_schemas import BRIDGE_GOODBYE_METHOD, BRIDGE_REBIND_METHOD, CHANNEL_METHOD
 from .core_schemas import error as _error
 from .core_schemas import notification as _notification
 from .state import read_lock
@@ -95,6 +96,25 @@ def _ancestry(pid: int) -> list[int]:
     return chain
 
 
+def _valid_inbox_socket(path: object) -> str | None:
+    """A bridge-supplied path the kernel will connect to: only a Claude Code
+    inbox, `.../cc-socks/<name>.sock`, never an arbitrary socket."""
+    if not isinstance(path, str):
+        return None
+    p = Path(path)
+    ok = p.is_absolute() and p.suffix == ".sock" and p.parent.name == "cc-socks"
+    return path if ok else None
+
+
+class Post(enum.Enum):
+    """How far a channel push got on one connection. `WRITTEN` is the most a
+    push can know: Claude Code never acknowledges one."""
+
+    WRITTEN = "written"  # on the wire to the bridge or inbox, or queued only pending `initialized`
+    HELD = "held"        # parked: queued, not yet on the wire
+    FAILED = "failed"    # connection closed, or the inbox write failed
+
+
 class Rebind(NamedTuple):
     old_id: str | None
     flushed: int  # parked pushes this rebind delivered to the successor
@@ -126,6 +146,7 @@ class Session:
         self.claude_session_id: str | None = None
         self.claude_project_dir: str | None = None
         self.claude_session_kind: str | None = None
+        self.inbox_socket: str | None = None
 
     @property
     def closed(self) -> bool:
@@ -146,6 +167,46 @@ class Session:
             self._close_locked()
             return False
 
+    def _emit(self, msg: dict) -> bool:
+        """`_write_msg`, except a channel push for a `bg` session with a known
+        inbox goes there: a `claude --bg` worker drops channel pushes. Caller
+        holds write_lock."""
+        if (
+            msg.get("method") == CHANNEL_METHOD
+            and self.claude_session_kind == "bg"
+            and self.inbox_socket is not None
+        ):
+            return self._write_inbox(msg)
+        return self._write_msg(msg)
+
+    def _write_inbox(self, msg: dict) -> bool:
+        """One bare `type:user` line to the session's inbox socket. It arrives
+        framed as a peer's message with no meta, so `kind`/`task_id` ride in
+        the text (and `roster`, which can run to 600 chars, stays out). A
+        failure never closes the session (the bridge connection is fine) but reads as `Post.FAILED`.
+        Short timeout: this runs on the kernel loop."""
+        params = msg.get("params") or {}
+        meta = params.get("meta") or {}
+        head = " ".join(
+            f'{k}="{meta[k]}"' for k in ("kind", "task_id") if k in meta
+        ) + "".join(
+            f' {k}="{v}"'
+            for k, v in meta.items()
+            if k not in ("kind", "task_id", "roster")
+        )
+        text = f"[repld push {head.strip()}]\n{params.get('content', '')}"
+        line = json.dumps(
+            {"type": "user", "message": {"role": "user", "content": text}}
+        )
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.25)
+                s.connect(str(self.inbox_socket))
+                s.sendall((line + "\n").encode("utf-8"))
+            return True
+        except OSError:
+            return False
+
     def write(self, msg: dict) -> None:
         with self.write_lock:
             if self._closed:
@@ -154,34 +215,31 @@ class Session:
 
     def post_channel(
         self, msg: dict, *, on_parked_flush: "Callable[[bool], None] | None" = None
-    ) -> bool:
+    ) -> Post:
         """Server-initiated notification (channel push).
 
         Queued until the session is marked initialized, then queued again
         (separately) while parked. Normal responses (to client requests)
         should use write() directly.
 
-        Returns False only when the message was queued because this
-        connection is currently parked — the caller's usual "delivered"
-        reading (True otherwise: written now, or queued only pending
-        notifications/initialized, which is a startup-only gap nothing has
-        ever needed to distinguish from delivered) would otherwise say a push
-        landed when it is still held. `on_parked_flush`, if given, fires
-        with whether the write actually succeeded once the park releases
-        (`unpark()` or its own timeout) — not called at all for any other
-        path, including a session that's already closed.
+        `HELD` only when the message was queued because this connection is
+        currently parked: reading it as delivered would say a push landed when
+        it is still held. A push queued only pending notifications/initialized
+        is `WRITTEN`, a startup-only gap nothing has needed to tell apart.
+        `on_parked_flush`, if given, fires with whether the write succeeded
+        once the park releases (`unpark()` or its own timeout), and never for
+        any other path.
         """
         with self.write_lock:
             if self._closed:
-                return True
+                return Post.FAILED
             if not self.initialized:
                 self.pending.append(msg)
-                return True
+                return Post.WRITTEN
             if self.parked:
                 self.parked_queue.append((msg, on_parked_flush))
-                return False
-            self._write_msg(msg)
-            return True
+                return Post.HELD
+            return Post.WRITTEN if self._emit(msg) else Post.FAILED
 
     def park(self, timeout_s: float) -> None:
         """Hold channel pushes destined for this connection instead of
@@ -234,7 +292,7 @@ class Session:
                 self._park_timer = None
             queued, self.parked_queue = self.parked_queue, []
             for msg, cb in queued:
-                ok = (not self._closed) and self._write_msg(msg)
+                ok = (not self._closed) and self._emit(msg)
                 flushed += ok
                 if cb is not None:
                     callbacks.append((cb, ok))
@@ -252,7 +310,7 @@ class Session:
             self.initialized = True
             pending, self.pending = self.pending, []
             for msg in pending:
-                self._write_msg(msg)
+                self._emit(msg)
                 if self._closed:
                     return
 
@@ -407,15 +465,16 @@ class Server:
         parked (queued, not yet on the wire — see `Session.park`;
         `on_parked_flush` reports the eventual outcome); True otherwise
         (written now, or queued only pending notifications/initialized).
+        False also for a write that failed (a `bg` inbox that is gone).
         """
         with self.sessions_lock:
             live = session in self.sessions
         if not live or session.closed:
             return False
-        delivered = session.post_channel(msg, on_parked_flush=on_parked_flush)
-        if session.closed:
+        outcome = session.post_channel(msg, on_parked_flush=on_parked_flush)
+        if session.closed or outcome is Post.FAILED:
             return False
-        return True if delivered else None
+        return None if outcome is Post.HELD else True
 
     def register_claude_session(
         self,
@@ -423,6 +482,7 @@ class Server:
         session_id: str,
         project_dir: str | None,
         session_kind: str | None = None,
+        inbox_socket: str | None = None,
     ) -> None:
         """Bind a Claude Code session id to this connection.
 
@@ -433,6 +493,7 @@ class Server:
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
         session.claude_session_kind = session_kind
+        session.inbox_socket = _valid_inbox_socket(inbox_socket)
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
 
@@ -589,9 +650,12 @@ def register_claude_session(
     session_id: str,
     project_dir: str | None,
     session_kind: str | None = None,
+    inbox_socket: str | None = None,
 ) -> None:
     if _server is not None:
-        _server.register_claude_session(session, session_id, project_dir, session_kind)
+        _server.register_claude_session(
+            session, session_id, project_dir, session_kind, inbox_socket
+        )
 
 
 def rebind_claude_session(new_id: str, pid: int, old_id: str | None = None) -> Rebind:

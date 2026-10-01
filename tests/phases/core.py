@@ -119,6 +119,10 @@ def phase_3(kernel: Kernel) -> None:
         ]
         missing = set(gt_schema["required"]) - set(snap)
         assert_eq(missing, set(), "snapshot carries every field outputSchema requires")
+        assert_true(
+            snap["push_state"] in gt_schema["properties"]["push_state"]["enum"],
+            f"push_state is one of the schema's states (got {snap['push_state']!r})",
+        )
         print(f"  ✓ get_task: done, output {snap['text'].strip()!r}")
 
         # Unknown task_id → JSON-RPC error, not a hollow success
