@@ -8,15 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `get_task` (and the dashboard's task rows) carry `push_state`, spelling out what `push_delivered`'s `null` hides: `none` (no push owed: answered inline, still running, ambient), `broadcast`, `held` (parked, not yet on the wire), then `written` or `failed` once known. `push_delivered` is unchanged. A consumer deciding "is a push on the way for this task" reads `held`, not `null`.
-
-- Channel pushes for a `claude --bg` session now go to its inbox socket. A `--bg` worker drops `notifications/claude/channel` (measured by `claude_code_research` on Claude Code 2.1.284: 0 of 3, while an interactive session got 3 of 3) but accepts a line on `cc-socks/<pid>.sock`. The bridge stamps `CLAUDE_CODE_MESSAGING_SOCKET` onto `initialize`; the kernel keeps it for `bg`-kind sessions only and refuses any path that is not `.../cc-socks/*.sock`. The text arrives framed as a peer's message, never the user's, with no meta attributes, so `kind` and `task_id` lead the text and `roster` is left out. A failed inbox write reads as `False` (`notify(session=)`, `push_delivered`) like a session that is gone, and does not close the connection. `ipc.Session.post_channel` now returns a `Post` enum (`WRITTEN`/`HELD`/`FAILED`) instead of a bool; `post_to`'s `True`/`None`/`False` contract is unchanged.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
+
+## [0.11.5] - 2026-10-01
+
+### Added
+
+- `get_task` (and the dashboard's task rows) carry `push_state`, spelling out what `push_delivered`'s `null` hides: `none` (no push owed: answered inline, still running, ambient), `broadcast`, `held` (parked, not yet on the wire), then `written` or `failed` once known. `push_delivered` is unchanged. A consumer deciding "is a push on the way for this task" reads `held`, not `null`.
+
+- Channel pushes for a `claude --bg` session now go to its inbox socket. A `--bg` worker drops `notifications/claude/channel` (measured by `claude_code_research` on Claude Code 2.1.284: 0 of 3, while an interactive session got 3 of 3) but accepts a line on `cc-socks/<pid>.sock`. The bridge stamps `CLAUDE_CODE_MESSAGING_SOCKET` onto `initialize`; the kernel keeps it for `bg`-kind sessions only and refuses any path that is not `.../cc-socks/*.sock`. The text arrives framed as a peer's message, never the user's, with no meta attributes, so `kind` and `task_id` lead the text and `roster` is left out. A failed inbox write reads as `False` (`notify(session=)`, `push_delivered`) like a session that is gone, and does not close the connection. `ipc.Session.post_channel` now returns a `Post` enum (`WRITTEN`/`HELD`/`FAILED`) instead of a bool; `post_to`'s `True`/`None`/`False` contract is unchanged.
+
 
 ## [0.11.4] - 2026-09-30
 
