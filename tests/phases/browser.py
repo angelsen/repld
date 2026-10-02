@@ -2684,6 +2684,7 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             self._filechooser_policy: dict | None = None
             self._filechooser_pending: dict | None = None
             self._filechooser_log: list[dict] = []
+            self._agent_driven = True
             self.sent: list[dict] = []
 
         async def execute(self, method: str, params: dict | None = None) -> dict:
@@ -2704,6 +2705,22 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             "left-open chooser tracked as pending",
         )
         assert_eq(cdp._filechooser_log[-1]["resolved"], False, "logged as unresolved")
+
+        # Shared tab: pending so set_files still works, but never logged
+        # unresolved -- the human's picker is open, the agent's click is fine.
+        cdp = _Cdp()
+        cdp._agent_driven = False
+        _record_filechooser_opened(cdp, {"backendNodeId": 5, "mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(cdp._filechooser_log, [], "shared tab: nothing logged unresolved")
+        assert_eq(
+            cdp._filechooser_pending is not None, True, "shared tab: still pending"
+        )
+
+        # Picker API (no backendNodeId): nothing set_files could answer.
+        cdp = _Cdp()
+        _record_filechooser_opened(cdp, {"mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(cdp._filechooser_pending, None, "node-less chooser not pending")
+        assert_eq(cdp._filechooser_log, [], "node-less chooser not logged")
 
         # Pre-armed: resolved via DOM.setFileInputFiles, consumed, logged.
         cdp = _Cdp()
@@ -2838,6 +2855,35 @@ def phase_6_filechooser(kernel: Kernel) -> None:
         print(
             "  ✓ filechooser: raw tab.click() (exec/gist path) carries the same guarantee"
         )
+    finally:
+        h.close()
+
+
+def phase_6_downloads(kernel: Kernel) -> None:
+    """A download is observed, not redirected: `Browser.downloadWillBegin` /
+    `downloadProgress` become `download_started` / `download_done` pushes naming
+    the file.
+    """
+    if not _chrome_ready("phase 6 downloads"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            '<a id=d download=repld-dl-test.txt href="data:text/plain,hello">dl</a>'
+        )
+        h.tool("browser_click", {"target": tid, "selector": "#d"})
+
+        def _named(m: dict) -> bool:
+            return m["params"]["meta"].get("filename") == "repld-dl-test.txt"
+
+        for kind in ("download_started", "download_done"):
+            n = h.b.wait_notification(
+                "notifications/claude/channel", kind=kind, where=_named, timeout=15
+            )
+            assert_true(
+                kind in n["params"]["content"], f"{kind} push names itself ({n!r})"
+            )
+        print("  ✓ downloads: download_started and download_done pushes name the file")
     finally:
         h.close()
 

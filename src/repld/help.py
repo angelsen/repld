@@ -1123,16 +1123,22 @@ Same blind spot as native JS dialogs above — an OS-level Chrome UI that
 Page.captureScreenshot and the AX tree can't see — three different shapes:
 
 File choosers (clicking a real <input type=file>-backed control):
+  On tabs from get()/open() (and after expect_file_chooser),
   Page.setInterceptFileChooserDialog stops the real OS picker from opening;
   Chrome reports Page.fileChooserOpened instead, so the triggering click
-  returns normally. There's no safe file selection to guess, so with no
-  pre-arm the chooser is left open rather than auto-answered:
+  returns normally. watch() tabs are left to the human: the picker still
+  opens and the agent only gets a `[filechooser] ... shared tab` push (and
+  can still set_files). A picker-API chooser (showOpenFilePicker) has no
+  input node, so it is reported human-only and set_files cannot answer it.
+  There's no safe file selection to guess, so with no pre-arm the chooser
+  is left open rather than auto-answered:
 
     await tab.expect_file_chooser(["/path/to/photo.jpg"])
     await tab.click("input[type=file] + button")   # resolves immediately
 
   Or resolve one already open: `await tab.set_files(["/path.jpg"])` (or
-  `[]` to cancel it). An unresolved chooser shows as `filechooser: mode=...
+  `[]` to cancel it). set_files reads one byte of each file back and raises
+  if the page cannot (e.g. an Android path Chrome's uid cannot open). An unresolved chooser shows as `filechooser: mode=...
   → open, unresolved` in the observation, pushes `[filechooser] target:
   opened (mode=...) — call tab.set_files(paths) or it stays open` to
   channel, and raises out of the triggering click/type/navigate/invoke call
@@ -1159,9 +1165,10 @@ Permission prompts (camera/mic/geolocation/notifications):
   Nothing is granted by default; silently handing out camera/mic access is
   a real change to what the page can do, not a UI blind spot to paper over.
 
-Downloads land in a fixed per-project directory
-($XDG_RUNTIME_DIR/repld/projects/<slug>/downloads/) instead of opening a
-native Save-As dialog — set once per attach via Page.setDownloadBehavior.
+Downloads are observed, not redirected: Chrome's own Save-As and download
+folder behave as the human configured. A download_started / download_done
+channel push names the file; its path (when Chrome reports one) is in the
+push meta, not at a fixed location.
 
 == Internals ==
 

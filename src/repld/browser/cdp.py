@@ -357,7 +357,33 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
     backend_node_id = params.get("backendNodeId")
     mode = params.get("mode", "selectSingle")
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    if backend_node_id is None:
+        # showOpenFilePicker and friends carry no node: nothing set_files can answer.
+        push_channel(
+            f"[filechooser] {short_id}: picker API opened (mode={mode}) — "
+            "no input node, human-only"
+            + (
+                " (blocked: this tab suppresses native pickers)"
+                if cdp._agent_driven
+                else ""
+            ),
+            {
+                "kind": "filechooser",
+                "target": short_id,
+                "mode": mode,
+                "human_only": True,
+            },
+        )
+        return
     cdp._filechooser_pending = {"backend_node_id": backend_node_id, "mode": mode}
+    if not cdp._agent_driven:
+        # The human's picker is open; an agent click here isn't left unresolved.
+        push_channel(
+            f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab — "
+            "the native picker is showing; tab.set_files(paths) still works",
+            {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
+        )
+        return
     cdp._filechooser_log.append(
         {"mode": mode, "resolved": False, "paths": None, "source": "auto"}
     )
@@ -661,6 +687,7 @@ class CDPSession:
         # Tab.set_files() — unlike a dialog there is no default to guess, so
         # this is never auto-resolved, only tracked until answered.
         self._filechooser_pending: dict | None = None
+        self._agent_driven = False
         # File choosers seen during the current observed mutation — cleared by
         # pre_observe, read by post_observe/unresolved_filechooser_error.
         self._filechooser_log: list[dict] = []
@@ -722,6 +749,21 @@ class CDPSession:
         )
         _create_views(self.db.execute)
 
+    async def arm_native(self) -> None:
+        """Suppress the native file picker on this tab; `set_files` answers it instead.
+
+        Agent-driven tabs only (get()/open()/expect_file_chooser): on a tab a
+        human may be using by hand the picker must open, so `watch()` tabs just
+        get the `fileChooserOpened` event.
+        """
+        self._agent_driven = True
+        try:
+            await self.send_nowait(
+                "Page.setInterceptFileChooserDialog", {"enabled": True}
+            )
+        except Exception as exc:
+            logger.debug("arm_native: %s", exc)
+
     async def _enable_domains(self) -> None:
         """Enable required CDP domains on attach.
 
@@ -730,28 +772,25 @@ class CDPSession:
         even with many concurrent tabs.  Fetch interception is separate
         (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
 
-        `Page.setInterceptFileChooserDialog` and `Page.setDownloadBehavior` are
-        here rather than opt-in like Fetch: both stop a native OS-level window
-        from ever opening (a real file picker, a real Save-As dialog), and that
-        window is invisible to Page.captureScreenshot and the AX tree alike —
-        there is no "observe it, then decide" for something CDP can't see.
+        `Page.setInterceptFileChooserDialog` is here rather than opt-in like
+        Fetch: it stops a native OS-level file picker from ever opening, and
+        that window is invisible to Page.captureScreenshot and the AX tree alike
+        — there is no "observe it, then decide" for something CDP can't see.
+        Downloads are observed, never redirected: see `BrowserSession`.
         """
-        from ..paths import downloads_dir
-
+        if self._agent_driven:
+            # Session-scoped: replayed here so a reattach keeps agent tabs armed.
+            await self.arm_native()
         for method, params in (
             ("Inspector.enable", None),
             ("DOM.enable", None),
-            ("Page.enable", None),
+            # Shared tabs: announce the chooser without suppressing the human's picker.
+            ("Page.enable", {"enableFileChooserOpenedEvent": True}),
             ("Network.enable", None),
             ("Runtime.enable", None),
             ("Log.enable", None),
             ("Accessibility.enable", None),
             ("Page.setLifecycleEventsEnabled", {"enabled": True}),
-            ("Page.setInterceptFileChooserDialog", {"enabled": True}),
-            (
-                "Page.setDownloadBehavior",
-                {"behavior": "allow", "downloadPath": str(downloads_dir())},
-            ),
         ):
             try:
                 await self.send_nowait(method, params)

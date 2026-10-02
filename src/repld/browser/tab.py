@@ -1763,10 +1763,43 @@ class Tab(TabQueryMixin):
         guess, so without this the chooser stays open until set_files()
         answers it. One-shot: consumed by the next Page.fileChooserOpened.
         """
+        await self._session.arm_native()
         self._session._filechooser_policy = {"paths": list(paths)}
         return (
             f"Next file chooser on {self.target_id} will receive {len(paths)} file(s)"
         )
+
+    async def _probe_files_readable(self, backend_node_id: int) -> None:
+        """Raise if the page cannot read a file just set on the input.
+
+        `DOM.setFileInputFiles` succeeds for a path the browser process cannot
+        open (an Android `media_rw` file), and the failure only surfaces as a
+        `NotReadableError` when the page reads the File.
+        """
+        node = await self._exec("DOM.resolveNode", {"backendNodeId": backend_node_id})
+        result = await self._exec(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": node["object"]["objectId"],
+                "functionDeclaration": """async function () {
+                    const bad = [];
+                    for (const f of this.files || []) {
+                        try { await f.slice(0, 1).arrayBuffer(); }
+                        catch (e) { bad.push(f.name + ': ' + e.name); }
+                    }
+                    return bad;
+                }""",
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+        )
+        bad = result.get("result", {}).get("value") or []
+        if bad:
+            raise RuntimeError(
+                "files set but unreadable by the page (" + "; ".join(bad) + ") — "
+                "the browser cannot open the path; on a device it must be readable "
+                "by Chrome's uid"
+            )
 
     async def set_files(self, paths: list[str]) -> str:
         """Resolve the most recent unanswered file chooser on this tab.
@@ -1781,10 +1814,12 @@ class Tab(TabQueryMixin):
                 "expect_file_chooser(paths) before clicking to pre-arm it"
             )
         self._session._filechooser_pending = None
+        node = pending["backend_node_id"]
         await self._exec(
-            "DOM.setFileInputFiles",
-            {"files": list(paths), "backendNodeId": pending["backend_node_id"]},
+            "DOM.setFileInputFiles", {"files": list(paths), "backendNodeId": node}
         )
+        if paths:
+            await self._probe_files_readable(node)
         for entry in reversed(self._session._filechooser_log):
             if not entry["resolved"]:
                 entry["resolved"] = True

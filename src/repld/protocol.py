@@ -625,9 +625,11 @@ TOOLS = [
         "description": (
             "Resolve the most recent unanswered native file-chooser prompt "
             "on a tab (opened by clicking a real <input type=file>-backed "
-            "control — Page.setInterceptFileChooserDialog stops the real OS "
-            "picker from ever opening, so this is the only way to answer "
-            "it). Pass absolute paths on the machine running repld. Empty "
+            "control; on get()/open() tabs "
+            "Page.setInterceptFileChooserDialog stops the real OS picker from "
+            "opening, so this is the way to answer it. A chooser from the "
+            "showOpenFilePicker API has no input and cannot be answered). Errors "
+            "if the page cannot read a file it was given. Pass absolute paths on the machine running repld. Empty "
             "paths cancels it, same as declining the real picker. Errors if "
             "no chooser is open."
         ),

@@ -19,6 +19,7 @@ from fnmatch import fnmatch
 from typing import Any
 
 from .. import bg
+from ..channel import push_channel
 from ..loopguard import LoopOwned
 from . import inject
 from .cdp import CDPSession
@@ -57,6 +58,8 @@ class BrowserSession:
         self._next_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
 
+        # guid → suggestedFilename for downloads in flight, so the done push can name them
+        self._downloads: dict[str, str] = {}
         # sessionId → CDPSession
         self._sessions: LoopOwned[str, CDPSession] = LoopOwned(
             "BrowserSession._sessions"
@@ -114,6 +117,19 @@ class BrowserSession:
         # Enable target discovery for lifecycle events
         if discover:
             await self.execute("Target.setDiscoverTargets", {"discover": True})
+        await self._enable_download_events()
+
+    async def _enable_download_events(self) -> None:
+        # behavior "default" leaves the human's Save-As and download folder alone;
+        # a non-default behavior is browser-context-wide, so it would also
+        # redirect tabs repld never attached.
+        try:
+            await self.execute(
+                "Browser.setDownloadBehavior",
+                {"behavior": "default", "eventsEnabled": True},
+            )
+        except Exception as exc:
+            logger.debug("Browser.setDownloadBehavior: %s", exc)
 
     async def _teardown_ws(self) -> None:
         """Stop the recv loop and close the WebSocket. Never raises.
@@ -249,6 +265,7 @@ class BrowserSession:
 
                 # Now enable target discovery (picks up new tabs)
                 await self.execute("Target.setDiscoverTargets", {"discover": True})
+                await self._enable_download_events()
 
                 logger.info(
                     "Reconnected to Chrome on port %d (%d sessions restored)",
@@ -668,7 +685,10 @@ class BrowserSession:
         method = data.get("method")
         params = data.get("params", {})
 
-        if method == "Target.targetCreated":
+        if method in ("Browser.downloadWillBegin", "Browser.downloadProgress"):
+            self._announce_download(method, params)
+
+        elif method == "Target.targetCreated":
             target_info = params.get("targetInfo", {})
             matched_id = self._resolve_target(target_info)
             if matched_id and self._on_target_created:
@@ -707,6 +727,42 @@ class BrowserSession:
                     self._auto_attach(target_info, matched_id),
                     name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
                 )
+
+    def _announce_download(self, method: str, params: dict) -> None:
+        guid = params.get("guid", "")
+        if method == "Browser.downloadWillBegin":
+            if len(self._downloads) >= 256:
+                self._downloads.pop(next(iter(self._downloads)))
+            self._downloads[guid] = params.get("suggestedFilename", "")
+            kind, state = "download_started", "started"
+        else:
+            state = params.get("state", "")
+            if state not in ("completed", "canceled"):
+                return
+            kind = "download_done" if state == "completed" else "download_canceled"
+        name = (
+            self._downloads.pop(guid, "")
+            if kind != "download_started"
+            else self._downloads[guid]
+        )
+        # A main frame's id equals its target id; a download from a child frame
+        # finds no owner and broadcasts.
+        cdp = self.find_by_target_id(params.get("frameId", ""))
+        short_id = (
+            f"{self.port}:{cdp.chrome_target_id[:6].lower()}" if cdp else str(self.port)
+        )
+        meta = {"kind": kind, "target": short_id, "filename": name}
+        if params.get("filePath"):
+            meta["path"] = params["filePath"]
+        elif params.get("url"):
+            meta["url"] = params["url"]
+        detail = meta.get("path") or meta.get("url") or ""
+        push_channel(
+            f"[{kind}] {short_id}: {name} {detail}".rstrip(),
+            meta,
+            session=cdp.last_caller if cdp else None,
+            fallback_broadcast=True,
+        )
 
     async def _auto_attach(self, target_info: dict, target_id: str) -> None:
         """Auto-attach to a newly-matched target."""

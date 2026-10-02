@@ -205,6 +205,7 @@ class Browser:
         if cdp is None:
             return None
         url = cdp.target_info.get("url", "")
+        await cdp.arm_native()
         if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
             await cdp.enable_fetch()
         tab = Tab(cdp, tid, self.port, ready=ready)
