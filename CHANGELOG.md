@@ -10,6 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.11.6] - 2026-10-02
+
+### Changed
+
 - Native file pickers are suppressed only on `get()`/`open()` tabs and after `expect_file_chooser()`. `watch()` tabs keep the human's picker and push a `[filechooser] ... shared tab` notice via `Page.enable {enableFileChooserOpenedEvent}`. A picker-API chooser (`showOpenFilePicker`, no input node) is reported human-only instead of left pending. `tab.set_files()` now reads a byte of each file back and raises when the page cannot read it (e.g. an Android path Chrome's uid cannot open) instead of reporting success.
 
 - Browser downloads are no longer redirected to a per-project directory. Repld sets `Browser.setDownloadBehavior` to `default` with events enabled, so a human's Save-As and download folder keep working on attached tabs (the old `allow` setting redirected every tab in the profile). Agents get `download_started` / `download_done` / `download_canceled` channel pushes instead; the saved path is in the push meta when Chrome reports it. `paths.downloads_dir()` is removed.
@@ -17,9 +25,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The kernel now sends `notifications/tools/list_changed` and `notifications/resources/list_changed` when a gist gains, loses or edits a `_tool_*` or its docstring, or when `browser` appears in `__main__` (polled every 2 s). Both were advertised with `listChanged` but only fired on kernel respawn.
 - Gist-tool and `browser_*` tool failures (including bad arguments) now return an `isError` result with the message instead of a JSON-RPC `-32000` error, so the model sees them and can retry (MCP tools spec, SEP-1303). Unknown tool names stay `-32602`.
 
-### Fixed
-
-### Removed
 
 ## [0.11.5] - 2026-10-01
 
