@@ -347,3 +347,9 @@ Peer-reported by `claude_code_research` (2026-10-01, Claude Code v2.1.284, 3 pos
 - [x] `bg` inbox delivery failure now reads False (`ipc.Post` enum). Still open, unmeasured: per-sender rate limits and the 50-message queue under chatty kinds, and a `--bg` session whose process the supervisor stopped after its idle hour (socket gone).
 - [x] Fallback run against a real `claude --bg` worker (peer-measured 2026-10-01, 0.11.5, cold-spawned worker, ephemeral bridge): 3 of 3 `notify(kind=...)` broadcasts delivered, each a user record within 0.1 s (origin `peer`, framed with the `[repld push kind="..."]` head) and answered in about 1.4 s. Not covered: a `task_done` push (so `push_state` on a `bg` origin), a held or failed write, rate limits under chatty kinds, a worker the daemon has stopped.
 - [x] `push_state == "broadcast"` covered by phase 15 `_push_state_broadcast` (a `defer()` from `repld_init.py`).
+
+## Gist durable state (open, Fredrik's call)
+
+Peer-raised by `claude_code_research` (2026-10-01/02). `state.sweep_dead_project_dirs` rmtree's a dead kernel's whole project dir at boot, taking any file a gist wrote beside `kernel.sock` (their `roster.json`/`roster.jsonl`) with it; after an OOM-killed kernel `roster.tell()` raises KeyError for every name until each session re-reports. Decided against preserving foreign files in the runtime dir: the whole-dir sweep is the leak backstop, and an allowlist makes the dir's contents a public contract.
+
+- [ ] Sanctioned durable helper `paths.gist_state_dir(name)` under `XDG_STATE_HOME`, never swept. Their one condition: a hook subprocess that cannot import repld must find it without a kernel, so the path also has to come out of `repld status --json` or a `repld paths` subcommand. If not taken, they derive the dir from the slug themselves and keep a copy beside the socket.
