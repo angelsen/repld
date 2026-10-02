@@ -124,7 +124,7 @@ infinite scroll.
   `_reattach_core` for agent tabs only; downloads switch to `behavior:"default"` +
   `eventsEnabled` with `Browser.downloadWillBegin/Progress` pushes (drops `downloads_dir()`);
   shared tabs record+push JS dialogs instead of auto-dismissing. Fallback: gate the existing
-  always-on arming on `mode`, `watch()` shared. File-chooser notify-only (shared vs agent tabs) and `set_files` readability probe DONE too. Downloads part DONE (uncommitted: `Browser.setDownloadBehavior default` + `download_*` pushes, `downloads_dir()` removed); `phase_6_downloads` covers the push live (events do fire in `default` mode); Save-As UI on a headed attached tab still unchecked by hand. Verified against Chromium
+  always-on arming on `mode`, `watch()` shared. File-chooser notify-only (shared vs agent tabs) and `set_files` readability probe DONE too. Downloads part DONE (shipped in 0.11.6: `Browser.setDownloadBehavior default` + `download_*` pushes, `downloads_dir()` removed); `phase_6_downloads` covers the push live (events do fire in `default` mode); Save-As UI on a headed attached tab still unchecked by hand. Verified against Chromium
   929d9d9f: `Browser.setDownloadBehavior {default, eventsEnabled:true}` emits download events and
   leaves the human's Save-As alone; today's `allow` redirects downloads for every tab in the
   profile. `Page.enable {enableFileChooserOpenedEvent:true}` emits `fileChooserOpened` without
