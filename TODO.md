@@ -139,10 +139,16 @@ infinite scroll.
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
   surface, so document the Chrome policies (`SerialAllowAllPortsForUrls`,
   `WebUsbAllowDevicesForUrls`) for a throwaway test Chrome instead of building anything.
-- [ ] **`set_files` reports success on an unreadable file.** On Android,
-  `set_files(['/sdcard/Download/x.png'])` returns "1 file(s) set" but the page's
-  `file.arrayBuffer()` throws `NotReadableError` (Chrome uid cannot read `media_rw`). Probe one
-  byte per file after `DOM.setFileInputFiles` and raise naming it.
+- [x] **`set_files` reports success on an unreadable file.** Fixed in 0.11.6: reads one byte of
+  each file back and raises naming it; confirmed on a Nothing Phone (`media_rw` file raises
+  `NotReadableError`).
+- [ ] **`set_files` readability probe hangs on a `hidden` tab.** With the screen off or Chrome
+  backgrounded, `Runtime.callFunctionOn` stalls and `set_files` dies with
+  `TimeoutError: CDP command Runtime.callFunctionOn timed out after 30s` instead of the readable
+  error (a hidden page throttles the awaited `arrayBuffer()`). Fine after waking the phone and
+  `tab.front()`. Fix: bound the probe to a few seconds and report "could not verify, tab
+  hidden" rather than a 30 s CDP timeout; reported by the strip-polish session.
+
 
 ## Testing gaps
 
