@@ -80,9 +80,10 @@ def push_channel(
     `fallback_broadcast=True` is the one deliberate exception: a *best-guess*
     affinity (e.g. controls observations and console errors/exceptions,
     routed via `CDPSession.last_caller` to whichever session last touched
-    the tab) is nobody's specific request the way `origin` is, so a
-    stale guess should degrade to the old broadcast behavior rather than
-    silently vanish.
+    the tab) is nobody's specific request the way `origin` is, so a failed
+    write on a live session degrades to a broadcast. A *closed* session is
+    still dropped: its owner left, and waking every other session for it
+    is the leak the targeted path exists to prevent.
 
     `content` is a backstop for callers that pass through external or user
     data unbounded (`notify()`'s content, `@every`'s stringified result, a
@@ -123,7 +124,7 @@ def push_channel(
         ipc.broadcast_channel(msg, exclude=exclude)
     else:
         delivered = ipc.post_to(session, msg, on_parked_flush=on_parked_flush)
-        if delivered is False and fallback_broadcast:
+        if delivered is False and fallback_broadcast and not session.closed:
             ipc.broadcast_channel(msg)
     events.emit(ChannelPush(content, meta))
     return delivered

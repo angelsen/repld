@@ -521,7 +521,7 @@ def _push_holder(content: str, kind: str, holder: _Holder, **meta: str) -> None:
     push_channel(
         content,
         {"kind": kind, "task": holder.name, "task_id": holder.task_id or "", **meta},
-        session=holder.origin,
+        session=holder.origin if holder.origin and not holder.origin.closed else None,
         fallback_broadcast=True,
     )
 

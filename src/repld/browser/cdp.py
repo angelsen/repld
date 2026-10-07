@@ -282,7 +282,7 @@ def _push_error_text(
     _dedup_push(
         f"[console:error] {short_id}: {text}",
         {"kind": "console_error", "target": short_id},
-        text[:100],
+        f"{getattr(session, 'claude_session_id', None)}:{text[:100]}",
         loop,
         session,
     )

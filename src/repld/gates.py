@@ -36,7 +36,7 @@ import uuid
 from dataclasses import dataclass
 from typing import IO, Literal
 
-from . import bg
+from . import bg, tasks
 from .channel import push_channel
 from .events import HumanPromptClosed, HumanPromptOpen, HumanPromptResponse, emit
 
@@ -265,7 +265,9 @@ async def _gate(
                 f"\nno terminal attached — answer from the project dir with: "
                 f"repld gate answer {gate_id} <value>"
             )
-        push_channel(content, meta)
+        push_channel(
+            content, meta, session=tasks.current_origin(), fallback_broadcast=True
+        )
         emit(HumanPromptOpen(gate_id, kind, prompt, options))
 
         # Route to pill UI if tab is pinned
