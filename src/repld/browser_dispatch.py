@@ -274,6 +274,12 @@ class BrowserDispatchMixin:
             tab.dismiss_dialog(bool(args.get("accept", True)), args.get("prompt_text"))
         )
 
+    def _bh_take(self, browser, args):
+        return self._run_async(self._get_tab(browser, args).take())
+
+    def _bh_release(self, browser, args):
+        return self._run_async(self._get_tab(browser, args).release())
+
     def _bh_expect_file_chooser(self, browser, args):
         tab = self._get_tab(browser, args)
         return self._run_async(tab.expect_file_chooser(list(args["paths"])))
@@ -569,6 +575,8 @@ class BrowserDispatchMixin:
         "browser_controls": _bh_controls,
         "browser_invoke": _bh_invoke,
         "browser_dismiss_dialog": _bh_dismiss_dialog,
+        "browser_take": _bh_take,
+        "browser_release": _bh_release,
         "browser_set_files": _bh_set_files,
         "browser_expect_file_chooser": _bh_expect_file_chooser,
         "browser_expect_auth": _bh_expect_auth,

@@ -8,7 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Browser tabs are `agent` or `shared`, shown in `browser_tabs`, the dashboard and `tab.mode`. `browser_take` / `browser_release` (`tab.take()` / `tab.release()`) switch it. A shared tab's JS dialogs and file picker stay native for the human: repld pushes `[dialog:...] waiting for the human`, then who answered, and a renderer-bound call blocked behind the dialog fails fast instead of waiting out the watchdog. `browser_dismiss_dialog` / `tab.dismiss_dialog()` answers a dialog that is open now.
+
 ### Changed
+
+- **Behavior change:** only `browser.open()` tabs start `agent`. `browser.get()`, `watch()` and any browser tool aimed at an existing page attach `shared`, so a page you opened yourself no longer loses its file picker or has its dialogs answered for you. `tab.take()` restores the old behavior. `expect_file_chooser` no longer flips a tab to `agent`; on a shared tab it intercepts that one chooser.
+- Dialog, file-chooser and auth pushes go to the session that last drove the tab (broadcast only if it is gone) instead of waking every session, and an auto-accepted `alert`/`beforeunload` no longer pushes at all.
 
 ### Fixed
 

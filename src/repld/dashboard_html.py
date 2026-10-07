@@ -205,7 +205,7 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
 
         <div class="section-label">attached tabs</div>
         <table id="tabs-table">
-          <thead><tr><th class="type">type</th><th>url</th><th>title</th></tr></thead>
+          <thead><tr><th class="type">type</th><th>mode</th><th>url</th><th>title</th></tr></thead>
           <tbody id="tabs-body"></tbody>
         </table>
         <div class="empty" id="tabs-empty">no attached tabs</div>
@@ -388,6 +388,7 @@ function render() {
   for (const t of b.tabs) {
     const tr = document.createElement('tr');
     tr.innerHTML = '<td class="type">' + esc(t.type) + '</td>'
+      + '<td>' + esc(t.mode || '') + '</td>'
       + '<td class="url" title="' + esc(t.url) + '">' + esc(t.url) + '</td>'
       + '<td>' + esc(t.title || '') + '</td>';
     tbody.appendChild(tr);
@@ -489,6 +490,7 @@ function renderTargets() {
     const tr = document.createElement('tr');
     const origin = urlOrigin(t.url);
     tr.innerHTML = '<td class="type">' + esc(t.type) + '</td>'
+      + '<td>' + esc(t.mode || '') + '</td>'
       + '<td class="url" title="' + esc(t.url) + '">' + esc(t.url) + '</td>'
       + '<td class="actions">'
       + (attached

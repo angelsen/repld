@@ -107,12 +107,16 @@ _BROWSER_MODEL = (
     "browser_invoke (act) MCP tools. Action observations push as channel messages. "
     "Console errors from watched tabs push as [console:error] channel messages automatically "
     "(cross-tab duplicates within 2s are collapsed; browser.suppress(substring) mutes matching errors). "
-    "Native dialogs (alert/confirm/prompt/beforeunload) are always dismissed the instant they open "
+    "Tabs are `agent` (browser_open: repld answers native prompts) or `shared` (any tab you attach "
+    "to: the human's own dialogs and file picker stay native, and you are told). browser_take/"
+    "browser_release switch it; browser_tabs shows it. On an agent tab native dialogs "
+    "(alert/confirm/prompt/beforeunload) are dismissed the instant they open "
     "so nothing hangs — but confirm()/prompt() reject by default and the triggering call errors "
     "rather than returning a receipt, since accepting one is never guessed. Pre-arm "
     "browser_dismiss_dialog(target, accept=true) first, then repeat the action, to accept it. "
     "alert() (only one option) and beforeunload (governed by the pin's guard_unload) don't error. "
-    "A native file chooser (clicking an <input type=file> control) is also intercepted rather than "
+    "On a shared tab a dialog waits for the human and the triggering call fails fast; "
+    "browser_dismiss_dialog answers it. A native file chooser on an agent tab is intercepted rather than "
     "opened for real — it stays open until tab.set_files(paths) answers it, or pre-arm with "
     "tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click. "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
@@ -752,9 +756,14 @@ on an already-attached tab still reports the original attach's value.
       See "Settle loop" below for what "idle" means.
 
   tab.dismiss_dialog(accept=True, prompt_text=None)           → str
-      Pre-arm the next native JS dialog on this tab. Dialogs auto-dismiss
-      already (see "Native JS dialogs" above) — this overrides the default
-      for one dialog, e.g. to make a confirm() return true.
+      Answer the dialog open on this tab, else pre-arm the next one. Agent
+      tabs auto-dismiss already (see "Native JS dialogs" above) - this
+      overrides the default for one dialog, e.g. to make a confirm() return
+      true. On a shared tab it answers a dialog left open for the human.
+
+  tab.take() / tab.release()                                  → str
+      Switch the tab to `agent` / `shared` (see "Tab mode" above). tab.mode
+      reads it.
 
   tab.set_files(paths)                                        → str
       Resolve the most recent unanswered native file-chooser prompt on
@@ -1079,12 +1088,29 @@ getBy*() chaining (.filter(), a second getBy*() call) is refused with
   leading repld shorthand (label=, testid=, placeholder=, getBy*()) swallows
   everything after it, `>>` included, as one literal value.
 
+== Tab mode: agent vs shared ==
+
+Every attached tab is `agent` or `shared`, shown in browser_tabs and tab.mode.
+The mode decides who owns the tab's native prompts (dialogs, file picker):
+
+  agent   repld answers them. browser.open() / browser_open tabs start here.
+  shared  the human may be using the tab, so they stay native and you are
+          notified. get(), watch() and browser_* calls on an existing tab
+          start here - attaching to a page is not taking it over.
+
+  await tab.take()      # → agent  (browser_take)
+  await tab.release()   # → shared (browser_release)
+
+Only take()/release() change it; expect_file_chooser and dismiss_dialog do not.
+
 == Native JS dialogs ==
 
 alert()/confirm()/prompt()/beforeunload block Chrome's renderer until
-dismissed, which would otherwise hang the CDP command that triggered them
-for the full watchdog timeout. repld listens for Page.javascriptDialogOpening
-and dismisses every dialog within milliseconds, before it can wedge anything:
+answered, which would otherwise hang the CDP command that triggered them
+for the full watchdog timeout.
+
+On an `agent` tab repld listens for Page.javascriptDialogOpening and answers
+every dialog within milliseconds, before it can wedge anything:
 
   alert()       → accepted (the only option)
   beforeunload  → accepted (navigate away), unless the tab is pinned with
@@ -1104,10 +1130,21 @@ pre-arm the tab *before* the action that opens it:
 The pre-arm is one-shot: it applies to the next dialog only, then reverts to
 the defaults above. alert()/beforeunload never error — accepting either
 isn't a guess (alert has no other option; beforeunload already reflects the
-pin's own guard_unload). Their outcome, and any dialog with no in-flight
-action behind it (a setTimeout, or one on a watch()-ed tab), shows up as a
-`dialog:` line in the observation and pushes to channel:
+pin's own guard_unload). Their outcome shows up as a `dialog:` line in the
+observation; only a confirm()/prompt() (or one with no in-flight action
+behind it) also pushes to channel, to the session that last drove the tab:
 `[dialog:confirm] 9222:a1b2c3: 'Delete?' → rejected (auto)`.
+
+On a `shared` tab the dialog is the human's. With no pre-arm, and a native
+dialog UI to show it, repld does not answer: the human does, in their
+browser. The agent gets `[dialog:confirm] ...: 'Delete?' → waiting for the
+human`, then `→ accepted by human` (or `by agent`). A click or other
+renderer-bound call blocked behind it fails at once with "waiting for the
+human" rather than riding out the watchdog - answer it yourself with
+`tab.dismiss_dialog(accept=...)` (it answers the open dialog), or
+`tab.take()` the tab. A pre-armed dialog is still answered, one-shot, and
+leaves the tab shared. A browser with no dialog UI of its own (hasBrowserHandler
+false) gets the `agent` behavior, since nothing else could answer.
 
 Auto-wait: selectors auto-wait up to 2s (click/type_text) or the specified
   timeout (wait_for), polling every 100ms, then actionability waits for
@@ -1123,12 +1160,13 @@ Same blind spot as native JS dialogs above — an OS-level Chrome UI that
 Page.captureScreenshot and the AX tree can't see — three different shapes:
 
 File choosers (clicking a real <input type=file>-backed control):
-  On tabs from get()/open() (and after expect_file_chooser),
+  On `agent` tabs (browser.open(), tab.take()),
   Page.setInterceptFileChooserDialog stops the real OS picker from opening;
   Chrome reports Page.fileChooserOpened instead, so the triggering click
-  returns normally. watch() tabs are left to the human: the picker still
+  returns normally. `shared` tabs are left to the human: the picker still
   opens and the agent only gets a `[filechooser] ... shared tab` push (and
-  can still set_files). A picker-API chooser (showOpenFilePicker) has no
+  can still set_files). expect_file_chooser on a shared tab intercepts that
+  one chooser only. A picker-API chooser (showOpenFilePicker) has no
   input node, so it is reported human-only and set_files cannot answer it.
   There's no safe file selection to guess, so with no pre-arm the chooser
   is left open rather than auto-answered:
@@ -1582,7 +1620,8 @@ Tab (async unless noted):
   tab.keys(keys, delay_ms=)                               → None (sequence of presses in one call)
   tab.wait_for(selector, timeout=5)                       → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)                 → int  (network idle; returns settle ms)
-  tab.dismiss_dialog(accept=True, prompt_text=)           → str  (pre-arm the next native dialog's outcome, one-shot)
+  tab.dismiss_dialog(accept=True, prompt_text=)           → str  (answer the open dialog, else pre-arm the next one, one-shot)
+  tab.take() / tab.release()                              → str  (agent: repld answers native prompts / shared: left to the human; tab.mode reads it)
   tab.set_files(paths)                                    → str  (resolve the most recent open file chooser; [] cancels; raises if none open)
   tab.expect_file_chooser(paths)                          → str  (pre-arm the next file chooser's files, one-shot)
   tab.expect_auth(username, password)                     → str  (pre-arm the next HTTP Basic/Digest challenge, one-shot)

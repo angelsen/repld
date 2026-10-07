@@ -38,6 +38,15 @@ PRUNE_CHECK_INTERVAL = 1_000
 # could legitimately have been waiting on it. Raise it if that ceiling rises.
 _INFLIGHT_MAX_AGE = 60.0
 
+# CDP methods that need the renderer, which an open JS dialog blocks.
+_RENDERER_BOUND = (
+    "Input.",
+    "Runtime.evaluate",
+    "Runtime.callFunctionOn",
+    "Page.navigate",
+    "Page.reload",
+)
+
 # Response mime types whose body stays open by design: the response has
 # arrived, and waiting for `loadingFinished` means waiting for the stream to
 # end. Matched against Network.responseReceived, where Chrome has already
@@ -279,17 +288,35 @@ def _push_error_text(
     )
 
 
-async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
-    """Auto-dismiss a native JS dialog (alert/confirm/prompt/beforeunload).
+class DialogPendingError(RuntimeError):
+    """A renderer-bound command hit a tab whose human-owned dialog is still open."""
 
-    Without this, a `confirm()`/`alert()` triggered by a click blocks Chrome's
-    renderer, and the CDP command that triggered it (Input.dispatchMouseEvent)
-    hangs until the dialog is dismissed — up to the 30s watchdog. Default
-    policy: alert (only option) and beforeunload accept; confirm/prompt reject
-    (safe — nothing destructive happens). A pinned tab with guard_unload=True
-    rejects beforeunload too, honoring the pin's "don't navigate away" intent
-    over the general default. A pre-armed `_dialog_policy` overrides all of
-    this once, then is consumed.
+
+def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
+    d = cdp._open_dialog or {}
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    return DialogPendingError(
+        f"{d.get('type', 'dialog')}() {d.get('message', '')!r} is open on shared "
+        f"tab {short_id}, waiting for the human; a push reports their answer, "
+        "or call browser_dismiss_dialog(target, accept=...) / browser_take(target)"
+    )
+
+
+async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
+    """Answer a native JS dialog (alert/confirm/prompt/beforeunload), or leave it.
+
+    An unanswered dialog blocks Chrome's renderer, and the CDP command that
+    triggered it (Input.dispatchMouseEvent) hangs up to the 30s watchdog. On
+    an `agent` tab repld answers within milliseconds: alert (only option) and
+    beforeunload accept; confirm/prompt reject (safe - nothing destructive
+    happens). A pinned tab with guard_unload=True rejects beforeunload too,
+    honoring the pin's "don't navigate away" intent. A pre-armed
+    `_dialog_policy` overrides all of this once, then is consumed.
+
+    A `shared` tab's dialog belongs to the human: with no pre-arm and a native
+    dialog UI to show it (`hasBrowserHandler`), it is left open and reported
+    by `_record_dialog_closed`. Without a browser handler (headless) nothing
+    could answer it but CDP, so the auto policy applies.
     """
     dialog_type = params.get("type", "")
     message = params.get("message", "")
@@ -302,6 +329,9 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
         cdp._dialog_policy = None
     elif dialog_type == "beforeunload" and cdp._pinned and cdp._pin_guard_unload:
         accept, prompt_text, source = False, None, "auto"
+    elif cdp.mode == "shared" and params.get("hasBrowserHandler"):
+        _leave_dialog_to_human(cdp, dialog_type, message)
+        return
     else:
         accept = dialog_type in ("alert", "beforeunload")
         prompt_text = None
@@ -324,6 +354,8 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
             "source": source,
         }
     )
+    if source == "auto" and accept and dialog_type in ("alert", "beforeunload"):
+        return  # routine: the observation's `dialog:` line carries it
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     action = "accepted" if accept else "rejected"
     push_channel(
@@ -334,6 +366,71 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
             "dialog_type": dialog_type,
             "action": action,
         },
+        session=cdp.last_caller,
+        fallback_broadcast=True,
+    )
+
+
+def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) -> None:
+    entry = {
+        "type": dialog_type,
+        "message": message,
+        "accepted": None,
+        "source": "human",
+    }
+    cdp._dialog_log.append(entry)
+    cdp._open_dialog = {
+        "type": dialog_type,
+        "message": message,
+        "entry": entry,
+        # The Closed push goes to whoever heard about the opening, not to
+        # whoever drove the tab in between.
+        "session": cdp.last_caller,
+    }
+    # In-flight renderer-bound commands (the click that opened this) can't
+    # return until the human answers; wake them instead of riding out 30s.
+    for waiter in list(cdp._dialog_waiters):
+        if not waiter.done():
+            waiter.set_result(None)
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    push_channel(
+        f"[dialog:{dialog_type}] {short_id}: {message!r} → waiting for the human",
+        {
+            "kind": "dialog",
+            "target": short_id,
+            "dialog_type": dialog_type,
+            "action": "waiting",
+        },
+        session=cdp.last_caller,
+        fallback_broadcast=True,
+    )
+
+
+def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
+    """Report how a dialog `_leave_dialog_to_human` left open was answered."""
+    opened = cdp._open_dialog
+    if opened is None:
+        return  # repld answered this one itself
+    cdp._open_dialog = None
+    accepted = bool(params.get("result"))
+    by = opened.get("answered_by", "human")
+    entry = opened["entry"]
+    entry["accepted"] = accepted
+    entry["source"] = by
+    action = "accepted" if accepted else "rejected"
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    push_channel(
+        f"[dialog:{opened['type']}] {short_id}: {opened['message']!r} "
+        f"→ {action} by {by}",
+        {
+            "kind": "dialog",
+            "target": short_id,
+            "dialog_type": opened["type"],
+            "action": action,
+            "answered_by": by,
+        },
+        session=opened.get("session"),
+        fallback_broadcast=True,
     )
 
 
@@ -364,7 +461,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
             "no input node, human-only"
             + (
                 " (blocked: this tab suppresses native pickers)"
-                if cdp._agent_driven
+                if cdp.mode == "agent"
                 else ""
             ),
             {
@@ -373,15 +470,19 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
                 "mode": mode,
                 "human_only": True,
             },
+            session=cdp.last_caller,
+            fallback_broadcast=True,
         )
         return
     cdp._filechooser_pending = {"backend_node_id": backend_node_id, "mode": mode}
-    if not cdp._agent_driven:
+    if cdp.mode == "shared":
         # The human's picker is open; an agent click here isn't left unresolved.
         push_channel(
             f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab — "
             "the native picker is showing; tab.set_files(paths) still works",
             {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
+            session=cdp.last_caller,
+            fallback_broadcast=True,
         )
         return
     cdp._filechooser_log.append(
@@ -391,6 +492,8 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
         f"[filechooser] {short_id}: opened (mode={mode}) — "
         "call tab.set_files(paths) or it stays open",
         {"kind": "filechooser", "target": short_id, "mode": mode},
+        session=cdp.last_caller,
+        fallback_broadcast=True,
     )
 
 
@@ -411,6 +514,9 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
         return  # only reached from _handle_event when a policy is armed
     paths = policy.get("paths", [])
     cdp._filechooser_policy = None
+    if cdp.mode == "shared":
+        # expect_file_chooser() intercepted this one picker only.
+        await cdp.intercept_file_chooser(False)
     try:
         await cdp.execute(
             "DOM.setFileInputFiles",
@@ -426,6 +532,8 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
         f"[filechooser] {short_id}: opened (mode={mode}) → "
         f"{len(paths)} file(s) set (pre-armed)",
         {"kind": "filechooser", "target": short_id, "action": "set"},
+        session=cdp.last_caller,
+        fallback_broadcast=True,
     )
 
 
@@ -503,6 +611,8 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
             "call tab.expect_auth(username, password) before retrying, or it "
             "stays a failed request",
             {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
+            session=cdp.last_caller,
+            fallback_broadcast=True,
         )
 
 
@@ -687,7 +797,15 @@ class CDPSession:
         # Tab.set_files() — unlike a dialog there is no default to guess, so
         # this is never auto-resolved, only tracked until answered.
         self._filechooser_pending: dict | None = None
-        self._agent_driven = False
+        # "agent": repld answers native prompts here. "shared": the human may be
+        # using the tab, so their dialogs and file picker stay native. Set at
+        # attach (open() → agent), changed only by Tab.take()/release().
+        self.mode: str = "shared"
+        # Dialog left open for the human (`_leave_dialog_to_human`), cleared by
+        # `_record_dialog_closed`; `_dialog_waiters` are the in-flight
+        # renderer-bound commands to wake when one opens.
+        self._open_dialog: dict | None = None
+        self._dialog_waiters: set[asyncio.Future] = set()
         # File choosers seen during the current observed mutation — cleared by
         # pre_observe, read by post_observe/unresolved_filechooser_error.
         self._filechooser_log: list[dict] = []
@@ -749,20 +867,22 @@ class CDPSession:
         )
         _create_views(self.db.execute)
 
-    async def arm_native(self) -> None:
-        """Suppress the native file picker on this tab; `set_files` answers it instead.
+    async def set_mode(self, mode: str) -> None:
+        """Switch this tab between `agent` and `shared`.
 
-        Agent-driven tabs only (get()/open()/expect_file_chooser): on a tab a
-        human may be using by hand the picker must open, so `watch()` tabs just
-        get the `fileChooserOpened` event.
+        `agent` suppresses the native file picker (`set_files` answers it
+        instead); `shared` leaves it to the human, who may be using the tab.
         """
-        self._agent_driven = True
+        self.mode = mode
+        await self.intercept_file_chooser(mode == "agent")
+
+    async def intercept_file_chooser(self, enabled: bool) -> None:
         try:
             await self.send_nowait(
-                "Page.setInterceptFileChooserDialog", {"enabled": True}
+                "Page.setInterceptFileChooserDialog", {"enabled": enabled}
             )
         except Exception as exc:
-            logger.debug("arm_native: %s", exc)
+            logger.debug("intercept_file_chooser: %s", exc)
 
     async def _enable_domains(self) -> None:
         """Enable required CDP domains on attach.
@@ -772,15 +892,18 @@ class CDPSession:
         even with many concurrent tabs.  Fetch interception is separate
         (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
 
-        `Page.setInterceptFileChooserDialog` is here rather than opt-in like
-        Fetch: it stops a native OS-level file picker from ever opening, and
+        `Page.setInterceptFileChooserDialog` is replayed here for `agent` tabs
+        only: it stops a native OS-level file picker from ever opening, and
         that window is invisible to Page.captureScreenshot and the AX tree alike
         — there is no "observe it, then decide" for something CDP can't see.
         Downloads are observed, never redirected: see `BrowserSession`.
         """
-        if self._agent_driven:
+        # A reattach may have missed the Closed event; a stale flag would fail
+        # every renderer-bound command on this tab from here on.
+        self._open_dialog = None
+        if self.mode == "agent":
             # Session-scoped: replayed here so a reattach keeps agent tabs armed.
-            await self.arm_native()
+            await self.intercept_file_chooser(True)
         for method, params in (
             ("Inspector.enable", None),
             ("DOM.enable", None),
@@ -864,7 +987,36 @@ class CDPSession:
         origin = tasks.current_origin()
         if origin is not None:
             self.last_caller = origin
-        return await self._send(method, params, self._session_id, timeout)
+        if not method.startswith(_RENDERER_BOUND):
+            return await self._send(method, params, self._session_id, timeout)
+        if self._open_dialog is not None:
+            raise _dialog_pending_error(self)
+        if self.mode != "shared":
+            return await self._send(method, params, self._session_id, timeout)
+        return await self._race_dialog(
+            self._send(method, params, self._session_id, timeout)
+        )
+
+    async def _race_dialog(self, call: Any) -> dict:
+        """Await `call`, abandoning it if a human-owned dialog opens meanwhile.
+
+        The renderer is blocked until the human answers, so the command would
+        otherwise ride out its 30s timeout. Cancelling the task pops its
+        `_pending` entry; Chrome's late reply is ignored by `_dispatch`.
+        """
+        loop = asyncio.get_running_loop()
+        abort: asyncio.Future = loop.create_future()
+        self._dialog_waiters.add(abort)
+        task = asyncio.ensure_future(call)
+        try:
+            await asyncio.wait({task, abort}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _dialog_pending_error(self)
+        finally:
+            self._dialog_waiters.discard(abort)
+            if not task.done():
+                task.cancel()
 
     async def send_nowait(
         self,
@@ -968,6 +1120,9 @@ class CDPSession:
                     self._dialog_handler(self, params),
                     name=f"repld-dialog-{params.get('type', '?')}",
                 )
+
+            if method == "Page.javascriptDialogClosed":
+                _record_dialog_closed(self, params)
 
             if (
                 method == "Page.fileChooserOpened"

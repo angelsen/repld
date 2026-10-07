@@ -180,6 +180,11 @@ class Tab(TabQueryMixin):
         return self._session._pinned
 
     @property
+    def mode(self) -> str:
+        """`agent` (repld answers native prompts) or `shared` (left to the human)."""
+        return self._session.mode
+
+    @property
     def target_id(self) -> str:
         """Short target ID in '{port}:{6-char-hex}' format."""
         return make_target(self._port, self._chrome_target_id)
@@ -1739,21 +1744,45 @@ class Tab(TabQueryMixin):
     async def dismiss_dialog(
         self, accept: bool = True, prompt_text: str | None = None
     ) -> str:
-        """Pre-arm how to handle the next native JS dialog on this tab.
+        """Answer the dialog open on this tab, or pre-arm the next one.
 
-        alert()/confirm()/prompt()/beforeunload dialogs are always dismissed
-        the instant they open, so nothing ever hangs waiting on one — but
-        confirm()/prompt() reject by default and the action that triggered
-        one raises instead of returning a receipt, since accepting one is
-        never guessed. Call this first with accept=True, then repeat the
-        action, to get the dialog to actually accept. One-shot: consumed by
-        the next dialog, then reverts to the reject default.
+        On an `agent` tab dialogs are answered the instant they open, so
+        nothing hangs - but confirm()/prompt() reject by default and the
+        action that triggered one raises instead of returning a receipt, since
+        accepting one is never guessed. Call this first with accept=True, then
+        repeat the action, to get the dialog to actually accept. One-shot:
+        consumed by the next dialog, then reverts to the reject default.
+
+        A `shared` tab's dialog is left to the human; if one is open now, this
+        answers it for them instead of pre-arming.
         """
+        opened = self._session._open_dialog
+        params: dict = {"accept": accept}
+        if prompt_text is not None:
+            params["promptText"] = prompt_text
+        if opened is not None:
+            opened["answered_by"] = "agent"
+            await self._exec("Page.handleJavaScriptDialog", params)
+            return f"Answered the open dialog on {self.target_id}"
         policy: dict = {"accept": accept}
         if prompt_text is not None:
             policy["promptText"] = prompt_text
         self._session._dialog_policy = policy
         return f"Next dialog on {self.target_id} will be {'accept' if accept else 'reject'}ed"
+
+    async def take(self) -> str:
+        """Make this tab `agent`: repld answers its dialogs and file pickers.
+
+        Use on a tab the agent owns. A `get()`/`watch()` tab starts `shared`
+        so a human's own dialog and picker stay native.
+        """
+        await self._session.set_mode("agent")
+        return f"{self.target_id} is now agent: repld answers native prompts here"
+
+    async def release(self) -> str:
+        """Make this tab `shared`: dialogs and file pickers are left to the human."""
+        await self._session.set_mode("shared")
+        return f"{self.target_id} is now shared: native prompts are left to the human"
 
     async def expect_file_chooser(self, paths: list[str]) -> str:
         """Pre-arm the files to hand the next native file-chooser prompt on
@@ -1762,8 +1791,9 @@ class Tab(TabQueryMixin):
         Mirrors dismiss_dialog: there's no safe default file selection to
         guess, so without this the chooser stays open until set_files()
         answers it. One-shot: consumed by the next Page.fileChooserOpened.
+        On a `shared` tab the picker is intercepted for that one chooser only.
         """
-        await self._session.arm_native()
+        await self._session.intercept_file_chooser(True)
         self._session._filechooser_policy = {"paths": list(paths)}
         return (
             f"Next file chooser on {self.target_id} will receive {len(paths)} file(s)"
@@ -2051,4 +2081,4 @@ class Tab(TabQueryMixin):
 
     def __repr__(self) -> str:
         rc = " ready=confirmed" if self.ready_confirmed else ""
-        return f"<Tab {self.target_id} {self.url!r}{rc}>"
+        return f"<Tab {self.target_id} {self.mode} {self.url!r}{rc}>"

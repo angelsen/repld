@@ -201,6 +201,7 @@ class BrowserPool:
                         "type": info.get("type", ""),
                         "url": info.get("url", ""),
                         "title": info.get("title", ""),
+                        "mode": cdp.mode,
                     }
                 )
         # No _connected guard: `patterns` already skips disconnected browsers,

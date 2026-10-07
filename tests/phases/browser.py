@@ -361,6 +361,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
 
     class _FakeCdp:
         def __init__(self, target_id: str, url: str) -> None:
+            self.mode = "shared"
             self.target_info = {
                 "targetId": target_id,
                 "type": "page",
@@ -2010,6 +2011,8 @@ def phase_6(kernel: Kernel) -> None:
             "browser_controls",
             "browser_invoke",
             "browser_dismiss_dialog",
+            "browser_take",
+            "browser_release",
             "browser_set_files",
             "browser_expect_file_chooser",
             "browser_expect_auth",
@@ -2501,20 +2504,35 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
     """
 
     class _Cdp:
-        def __init__(self, *, pinned: bool = False, guard_unload: bool = True) -> None:
+        def __init__(
+            self,
+            *,
+            pinned: bool = False,
+            guard_unload: bool = True,
+            mode: str = "agent",
+        ) -> None:
             self.port = 9222
             self.chrome_target_id = "abcdef123456"
+            self.mode = mode
+            self.last_caller = None
             self._pinned = pinned
             self._pin_guard_unload = guard_unload
             self._dialog_policy: dict | None = None
             self._dialog_log: list[dict] = []
+            self._open_dialog: dict | None = None
+            self._dialog_waiters: set = set()
             self.sent: list[dict] = []
 
         async def execute(self, method: str, params: dict | None = None) -> dict:
             self.sent.append(params or {})
             return {}
 
-    from repld.browser.cdp import _handle_dialog
+    from repld.browser.cdp import (
+        CDPSession,
+        DialogPendingError,
+        _handle_dialog,
+        _record_dialog_closed,
+    )
 
     async def _run() -> None:
         # alert: only one option, always accepted.
@@ -2566,8 +2584,82 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
         assert_eq(cdp._dialog_policy, None, "pre-arm is consumed after one dialog")
         assert_eq(cdp._dialog_log[-1]["source"], "pre-armed", "logged as pre-armed")
 
+        # Shared tab with a native dialog UI: left to the human, not answered.
+        cdp = _Cdp(mode="shared")
+        waiter = asyncio.get_running_loop().create_future()
+        cdp._dialog_waiters.add(waiter)
+        await _handle_dialog(
+            cdp,  # type: ignore[arg-type]
+            {"type": "confirm", "message": "Delete?", "hasBrowserHandler": True},
+        )
+        assert_eq(cdp.sent, [], "shared tab: dialog with a browser handler unanswered")
+        assert_true(
+            cdp._open_dialog is not None and cdp._open_dialog["type"] == "confirm",
+            "shared tab: dialog tracked open",
+        )
+        assert_eq(cdp._dialog_log[-1]["source"], "human", "logged as the human's")
+        assert_true(waiter.done(), "shared tab: in-flight commands are woken")
+        _record_dialog_closed(cdp, {"result": True, "userInput": ""})  # type: ignore[arg-type]
+        assert_eq(cdp._open_dialog, None, "closed event clears the open dialog")
+        assert_eq(
+            cdp._dialog_log[-1]["accepted"], True, "closed event fills the answer"
+        )
+
+        # Shared tab, no browser handler (headless): only CDP can answer.
+        cdp = _Cdp(mode="shared")
+        await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
+        assert_eq(cdp.sent[-1], {"accept": False}, "shared + headless: auto policy")
+
+        # Shared tab, pre-armed: explicit agent intent still answers.
+        cdp = _Cdp(mode="shared")
+        cdp._dialog_policy = {"accept": True}
+        await _handle_dialog(
+            cdp,  # type: ignore[arg-type]
+            {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
+        )
+        assert_eq(cdp.sent[-1], {"accept": True}, "shared + pre-arm: answered")
+        assert_eq(cdp._open_dialog, None, "shared + pre-arm: nothing left open")
+
+        # Agent tab ignores hasBrowserHandler: repld always answers.
+        cdp = _Cdp(mode="agent")
+        await _handle_dialog(
+            cdp,  # type: ignore[arg-type]
+            {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
+        )
+        assert_eq(cdp.sent[-1], {"accept": False}, "agent tab: auto policy")
+
+        # A renderer-bound command in flight when a human dialog opens is
+        # abandoned (not left to the 30s timeout), and the wait leaves no trace.
+        cdp = _Cdp(mode="shared")
+        cdp._open_dialog = {"type": "confirm", "message": "Sure?"}
+        never: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        async def _hang() -> dict:
+            return await never
+
+        racing = asyncio.ensure_future(CDPSession._race_dialog(cdp, _hang()))  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        for waiter in list(cdp._dialog_waiters):
+            waiter.set_result(None)
+        try:
+            await racing
+            raised = False
+        except DialogPendingError:
+            raised = True
+        assert_true(raised, "in-flight command aborts with DialogPendingError")
+        assert_eq(cdp._dialog_waiters, set(), "and the waiter is deregistered")
+
+        async def _quick() -> dict:
+            return {"ok": 1}
+
+        assert_eq(
+            await CDPSession._race_dialog(cdp, _quick()),  # type: ignore[arg-type]
+            {"ok": 1},
+            "a command that finishes first returns normally",
+        )
+
     asyncio.run(_run())
-    print("  ✓ dialog policy: alert/confirm/prompt defaults, pin guard, pre-arm")
+    print("  ✓ dialog policy: defaults, pin guard, pre-arm, shared-tab hand-off")
 
 
 def phase_6_dialog(kernel: Kernel) -> None:
@@ -2684,12 +2776,17 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             self._filechooser_policy: dict | None = None
             self._filechooser_pending: dict | None = None
             self._filechooser_log: list[dict] = []
-            self._agent_driven = True
+            self.mode = "agent"
+            self.last_caller = None
+            self.intercepts: list[bool] = []
             self.sent: list[dict] = []
 
         async def execute(self, method: str, params: dict | None = None) -> dict:
             self.sent.append(params or {})
             return {}
+
+        async def intercept_file_chooser(self, enabled: bool) -> None:
+            self.intercepts.append(enabled)
 
     from repld.browser.cdp import _handle_filechooser, _record_filechooser_opened
 
@@ -2709,7 +2806,7 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
         # Shared tab: pending so set_files still works, but never logged
         # unresolved -- the human's picker is open, the agent's click is fine.
         cdp = _Cdp()
-        cdp._agent_driven = False
+        cdp.mode = "shared"
         _record_filechooser_opened(cdp, {"backendNodeId": 5, "mode": "selectSingle"})  # type: ignore[arg-type]
         assert_eq(cdp._filechooser_log, [], "shared tab: nothing logged unresolved")
         assert_eq(
@@ -2738,6 +2835,14 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             cdp._filechooser_pending, None, "resolved chooser isn't tracked as pending"
         )
         assert_eq(cdp._filechooser_log[-1]["resolved"], True, "logged as resolved")
+        assert_eq(cdp.intercepts, [], "agent tab: interception stays on")
+
+        # Shared tab: expect_file_chooser() intercepted this one picker only.
+        cdp = _Cdp()
+        cdp.mode = "shared"
+        cdp._filechooser_policy = {"paths": ["/tmp/a.jpg"]}
+        await _handle_filechooser(cdp, {"backendNodeId": 7, "mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(cdp.intercepts, [False], "shared tab: interception dropped again")
         assert_eq(
             cdp._filechooser_log[-1]["source"], "pre-armed", "logged as pre-armed"
         )
@@ -2884,6 +2989,83 @@ def phase_6_downloads(kernel: Kernel) -> None:
                 kind in n["params"]["content"], f"{kind} push names itself ({n!r})"
             )
         print("  ✓ downloads: download_started and download_done pushes name the file")
+    finally:
+        h.close()
+
+
+def phase_6_tab_mode(kernel: Kernel) -> None:
+    """A tab's mode (agent/shared) decides who owns its native prompts, is
+    shown in browser_tabs, and moves only through browser_take/browser_release.
+    """
+    if not _chrome_ready("phase 6 tab mode"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            "<input type=file id=f style=display:none>"
+            "<button id=go onclick=\"document.getElementById('f').click()\">Pick</button>"
+            "<button id=ask onclick=\"confirm('Sure?')\">Ask</button>"
+        )
+
+        def _mode() -> str:
+            listing = content_text(h.tool("browser_tabs", {}))
+            line = next(ln for ln in listing.splitlines() if ln.strip().startswith(tid))
+            return line.split()[2]
+
+        assert_eq(_mode(), "agent", "browser_open tabs list as agent")
+
+        h.tool("browser_release", {"target": tid})
+        assert_eq(_mode(), "shared", "browser_release makes the tab shared")
+
+        # Shared: the click returns normally (the human's picker would be
+        # open) and the agent only gets a notice.
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        assert_eq(_tool_error_text(resp), "", "shared tab: picker click raises nothing")
+        h.b.wait_notification(
+            "notifications/claude/channel",
+            kind="filechooser",
+            where=lambda m: "on a shared tab" in m["params"]["content"],
+            timeout=10,
+        )
+        print("  ✓ tab mode: shared tab leaves the picker open, pushes a notice")
+
+        resp = h.tool("browser_take", {"target": tid})
+        assert_eq(_mode(), "agent", "browser_take makes the tab agent")
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        msg = _tool_error_text(resp)
+        assert_true(
+            "file chooser" in msg and "tab.set_files" in msg,
+            f"agent tab: picker is intercepted and left unresolved (got {msg!r})",
+        )
+        h.tool("browser_set_files", {"target": tid, "paths": []})
+        print("  ✓ tab mode: take/release switch who owns the picker")
+
+        # Shared dialog: with a native dialog UI it is left to the human and
+        # the blocked click fails fast; without one (headless) it is rejected
+        # as on an agent tab. Which one this Chrome does is not ours to pick.
+        h.tool("browser_release", {"target": tid})
+        resp = h.tool("browser_click", {"target": tid, "selector": "#ask"})
+        msg = _tool_error_text(resp)
+        if "waiting for the human" in msg:
+            h.tool("browser_dismiss_dialog", {"target": tid, "accept": True})
+            n = h.b.wait_notification(
+                "notifications/claude/channel",
+                kind="dialog",
+                where=lambda m: m["params"]["meta"].get("action") == "accepted",
+                timeout=10,
+            )
+            assert_true("by agent" in n["params"]["content"], f"push names who ({n!r})")
+            print(
+                "  ✓ tab mode: shared dialog left open, click fails fast, then answered"
+            )
+        else:
+            assert_true(
+                "auto-rejected" in msg,
+                f"no browser handler: shared dialog is auto-rejected (got {msg!r})",
+            )
+            print(
+                "  ✓ tab mode: shared dialog without a browser handler is auto-rejected"
+            )
     finally:
         h.close()
 

@@ -102,6 +102,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Gists layer — `./gists/` + `~/.repld/gists/` on sys.path, auto-reload import hook, `scan()` discovery, `introspect()` AST parsing, `repld://gists/{name}` resource templates
 - [x] Gist tools — typed `_tool_*` handlers with inferred schemas, auto-discovery in `tools/list`, `repld gist` scaffolding
 - [x] Browser observation pipeline — mutations return tree + network delta + console delta; Playwright-aligned selectors; iframe composition; parent dialog detection
+- [x] Browser tab mode — `agent` (repld answers native dialogs/pickers) vs `shared` (left to the human, agent notified); `open()` is agent, attach is shared; `take()`/`release()` switch
 - [x] Browser target hierarchy — nested tabs output, iframe navigate guard
 - [x] Ready signal — `browser.get(ready=selector)`, session recovery on HMR, navigate/reload wait
 - [x] Touch input — `tab.tap()`, `tab.swipe()`, 3s timeout for blocking handlers

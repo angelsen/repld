@@ -1228,7 +1228,13 @@ def format_observation(obs: Observation) -> str:
 
     # Dialogs — auto-dismissed alert/confirm/prompt/beforeunload, if any.
     for d in obs.dialogs:
-        action = "accepted" if d["accepted"] else "rejected"
+        action = (
+            "waiting for the human"
+            if d["accepted"] is None
+            else "accepted"
+            if d["accepted"]
+            else "rejected"
+        )
         parts.append(f"dialog: {d['type']} {d['message']!r} → {action} ({d['source']})")
     if obs.dialogs:
         parts.append("")

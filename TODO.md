@@ -116,26 +116,16 @@ infinite scroll.
   `_run_sync_on_loop`; `dashboard._collect_state`, now `async def` itself) changed with them.
   New `phase_6_dead_pool_listing` test (pure asyncio, no real Chrome, companion to
   `phase_6_dead_pool_failover`).
-- [ ] **Browser coexistence with a human on the same Chrome (open, Fredrik's call).**
-  `CDPSession._enable_domains` arms `Page.setInterceptFileChooserDialog` and
-  `Page.setDownloadBehavior allow` on every attached tab, `watch()` included, so a human's
-  file picker / Save-As never opens (also reported from a phone tab). Candidate: per-tab
-  `mode` (`shared`/`agent`), arm lazily via an unlocked `_arm_native_core` replayed in
-  `_reattach_core` for agent tabs only; downloads switch to `behavior:"default"` +
-  `eventsEnabled` with `Browser.downloadWillBegin/Progress` pushes (drops `downloads_dir()`);
-  shared tabs record+push JS dialogs instead of auto-dismissing. Fallback: gate the existing
-  always-on arming on `mode`, `watch()` shared. File-chooser notify-only (shared vs agent tabs) and `set_files` readability probe DONE too. Downloads part DONE (shipped in 0.11.6: `Browser.setDownloadBehavior default` + `download_*` pushes, `downloads_dir()` removed); `phase_6_downloads` covers the push live (events do fire in `default` mode); Save-As UI on a headed attached tab still unchecked by hand. Verified against Chromium
-  929d9d9f: `Browser.setDownloadBehavior {default, eventsEnabled:true}` emits download events and
-  leaves the human's Save-As alone; today's `allow` redirects downloads for every tab in the
-  profile. `Page.enable {enableFileChooserOpenedEvent:true}` emits `fileChooserOpened` without
-  suppressing the native picker, so shared tabs get notify-only with no `Runtime.addBinding`.
-  `showOpenFilePicker` is intercepted too and rejects with AbortError for the human, with no
-  `backendNodeId` (`set_files` sends `None` today). Still unverified: Save-As UI live after the
-  switch; `downloadProgress.filePath` on Linux.
-- [ ] **Native-prompt backlog, ordered.** (1) Page.enable `enableFileChooserOpenedEvent` on
-  shared tabs + gate `setInterceptFileChooserDialog` on agent mode; picker-API chooser (no
-  `backendNodeId`) reported human-only. (2) `set_files` readability probe (next item).
-  (3) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
+- [x] **Browser coexistence with a human on the same Chrome.** Per-tab `mode`
+  (`agent`/`shared`) shipped: `open()` tabs are `agent`, everything attached is `shared`,
+  `take()`/`release()` switch it. Shared tabs get notify-only file choosers and leave a dialog
+  to the human when Chrome has a dialog UI (`hasBrowserHandler`); pushes target `last_caller`.
+  Downloads were observe-only already (0.11.6). `phase_6_tab_mode` covers the shared picker and
+  dialog live on headless Chrome 153, where `hasBrowserHandler` is true. Still unchecked by
+  hand on a headed attached Chrome: Save-As UI, a human actually answering a shared dialog,
+  and `downloadProgress.filePath` on Linux.
+- [ ] **Native-prompt backlog, ordered.** (1) `set_files` readability probe hangs on a
+  `hidden` tab (next item). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
   surface, so document the Chrome policies (`SerialAllowAllPortsForUrls`,
   `WebUsbAllowDevicesForUrls`) for a throwaway test Chrome instead of building anything.

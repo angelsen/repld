@@ -594,14 +594,15 @@ TOOLS = [
     {
         "name": "browser_dismiss_dialog",
         "description": (
-            "Pre-arm how the next native JS dialog (alert/confirm/prompt/"
-            "beforeunload) on a tab gets dismissed. Every dialog is dismissed "
-            "the instant it opens so nothing hangs — but confirm()/prompt() "
-            "reject by default and the click/type/etc. call that triggered "
-            "one raises instead of returning a receipt, since accepting one "
-            "is never guessed. Call this first with accept=true, then repeat "
-            "the action, to make it actually accept. One-shot: consumed by "
-            "the next dialog only, then reverts to the reject default."
+            "Answer the native JS dialog open on a tab, or pre-arm the next one. "
+            "On an agent tab (browser_open, browser_take) every dialog is "
+            "dismissed the instant it opens so nothing hangs - but confirm()/"
+            "prompt() reject by default and the click/type/etc. call that "
+            "triggered one raises instead of returning a receipt, since "
+            "accepting one is never guessed. Call this first with accept=true, "
+            "then repeat the action, to make it actually accept (one-shot). On "
+            "a shared tab (attached with browser_watch or by an existing tab) "
+            "the human's dialog stays native; if one is open, this answers it."
         ),
         "inputSchema": {
             "type": "object",
@@ -610,7 +611,7 @@ TOOLS = [
                 "accept": {
                     "type": "boolean",
                     "default": True,
-                    "description": "Accept (true) or reject/cancel (false) the next dialog",
+                    "description": "Accept (true) or reject/cancel (false) the dialog",
                 },
                 "prompt_text": {
                     "type": "string",
@@ -621,13 +622,40 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_take",
+        "description": (
+            "Make a tab agent-owned: repld answers its JS dialogs and suppresses "
+            "its native file picker (answer with browser_set_files). Tabs from "
+            "browser_open start this way; tabs attached to an existing page "
+            "start shared, so a human's own prompts stay native."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"target": _TARGET_PARAM},
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "browser_release",
+        "description": (
+            "Make a tab shared: JS dialogs and the file picker are left to the "
+            "human, and you are notified instead. Undoes browser_take."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"target": _TARGET_PARAM},
+            "required": ["target"],
+        },
+    },
+    {
         "name": "browser_set_files",
         "description": (
             "Resolve the most recent unanswered native file-chooser prompt "
             "on a tab (opened by clicking a real <input type=file>-backed "
-            "control; on get()/open() tabs "
+            "control; on an agent tab (browser_open, browser_take) "
             "Page.setInterceptFileChooserDialog stops the real OS picker from "
-            "opening, so this is the way to answer it. A chooser from the "
+            "opening, so this is the way to answer it; a shared tab's picker "
+            "stays open for the human. A chooser from the "
             "showOpenFilePicker API has no input and cannot be answered). Errors "
             "if the page cannot read a file it was given. Pass absolute paths on the machine running repld. Empty "
             "paths cancels it, same as declining the real picker. Errors if "
@@ -755,6 +783,9 @@ _TOOL_ANNOTATIONS = {
     "browser_drag": {"openWorldHint": True},
     "browser_invoke": {"openWorldHint": True},
     "browser_dismiss_dialog": {"openWorldHint": True},
+    # repld-side mode switch, repeatable, touches no page state.
+    "browser_take": {"destructiveHint": False, "idempotentHint": True},
+    "browser_release": {"destructiveHint": False, "idempotentHint": True},
     "browser_set_files": {"openWorldHint": True},
     "browser_expect_file_chooser": {"openWorldHint": True},
     "browser_expect_auth": {"openWorldHint": True},

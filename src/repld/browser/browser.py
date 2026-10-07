@@ -194,9 +194,17 @@ class Browser:
         return None, None, ""
 
     async def _attach_and_wrap(
-        self, tid: str, t: dict | None = None, *, ready: str | None = None
+        self,
+        tid: str,
+        t: dict | None = None,
+        *,
+        ready: str | None = None,
+        mode: str = "shared",
     ) -> "Tab | None":
         """Attach, enable Fetch body capture, and wrap the result in a Tab.
+
+        `mode="agent"` (open()) takes the tab over; the `shared` default leaves
+        native prompts to the human, since get() may attach a tab they are using.
 
         Returns None if attach failed (e.g. a concurrent attach for the same
         target is already in flight) — callers keep searching in that case.
@@ -205,7 +213,8 @@ class Browser:
         if cdp is None:
             return None
         url = cdp.target_info.get("url", "")
-        await cdp.arm_native()
+        if mode == "agent":
+            await cdp.set_mode("agent")
         if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
             await cdp.enable_fetch()
         tab = Tab(cdp, tid, self.port, ready=ready)
@@ -222,6 +231,7 @@ class Browser:
         *,
         ready: str | None = None,
         budget: float | None = None,
+        mode: str = "shared",
     ) -> "Tab | None":
         """Attach to `tid`, waiting out a concurrent attach for the same target.
 
@@ -246,7 +256,7 @@ class Browser:
         """
         deadline = time.monotonic() + (_ATTACH_TIMEOUT_S if budget is None else budget)
         while True:
-            tab = await self._attach_and_wrap(tid, t, ready=ready)
+            tab = await self._attach_and_wrap(tid, t, ready=ready, mode=mode)
             if tab is not None:
                 return tab
             if time.monotonic() >= deadline:
@@ -423,7 +433,7 @@ class Browser:
         await self._ensure_connected()
         result = await self._session.execute("Target.createTarget", {"url": url})
         tid = result["targetId"]
-        tab = await self._attach_racing(tid, ready=ready)
+        tab = await self._attach_racing(tid, ready=ready, mode="agent")
         if tab is None:
             raise RuntimeError(f"Failed to attach to new tab '{tid}'")
         return tab
@@ -561,6 +571,7 @@ class Browser:
                     "type": info.get("type", "unknown"),
                     "url": info.get("url", ""),
                     "title": info.get("title", ""),
+                    "mode": tab.mode,
                     "parent_frame_id": info.get("parentFrameId", ""),
                     "opener_id": info.get("openerId", ""),
                 }
@@ -581,9 +592,11 @@ class Browser:
         # Format output
         lines: list[str] = []
         for e in top_level:
-            lines.append(f"{e['target']}  {e['type']}  {e['url']}")
+            lines.append(f"{e['target']}  {e['type']}  {e['mode']}  {e['url']}")
             for child in children.get(e["target"], []):
-                lines.append(f"  {child['target']}  {child['type']}  {child['url']}")
+                lines.append(
+                    f"  {child['target']}  {child['type']}  {child['mode']}  {child['url']}"
+                )
 
         # Orphaned children (parent not attached)
         shown = {e["target"] for e in top_level}
@@ -591,7 +604,8 @@ class Browser:
             if parent_short not in shown:
                 for child in kids:
                     lines.append(
-                        f"{child['target']}  {child['type']} → {parent_short}  {child['url']}"
+                        f"{child['target']}  {child['type']} → {parent_short}"
+                        f"  {child['mode']}  {child['url']}"
                     )
 
         return "\n".join(lines) if lines else _NO_TABS
