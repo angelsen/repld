@@ -14,6 +14,7 @@ from typing import ClassVar
 
 import __main__
 
+from . import tasks
 from .kernel_context import KernelContext
 
 # ipc.Session for the tool call currently dispatching on this IPC reader
@@ -179,7 +180,13 @@ class BrowserDispatchMixin:
         (`browser_js` awaiting a promise, `browser_fetch`, `browser_cdp`, any
         async gist tool) that can legitimately outrun 30s.
         """
-        fut = asyncio.run_coroutine_threadsafe(coro, self.ctx.loop)
+        caller = getattr(_dispatch_session, "current", None)
+
+        async def _scoped():
+            tasks._tool_caller.set(caller)
+            return await coro
+
+        fut = asyncio.run_coroutine_threadsafe(_scoped(), self.ctx.loop)
         try:
             return fut.result(timeout=_ASYNC_CALL_TIMEOUT)
         except TimeoutError:

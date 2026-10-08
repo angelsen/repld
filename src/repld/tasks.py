@@ -119,6 +119,13 @@ def install_tee() -> None:
         sys.stderr = _Tee(sys.__stderr__, "stderr")  # type: ignore[arg-type]
 
 
+# Set around a coroutine an MCP tool call hands to the loop, which carries no
+# repld task for `current_origin` to read.
+_tool_caller: contextvars.ContextVar["Session | None"] = contextvars.ContextVar(
+    "repld_tool_caller", default=None
+)
+
+
 def set_current_task(task_id: str | None) -> None:
     """Bind the running coroutine's ContextVar so `_Tee.write` attributes
     output (and async descendants via copy_context()) to *task_id*."""
@@ -138,7 +145,8 @@ def current_origin() -> "Session | None":
     """The session that asked for the running cell or defer() task, if any."""
     task_id = _current_task.get()
     task = get(task_id) if task_id is not None else None
-    return task.get("origin") if task is not None else None
+    origin = task.get("origin") if task is not None else None
+    return origin if origin is not None else _tool_caller.get()
 
 
 def task_id_of(atask: asyncio.Task[object]) -> str | None:

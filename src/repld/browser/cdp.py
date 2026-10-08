@@ -366,7 +366,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
             "dialog_type": dialog_type,
             "action": action,
         },
-        session=cdp.last_caller,
+        session=cdp.route_to,
         fallback_broadcast=True,
     )
 
@@ -385,7 +385,7 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
         "entry": entry,
         # The Closed push goes to whoever heard about the opening, not to
         # whoever drove the tab in between.
-        "session": cdp.last_caller,
+        "session": cdp.route_to,
     }
     # In-flight renderer-bound commands (the click that opened this) can't
     # return until the human answers; wake them instead of riding out 30s.
@@ -401,7 +401,7 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
             "dialog_type": dialog_type,
             "action": "waiting",
         },
-        session=cdp.last_caller,
+        session=cdp.route_to,
         fallback_broadcast=True,
     )
 
@@ -470,7 +470,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
                 "mode": mode,
                 "human_only": True,
             },
-            session=cdp.last_caller,
+            session=cdp.route_to,
             fallback_broadcast=True,
         )
         return
@@ -481,7 +481,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
             f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab — "
             "the native picker is showing; tab.set_files(paths) still works",
             {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
-            session=cdp.last_caller,
+            session=cdp.route_to,
             fallback_broadcast=True,
         )
         return
@@ -492,7 +492,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
         f"[filechooser] {short_id}: opened (mode={mode}) — "
         "call tab.set_files(paths) or it stays open",
         {"kind": "filechooser", "target": short_id, "mode": mode},
-        session=cdp.last_caller,
+        session=cdp.route_to,
         fallback_broadcast=True,
     )
 
@@ -532,7 +532,7 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
         f"[filechooser] {short_id}: opened (mode={mode}) → "
         f"{len(paths)} file(s) set (pre-armed)",
         {"kind": "filechooser", "target": short_id, "action": "set"},
-        session=cdp.last_caller,
+        session=cdp.route_to,
         fallback_broadcast=True,
     )
 
@@ -611,7 +611,7 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
             "call tab.expect_auth(username, password) before retrying, or it "
             "stays a failed request",
             {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
-            session=cdp.last_caller,
+            session=cdp.route_to,
             fallback_broadcast=True,
         )
 
@@ -709,6 +709,9 @@ class CDPSession:
         # for routing console errors and controls observations, not a firm
         # request like tasks.origin.
         self.last_caller: Session | None = None
+        # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
+        # (inherited by tabs it auto-attaches), cleared by `release()`.
+        self.owner: Session | None = None
 
         # In-memory DuckDB.  The main connection is written only from the
         # asyncio loop thread (store_event/_async_prune); query/fetch_body/
@@ -867,6 +870,12 @@ class CDPSession:
         )
         _create_views(self.db.execute)
 
+    @property
+    def route_to(self) -> "Session | None":
+        """Where this tab's pushes go: its live owner, else `last_caller`."""
+        o = self.owner
+        return o if o is not None and not o.closed else self.last_caller
+
     async def set_mode(self, mode: str) -> None:
         """Switch this tab between `agent` and `shared`.
 
@@ -874,6 +883,10 @@ class CDPSession:
         instead); `shared` leaves it to the human, who may be using the tab.
         """
         self.mode = mode
+        if mode != "agent":
+            self.owner = None
+        elif (origin := tasks.current_origin()) is not None:
+            self.owner = origin
         await self.intercept_file_chooser(mode == "agent")
 
     async def intercept_file_chooser(self, enabled: bool) -> None:
@@ -1158,16 +1171,14 @@ class CDPSession:
                 self._injected = {}
 
             if method == "Runtime.consoleAPICalled":
-                _check_controls_observation(params, target_id, self.last_caller)
+                _check_controls_observation(params, target_id, self.route_to)
                 if params.get("type") == "error":
                     _push_console_error(
-                        params, target_id, self.port, self._loop, self.last_caller
+                        params, target_id, self.port, self._loop, self.route_to
                     )
 
             if method == "Runtime.exceptionThrown":
-                _push_exception(
-                    params, target_id, self.port, self._loop, self.last_caller
-                )
+                _push_exception(params, target_id, self.port, self._loop, self.route_to)
 
             # Periodic pruning — async task to avoid blocking the recv loop
             if self._event_count >= self._next_prune_check:

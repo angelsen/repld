@@ -429,6 +429,7 @@ class Tab(TabQueryMixin):
             push_kind(
                 f"pinned tab navigated away from {origin}",
                 "pin_lost",
+                session=session.route_to,
                 target=self.target_id,
             )
             break
@@ -1100,6 +1101,7 @@ class Tab(TabQueryMixin):
                     push_kind(
                         f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
                         "browser_warning",
+                        session=self._session.route_to,
                         target=self.target_id,
                     )
 

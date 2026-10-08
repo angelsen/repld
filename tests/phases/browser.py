@@ -2515,6 +2515,7 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             self.chrome_target_id = "abcdef123456"
             self.mode = mode
             self.last_caller = None
+            self.route_to = None
             self._pinned = pinned
             self._pin_guard_unload = guard_unload
             self._dialog_policy: dict | None = None
@@ -2778,6 +2779,7 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             self._filechooser_log: list[dict] = []
             self.mode = "agent"
             self.last_caller = None
+            self.route_to = None
             self.intercepts: list[bool] = []
             self.sent: list[dict] = []
 

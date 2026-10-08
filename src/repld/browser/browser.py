@@ -11,6 +11,7 @@ import os
 import time
 from fnmatch import fnmatch
 
+from .. import tasks
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
 from .cdp import CDPSession, _no_capture_patterns
 from .row import Rows
@@ -387,7 +388,9 @@ class Browser:
 
         async def _attach_one(tid: str, info: dict) -> str | None:
             try:
-                await self._session.attach(tid, info)
+                cdp = await self._session.attach(tid, info)
+                if cdp is not None:
+                    cdp.owner = tasks.current_origin()
                 self._session._watched_patterns.setdefault(pattern, set()).add(tid)
                 return tid
             except Exception as exc:

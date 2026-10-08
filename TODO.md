@@ -124,12 +124,10 @@ infinite scroll.
   dialog live on headless Chrome 153, where `hasBrowserHandler` is true. Still unchecked by
   hand on a headed attached Chrome: Save-As UI, a human actually answering a shared dialog,
   and `downloadProgress.filePath` on Linux.
-- [ ] **`CDPSession.owner` for push routing.** No creator field exists: `open()`/`watch()`/pin/gate
-  record nobody durable, and `take()` from an exec cell does not claim the tab. Set `owner` in
-  `open`/`take`/`watch`, inherit it in iframe children and auto-attached tabs (which start
-  `last_caller = None` and broadcast), and route owner-or-`last_caller`. Also still broadcasting:
-  `pin_lost` (tab.py), `browser_warning` (tab.py), child-frame `download_*` (session.py), dashboard
-  `browser_*` pushes (dashboard.py); and no push at all for tab crash/destroy or browser reconnect.
+- [ ] **Remaining unrouted browser pushes.** `CDPSession.owner` shipped (claimed by `open()`,
+  `take()`, a `watch()` pattern and inherited by auto-attached/opener tabs); still broadcasting:
+  dashboard `browser_*` pushes (dashboard.py), and no push at all for tab crash/destroy or browser
+  reconnect.
 - [ ] **Native-prompt backlog, ordered.** (1) `set_files` readability probe hangs on a
   `hidden` tab (next item). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP

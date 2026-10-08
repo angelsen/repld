@@ -16,9 +16,9 @@ import logging
 import urllib.request
 from collections.abc import Callable
 from fnmatch import fnmatch
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .. import bg
+from .. import bg, tasks
 from ..channel import push_channel
 from ..loopguard import LoopOwned
 from . import inject
@@ -30,6 +30,9 @@ from .pin import BINDING_NAME, reapply_label
 WORKER_TYPES = frozenset({"service_worker", "shared_worker", "worker"})
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from ..ipc import Session
 
 __all__ = ["BrowserSession"]
 
@@ -67,6 +70,7 @@ class BrowserSession:
 
         # Watch patterns: glob pattern → set of target_ids matched
         self._watched_patterns: dict[str, set[str]] = {}
+        self._pattern_owners: dict[str, Session] = {}
 
         # target_ids currently being attached (guards against concurrent duplicates)
         self._attaching: set[str] = set()
@@ -562,6 +566,8 @@ class BrowserSession:
         """Register a URL glob pattern and track already-matching sessions."""
         if pattern not in self._watched_patterns:
             self._watched_patterns[pattern] = set()
+        if (origin := tasks.current_origin()) is not None:
+            self._pattern_owners[pattern] = origin
         for cdp in self._sessions.values():
             url = cdp.target_info.get("url", "")
             if fnmatch(url, pattern):
@@ -760,16 +766,28 @@ class BrowserSession:
         push_channel(
             f"[{kind}] {short_id}: {name} {detail}".rstrip(),
             meta,
-            session=cdp.last_caller if cdp else None,
+            session=cdp.route_to if cdp else None,
             fallback_broadcast=True,
         )
+
+    def _inherited_owner(self, target_info: dict) -> "Session | None":
+        """Owner for an auto-attached target: its opener's, else the watcher of
+        the first matching pattern (the order `_resolve_target` matched in)."""
+        url = target_info.get("url", "")
+        for pattern, owner in self._pattern_owners.items():
+            if fnmatch(url, pattern):
+                return owner
+        opener = self.find_by_target_id(target_info.get("openerId", ""))
+        return opener.owner if opener is not None else None
 
     async def _auto_attach(self, target_info: dict, target_id: str) -> None:
         """Auto-attach to a newly-matched target."""
         try:
-            await self.attach(target_id, target_info)
-            # Update pattern tracking
+            cdp = await self.attach(target_id, target_info)
             url = target_info.get("url", "")
+            if cdp is not None and cdp.owner is None:
+                cdp.owner = self._inherited_owner(target_info)
+            # Update pattern tracking
             for pattern, ids in self._watched_patterns.items():
                 if fnmatch(url, pattern):
                     ids.add(target_id)

@@ -676,6 +676,61 @@ def _crash_reason() -> None:
     )
 
 
+def _tab_owner_routing() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    NS = cast(Any, SimpleNamespace)
+
+    from repld.browser.cdp import CDPSession
+    from repld.browser.session import BrowserSession
+
+    route = cast(Any, CDPSession.route_to).fget
+    owner, caller = NS(closed=False), NS(closed=False)
+    assert_eq(
+        route(NS(owner=owner, last_caller=caller)), owner, "owner beats last_caller"
+    )
+    owner.closed = True
+    assert_eq(
+        route(NS(owner=owner, last_caller=caller)),
+        caller,
+        "a closed owner falls back to last_caller",
+    )
+    assert_eq(route(NS(owner=None, last_caller=None)), None, "unclaimed tab broadcasts")
+
+    watcher, opener_owner = NS(), NS()
+    parent = NS(owner=opener_owner)
+    fake = NS(
+        _pattern_owners={"*app.test*": watcher},
+        find_by_target_id=lambda tid: parent if tid == "P" else None,
+    )
+    inherit = cast(Any, BrowserSession._inherited_owner)
+    assert_eq(
+        inherit(fake, {"url": "https://app.test/x", "openerId": "P"}),
+        watcher,
+        "a pattern match inherits the watcher",
+    )
+    assert_eq(
+        inherit(fake, {"url": "https://other.test/", "openerId": "P"}),
+        opener_owner,
+        "an opener-matched tab inherits its opener's owner",
+    )
+    assert_eq(inherit(fake, {"url": "https://other.test/"}), None, "no match, no owner")
+
+    sess = NS()
+    seen: list = []
+
+    async def _probe() -> None:
+        tasks._tool_caller.set(sess)
+        seen.append(tasks.current_origin())
+
+    asyncio.run(_probe())
+    assert_true(seen == [sess], "a tool call's caller is visible as current_origin")
+    print(
+        "  ✓ tab owner: route_to precedence, watch/opener inheritance, tool-call origin"
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -690,3 +745,4 @@ def phase_2_pure() -> None:
     _loop_watchdog()
     _starvation_classification()
     _crash_reason()
+    _tab_owner_routing()
