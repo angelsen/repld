@@ -124,6 +124,9 @@ infinite scroll.
   dialog live on headless Chrome 153, where `hasBrowserHandler` is true. Still unchecked by
   hand on a headed attached Chrome: Save-As UI, a human actually answering a shared dialog,
   and `downloadProgress.filePath` on Linux.
+- [ ] **Live two-session test for `CDPSession.owner`.** Only phase 2's `_tab_owner_routing` covers
+  it (fakes). Add a `phase_15`-style case with two bridges: A `browser_open`s, B drives the tab, a
+  console error reaches A only; and a `watch()` pattern's auto-attached tab reaches the watcher.
 - [ ] **Remaining unrouted browser pushes.** `CDPSession.owner` shipped (claimed by `open()`,
   `take()`, a `watch()` pattern and inherited by auto-attached/opener tabs); still broadcasting:
   dashboard `browser_*` pushes (dashboard.py), and no push at all for tab crash/destroy or browser
