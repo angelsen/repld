@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tab.set_files()` on a `hidden` tab (screen off, Chrome backgrounded) no longer dies after 30 s on its readability probe. The probe is bounded to 5 s and `set_files` returns with a "readability not verified" note; the files are still set.
 ### Removed
 
 ## [0.11.6] - 2026-10-02

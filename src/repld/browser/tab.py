@@ -40,6 +40,7 @@ __all__ = ["BrowserJSError", "Receipt", "Tab"]
 # heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
 # Python-side give-up point (interval * max misses) via the same constants,
 # substituted into _PIN_JS at injection time (see tab.py:_inject_pin).
+_PROBE_TIMEOUT_S = 5  # set_files readability probe; a hidden tab never answers
 _HEARTBEAT_INTERVAL_S = 5
 _HEARTBEAT_MAX_MISSES = 3
 _HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
@@ -1801,19 +1802,21 @@ class Tab(TabQueryMixin):
             f"Next file chooser on {self.target_id} will receive {len(paths)} file(s)"
         )
 
-    async def _probe_files_readable(self, backend_node_id: int) -> None:
-        """Raise if the page cannot read a file just set on the input.
+    async def _probe_files_readable(self, backend_node_id: int) -> str:
+        """Raise if the page cannot read a file just set on the input; return a
+        note when the probe could not run.
 
         `DOM.setFileInputFiles` succeeds for a path the browser process cannot
         open (an Android `media_rw` file), and the failure only surfaces as a
         `NotReadableError` when the page reads the File.
         """
         node = await self._exec("DOM.resolveNode", {"backendNodeId": backend_node_id})
-        result = await self._exec(
-            "Runtime.callFunctionOn",
-            {
-                "objectId": node["object"]["objectId"],
-                "functionDeclaration": """async function () {
+        try:
+            result = await self._exec(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": node["object"]["objectId"],
+                    "functionDeclaration": """async function () {
                     const bad = [];
                     for (const f of this.files || []) {
                         try { await f.slice(0, 1).arrayBuffer(); }
@@ -1821,10 +1824,14 @@ class Tab(TabQueryMixin):
                     }
                     return bad;
                 }""",
-                "awaitPromise": True,
-                "returnByValue": True,
-            },
-        )
+                    "awaitPromise": True,
+                    "returnByValue": True,
+                },
+                timeout=_PROBE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            # A hidden page throttles the awaited arrayBuffer(); the files are set.
+            return " (readability not verified: the page did not answer, tab may be hidden)"
         bad = result.get("result", {}).get("value") or []
         if bad:
             raise RuntimeError(
@@ -1832,6 +1839,7 @@ class Tab(TabQueryMixin):
                 "the browser cannot open the path; on a device it must be readable "
                 "by Chrome's uid"
             )
+        return ""
 
     async def set_files(self, paths: list[str]) -> str:
         """Resolve the most recent unanswered file chooser on this tab.
@@ -1850,15 +1858,14 @@ class Tab(TabQueryMixin):
         await self._exec(
             "DOM.setFileInputFiles", {"files": list(paths), "backendNodeId": node}
         )
-        if paths:
-            await self._probe_files_readable(node)
+        note = await self._probe_files_readable(node) if paths else ""
         for entry in reversed(self._session._filechooser_log):
             if not entry["resolved"]:
                 entry["resolved"] = True
                 entry["paths"] = list(paths)
                 entry["source"] = "manual"
                 break
-        return f"{len(paths)} file(s) set on {self.target_id}"
+        return f"{len(paths)} file(s) set on {self.target_id}{note}"
 
     async def expect_auth(self, username: str, password: str) -> str:
         """Pre-arm credentials for the next HTTP Basic/Digest auth challenge

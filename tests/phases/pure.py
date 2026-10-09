@@ -731,6 +731,40 @@ def _tab_owner_routing() -> None:
     )
 
 
+def _files_probe_timeout() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser.tab import Tab
+
+    probe = cast(Any, Tab._probe_files_readable)
+
+    def _tab(reply):
+        async def _exec(method, params=None, timeout=30):
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": "o"}}
+            if isinstance(reply, Exception):
+                assert timeout < 30, "the probe must bound its own wait"
+                raise reply
+            return reply
+
+        return SimpleNamespace(_exec=_exec)
+
+    note = asyncio.run(probe(_tab(TimeoutError()), 1))
+    assert_true("not verified" in note, "a stalled probe reports instead of raising")
+    ok = asyncio.run(probe(_tab({"result": {"value": []}}), 1))
+    assert_eq(ok, "", "a readable file adds no note")
+    err = ""
+    try:
+        asyncio.run(probe(_tab({"result": {"value": ["a.txt: NotReadableError"]}}), 1))
+    except RuntimeError as exc:
+        err = str(exc)
+    assert_true("unreadable" in err, "an unreadable file still raises")
+    print(
+        "  ✓ set_files probe: stalled -> note, readable -> silent, unreadable -> raises"
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -746,3 +780,4 @@ def phase_2_pure() -> None:
     _starvation_classification()
     _crash_reason()
     _tab_owner_routing()
+    _files_probe_timeout()

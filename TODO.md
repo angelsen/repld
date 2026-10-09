@@ -131,20 +131,17 @@ infinite scroll.
   `take()`, a `watch()` pattern and inherited by auto-attached/opener tabs); still broadcasting:
   dashboard `browser_*` pushes (dashboard.py), and no push at all for tab crash/destroy or browser
   reconnect.
-- [ ] **Native-prompt backlog, ordered.** (1) `set_files` readability probe hangs on a
-  `hidden` tab (next item). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
+- [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
+  `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
   surface, so document the Chrome policies (`SerialAllowAllPortsForUrls`,
   `WebUsbAllowDevicesForUrls`) for a throwaway test Chrome instead of building anything.
 - [x] **`set_files` reports success on an unreadable file.** Fixed in 0.11.6: reads one byte of
   each file back and raises naming it; confirmed on a Nothing Phone (`media_rw` file raises
   `NotReadableError`).
-- [ ] **`set_files` readability probe hangs on a `hidden` tab.** With the screen off or Chrome
-  backgrounded, `Runtime.callFunctionOn` stalls and `set_files` dies with
-  `TimeoutError: CDP command Runtime.callFunctionOn timed out after 30s` instead of the readable
-  error (a hidden page throttles the awaited `arrayBuffer()`). Fine after waking the phone and
-  `tab.front()`. Fix: bound the probe to a few seconds and report "could not verify, tab
-  hidden" rather than a 30 s CDP timeout; reported by the strip-polish session.
+- [x] **`set_files` readability probe hangs on a `hidden` tab.** The probe now waits
+  `_PROBE_TIMEOUT_S` (5 s) and `set_files` returns with a "readability not verified" note instead
+  of a 30 s CDP timeout; covered by `_files_probe_timeout` (phase 2).
 
 
 ## Testing gaps
