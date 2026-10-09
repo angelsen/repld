@@ -276,6 +276,11 @@ class BrowserSession:
                     self.port,
                     len(self._sessions),
                 )
+                push_channel(
+                    f"[browser_reconnected] Chrome on port {self.port}: "
+                    f"{len(self._sessions)} tab(s) restored",
+                    {"kind": "browser_reconnected", "port": str(self.port)},
+                )
             finally:
                 self._reconnecting = False
 
@@ -714,6 +719,7 @@ class BrowserSession:
             for sid in to_remove:
                 cdp = self._sessions.pop(sid, None)
                 if cdp:
+                    self._announce_tab_closed(cdp)
                     cdp.cleanup()
             if to_remove and self._on_target_destroyed:
                 self._on_target_destroyed(chrome_tid)
@@ -733,6 +739,18 @@ class BrowserSession:
                     self._auto_attach(target_info, matched_id),
                     name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
                 )
+
+    def _announce_tab_closed(self, cdp: CDPSession) -> None:
+        # Targeted only: a tab nobody claimed or drove has no one to tell.
+        session = cdp.route_to
+        if cdp.closing or session is None:
+            return
+        short_id = f"{self.port}:{cdp.chrome_target_id[:6].lower()}"
+        push_channel(
+            f"[tab_closed] {short_id}: {cdp.target_info.get('url', '')}",
+            {"kind": "tab_closed", "target": short_id},
+            session=session,
+        )
 
     def _announce_download(self, method: str, params: dict) -> None:
         guid = params.get("guid", "")

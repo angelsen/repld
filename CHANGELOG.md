@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Browser tabs are `agent` or `shared`, shown in `browser_tabs`, the dashboard and `tab.mode`. `browser_take` / `browser_release` (`tab.take()` / `tab.release()`) switch it. A shared tab's JS dialogs and file picker stay native for the human: repld pushes `[dialog:...] waiting for the human`, then who answered, and a renderer-bound call blocked behind the dialog fails fast instead of waiting out the watchdog. `browser_dismiss_dialog` / `tab.dismiss_dialog()` answers a dialog that is open now.
+- Tab crash, a tab closed from outside repld, and a Chrome reconnect now push `tab_crashed`, `tab_closed` and `browser_reconnected`. The first two go to the tab's owning session (a crash broadcasts if none is live; a close with no owner is silent, as is one repld made itself); the reconnect broadcasts.
 
 ### Changed
 

@@ -406,6 +406,16 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
     )
 
 
+def _push_tab_crashed(cdp: "CDPSession") -> None:
+    short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    push_channel(
+        f"[tab_crashed] {short_id}: {cdp.target_info.get('url', '')}",
+        {"kind": "tab_crashed", "target": short_id},
+        session=cdp.route_to,
+        fallback_broadcast=True,
+    )
+
+
 def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
     """Report how a dialog `_leave_dialog_to_human` left open was answered."""
     opened = cdp._open_dialog
@@ -712,6 +722,8 @@ class CDPSession:
         # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
         # (inherited by tabs it auto-attaches), cleared by `release()`.
         self.owner: Session | None = None
+        # Set by `Tab.close` so the resulting targetDestroyed isn't echoed back as `tab_closed`.
+        self.closing: bool = False
 
         # In-memory DuckDB.  The main connection is written only from the
         # asyncio loop thread (store_event/_async_prune); query/fetch_body/
@@ -1169,6 +1181,9 @@ class CDPSession:
                 # handle, not just the one that navigated — inject.ensure_engine
                 # re-instantiates each lazily.
                 self._injected = {}
+
+            if method == "Inspector.targetCrashed":
+                _push_tab_crashed(self)
 
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id, self.route_to)

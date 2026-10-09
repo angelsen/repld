@@ -731,6 +731,57 @@ def _tab_owner_routing() -> None:
     )
 
 
+def _tab_lifecycle_pushes() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser import cdp as cdp_mod
+    from repld.browser import session as session_mod
+    from repld.browser.session import BrowserSession
+
+    NS = cast(Any, SimpleNamespace)
+    sent: list = []
+
+    def _fake_push(content, meta=None, **kw):
+        sent.append(((meta or {})["kind"], kw))
+
+    owner = NS()
+    tab = NS(
+        port=9222,
+        chrome_target_id="ABCDEF123",
+        target_info={"url": "https://x.test/"},
+        route_to=owner,
+        closing=False,
+    )
+    real_cdp, real_session = cdp_mod.push_channel, session_mod.push_channel
+    cdp_mod.push_channel = session_mod.push_channel = _fake_push
+    try:
+        cdp_mod._push_tab_crashed(tab)
+        assert_eq(
+            sent[-1],
+            ("tab_crashed", {"session": owner, "fallback_broadcast": True}),
+            "a crash goes to the tab's route_to, broadcasting on a miss",
+        )
+
+        announce = cast(Any, BrowserSession._announce_tab_closed)
+        announce(NS(port=9222), tab)
+        assert_eq(
+            sent[-1],
+            ("tab_closed", {"session": owner}),
+            "an outside close is told to the owner, never broadcast",
+        )
+
+        n = len(sent)
+        tab.closing = True
+        announce(NS(port=9222), tab)
+        tab.closing, tab.route_to = False, None
+        announce(NS(port=9222), tab)
+        assert_eq(len(sent), n, "repld's own close and an unclaimed tab push nothing")
+    finally:
+        cdp_mod.push_channel, session_mod.push_channel = real_cdp, real_session
+    print("  ✓ tab lifecycle: crash routed, outside close targeted, own close silent")
+
+
 def _files_probe_timeout() -> None:
     from types import SimpleNamespace
     from typing import Any, cast
@@ -780,4 +831,5 @@ def phase_2_pure() -> None:
     _starvation_classification()
     _crash_reason()
     _tab_owner_routing()
+    _tab_lifecycle_pushes()
     _files_probe_timeout()
