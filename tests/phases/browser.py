@@ -15,8 +15,10 @@ import io
 import json
 import os
 import re
+import signal
 import time
 import urllib.request
+from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
@@ -1884,6 +1886,100 @@ def phase_6_tab_owner(kernel: Kernel) -> None:
         )
         print("  ✓ tab owner: browser_take moves the push target to the taker")
     finally:
+        a.close()
+        b.b.close()
+
+
+def _proc_cmdline(d: Path) -> bytes:
+    try:
+        return (d / "cmdline").read_bytes()
+    except OSError:
+        return b""
+
+
+def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
+    """tab_crashed / tab_closed reach the owner only; a cross-site swap is not a close."""
+    if not _chrome_ready("phase 6 tab lifecycle pushes"):
+        return
+    import http.server
+    import threading
+
+    class _Quiet(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<p>swap</p>")
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+
+        def _got(h: _BridgeHarness, kind: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel", kind=kind, timeout=timeout
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        def _full_id(tid: str) -> str:
+            info = content_text(
+                b.tool("browser_cdp", {"target": tid, "method": "Target.getTargetInfo"})
+            )
+            m = re.search(r'"targetId":\s*"([0-9A-F]+)"', info)
+            assert m, f"no targetId in {info[:200]!r}"
+            return m.group(1)
+
+        tid = a.open_tab("<p>swap</p>")
+        for host in ("127.0.0.1", "localhost"):
+            b.tool("browser_navigate", {"target": tid, "url": f"http://{host}:{port}/"})
+        assert_true(
+            not _got(a, "tab_closed", 3), "a cross-site swap is not reported as a close"
+        )
+        resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"})
+        assert_true("2" in content_text(resp), "the tab survives the swap")
+        print("  ✓ tab lifecycle: cross-site navigation pushes no tab_closed")
+
+        b.tool(
+            "browser_cdp",
+            {
+                "target": tid,
+                "method": "Target.closeTarget",
+                "params": {"targetId": _full_id(tid)},
+            },
+        )
+        assert_true(_got(a, "tab_closed", 10), "an outside close reaches the owner")
+        assert_true(
+            not _got(b, "tab_closed", 2), "the driver that is not owner is spared"
+        )
+        print("  ✓ tab lifecycle: outside close goes to the owner only")
+
+        tid = a.open_tab("<p>crash</p>")
+        # Page.crash is a no-op in headless; killing the renderer is the real crash.
+        victims = [
+            int(d.name)
+            for d in Path("/proc").iterdir()
+            if d.name.isdigit()
+            and b"--type=renderer" in _proc_cmdline(d)
+            and b"repld-test-chrome-" in _proc_cmdline(d)
+        ]
+        if not victims:
+            print("  - tab lifecycle crash: no throwaway Chrome renderer, skipping")
+            return
+        for pid in victims:
+            os.kill(pid, signal.SIGKILL)
+        assert_true(_got(a, "tab_crashed", 10), "a crash reaches the owner")
+        print("  ✓ tab lifecycle: crash reaches the owner")
+    finally:
+        srv.shutdown()
         a.close()
         b.b.close()
 

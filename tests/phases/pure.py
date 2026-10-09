@@ -686,7 +686,7 @@ def _tab_owner_routing() -> None:
     from repld.browser.session import BrowserSession
 
     route = cast(Any, CDPSession.route_to).fget
-    owner, caller = NS(closed=False), NS(closed=False)
+    owner, caller = NS(closed=False, who="owner"), NS(closed=False, who="caller")
     assert_eq(
         route(NS(owner=owner, last_caller=caller)), owner, "owner beats last_caller"
     )
@@ -698,7 +698,7 @@ def _tab_owner_routing() -> None:
     )
     assert_eq(route(NS(owner=None, last_caller=None)), None, "unclaimed tab broadcasts")
 
-    watcher, opener_owner = NS(), NS()
+    watcher, opener_owner = NS(who="watcher"), NS(who="opener")
     parent = NS(owner=opener_owner)
     fake = NS(
         _pattern_owners={"*app.test*": watcher},
