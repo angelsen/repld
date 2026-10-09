@@ -3154,6 +3154,82 @@ def phase_6_downloads(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_download_routing(kernel: Kernel) -> None:
+    """Downloads reach the tab's owner: started, done (which carries no frameId)
+    and a download begun inside an iframe all route to A, not to B who drove it."""
+    if not _chrome_ready("phase 6 download routing"):
+        return
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        link = '<a id=d download=NAME href="data:text/plain,hello">dl</a>'
+        frame_doc = link.replace("NAME", "repld-dl-frame.txt").replace('"', "&quot;")
+        tid = a.open_tab(
+            link.replace("NAME", "repld-dl-main.txt")
+            + f"<iframe id=f srcdoc='{frame_doc}'></iframe>"
+        )
+
+        def _heard(h: _BridgeHarness, kind: str, filename: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel",
+                    kind=kind,
+                    where=lambda m: m["params"]["meta"].get("filename") == filename,
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        for filename, code in (
+            ("repld-dl-main.txt", "document.getElementById('d').click()"),
+            (
+                "repld-dl-frame.txt",
+                "document.getElementById('f').contentDocument.getElementById('d').click()",
+            ),
+        ):
+            b.tool("browser_js", {"target": tid, "code": code})
+            for kind in ("download_started", "download_done"):
+                assert_true(
+                    _heard(a, kind, filename, 15), f"{filename}: owner hears {kind}"
+                )
+                assert_true(
+                    not _heard(b, kind, filename, 1),
+                    f"{filename}: the driver that is not owner does not hear {kind}",
+                )
+        print(
+            "  ✓ download routing: main-frame and iframe downloads reach the owner only"
+        )
+    finally:
+        a.close()
+        b.b.close()
+
+
+def phase_6_reconnect_push(kernel: Kernel) -> None:
+    """A dropped Chrome socket is healed by the next call and announced to everyone."""
+    if not _chrome_ready("phase 6 reconnect push"):
+        return
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        tid = a.open_tab("<p>reconnect</p>")
+        a.exec(
+            "for _br in list(browser.peek()._browsers.values()):\n"
+            "    await _br._session._ws.close()\n"
+        )
+        resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"}, timeout=45)
+        assert_true("2" in content_text(resp), "the call after a dropped socket works")
+        for h, who in ((a, "A"), (b, "B")):
+            n = h.b.wait_notification(
+                "notifications/claude/channel", kind="browser_reconnected", timeout=15
+            )
+            assert_true("restored" in n["params"]["content"], f"{who} hears it ({n!r})")
+        print("  ✓ reconnect: browser_reconnected broadcasts to every session")
+    finally:
+        a.close()
+        b.b.close()
+
+
 def phase_6_tab_mode(kernel: Kernel) -> None:
     """A tab's mode (agent/shared) decides who owns its native prompts, is
     shown in browser_tabs, and moves only through browser_take/browser_release.

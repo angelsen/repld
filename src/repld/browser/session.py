@@ -62,7 +62,7 @@ class BrowserSession:
         self._pending: dict[int, asyncio.Future] = {}
 
         # guid → suggestedFilename for downloads in flight, so the done push can name them
-        self._downloads: dict[str, str] = {}
+        self._downloads: dict[str, tuple[str, asyncio.Future[CDPSession | None]]] = {}
         # sessionId → CDPSession
         self._sessions: LoopOwned[str, CDPSession] = LoopOwned(
             "BrowserSession._sessions"
@@ -754,24 +754,58 @@ class BrowserSession:
 
     def _announce_download(self, method: str, params: dict) -> None:
         guid = params.get("guid", "")
+        owner: asyncio.Future[CDPSession | None] | None
         if method == "Browser.downloadWillBegin":
             if len(self._downloads) >= 256:
                 self._downloads.pop(next(iter(self._downloads)))
-            self._downloads[guid] = params.get("suggestedFilename", "")
-            kind, state = "download_started", "started"
+            owner = asyncio.get_running_loop().create_future()
+            name = params.get("suggestedFilename", "")
+            self._downloads[guid] = (name, owner)
+            bg.spawn(
+                self._resolve_download_owner(owner, params.get("frameId", "")),
+                name=f"repld-download-owner-{guid[:8]}",
+            )
+            kind = "download_started"
         else:
             state = params.get("state", "")
             if state not in ("completed", "canceled"):
                 return
             kind = "download_done" if state == "completed" else "download_canceled"
-        name = (
-            self._downloads.pop(guid, "")
-            if kind != "download_started"
-            else self._downloads[guid]
+            # downloadProgress carries no frameId: the owner was fixed at WillBegin.
+            name, owner = self._downloads.pop(guid, ("", None))
+        bg.spawn(
+            self._push_download(kind, name, owner, params),
+            name=f"repld-download-push-{guid[:8]}",
         )
-        # A main frame's id equals its target id; a download from a child frame
-        # finds no owner and broadcasts.
-        cdp = self.find_by_target_id(params.get("frameId", ""))
+
+    async def _resolve_download_owner(
+        self, owner: "asyncio.Future[CDPSession | None]", frame_id: str
+    ) -> None:
+        """Settle `owner` with the tab a download's frame belongs to, else None."""
+        found: CDPSession | None = None
+        try:
+            found = self.find_by_target_id(frame_id)
+            if found is None and frame_id:
+                hit = await self.find_frame_owner(frame_id)
+                found = hit[0] if hit else None
+        except Exception as exc:
+            logger.debug("download owner lookup failed: %s", exc)
+        finally:
+            owner.set_result(found)
+
+    async def _push_download(
+        self,
+        kind: str,
+        name: str,
+        owner: "asyncio.Future[CDPSession | None] | None",
+        params: dict,
+    ) -> None:
+        cdp: CDPSession | None = None
+        if owner is not None:
+            try:
+                cdp = await asyncio.wait_for(asyncio.shield(owner), 3)
+            except TimeoutError:
+                pass
         short_id = (
             f"{self.port}:{cdp.chrome_target_id[:6].lower()}" if cdp else str(self.port)
         )

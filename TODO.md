@@ -128,9 +128,9 @@ infinite scroll.
   now push (`tab_crashed`, `tab_closed`, `browser_reconnected`; `_tab_lifecycle_pushes`, phase 2).
   Dashboard `browser_*` pushes stay broadcast on purpose: the page is a human click over HTTP,
   with no Claude session behind it to route to.
-- [ ] Live test for `browser_reconnected` (drop the socket, assert the broadcast). `tab_crashed`,
-  `tab_closed` and the cross-site-swap non-event are live in `phase_6_tab_lifecycle_pushes`; a
-  renderer SIGKILL stands in for a crash because `Page.crash` is a no-op in headless.
+- [x] Live tests for the lifecycle pushes: `phase_6_tab_lifecycle_pushes` (crash via renderer
+  SIGKILL, since `Page.crash` is a no-op in headless), `phase_6_reconnect_push`, and
+  `phase_6_download_routing` (main frame and iframe).
 - [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
   `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
