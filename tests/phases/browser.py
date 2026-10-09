@@ -1978,6 +1978,20 @@ def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
             os.kill(pid, signal.SIGKILL)
         assert_true(_got(a, "tab_crashed", 10), "a crash reaches the owner")
         print("  ✓ tab lifecycle: crash reaches the owner")
+
+        resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"}, timeout=8)
+        assert_true(
+            "crashed" in _tool_error_text(resp),
+            "a renderer-bound call on a crashed tab fails fast, naming the crash",
+        )
+        b.tool(
+            "browser_navigate",
+            {"target": tid, "url": f"data:text/html,<i>{_MARKER}</i>"},
+            timeout=40,
+        )
+        resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"})
+        assert_true("2" in content_text(resp), "navigating revives a crashed tab")
+        print("  ✓ tab lifecycle: crashed tab fails fast, navigate revives it")
     finally:
         srv.shutdown()
         a.close()

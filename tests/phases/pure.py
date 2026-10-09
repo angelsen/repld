@@ -782,6 +782,71 @@ def _tab_lifecycle_pushes() -> None:
     print("  ✓ tab lifecycle: crash routed, outside close targeted, own close silent")
 
 
+def _crashed_tab_guard() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser.cdp import CDPSession, TabCrashedError
+    from repld.browser.tab import Tab
+
+    NS = cast(Any, SimpleNamespace)
+    sent: list[str] = []
+
+    async def _send(method, params, session_id, timeout):
+        sent.append(method)
+        return {}
+
+    tab = NS(
+        crashed=True,
+        _send=_send,
+        _session_id="s",
+        _open_dialog=None,
+        mode="agent",
+        port=9222,
+        chrome_target_id="ABCDEF123",
+        last_caller=None,
+    )
+    execute = cast(Any, CDPSession.execute)
+
+    async def _run() -> None:
+        try:
+            await execute(tab, "Runtime.evaluate", {})
+        except TabCrashedError:
+            pass
+        else:
+            raise AssertionError("renderer-bound call on a crashed tab must raise")
+        await execute(tab, "Page.captureScreenshot", {})
+        assert_true(tab.crashed, "a non-renderer command leaves the flag alone")
+        await execute(tab, "Page.navigate", {"url": "about:blank"})
+        assert_true(not tab.crashed, "navigate revives the tab and clears the flag")
+        await execute(tab, "Runtime.evaluate", {})
+
+    asyncio.run(_run())
+    assert_eq(
+        sent,
+        ["Page.captureScreenshot", "Page.navigate", "Runtime.evaluate"],
+        "the crashed-tab guard sent nothing for the refused call",
+    )
+
+    async def _failing_exec(method, params=None, timeout=30):
+        raise RuntimeError("closeTarget failed")
+
+    closing_tab = NS(
+        _session=NS(closing=False), _chrome_target_id="X", _exec=_failing_exec
+    )
+    try:
+        asyncio.run(cast(Any, Tab.close)(closing_tab))
+    except RuntimeError:
+        pass
+    assert_true(
+        not closing_tab._session.closing,
+        "a failed close must not leave the tab marked as closed by repld",
+    )
+    print(
+        "  ✓ crashed tab fails fast and revives on navigate; failed close resets closing"
+    )
+
+
 def _files_probe_timeout() -> None:
     from types import SimpleNamespace
     from typing import Any, cast
@@ -832,4 +897,5 @@ def phase_2_pure() -> None:
     _crash_reason()
     _tab_owner_routing()
     _tab_lifecycle_pushes()
+    _crashed_tab_guard()
     _files_probe_timeout()

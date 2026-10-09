@@ -1958,7 +1958,12 @@ class Tab(TabQueryMixin):
         """Close this tab (Target.closeTarget). Session cleanup follows from
         the resulting Target.targetDestroyed event, same as a user closing it."""
         self._session.closing = True
-        await self._exec("Target.closeTarget", {"targetId": self._chrome_target_id})
+        try:
+            await self._exec("Target.closeTarget", {"targetId": self._chrome_target_id})
+        except BaseException:
+            # Still open: a later outside close must announce.
+            self._session.closing = False
+            raise
 
     async def screenshot(
         self,

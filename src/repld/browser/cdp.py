@@ -47,6 +47,9 @@ _RENDERER_BOUND = (
     "Page.reload",
 )
 
+# The only renderer-bound commands that can revive a crashed tab.
+_CRASH_RECOVERY = ("Page.navigate", "Page.reload")
+
 # Response mime types whose body stays open by design: the response has
 # arrived, and waiting for `loadingFinished` means waiting for the stream to
 # end. Matched against Network.responseReceived, where Chrome has already
@@ -290,6 +293,10 @@ def _push_error_text(
 
 class DialogPendingError(RuntimeError):
     """A renderer-bound command hit a tab whose human-owned dialog is still open."""
+
+
+class TabCrashedError(RuntimeError):
+    """A renderer-bound command hit a tab whose renderer has crashed."""
 
 
 def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
@@ -820,6 +827,8 @@ class CDPSession:
         # `_record_dialog_closed`; `_dialog_waiters` are the in-flight
         # renderer-bound commands to wake when one opens.
         self._open_dialog: dict | None = None
+        # Set by Inspector.targetCrashed; cleared when the renderer is replaced.
+        self.crashed: bool = False
         self._dialog_waiters: set[asyncio.Future] = set()
         # File choosers seen during the current observed mutation — cleared by
         # pre_observe, read by post_observe/unresolved_filechooser_error.
@@ -926,6 +935,7 @@ class CDPSession:
         # A reattach may have missed the Closed event; a stale flag would fail
         # every renderer-bound command on this tab from here on.
         self._open_dialog = None
+        self.crashed = False
         if self.mode == "agent":
             # Session-scoped: replayed here so a reattach keeps agent tabs armed.
             await self.intercept_file_chooser(True)
@@ -1014,6 +1024,15 @@ class CDPSession:
             self.last_caller = origin
         if not method.startswith(_RENDERER_BOUND):
             return await self._send(method, params, self._session_id, timeout)
+        if self.crashed and method in _CRASH_RECOVERY:
+            result = await self._send(method, params, self._session_id, timeout)
+            self.crashed = False  # Chrome has replaced the renderer
+            return result
+        if self.crashed:
+            raise TabCrashedError(
+                f"tab {self.port}:{self.chrome_target_id[:6].lower()} has crashed; "
+                "browser_navigate(target, url) reloads it"
+            )
         if self._open_dialog is not None:
             raise _dialog_pending_error(self)
         if self.mode != "shared":
@@ -1183,7 +1202,11 @@ class CDPSession:
                 self._injected = {}
 
             if method == "Inspector.targetCrashed":
+                self.crashed = True
                 _push_tab_crashed(self)
+
+            if method == "Inspector.targetReloadedAfterCrash":
+                self.crashed = False
 
             if method == "Runtime.consoleAPICalled":
                 _check_controls_observation(params, target_id, self.route_to)
