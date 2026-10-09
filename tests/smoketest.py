@@ -69,6 +69,7 @@ from phases.browser import (
     phase_6_tab_affinity,
     phase_6_tab_close,
     phase_6_tab_mode,
+    phase_6_tab_owner,
     phase_6_tools_and_gists,
     phase_6_viewport_param,
 )
@@ -176,6 +177,7 @@ PHASES = {
         phase_6_filechooser(k),
         phase_6_downloads(k),
         phase_6_tab_mode(k),
+        phase_6_tab_owner(k),
         phase_6_click_arrival(k),
         phase_6_actionability(k),
         phase_6_react_controlled_input(k),

@@ -1839,6 +1839,55 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
         b.close()
 
 
+def phase_6_tab_owner(kernel: Kernel) -> None:
+    """A tab's pushes go to the session that claimed it, not whoever drove it last."""
+    if not _chrome_ready("phase 6 tab owner"):
+        return
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        tid = a.open_tab("<p>owner</p>")
+
+        def _err(h: _BridgeHarness, text: str) -> None:
+            h.tool(
+                "browser_js",
+                {"target": tid, "code": f"console.error('{text}'); 1"},
+            )
+
+        def _got(h: _BridgeHarness, text: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel",
+                    kind="console_error",
+                    where=lambda m: text in m["params"]["content"],
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        _err(b, f"{_MARKER}-owner-1")
+        assert_true(
+            _got(a, f"{_MARKER}-owner-1", 10), "the opener hears an error B triggered"
+        )
+        assert_true(
+            not _got(b, f"{_MARKER}-owner-1", 2),
+            "the session that only drove it does not",
+        )
+        print("  ✓ tab owner: opener gets the push, the other driver does not")
+
+        b.tool("browser_take", {"target": tid})
+        _err(a, f"{_MARKER}-owner-2")
+        assert_true(_got(b, f"{_MARKER}-owner-2", 10), "browser_take claims the tab")
+        assert_true(
+            not _got(a, f"{_MARKER}-owner-2", 2), "the previous owner is not woken"
+        )
+        print("  ✓ tab owner: browser_take moves the push target to the taker")
+    finally:
+        a.close()
+        b.b.close()
+
+
 def phase_6_key_native_activation(kernel: Kernel) -> None:
     """tab.key("Enter") / tab.key("Space") trigger native button activation.
 
