@@ -1897,6 +1897,33 @@ def _proc_cmdline(d: Path) -> bytes:
         return b""
 
 
+def _test_renderer_pids() -> set[int]:
+    return {
+        int(d.name)
+        for d in Path("/proc").iterdir()
+        if d.name.isdigit()
+        and b"--type=renderer" in _proc_cmdline(d)
+        and b"repld-test-chrome-" in _proc_cmdline(d)
+    }
+
+
+def _kill_test_renderers() -> bool:
+    """SIGKILL the throwaway Chrome's renderers (Page.crash is a no-op in headless).
+
+    Returns once Chrome has spawned a replacement: a navigation sent earlier can
+    adopt a killed idle renderer whose death Chrome hasn't noticed, and hang.
+    """
+    victims = _test_renderer_pids()
+    for pid in victims:
+        os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while victims and time.monotonic() < deadline:
+        if _test_renderer_pids() - victims:
+            break
+        time.sleep(0.1)
+    return bool(victims)
+
+
 def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
     """tab_crashed / tab_closed reach the owner only; a cross-site swap is not a close."""
     if not _chrome_ready("phase 6 tab lifecycle pushes"):
@@ -1963,19 +1990,9 @@ def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
         print("  ✓ tab lifecycle: outside close goes to the owner only")
 
         tid = a.open_tab("<p>crash</p>")
-        # Page.crash is a no-op in headless; killing the renderer is the real crash.
-        victims = [
-            int(d.name)
-            for d in Path("/proc").iterdir()
-            if d.name.isdigit()
-            and b"--type=renderer" in _proc_cmdline(d)
-            and b"repld-test-chrome-" in _proc_cmdline(d)
-        ]
-        if not victims:
+        if not _kill_test_renderers():
             print("  - tab lifecycle crash: no throwaway Chrome renderer, skipping")
             return
-        for pid in victims:
-            os.kill(pid, signal.SIGKILL)
         assert_true(_got(a, "tab_crashed", 10), "a crash reaches the owner")
         print("  ✓ tab lifecycle: crash reaches the owner")
 
@@ -1984,14 +2001,43 @@ def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
             "crashed" in _tool_error_text(resp),
             "a renderer-bound call on a crashed tab fails fast, naming the crash",
         )
-        b.tool(
+        nav = b.tool(
             "browser_navigate",
             {"target": tid, "url": f"data:text/html,<i>{_MARKER}</i>"},
             timeout=40,
         )
         resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"})
-        assert_true("2" in content_text(resp), "navigating revives a crashed tab")
+        assert_true(
+            "2" in content_text(resp),
+            f"navigating revives a crashed tab (nav {str(nav)[:200]!r}, js {str(resp)[:200]!r})",
+        )
         print("  ✓ tab lifecycle: crashed tab fails fast, navigate revives it")
+
+        # A call already in flight when the renderer dies must fail too.
+        tid = a.open_tab("<p>inflight</p>")
+        rid = b.b.send(
+            "tools/call",
+            {"name": "browser_js", "arguments": {"target": tid, "code": "while(1){}"}},
+        )
+        time.sleep(1)
+        _kill_test_renderers()
+        deadline = time.monotonic() + 12
+        reply = None
+        while reply is None and time.monotonic() < deadline:
+            try:
+                msg = b.b.inbox.get(timeout=1)
+            except Exception:
+                continue
+            if msg.get("id") == rid:
+                reply = msg
+        assert_true(
+            reply is not None, "an in-flight call is failed, not left to time out"
+        )
+        assert_true(
+            "crashed" in _tool_error_text(reply or {}),
+            f"the in-flight failure names the crash (got {str(reply)[:300]!r})",
+        )
+        print("  ✓ tab lifecycle: an in-flight call fails when the renderer dies")
     finally:
         srv.shutdown()
         a.close()

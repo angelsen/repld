@@ -1009,6 +1009,10 @@ async def pre_observe(tab: Tab, session: BrowserSession) -> PreObservation:
     """
     from . import inject
 
+    if tab._session.crashed:
+        # A dead renderer never answers the tree/DOM reads below, and each rides
+        # out its full timeout; the mutation (navigate/reload) is the recovery.
+        return PreObservation(snapshots=_snapshot_max_ids([tab]), url=tab.url)
     iframe_children = await _discover_iframe_children(tab, session)
     all_tabs = [tab] + iframe_children
     # Only report dialogs dismissed during *this* mutation, not stragglers

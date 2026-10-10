@@ -22,7 +22,7 @@ from .. import bg, tasks
 from ..channel import push_channel
 from ..loopguard import LoopOwned
 from . import inject
-from .cdp import CDPSession
+from .cdp import CDPSession, crash_blocks
 from .pin import BINDING_NAME, reapply_label
 
 # Target types that are infrastructure, not user-visible pages/iframes.
@@ -60,6 +60,9 @@ class BrowserSession:
         # msg_id → asyncio.Future (globally unique per WS)
         self._next_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
+        # msg_id -> (sessionId, method) for commands aimed at a tab, so a crash
+        # can fail the ones its renderer will never answer.
+        self._pending_tabs: dict[int, tuple[str, str]] = {}
 
         # guid → suggestedFilename for downloads in flight, so the done push can name them
         self._downloads: dict[str, tuple[str, asyncio.Future[CDPSession | None]]] = {}
@@ -343,10 +346,11 @@ class BrowserSession:
 
         fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
-
-        await self._ws.send(payload)
+        if session_id:
+            self._pending_tabs[msg_id] = (session_id, method)
 
         try:
+            await self._ws.send(payload)
             return await asyncio.wait_for(fut, timeout=timeout)
         except TimeoutError:
             self._pending.pop(msg_id, None)
@@ -359,6 +363,19 @@ class BrowserSession:
         except asyncio.CancelledError:
             self._pending.pop(msg_id, None)
             raise
+        finally:
+            self._pending_tabs.pop(msg_id, None)
+
+    def fail_tab_pending(
+        self, session_id: str, make_exc: Callable[[], Exception]
+    ) -> None:
+        """Fail in-flight commands a crashed tab's renderer can never answer."""
+        for msg_id, (sid, method) in list(self._pending_tabs.items()):
+            if sid != session_id or not crash_blocks(method):
+                continue
+            fut = self._pending.pop(msg_id, None)
+            if fut is not None and not fut.done():
+                fut.set_exception(make_exc())
 
     async def send_nowait(
         self,

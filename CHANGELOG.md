@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Browser tabs are `agent` or `shared`, shown in `browser_tabs`, the dashboard and `tab.mode`. `browser_take` / `browser_release` (`tab.take()` / `tab.release()`) switch it. A shared tab's JS dialogs and file picker stay native for the human: repld pushes `[dialog:...] waiting for the human`, then who answered, and a renderer-bound call blocked behind the dialog fails fast instead of waiting out the watchdog. `browser_dismiss_dialog` / `tab.dismiss_dialog()` answers a dialog that is open now.
 - Tab crash, a tab closed from outside repld, and a Chrome reconnect now push `tab_crashed`, `tab_closed` and `browser_reconnected`. The first two go to the tab's owning session (a crash broadcasts if none is live; a close with no owner is silent, as is one repld made itself); the reconnect broadcasts.
-- A tab whose renderer crashed now fails renderer-bound calls at once with `TabCrashedError` (naming `browser_navigate`) instead of riding out the 30 s CDP timeout; `Page.navigate` / `Page.reload` revive it.
+- A tab whose renderer crashed now fails renderer-bound calls at once with `TabCrashedError` (naming `browser_navigate`) instead of riding out the 30 s CDP timeout; `Page.navigate` / `Page.reload` revive it. Calls already in flight when the renderer dies fail the same way, and `browser_navigate` on a crashed tab skips its pre-mutation page reads instead of waiting out their timeouts.
 - `download_done` / `download_canceled` pushes now go to the tab's owning session like `download_started`, including for a download begun inside an iframe. They used to broadcast to every session, because `Browser.downloadProgress` carries no frame id.
 
 ### Changed

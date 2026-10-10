@@ -50,6 +50,12 @@ _RENDERER_BOUND = (
 # The only renderer-bound commands that can revive a crashed tab.
 _CRASH_RECOVERY = ("Page.navigate", "Page.reload")
 
+
+def crash_blocks(method: str) -> bool:
+    """True for a command a crashed renderer can never answer."""
+    return method.startswith(_RENDERER_BOUND) and method not in _CRASH_RECOVERY
+
+
 # Response mime types whose body stays open by design: the response has
 # arrived, and waiting for `loadingFinished` means waiting for the stream to
 # end. Matched against Network.responseReceived, where Chrome has already
@@ -1029,16 +1035,19 @@ class CDPSession:
             self.crashed = False  # Chrome has replaced the renderer
             return result
         if self.crashed:
-            raise TabCrashedError(
-                f"tab {self.port}:{self.chrome_target_id[:6].lower()} has crashed; "
-                "browser_navigate(target, url) reloads it"
-            )
+            raise self._crashed_error()
         if self._open_dialog is not None:
             raise _dialog_pending_error(self)
         if self.mode != "shared":
             return await self._send(method, params, self._session_id, timeout)
         return await self._race_dialog(
             self._send(method, params, self._session_id, timeout)
+        )
+
+    def _crashed_error(self) -> TabCrashedError:
+        return TabCrashedError(
+            f"tab {self.port}:{self.chrome_target_id[:6].lower()} has crashed; "
+            "browser_navigate(target, url) reloads it"
         )
 
     async def _race_dialog(self, call: Any) -> dict:
@@ -1203,6 +1212,10 @@ class CDPSession:
 
             if method == "Inspector.targetCrashed":
                 self.crashed = True
+                if self.browser_session is not None:
+                    self.browser_session.fail_tab_pending(
+                        self._session_id, self._crashed_error
+                    )
                 _push_tab_crashed(self)
 
             if method == "Inspector.targetReloadedAfterCrash":

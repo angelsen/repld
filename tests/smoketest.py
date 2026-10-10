@@ -220,6 +220,14 @@ def main() -> int:
     ap.add_argument(
         "--phase", type=int, default=3, help="highest phase to run (ceiling: 18)"
     )
+    ap.add_argument(
+        "--only",
+        metavar="NAME",
+        help="run just this function from tests/phases/browser.py (needs --phase 6)",
+    )
+    ap.add_argument(
+        "--repeat", type=int, default=1, help="with --only: run it N times (flake hunt)"
+    )
     args = ap.parse_args()
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
@@ -247,6 +255,13 @@ def main() -> int:
 
         print(f"== kernel cwd: {tmp} ==")
         kernel = Kernel(tmp)
+        if args.only:
+            from phases import browser as browser_phases
+
+            for i in range(args.repeat):
+                getattr(browser_phases, args.only)(kernel)
+                print(f"== {args.only} run {i + 1}/{args.repeat} ok ==")
+            return 0
         for p in sorted(PHASES):
             if p > args.phase:
                 break

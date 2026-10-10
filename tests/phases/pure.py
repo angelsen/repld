@@ -806,6 +806,7 @@ def _crashed_tab_guard() -> None:
         chrome_target_id="ABCDEF123",
         last_caller=None,
     )
+    tab._crashed_error = lambda: cast(Any, CDPSession._crashed_error)(tab)
     execute = cast(Any, CDPSession.execute)
 
     async def _run() -> None:
@@ -845,6 +846,37 @@ def _crashed_tab_guard() -> None:
     print(
         "  ✓ crashed tab fails fast and revives on navigate; failed close resets closing"
     )
+
+
+def _inflight_crash_failure() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser.session import BrowserSession
+
+    NS = cast(Any, SimpleNamespace)
+
+    async def _run() -> list:
+        loop = asyncio.get_running_loop()
+        futs = {i: loop.create_future() for i in (1, 2, 3, 4, 5)}
+        fake = NS(
+            _pending=dict(futs),
+            _pending_tabs={
+                1: ("S1", "Runtime.evaluate"),
+                2: ("S1", "Network.getResponseBody"),
+                3: ("S2", "Runtime.evaluate"),
+                4: ("S1", "Page.navigate"),
+            },
+        )
+        cast(Any, BrowserSession.fail_tab_pending)(fake, "S1", lambda: ValueError("x"))
+        return [futs[i].done() for i in (1, 2, 3, 4, 5)]
+
+    assert_eq(
+        asyncio.run(_run()),
+        [True, False, False, False, False],
+        "only the crashed tab's renderer-bound, non-recovery commands fail",
+    )
+    print("  ✓ in-flight: a crash fails that tab's renderer-bound calls and no others")
 
 
 def _files_probe_timeout() -> None:
@@ -898,4 +930,5 @@ def phase_2_pure() -> None:
     _tab_owner_routing()
     _tab_lifecycle_pushes()
     _crashed_tab_guard()
+    _inflight_crash_failure()
     _files_probe_timeout()
