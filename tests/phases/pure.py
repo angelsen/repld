@@ -816,8 +816,19 @@ def _crashed_tab_guard() -> None:
             pass
         else:
             raise AssertionError("renderer-bound call on a crashed tab must raise")
-        await execute(tab, "Page.captureScreenshot", {})
-        assert_true(tab.crashed, "a non-renderer command leaves the flag alone")
+        for blocked in (
+            "Page.captureScreenshot",
+            "Accessibility.getFullAXTree",
+            "DOM.getDocument",
+        ):
+            try:
+                await execute(tab, blocked, {})
+            except TabCrashedError:
+                pass
+            else:
+                raise AssertionError(f"{blocked} on a crashed tab must raise")
+        await execute(tab, "Target.getTargetInfo", {})
+        assert_true(tab.crashed, "a browser-process command leaves the flag alone")
         await execute(tab, "Page.navigate", {"url": "about:blank"})
         assert_true(not tab.crashed, "navigate revives the tab and clears the flag")
         await execute(tab, "Runtime.evaluate", {})
@@ -825,7 +836,7 @@ def _crashed_tab_guard() -> None:
     asyncio.run(_run())
     assert_eq(
         sent,
-        ["Page.captureScreenshot", "Page.navigate", "Runtime.evaluate"],
+        ["Target.getTargetInfo", "Page.navigate", "Runtime.evaluate"],
         "the crashed-tab guard sent nothing for the refused call",
     )
 
@@ -863,7 +874,7 @@ def _inflight_crash_failure() -> None:
             _pending=dict(futs),
             _pending_tabs={
                 1: ("S1", "Runtime.evaluate"),
-                2: ("S1", "Network.getResponseBody"),
+                2: ("S1", "Fetch.continueRequest"),
                 3: ("S2", "Runtime.evaluate"),
                 4: ("S1", "Page.navigate"),
             },
@@ -874,7 +885,7 @@ def _inflight_crash_failure() -> None:
     assert_eq(
         asyncio.run(_run()),
         [True, False, False, False, False],
-        "only the crashed tab's renderer-bound, non-recovery commands fail",
+        "only the crashed tab's non-allowlisted, non-recovery commands fail",
     )
     print("  ✓ in-flight: a crash fails that tab's renderer-bound calls and no others")
 

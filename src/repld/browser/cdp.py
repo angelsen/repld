@@ -47,13 +47,17 @@ _RENDERER_BOUND = (
     "Page.reload",
 )
 
-# The only renderer-bound commands that can revive a crashed tab.
+# The only commands that can revive a crashed tab.
 _CRASH_RECOVERY = ("Page.navigate", "Page.reload")
+
+# Domains served by the browser process, so they still answer on a crashed tab.
+# An allowlist: a new renderer-bound domain must fail fast, not ride out 30s.
+_CRASH_SAFE = ("Target.", "Browser.", "Fetch.", "Inspector.")
 
 
 def crash_blocks(method: str) -> bool:
     """True for a command a crashed renderer can never answer."""
-    return method.startswith(_RENDERER_BOUND) and method not in _CRASH_RECOVERY
+    return not method.startswith(_CRASH_SAFE) and method not in _CRASH_RECOVERY
 
 
 # Response mime types whose body stays open by design: the response has
@@ -1028,14 +1032,15 @@ class CDPSession:
         origin = tasks.current_origin()
         if origin is not None:
             self.last_caller = origin
+        if self.crashed:
+            if method in _CRASH_RECOVERY:
+                result = await self._send(method, params, self._session_id, timeout)
+                self.crashed = False  # Chrome has replaced the renderer
+                return result
+            if crash_blocks(method):
+                raise self._crashed_error()
         if not method.startswith(_RENDERER_BOUND):
             return await self._send(method, params, self._session_id, timeout)
-        if self.crashed and method in _CRASH_RECOVERY:
-            result = await self._send(method, params, self._session_id, timeout)
-            self.crashed = False  # Chrome has replaced the renderer
-            return result
-        if self.crashed:
-            raise self._crashed_error()
         if self._open_dialog is not None:
             raise _dialog_pending_error(self)
         if self.mode != "shared":

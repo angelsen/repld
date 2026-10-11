@@ -15,6 +15,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from .cdp import TabCrashedError
 from .row import size_str
 from .session import BrowserSession
 from .tab import Tab
@@ -248,6 +249,9 @@ async def build_tree_sig(tab: Tab, max_depth: int = 6) -> tuple[list[str], TreeS
     diff of two signatures describes what a reader of the two trees would see
     change.
     """
+    if tab._session.crashed:
+        # `_fetch_frame_nodes` swallows read errors, so a dead renderer would render as "(empty tree)".
+        raise tab._session._crashed_error()
     nodes_by_id: dict[str, dict] = {}
     children_map: dict[str, list[str]] = {}
     nodes = await _fetch_frame_nodes(tab, None, 0, nodes_by_id, children_map)
@@ -283,6 +287,8 @@ async def build_aria_tree(tab: Tab) -> list[str]:
     """
     from . import inject
 
+    if tab._session.crashed:
+        raise tab._session._crashed_error()
     try:
         text = await inject.aria_snapshot(tab)
     except inject.EngineUnavailable:
@@ -1335,6 +1341,12 @@ async def post_observe(
 
     # Settle across target + iframe children
     settle_ms = await settle(all_tabs, timeout=timeout, quiet=quiet)
+
+    if tab._session.crashed:
+        # A mutation that ran on a crashed tab raised before reaching here, so this crash was this action's.
+        raise TabCrashedError(
+            f"the page crashed during this action; browser_navigate({tab._session.port}:{tab._session.chrome_target_id[:6].lower()}, url) reloads it"
+        )
 
     # Build composed tree — re-discovers iframes, which may differ from
     # pre.iframe_children if the mutation added/removed one.

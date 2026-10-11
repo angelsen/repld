@@ -734,6 +734,7 @@ class _FrameFakeSession:
     ) -> None:
         self.frames = frames
         self.iframe_frames = iframe_frames
+        self.crashed = False
         self.calls: list[tuple[str, dict | None]] = []
 
     async def execute(
@@ -2001,6 +2002,13 @@ def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
             "crashed" in _tool_error_text(resp),
             "a renderer-bound call on a crashed tab fails fast, naming the crash",
         )
+        for name in ("browser_screenshot", "browser_tree"):
+            t0 = time.monotonic()
+            resp = b.tool(name, {"target": tid}, timeout=15)
+            assert_true(
+                "crashed" in _tool_error_text(resp) and time.monotonic() - t0 < 8,
+                f"{name} on a crashed tab fails fast, naming the crash ({str(resp)[:200]!r})",
+            )
         nav = b.tool(
             "browser_navigate",
             {"target": tid, "url": f"data:text/html,<i>{_MARKER}</i>"},
