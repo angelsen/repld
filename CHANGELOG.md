@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Behavior change:** only `browser.open()` tabs start `agent`. `browser.get()`, `watch()` and any browser tool aimed at an existing page attach `shared`, so a page you opened yourself no longer loses its file picker or has its dialogs answered for you. `tab.take()` restores the old behavior. `expect_file_chooser` no longer flips a tab to `agent`; on a shared tab it intercepts that one chooser.
 - Dialog, file-chooser and auth pushes go to the session that last drove the tab (broadcast only if it is gone) instead of waking every session, and an auto-accepted `alert`/`beforeunload` no longer pushes at all.
+- Browser pushes now prefer a tab's owner over its last caller. A session claims a tab by opening or taking it, or by `watch()`; a tab auto-attached later inherits the owner of the matching watch pattern or of the tab that opened it, and `release()` clears it. With no live owner the push falls back to the last caller.
 
 ### Fixed
 
