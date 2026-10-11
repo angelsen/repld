@@ -142,6 +142,8 @@ infinite scroll.
   256-entry `_downloads` cap evicting an entry mid-flight, both should degrade to a broadcast.
   (b) A crashed out-of-process iframe: does the parent get `tab_crashed`, and does the guard
   wrongly block the parent's calls? Needs a live look.
+  (c) `post_observe`'s "the page crashed during this action" has no live test: the lifecycle
+  test kills an idle tab, so no mutation is in flight when the renderer dies.
 - [ ] **Auto-attach inheritance has no live test.** `_inherited_owner` (watch pattern, opener) is
   covered by phase-2 fakes only; `phase_6_tab_owner` covers `open()`/`take()`.
 - [ ] **`set_files` probe against a real hidden tab.** The 5 s bound (`_files_probe_timeout`) is
