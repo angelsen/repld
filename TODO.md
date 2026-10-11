@@ -131,6 +131,29 @@ infinite scroll.
 - [x] Live tests for the lifecycle pushes: `phase_6_tab_lifecycle_pushes` (crash via renderer
   SIGKILL, since `Page.crash` is a no-op in headless), `phase_6_reconnect_push`, and
   `phase_6_download_routing` (main frame and iframe).
+- [ ] **Crash guard covers five commands.** `_RENDERER_BOUND` (`Input.`, `Runtime.evaluate`,
+  `Runtime.callFunctionOn`, `Page.navigate`, `Page.reload`) is all `crash_blocks` and the
+  `crashed` fail-fast know, so screenshot, `Accessibility.*` and `DOM.*` on a crashed tab
+  probably still ride out 30 s (unconfirmed). Invert it: a crashed tab fails everything except a
+  `Target.`/`Browser.`/`Fetch.`/`Inspector.` allowlist and the navigate/reload recovery; add a
+  live screenshot/tree test on a killed tab. Also have `post_observe` after a non-navigate
+  mutation report "the page crashed during this action" rather than a generic error.
+- [ ] **Crash/download edge cases, untested.** (a) A tab closed before `download_done`, and the
+  256-entry `_downloads` cap evicting an entry mid-flight, both should degrade to a broadcast.
+  (b) A crashed out-of-process iframe: does the parent get `tab_crashed`, and does the guard
+  wrongly block the parent's calls? Needs a live look.
+- [ ] **Auto-attach inheritance has no live test.** `_inherited_owner` (watch pattern, opener) is
+  covered by phase-2 fakes only; `phase_6_tab_owner` covers `open()`/`take()`.
+- [ ] **`set_files` probe against a real hidden tab.** The 5 s bound (`_files_probe_timeout`) is
+  verified only against a fake tab.
+- [ ] **To check out: typed call between project kernels (a peer session's proposal).** Today only
+  `repld --project DIR exec 'CODE'` crosses kernels: code strings are fragile (multi-line
+  f-strings fail before running), results are printed reprs, and siblings in `status --json`
+  have no stable handle. Sketch: `repld.kernel("voice-api").call("module.fn", **json_args)`
+  returning JSON or a typed error, target chosen by name from the sibling's gists, plus an
+  event subscription so a sibling is notified without a Claude session. Context:
+  `claude_code_research/docs/features/phone-channel.md`. Check against "substrate, not
+  library" and the per-cwd, localhost-only invariant before building anything.
 - [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
   `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
