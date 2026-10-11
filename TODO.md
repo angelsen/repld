@@ -131,7 +131,7 @@ infinite scroll.
 - [x] Live tests for the lifecycle pushes: `phase_6_tab_lifecycle_pushes` (crash via renderer
   SIGKILL, since `Page.crash` is a no-op in headless), `phase_6_reconnect_push`, and
   `phase_6_download_routing` (main frame and iframe).
-- [ ] **Crash guard covers five commands.** `_RENDERER_BOUND` (`Input.`, `Runtime.evaluate`,
+- [x] **Crash guard covers five commands.** Fixed (cfcbf013): allowlist inverted, live screenshot/tree test, `post_observe` names the crash. Original note: `_RENDERER_BOUND` (`Input.`, `Runtime.evaluate`,
   `Runtime.callFunctionOn`, `Page.navigate`, `Page.reload`) is all `crash_blocks` and the
   `crashed` fail-fast know, so screenshot, `Accessibility.*` and `DOM.*` on a crashed tab
   probably still ride out 30 s (unconfirmed). Invert it: a crashed tab fails everything except a
