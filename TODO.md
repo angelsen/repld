@@ -146,8 +146,8 @@ infinite scroll.
   frame's watcher; the parent's js/screenshot are untouched; `browser_tree`/`post_observe` on the
   parent used to fail with the child's `TabCrashedError` (fixed: the frame composes as a crashed
   line); the hint now carries `force=true`, which `browser_navigate` needs on an iframe target.
-  (c) `post_observe`'s "the page crashed during this action" has no live test: the lifecycle
-  test kills an idle tab, so no mutation is in flight when the renderer dies.
+  (c) ~~`post_observe`'s "the page crashed during this action" has no live test.~~ Done
+  (`phase_6_crash_mid_action`: a click whose handler makes the test server SIGKILL the renderers).
 - [x] **Auto-attach inheritance has no live test.** Done (`phase_6_auto_attach_owner`): it found a
   popup attaching at `''` took its opener's owner and never switched when the URL matched a
   watched pattern; `owner_from_opener` now lets the pattern watcher replace it.

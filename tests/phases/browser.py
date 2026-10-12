@@ -281,7 +281,7 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
                 raise RuntimeError("Cannot reach Chrome on port 3333: refused")
 
         b = Browser(port=3333)
-        b._connected = True         # stale: was connected, Chrome died since
+        b._connected = True  # stale: was connected, Chrome died since
         b._session = _DeadSocket()  # type: ignore[assignment]
         try:
             await b._ensure_connected()
@@ -383,7 +383,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     def _stocked_pool() -> "BrowserPool":
         pool = BrowserPool()
         dead = _Dead(port=1111)
-        dead._connected = True                           # sorts first, looks connected, isn't
+        dead._connected = True  # sorts first, looks connected, isn't
         dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
             "dead-target", "http://dead/"
         )
@@ -473,7 +473,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute     # type: ignore[assignment]
+        session.execute = fake_execute  # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -569,7 +569,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
@@ -1988,6 +1988,59 @@ def phase_6_auto_attach_owner(kernel: Kernel) -> None:
         b.b.close()
 
 
+def phase_6_crash_mid_action(kernel: Kernel) -> None:
+    """A renderer dying while a click is settling reports "the page crashed during this
+    action" rather than a generic observation error."""
+    if not _chrome_ready("phase 6 crash mid action"):
+        return
+    import http.server
+    import threading
+
+    class _Killer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/kill":
+                for pid in _test_renderer_pids():
+                    os.kill(pid, signal.SIGKILL)
+                body = b"killed"
+            else:
+                body = b"<button id=go onclick=\"fetch('/kill')\">go</button>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Killer)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    h = _BridgeHarness(kernel)
+    try:
+        resp = h.tool(
+            "browser_open",
+            {"url": f"http://127.0.0.1:{srv.server_address[1]}/?{_MARKER}"},
+        )
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert m, f"browser_open carries no target ({content_text(resp)[:200]!r})"
+        tid = m.group(1)
+        if not _test_renderer_pids():
+            print(
+                "  - crash mid action: skipped (no throwaway Chrome renderer to kill)"
+            )
+            return
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        text = _tool_error_text(resp) or content_text(resp)
+        assert_true(
+            "crashed during this action" in text,
+            f"a crash mid-click is attributed to the action ({text[:300]!r})",
+        )
+        print("  ✓ crash mid action: the click reports the page crashed during it")
+    finally:
+        srv.shutdown()
+        _kill_test_renderers()
+        h.close()
+
+
 def _proc_cmdline(d: Path) -> bytes:
     try:
         return (d / "cmdline").read_bytes()
@@ -2711,7 +2764,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",    # bare tag — the regression
+        "main",  # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",
