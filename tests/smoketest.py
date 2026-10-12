@@ -110,6 +110,7 @@ from phases.lockfile import (
     phase_5_sweep,
     phase_5_zombie,
 )
+from phases.peers import phase_19_peers
 from phases.pure import phase_2_pure
 from phases.resources import (
     phase_8_doc_surfaces,
@@ -222,13 +223,14 @@ PHASES = {
     16: phase_16_venv_binding,
     17: phase_17_gates,
     18: phase_18_tasks_cli,
+    19: phase_19_peers,
 }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", type=int, default=3, help="highest phase to run (ceiling: 18)"
+        "--phase", type=int, default=3, help="highest phase to run (ceiling: 19)"
     )
     ap.add_argument(
         "--only",

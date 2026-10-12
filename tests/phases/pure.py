@@ -24,6 +24,9 @@ from repld import (
     gists,
     kernel,
     lifecycle_cmd,
+    paths,
+    peer,
+    peer_host,
     render,
     tasks,
 )
@@ -251,7 +254,7 @@ def _json_types() -> None:
         (list[str], "array"),
         (dict[str, int], "object"),
         (int | None, "integer"),
-        (Optional[list[int]], "array"),  # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
         (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
         (int | str, None),
         (Path, None),
@@ -994,6 +997,219 @@ def _download_cap() -> None:
     )
 
 
+def _expect[E: BaseException](exc_type: type[E], fn, *args, **kwargs) -> E:
+    """Call *fn*, return the *exc_type* it raised; fail if it raised nothing."""
+    try:
+        fn(*args, **kwargs)
+    except exc_type as exc:
+        return exc
+    raise AssertionError(f"{fn.__name__} did not raise {exc_type.__name__}")
+
+
+def _peer_resolution() -> None:
+    live = [
+        {"cwd": "/p/voice-api", "pid": 1, "socket_path": "/s/a.sock"},
+        {"cwd": "/p/other", "pid": 2, "socket_path": "/s/b.sock"},
+        {"cwd": "/q/other", "pid": 3, "socket_path": "/s/c.sock"},
+    ]
+    assert_eq(peer.resolve_cwd("voice-api", live), "/p/voice-api", "unique name")
+    assert_eq(
+        peer.resolve_cwd("/x/never-run", live), "/x/never-run", "path need not be live"
+    )
+    assert_eq(peer.resolve_cwd("./", live), str(Path("./").resolve()), "relative path")
+    err = _expect(peer.PeerNotFound, peer.resolve_cwd, "other", live)
+    assert_eq(sorted(err.candidates), ["/p/other", "/q/other"], "ambiguity lists paths")
+    err = _expect(peer.PeerNotFound, peer.resolve_cwd, "nope", live)
+    assert_true("voice-api" in str(err), "not-found lists live names")
+    _expect(peer.PeerNotFound, peer.resolve_cwd, "", live)
+
+    canonical = str(paths.socket_path(Path("/p/twice")))
+    rows = [
+        {"cwd": "/p/twice", "pid": 4, "socket_path": "/elsewhere/kernel.sock"},
+        {"cwd": "/p/twice", "pid": 5, "socket_path": canonical},
+    ]
+    picked = peer.pick_session("/p/twice", rows)
+    assert_true(picked is not None and picked["pid"] == 5, "canonical socket preferred")
+    assert_eq(
+        peer.pick_session("/p/none", rows), None, "no session for a stopped project"
+    )
+    print("  ✓ peers: name/path resolution, ambiguity, canonical-socket preference")
+
+
+def _peer_host_vetting() -> None:
+    assert_eq(peer_host.parse_target("a.b.c"), ["a", "b", "c"], "dotted name")
+    for bad in ("", "a..b", "1x", "a-b", ".a", "a.", "os.path;x"):
+        _expect(ValueError, peer_host.parse_target, bad)
+    _expect(ValueError, peer_host.parse_target, 3)
+
+    own = "/run/me/kernel.sock"
+    hop = lambda n: {"socket": f"/run/k{n}/kernel.sock"}
+    assert_eq(peer_host.check_chain(None, own), None, "no caller")
+    assert_eq(peer_host.check_chain({"chain": [hop(1)]}, own), None, "unrelated chain")
+    assert_eq(
+        peer_host.check_chain({"chain": [hop(1), {"socket": own}]}, own),
+        "cycle",
+        "in chain",
+    )
+    assert_eq(
+        peer_host.check_chain({"kernel": {"socket": own}}, own), "cycle", "caller is us"
+    )
+    assert_eq(
+        peer_host.check_chain({"chain": [hop(i) for i in range(7)]}, own),
+        None,
+        "7 is fine",
+    )
+    assert_eq(
+        peer_host.check_chain({"chain": [hop(i) for i in range(8)]}, own),
+        "depth",
+        "8 is full",
+    )
+
+    def two(a, b=1): ...
+
+    peer_host.bind_check(two, [1], {})
+    peer_host.bind_check(two, [], {"a": 1, "b": 2})
+    err = _expect(peer_host.TargetError, peer_host.bind_check, two, [], {})
+    assert_eq(err.code, -32602, "missing argument is invalid params")
+    peer_host.bind_check(print, ["no signature needed"], {})
+    print("  ✓ peers: target parsing, chain cycle/depth, argument binding")
+
+
+def _peer_responses() -> None:
+    ok = {"result": {"task_id": "t", "value": {"k": [1, None]}, "error": None}}
+    assert_eq(
+        peer.map_call_result(ok, "svc", "m.f"), {"k": [1, None]}, "value passes through"
+    )
+
+    ran = {
+        "result": {
+            "task_id": "t1",
+            "value": None,
+            "spill_path": "/x/y.out",
+            "error": {
+                "type": "ValueError",
+                "message": "bad",
+                "traceback": "Tb\nValueError: bad",
+                "output": "o",
+            },
+        }
+    }
+    err = _expect(peer.PeerCallError, peer.map_call_result, ran, "svc", "m.f")
+    assert_eq(
+        (err.remote_type, err.remote_message, err.task_id),
+        ("ValueError", "bad", "t1"),
+        "call error fields",
+    )
+    assert_eq((err.output, err.spill_path), ("o", "/x/y.out"), "call error output")
+
+    cancelled = {
+        "result": {"error": {"type": "CancelledError", "message": "x", "traceback": ""}}
+    }
+    err = _expect(peer.PeerCallError, peer.map_call_result, cancelled, "svc", "m.f")
+    assert_eq(
+        err.remote_type,
+        "CancelledError",
+        "remote cancellation is a PeerCallError, not a local cancel",
+    )
+
+    def refused(code: int, **data: object) -> peer.PeerRefused:
+        msg = {
+            "error": {"code": code, "message": "no", **({"data": data} if data else {})}
+        }
+        return _expect(peer.PeerRefused, peer.map_call_result, msg, "svc", "m.f")
+
+    assert_eq(refused(-32010).reason, "unresolved", "unresolved")
+    assert_eq(refused(-32011, reason="cycle").reason, "cycle", "cycle")
+    assert_eq(refused(-32602).reason, "bad_args", "bad args")
+    old = {"error": {"code": -32601, "message": "method not found: peer/call"}}
+    err = _expect(peer.PeerUnavailable, peer.map_call_result, old, "svc", "m.f")
+    assert_true("predates peers" in str(err), "old kernel is named")
+
+    env = {
+        "A": "1",
+        "REPLD_BOUND": "1",
+        "VIRTUAL_ENV": "/v",
+        "PYTHONPATH": "/p",
+        "SECRET": "s",
+        "REPLD_OWNER_PID": "9",
+    }
+    assert_eq(
+        peer.clean_env(env, {"SECRET"}),
+        {"A": "1"},
+        "spawn env drops binding, owner and .env keys",
+    )
+    print("  ✓ peers: replies map to typed errors; spawn env is cleaned")
+
+
+def _peer_describe() -> None:
+    import tempfile
+
+    src = (
+        '"""doc."""\n'
+        "def a(x, /, y: int = 3, *args, z: str = 's', w=len([]), **kw) -> dict:\n"
+        '    """First line.\n    more"""\n'
+        "async def b(): pass\n"
+        "def _private(): pass\n"
+        "class C: pass\n"
+    )
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "g.py"
+        f.write_text(src)
+        fns = gist_api.functions_for_path(f)
+    assert_eq([x["name"] for x in fns], ["a", "b"], "public top-level functions only")
+    a, b = fns
+    assert_eq((a["async"], b["async"]), (False, True), "async flag")
+    assert_eq(
+        (a["returns"], a["doc"]), ("dict", "First line."), "returns and doc first line"
+    )
+    assert_true(
+        a["signature"].startswith("(x, /, y: int=3"),
+        f"signature text ({a['signature']})",
+    )
+    params = {p["name"]: p for p in a["params"]}
+    assert_eq(params["x"]["kind"], "POSITIONAL_ONLY", "posonly")
+    assert_eq(params["y"]["kind"], "POSITIONAL_OR_KEYWORD", "positional-or-keyword")
+    assert_eq(
+        (params["y"]["default"], params["y"]["literal"], params["y"]["annotation"]),
+        ("3", True, "int"),
+        "literal default",
+    )
+    assert_eq(params["args"]["kind"], "VAR_POSITIONAL", "*args")
+    assert_eq(
+        (params["z"]["kind"], params["z"]["default"]),
+        ("KEYWORD_ONLY", "'s'"),
+        "kwonly default",
+    )
+    assert_eq(
+        (params["w"]["has_default"], params["w"]["literal"]),
+        (True, False),
+        "non-literal default",
+    )
+    assert_eq(params["kw"]["kind"], "VAR_KEYWORD", "**kw")
+
+    caller = {
+        "kernel": {"cwd": "/p/client", "pid": 7},
+        "pid_verified": True,
+        "claude_session_id": "abcdef012345",
+        "task_id": "0123456789abcdef",
+    }
+    text = render.peer_call_source("svc.add", [1, "x" * 900], {"b": 2}, caller)
+    head, call = text.split("\n", 1)
+    assert_eq(
+        head,
+        "# peer call from client (pid 7 verified, session abcdef01, task 01234567)",
+        "header names the caller",
+    )
+    assert_true(call.startswith("await svc.add(1, '"), "call reads as code")
+    assert_true("..." in call and call.endswith(", b=2)"), "long arguments are clipped")
+    assert_eq(
+        render.peer_call_source("os.getcwd", [], {}, None),
+        "# peer call from unknown kernel\nawait os.getcwd()",
+        "no caller",
+    )
+    print("  ✓ peers: function descriptors for stubs, call header rendering")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1014,3 +1230,7 @@ def phase_2_pure() -> None:
     _download_cap()
     _inflight_crash_failure()
     _files_probe_timeout()
+    _peer_resolution()
+    _peer_host_vetting()
+    _peer_responses()
+    _peer_describe()
