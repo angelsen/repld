@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.13.0] - 2026-10-12
+
+### Added
+
 - **Peers: kernel-to-kernel calls.** `peers.get("voice-api")` (a directory name or a path) returns a handle whose `await peer.call("gist.fn", *args, **kwargs)` runs any dotted name in that project's own kernel, with its own venv, deps and warm state, and returns the JSON value. Each call opens a connection of its own, so `asyncio.gather` runs calls concurrently and cancelling the awaiting task cancels the target on the other side. Every error says whether the target ran: `PeerRefused` and `PeerUnavailable` never did, `PeerCallError` ran and raised, `PeerDisconnected` is unknown and is never retried. `peers.get(path, start=True)` starts a stopped peer under a cleaned environment; without it a stopped peer is a `PeerUnavailable` naming `repld --project DIR start`. `peer.info()` and `peer.inspect()` describe a peer without calling it. Read `repld://docs/peers` (or `repld help peers`). `phase_19_peers` runs two to five real kernels.
 - **Caller identity on every peer call.** The callee records the calling kernel, the Claude Code session that started the chain, the calling task and the full chain of kernels (a nested call keeps the originating session). It shows in `repld log` as `# peer call from <project> (pid N verified, ...)`, in `repld tasks` as `from=peer:<project>/<session>`, in `get_task` as the new `caller` field, and inside the called function as `repld.peer_caller()`. Only the kernel pid is verified (against the connecting process); the rest is a claim for attribution, not authorization. A call that would re-enter a kernel already in its chain, or run eight kernels deep, is refused.
 - `repld gist stub <peer> <gist>[.fn,...]` writes a local gist of typed `async def` shims that forward to a peer, keeping parameter kinds, annotations and literal defaults (a non-literal default is left to the peer). `repld gist stub --check` names the stubs that have drifted from their peer and exits 1 if any has; a peer that is not running reads `unchecked`, not `ok`. `--force` regenerates a stub and never overwrites a hand-written gist, and `repld gist list` marks stubs.
@@ -24,7 +34,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A popup that opens at an empty URL and then navigates to a `browser_watch` pattern is now owned by that pattern's watcher, not its opener's owner, so its console errors and other pushes reach the session that asked to watch it. `phase_6_auto_attach_owner` is the live test.
 - A crashed out-of-process iframe no longer fails `browser_tree` and observed mutations on its healthy parent page with the frame's `TabCrashedError`; the frame is composed as a `(tab ... has crashed; ...)` line under its `iframe` marker instead. The crash hint for an iframe target now reads `browser_navigate(target, url, force=true)`, since `browser_navigate` refuses an iframe target without `force`.
 
-### Removed
 
 ## [0.12.0] - 2026-10-11
 
