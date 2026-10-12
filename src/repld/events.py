@@ -33,6 +33,7 @@ class CellStart:
     task_id: str
     source: str
     t: float
+    caller: dict | None = None  # a peer kernel's `peer/call` caller, else None
 
 
 @dataclass(frozen=True, slots=True)

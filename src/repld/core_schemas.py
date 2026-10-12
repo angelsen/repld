@@ -64,6 +64,20 @@ BRIDGE_REBIND_METHOD = "notifications/repld/session_rebound"
 # goodbye before it is a crash, and the bridge says so to its own client.
 BRIDGE_GOODBYE_METHOD = "notifications/repld/goodbye"
 
+# Kernel-to-kernel calls (`peer.py` client, `peer_host.py` + protocol.py callee).
+# Bare JSON-RPC methods on the kernel socket, never MCP tools: no client is told
+# they exist, and a peer connection sends no `initialize`.
+PEER_LIST_METHOD = "peer/list"
+PEER_INSPECT_METHOD = "peer/inspect"
+PEER_CALL_METHOD = "peer/call"
+PEER_PROTOCOL = 1
+PEER_MAX_DEPTH = 8
+PEER_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
+# A JSON-RPC error from `peer/call` means the callee never ran the target;
+# `result.error` means it ran and raised. Callers retry only on the former.
+PEER_ERR_UNRESOLVED = -32010
+PEER_ERR_REFUSED = -32011
+
 
 # What `initialize` negotiates, from either side of the socket. Shared for the
 # same reason the tool schemas are: the bridge answers `initialize` itself when
@@ -159,6 +173,14 @@ CORE_TOOLS = [
                         "wire; written/failed once the push's outcome is known"
                     ),
                 },
+                "caller": {
+                    "type": ["object", "null"],
+                    "description": (
+                        "for a task started by a peer kernel's peer/call: who asked "
+                        "(kernel cwd/pid/socket, claude_session_id, task_id, call "
+                        "chain, pid_verified); null for every other task"
+                    ),
+                },
             },
             "required": [
                 "task_id",
@@ -173,6 +195,7 @@ CORE_TOOLS = [
                 "label",
                 "push_delivered",
                 "push_state",
+                "caller",
             ],
         },
         "annotations": {"readOnlyHint": True},
@@ -283,8 +306,11 @@ def response(rid, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
 
-def error(rid, code: int, message: str) -> dict:
-    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+def error(rid, code: int, message: str, data: dict | None = None) -> dict:
+    err: dict = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    return {"jsonrpc": "2.0", "id": rid, "error": err}
 
 
 def tool_error(rid, text: str) -> dict:

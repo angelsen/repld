@@ -9,6 +9,7 @@ imports it.
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import Protocol
 
 
@@ -17,6 +18,16 @@ class KernelContext(Protocol):
 
     def start_task(
         self, src: str, *, origin: object = None
+    ) -> tuple[str, threading.Event]: ...
+    def start_peer_call(
+        self,
+        target: str,
+        func: Callable,
+        args: list,
+        kwargs: dict,
+        caller: dict | None,
+        *,
+        origin: object = None,
     ) -> tuple[str, threading.Event]: ...
     def wait_ready(self) -> None: ...
     def snapshot(self, task_id: str) -> dict | None: ...

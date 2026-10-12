@@ -179,6 +179,79 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
     return ", ".join(parts)
 
 
+def _param_records(args: ast.arguments) -> list[dict]:
+    """Every parameter of *args* with its kind, annotation and default as source
+    text. `literal` says the default round-trips through `ast.literal_eval`, so a
+    stub can copy it; anything else (a call, a name) cannot be copied safely."""
+    positional = args.posonlyargs + args.args
+    first_default = len(positional) - len(args.defaults)
+    rows: list[tuple[ast.arg, str, ast.expr | None]] = []
+    for i, arg in enumerate(positional):
+        kind = (
+            "POSITIONAL_ONLY" if i < len(args.posonlyargs) else "POSITIONAL_OR_KEYWORD"
+        )
+        default = args.defaults[i - first_default] if i >= first_default else None
+        rows.append((arg, kind, default))
+    if args.vararg:
+        rows.append((args.vararg, "VAR_POSITIONAL", None))
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        rows.append((arg, "KEYWORD_ONLY", default))
+    if args.kwarg:
+        rows.append((args.kwarg, "VAR_KEYWORD", None))
+
+    out: list[dict] = []
+    for arg, kind, default in rows:
+        literal = False
+        if default is not None:
+            try:
+                ast.literal_eval(default)
+                literal = True
+            except (ValueError, SyntaxError):
+                pass
+        out.append(
+            {
+                "name": arg.arg,
+                "kind": kind,
+                "annotation": ast.unparse(arg.annotation) if arg.annotation else None,
+                "has_default": default is not None,
+                "default": ast.unparse(default) if default is not None else None,
+                "literal": literal,
+            }
+        )
+    return out
+
+
+def functions_for_path(path: Path) -> list[dict]:
+    """Public top-level functions of the gist at *path* as structured data.
+
+    For `peer/list` and `repld gist stub`: unlike `_format_function`'s one-line
+    text, this keeps parameter kinds and default source apart so a stub can
+    forward them faithfully. AST only, so nothing is imported.
+    """
+    tree = _parse(path)
+    if tree is None:
+        return []
+    out: list[dict] = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name.startswith("_"):
+            continue
+        returns = ast.unparse(node.returns) if node.returns else None
+        sig = f"({ast.unparse(node.args)})" + (f" -> {returns}" if returns else "")
+        out.append(
+            {
+                "name": node.name,
+                "async": isinstance(node, ast.AsyncFunctionDef),
+                "signature": sig,
+                "params": _param_records(node.args),
+                "returns": returns,
+                "doc": _first_line(ast.get_docstring(node)),
+            }
+        )
+    return out
+
+
 def _is_exception_class(node: ast.ClassDef) -> bool:
     """True if node looks like an exception type, not an entry-point class.
 

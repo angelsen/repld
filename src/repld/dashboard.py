@@ -119,6 +119,7 @@ async def _collect_tasks() -> dict:
                 "push_state": t.get("push_state", "none"),
                 "origin_session": getattr(origin, "claude_session_id", None),
                 "origin_kind": getattr(origin, "claude_session_kind", None),
+                "caller": t.get("caller"),
             }
         )
 

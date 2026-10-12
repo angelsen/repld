@@ -8,6 +8,7 @@ tool call, so every schema and handler below lives on this side of the socket.
 import inspect
 import json
 import socket
+import time
 from typing import ClassVar
 
 import __main__
@@ -22,6 +23,9 @@ from .core_schemas import (
     CAPABILITIES,
     CORE_TOOLS,
     DOC_HELP_ATTRS,
+    PEER_CALL_METHOD,
+    PEER_INSPECT_METHOD,
+    PEER_LIST_METHOD,
     PROTOCOL_VERSION,
     RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
@@ -883,6 +887,11 @@ class Dispatcher(BrowserDispatchMixin):
             return self._tasks_wait(rid, req.get("params", {}), session)
         if method == "tasks/cancel":
             return self._tasks_cancel(rid, req.get("params", {}))
+        # Kernel-to-kernel calls — bare JSON-RPC for the same reason as the
+        # methods above: only `peer.py` calls them, on a connection of its own
+        # that never sends `initialize`. See `_peer` for what that implies.
+        if method in (PEER_LIST_METHOD, PEER_INSPECT_METHOD, PEER_CALL_METHOD):
+            return self._peer(rid, method, req.get("params") or {}, session)
         if rid is None:
             return None
         return _error(rid, -32601, f"method not found: {method}")
@@ -920,6 +929,90 @@ class Dispatcher(BrowserDispatchMixin):
         if not tid:
             return _error(rid, -32602, "missing task_id")
         return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
+
+    def _peer(self, rid, method: str, params: dict, session) -> dict | None:
+        """`peer/list`, `peer/inspect`, `peer/call`.
+
+        The first request marks the connection `Session.peer`: it is one call's
+        socket, not a session, so channel pushes and broadcasts skip it. A
+        JSON-RPC error here always means the target did not run; one that ran
+        and raised comes back as `result.error` (see `_peer_call`).
+        """
+        from . import peer_host
+
+        session.peer = True
+        try:
+            if method == PEER_CALL_METHOD:
+                return self._peer_call(rid, params, session)
+            self.ctx.wait_ready()
+            if method == PEER_LIST_METHOD:
+                return _response(rid, peer_host.describe_surface())
+            return _response(rid, peer_host.inspect_target(peer_host.target_of(params)))
+        except peer_host.TargetError as exc:
+            return _error(rid, exc.code, str(exc), exc.data)
+
+    def _peer_call(self, rid, params: dict, session) -> dict | None:
+        """Resolve, vet and run one call; block this connection's reader thread
+        until it finishes (the `_tasks_wait` pattern), or cancel it if the
+        caller hangs up first. The loop is never touched from here."""
+        from . import peer_host, tasks
+
+        args = params.get("args", [])
+        kwargs = params.get("kwargs", {})
+        meta = params.get("_meta") or {}
+        caller = meta.get("caller") if isinstance(meta, dict) else None
+        if (
+            not isinstance(args, list)
+            or not isinstance(kwargs, dict)
+            or (caller is not None and not isinstance(caller, dict))
+        ):
+            return _error(rid, -32602, "args must be a list, kwargs an object")
+        reason = peer_host.check_chain(caller, str(ipc.socket_path()))
+        if reason is not None:
+            raise peer_host.refusal(reason, caller)
+        # Same wait the other lazy-spawn triggers take: the first call may be
+        # what started this kernel, and `repld_init.py` has not run yet.
+        self.ctx.wait_ready()
+        target = peer_host.target_of(params)
+        func = peer_host.resolve_target(target)
+        peer_host.bind_check(func, args, kwargs)
+
+        stamped = dict(caller or {})
+        claimed_pid = (stamped.get("kernel") or {}).get("pid")
+        # SO_PEERCRED is the one thing here the caller cannot lie about.
+        stamped["pid_verified"] = (
+            session.peer_pid is not None and claimed_pid == session.peer_pid
+        )
+        stamped["peer_pid"] = session.peer_pid
+        task_id, done_event = self.ctx.start_peer_call(
+            target, func, args, kwargs, stamped, origin=session
+        )
+        while not done_event.wait(timeout=0.25):
+            if session.closed or _peer_gone(session.sock):
+                # The task may not have entered `_task_scope` yet, in which
+                # case there is no asyncio task to cancel; retry briefly.
+                for _ in range(8):
+                    if self.ctx.cancel_task(task_id) or done_event.wait(timeout=0.25):
+                        break
+                return None
+        task = tasks.get(task_id)
+        snap = self.ctx.snapshot(task_id)
+        if task is None or snap is None:
+            return _error(rid, -32603, f"peer task evicted: {task_id}")
+        err = task.get("peer_error")
+        if err is None and task["exception"]:
+            err = {"type": task["exception"], "message": "", "traceback": ""}
+        started = task["started_at"]
+        elapsed_ms = ((task.get("finished_at") or time.time()) - started) * 1000
+        result = {
+            "task_id": task_id,
+            "value": None if err else task.get("peer_value"),
+            "error": {**err, "output": snap["text"]} if err else None,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "spill_path": snap["spill_path"],
+        }
+        task.pop("peer_value", None)
+        return _response(rid, result)
 
     def _gates_resolve(self, rid, params: dict) -> dict:
         """Answer one pending gate, coercing the value the way its kind needs.

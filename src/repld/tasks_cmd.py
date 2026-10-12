@@ -86,6 +86,14 @@ def _fetch(lock: dict, hint_path: Path) -> dict | None:
     return body if isinstance(body, dict) else None
 
 
+def _peer_origin(caller: dict) -> str:
+    """`peer:<project>/<session8>` for a task a peer kernel's `peer/call` started."""
+    cwd = str((caller.get("kernel") or {}).get("cwd") or "")
+    project = cwd.rstrip("/").rsplit("/", 1)[-1] or "?"
+    session = str(caller.get("claude_session_id") or "-")[:8]
+    return f"peer:{project}/{session}"
+
+
 def _print_tasks(data: dict) -> None:
     active = [t for t in data.get("tasks", []) if not t["done"]]
     if active:
@@ -95,6 +103,8 @@ def _print_tasks(data: dict) -> None:
             origin_str = origin[:8] if origin else "ambient"
             if t.get("origin_kind") == "bg":
                 origin_str += " (bg)"
+            if t.get("caller"):
+                origin_str = _peer_origin(t["caller"])
             label = f"  {t['label']}" if t.get("label") else ""
             err = f"  {YELLOW}err={t['exception']}{RESET}" if t.get("exception") else ""
             print(

@@ -147,6 +147,11 @@ class Session:
         self.claude_project_dir: str | None = None
         self.claude_session_kind: str | None = None
         self.inbox_socket: str | None = None
+        # Set on the first `peer/*` request: a kernel-to-kernel call connection,
+        # one per call, that never sends `initialize`. It is not a session
+        # anything can be pushed to, so `post_channel` refuses and the
+        # broadcast/listing paths skip it.
+        self.peer = False
 
     @property
     def closed(self) -> bool:
@@ -231,7 +236,7 @@ class Session:
         any other path.
         """
         with self.write_lock:
-            if self._closed:
+            if self._closed or self.peer:
                 return Post.FAILED
             if not self.initialized:
                 self.pending.append(msg)
@@ -379,7 +384,7 @@ class Server:
             self.sock.bind(str(self.socket_path))
         finally:
             os.umask(old_umask)
-        self.sock.listen(8)
+        self.sock.listen(64)  # a peers.gather() opens one connection per call
         self.accept_thread = threading.Thread(
             target=self._accept_loop, daemon=True, name="repld-ipc-accept"
         )
@@ -450,7 +455,7 @@ class Server:
         with self.sessions_lock:
             targets = list(self.sessions)
         for s in targets:
-            if s is exclude:
+            if s is exclude or s.peer:
                 continue
             s.post_channel(msg)
 
@@ -571,6 +576,7 @@ class Server:
         return [
             (s.claude_session_id, s.claude_project_dir, s.claude_session_kind)
             for s in targets
+            if not s.peer
         ]
 
     def stop(self) -> None:

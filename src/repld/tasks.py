@@ -142,11 +142,25 @@ def current_task_id() -> str | None:
 
 
 def current_origin() -> "Session | None":
-    """The session that asked for the running cell or defer() task, if any."""
+    """The session that asked for the running cell or defer() task, if any.
+
+    A peer connection (`Session.peer`) is not a session anyone can be pushed
+    to, so work it started reads as ambient here: browser ownership and
+    `last_caller` must not latch onto a socket that closes with the call.
+    """
     task_id = _current_task.get()
     task = get(task_id) if task_id is not None else None
     origin = task.get("origin") if task is not None else None
-    return origin if origin is not None else _tool_caller.get()
+    if origin is not None:
+        return None if getattr(origin, "peer", False) else origin
+    return _tool_caller.get()
+
+
+def current_caller() -> dict | None:
+    """The peer-call `caller` of the running task, if a peer kernel asked for it."""
+    task_id = _current_task.get()
+    task = get(task_id) if task_id is not None else None
+    return task.get("caller") if task is not None else None
 
 
 def task_id_of(atask: asyncio.Task[object]) -> str | None:
@@ -185,6 +199,10 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         # ipc.Session that asked for this work, or None for ambient tasks
         # (repld_init.py, @every bodies). Drives targeted vs. broadcast push.
         "origin": origin,
+        # Who asked, for a task started by a peer kernel's `peer/call`
+        # (peer_host/protocol._peer_call); None for every other task. A claim,
+        # except `pid_verified`.
+        "caller": None,
     }
     with _tasks_lock:
         _tasks[task_id] = task
@@ -345,6 +363,7 @@ def snapshot(task_id: str) -> dict | None:
         "label": task.get("label"),
         "push_delivered": task.get("push_delivered"),
         "push_state": task.get("push_state", "none"),
+        "caller": task.get("caller"),
     }
 
 

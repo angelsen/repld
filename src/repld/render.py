@@ -62,6 +62,37 @@ def cell_source_block(source: str) -> str:
     return "\n".join(f"  {line}" for line in source.rstrip().splitlines())
 
 
+_PEER_ARG_CLIP = 500
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= _PEER_ARG_CLIP else text[:_PEER_ARG_CLIP] + "..."
+
+
+def peer_call_source(target: str, args: list, kwargs: dict, caller: dict | None) -> str:
+    """The `CellStart` source for a `peer/call`: who asked, then the call as
+    code. Plain Python after the comment, so the TUI's syntax highlighting and
+    `repld log` render it like any cell."""
+    caller = caller or {}
+    kernel = caller.get("kernel") or {}
+    who = (
+        str(kernel.get("cwd") or "").rstrip("/").rsplit("/", 1)[-1] or "unknown kernel"
+    )
+    bits: list[str] = []
+    if kernel.get("pid"):
+        verified = " verified" if caller.get("pid_verified") else ""
+        bits.append(f"pid {kernel['pid']}{verified}")
+    if caller.get("claude_session_id"):
+        bits.append(f"session {str(caller['claude_session_id'])[:8]}")
+    if caller.get("task_id"):
+        bits.append(f"task {short_task(str(caller['task_id']))}")
+    head = f"# peer call from {who}" + (f" ({', '.join(bits)})" if bits else "")
+    parts = [_clip(repr(a)) for a in args] + [
+        f"{k}={_clip(repr(v))}" for k, v in kwargs.items()
+    ]
+    return f"{head}\nawait {target}({', '.join(parts)})"
+
+
 def cell_done_line(task_id: str, elapsed_ms: float, error: str | None) -> str:
     short = short_task(task_id)
     ms = f"{elapsed_ms:.0f}ms"

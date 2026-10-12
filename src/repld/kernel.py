@@ -31,7 +31,7 @@ from pathlib import Path
 
 import __main__
 
-from . import eventlog, events, gates, ipc, paths, sessions, state, tasks
+from . import eventlog, events, gates, ipc, paths, render, sessions, state, tasks
 from .channel import push_channel
 from .channel import push_kind as _push
 from .events import CellDone, CellStart
@@ -150,6 +150,12 @@ _active_lock_path: Path | None = None
 # ---------------------------------------------------------------------------
 
 
+# Keys `load_dotenv` set in os.environ. `peer.clean_env` drops them when it
+# spawns another project's kernel, so this project's secrets neither leak into
+# it nor shadow its own `.env` (load_dotenv never overrides an existing var).
+DOTENV_KEYS: set[str] = set()
+
+
 def load_dotenv() -> None:
     """Load KEY=VALUE pairs from ./.env into os.environ (stdlib only).
 
@@ -181,6 +187,7 @@ def load_dotenv() -> None:
             val = val[1:-1]
         if key and key not in os.environ:
             os.environ[key] = val
+            DOTENV_KEYS.add(key)
 
 
 def _cleanup_lockfile() -> None:
@@ -794,6 +801,61 @@ async def _run_deferred(task_id: str, thunk) -> None:
             sys.stderr.write(traceback.format_exc())
 
 
+_PEER_TRACEBACK_LIMIT = 8000
+
+
+async def _run_peer_call(task_id: str, func, args: list, kwargs: dict) -> None:
+    """Run one `peer/call` target inside the task lifecycle.
+
+    Coroutine functions run on the loop; anything else goes through
+    `asyncio.to_thread`, as a sync exec cell does, so a blocking callee cannot
+    stall the kernel. The return is stored as a detached JSON copy
+    (`task["peer_value"]`) so the reader thread never serialises live state.
+    """
+    from . import peer_host, runtime
+    from .core_schemas import PEER_MAX_PAYLOAD_BYTES
+
+    async with _task_scope(task_id) as task:
+        try:
+            if inspect.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                result = await asyncio.to_thread(func, *args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+            value, _ = runtime.unwrap_display(result)
+            try:
+                text = json.dumps(value)
+            except (TypeError, ValueError) as exc:
+                raise peer_host.PayloadError(
+                    f"return value is not JSON-serializable ({type(value).__name__}: "
+                    f"{exc}); write it to a file and return the path"
+                ) from exc
+            if len(text) > PEER_MAX_PAYLOAD_BYTES:
+                raise peer_host.PayloadError(
+                    f"return value is {len(text)} bytes of JSON, over the "
+                    f"{PEER_MAX_PAYLOAD_BYTES} limit; write it to a file and return the path"
+                )
+            task["peer_value"] = json.loads(text)
+            task["result"] = _safe_repr(value)
+        except asyncio.CancelledError:
+            task["exception"] = "CancelledError"
+            task["peer_error"] = {
+                "type": "CancelledError",
+                "message": "cancelled on the callee",
+                "traceback": "",
+            }
+        except BaseException as exc:
+            tb = traceback.format_exc()
+            task["exception"] = type(exc).__name__
+            task["peer_error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": tb[-_PEER_TRACEBACK_LIMIT:],
+            }
+            sys.stderr.write(tb)
+
+
 def _make_defer(loop: asyncio.AbstractEventLoop):
     """Return a defer(coro, label=None) function bound to the kernel's loop."""
 
@@ -831,13 +893,23 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
         # reports back to whoever asked for it. defer() from an @every body or
         # the project bootstrap has no current task, so it stays ambient.
         parent = tasks.get(tasks.current_task_id() or "")
-        task_id, task = tasks.new_task(origin=parent.get("origin") if parent else None)
+        origin = parent.get("origin") if parent else None
+        # A peer call's origin is a connection that closes with the call, so
+        # its completion push would have nowhere to land; the deferred work
+        # reports to this kernel's own sessions instead, still naming `caller`.
+        if getattr(origin, "peer", False):
+            origin = None
+        task_id, task = tasks.new_task(origin=origin)
+        if parent:
+            task["caller"] = parent.get("caller")
         task["nudged"] = True
         task["nudge_cutoff"] = 0
         if label is not None:
             task["label"] = label
         src_label = label or "..."
-        events.emit(CellStart(task_id, f"defer({src_label})", time.time()))
+        events.emit(
+            CellStart(task_id, f"defer({src_label})", time.time(), task["caller"])
+        )
         asyncio.run_coroutine_threadsafe(_run_deferred(task_id, thunk), loop)
         return task_id
 
@@ -1034,6 +1106,28 @@ class _Context:
         task_id, task = tasks.new_task(origin=origin)
         events.emit(CellStart(task_id, src, time.time()))
         asyncio.run_coroutine_threadsafe(_run_cell(task_id, src, n), self.loop)
+        return task_id, task["done_event"]
+
+    def start_peer_call(
+        self,
+        target: str,
+        func,
+        args: list,
+        kwargs: dict,
+        caller: dict | None,
+        *,
+        origin=None,
+    ):
+        """Schedule a resolved `peer/call` target as a tracked task. Not nudged:
+        the connection waits on `done_event`, so no completion push is owed."""
+        task_id, task = tasks.new_task(origin=origin)
+        task["label"] = f"peer:{target}"
+        task["caller"] = caller
+        source = render.peer_call_source(target, args, kwargs, caller)
+        events.emit(CellStart(task_id, source, time.time(), caller))
+        asyncio.run_coroutine_threadsafe(
+            _run_peer_call(task_id, func, args, kwargs), self.loop
+        )
         return task_id, task["done_event"]
 
     def wait_ready(self) -> None:
@@ -1362,6 +1456,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         "no_display": runtime.no_display,
         "claude_sessions": _claude_sessions,
         "current_session_id": _current_session_id,
+        "peer_caller": tasks.current_caller,
     }
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)
