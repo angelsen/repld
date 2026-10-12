@@ -249,14 +249,11 @@ def _gist_fetch(argv: list[str]) -> int:
     to_global = "--global" in argv
     force = "--force" in argv
     rest = [a for a in argv if a not in ("--global", "--force")]
-    rename: str | None = None
-    if "--name" in rest:
-        i = rest.index("--name")
-        if i + 1 >= len(rest):
-            print("error: --name needs a value")
-            return 2
-        rename = rest[i + 1]
-        del rest[i : i + 2]
+    try:
+        rename = cli_args.take_value(rest, "--name")
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
     # No `flags=`: every option this verb understands has already been
     # stripped from `rest` above, so anything still starting with `-` is
     # unknown by construction. Same ordering rule `check_args` documents for
@@ -418,14 +415,11 @@ def _gist_stub(argv: list[str]) -> int:
     force = "--force" in argv
     start = "--start" in argv
     rest = [a for a in argv if a not in ("--global", "--force", "--start")]
-    rename: str | None = None
-    if "--as" in rest:
-        i = rest.index("--as")
-        if i + 1 >= len(rest):
-            print("error: --as needs a value")
-            return 2
-        rename = rest[i + 1]
-        del rest[i : i + 2]
+    try:
+        rename = cli_args.take_value(rest, "--as")
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
     bad = cli_args.check_args("repld gist stub", rest, usage, positionals=2)
     if bad is not None:
         return bad

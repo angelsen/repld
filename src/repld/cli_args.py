@@ -33,6 +33,22 @@ def wants_help(argv: list[str]) -> bool:
     return any(a in ("-h", "--help") for a in argv)
 
 
+def take_value(argv: list[str], flag: str) -> str | None:
+    """Remove ``flag VALUE`` from *argv* in place; return VALUE, or None if absent.
+
+    Raises ValueError when *flag* is the last argument. Call before `check_args`,
+    which would otherwise refuse the flag as unknown.
+    """
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    if i + 1 >= len(argv):
+        raise ValueError(f"{flag} needs a value")
+    value = argv[i + 1]
+    del argv[i : i + 2]
+    return value
+
+
 def check_args(
     prog: str,
     argv: list[str],
