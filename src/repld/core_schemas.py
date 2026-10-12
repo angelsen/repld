@@ -245,6 +245,13 @@ DOC_RESOURCES = [
         "mimeType": "text/plain",
         "_help_attr": "PRODUCTION",
     },
+    {
+        "uri": "repld://docs/peers",
+        "name": "repld-peers",
+        "description": "Kernel-to-kernel calls: await another project's kernel as a service (peers.get, call, errors, identity, stubs). Read before calling another kernel.",
+        "mimeType": "text/plain",
+        "_help_attr": "PEERS_GUIDE",
+    },
 ]
 
 # URI → name of the `help.py` module attribute holding that doc's text. Both

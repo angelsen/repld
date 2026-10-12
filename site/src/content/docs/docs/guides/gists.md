@@ -162,6 +162,16 @@ repld gist fetch <url> --name weather --global
 
 Nothing tracks the file afterwards, so `rm` — which only unlinks — is not how you undo it; delete the file. A bare gist id works too, as does a raw `gist.githubusercontent.com` URL, but nothing else: the file lands somewhere a kernel imports at boot, so the set of origins stays one a reader recognises. The fetched file's `__repld_deps__` is deliberately _not_ installed — this is code from a URL, and its dependency list shouldn't drive an install before you've read the file.
 
+## Calling another project's kernel
+
+A gist can also be a thin shim over another project's running kernel, so its dependencies stay in that project's venv:
+
+```bash
+repld gist stub voice-api voice      # writes ./gists/voice.py, one async def per public function
+```
+
+`repld gist stub --check` reports stubs that have drifted from their peer. The [peers guide](/repld/docs/guides/peers/) has the whole model.
+
 ## Linting
 
 ```bash

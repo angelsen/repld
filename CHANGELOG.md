@@ -8,7 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Peers: kernel-to-kernel calls.** `peers.get("voice-api")` (a directory name or a path) returns a handle whose `await peer.call("gist.fn", *args, **kwargs)` runs any dotted name in that project's own kernel, with its own venv, deps and warm state, and returns the JSON value. Each call opens a connection of its own, so `asyncio.gather` runs calls concurrently and cancelling the awaiting task cancels the target on the other side. Every error says whether the target ran: `PeerRefused` and `PeerUnavailable` never did, `PeerCallError` ran and raised, `PeerDisconnected` is unknown and is never retried. `peers.get(path, start=True)` starts a stopped peer under a cleaned environment; without it a stopped peer is a `PeerUnavailable` naming `repld --project DIR start`. `peer.info()` and `peer.inspect()` describe a peer without calling it. Read `repld://docs/peers` (or `repld help peers`). `phase_19_peers` runs two to five real kernels.
+- **Caller identity on every peer call.** The callee records the calling kernel, the Claude Code session that started the chain, the calling task and the full chain of kernels (a nested call keeps the originating session). It shows in `repld log` as `# peer call from <project> (pid N verified, ...)`, in `repld tasks` as `from=peer:<project>/<session>`, in `get_task` as the new `caller` field, and inside the called function as `repld.peer_caller()`. Only the kernel pid is verified (against the connecting process); the rest is a claim for attribution, not authorization. A call that would re-enter a kernel already in its chain, or run eight kernels deep, is refused.
+- `repld gist stub <peer> <gist>[.fn,...]` writes a local gist of typed `async def` shims that forward to a peer, keeping parameter kinds, annotations and literal defaults (a non-literal default is left to the peer). `repld gist stub --check` names the stubs that have drifted from their peer and exits 1 if any has; a peer that is not running reads `unchecked`, not `ok`. `--force` regenerates a stub and never overwrites a hand-written gist, and `repld gist list` marks stubs.
+- The `peer/list`, `peer/inspect` and `peer/call` JSON-RPC methods on the kernel socket. Like `gates/*` and `tasks/*` they are not MCP tools, so no client is told they exist.
+
 ### Changed
+
+- A peer-call connection is never a Claude session: `claude_sessions()` does not list it, broadcasts skip it, and work it started reads as ambient. A `defer()` started inside a peer call reports to the callee's own sessions and keeps the caller.
+- The kernel's IPC listen backlog is 64 (was 8), since a `gather` of peer calls opens one connection per call.
 
 ### Fixed
 

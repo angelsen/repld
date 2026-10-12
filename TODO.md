@@ -162,23 +162,20 @@ infinite scroll.
 - [x] **`set_files` probe against a real hidden tab.** Done (`phase_6_set_files_hidden`): a merely
   backgrounded tab is not throttled and verifies normally; only `Page.setWebLifecycleState`
   `frozen` stalls the probe, which then returns the 'not verified' note at the 5 s bound.
-- [ ] **To check out: typed call between project kernels (a peer session's proposal).** Today only
-  `repld --project DIR exec 'CODE'` crosses kernels: code strings are fragile (multi-line
-  f-strings fail before running), results are printed reprs, and siblings in `status --json`
-  have no stable handle. Sketch: `repld.kernel("voice-api").call("module.fn", **json_args)`
-  returning JSON or a typed error, target chosen by name from the sibling's gists, plus an
-  event subscription so a sibling is notified without a Claude session. Context:
-  `claude_code_research/docs/features/phone-channel.md`. Check against "substrate, not
-  library" and the per-cwd, localhost-only invariant before building anything.
-  **Design read (2026-10-12), no code yet:** the typed surface already exists. A sibling's gist
-  `_tool_*` functions are typed MCP tools with inferred schemas (`gists.scan_tools`/`resolve_tool`),
-  and its unix socket already speaks `tools/call`. So the call is one primitive that resolves a
-  sibling by cwd basename or path via `sessions.list_sessions()`, connects with
-  `ipc.connect_to_kernel`, and sends `tools/call`, returning JSON or the tool's typed error. No
-  `module.fn` string dispatch and no new protocol. That keeps the uid-protected socket as the only
-  door (never the dashboard's TCP port) and adds no per-service helper. Open: whether the caller's
-  session id should ride along so the callee's pushes route back; the event subscription
-  (`.events` file vs a socket subscribe) is unexamined and should be a separate step.
+- [x] **Typed call between project kernels.** Shipped as peers (`peers.get(project).call(...)`,
+  `peer/*`, `repld gist stub`); `repld://docs/peers` is the spec and phase 19 the test. The `_tool_*`
+  route in the original sketch was dropped: it advertised service internals as MCP tools and could
+  not carry a caller or cancel a call.
+- [ ] **Cross-kernel event subscription (peers follow-up).** A peer cannot be told when something
+  happens in another kernel; today poll with `@every` or have the callee `notify()` its own sessions.
+  Context: `claude_code_research/docs/features/phone-channel.md` wants a sibling notified without a
+  Claude session. `kernel.events` is a per-project NDJSON log, not a bus, and nothing has checked
+  whether its records are structured enough to react to. Design a subscribe call on the same
+  per-call-connection model before building (a long-lived stream breaks the one-request-per-connection
+  assumption `peer/call` leans on).
+- [ ] **Peers live check against a real service.** Phase 19 uses throwaway kernels. Run
+  `peers.get("voice-api")` from this project against the real `voice-api` kernel once: a real call,
+  a mid-call `cancel`, and `repld gist stub voice-api <gist>`.
 - [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
   `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP

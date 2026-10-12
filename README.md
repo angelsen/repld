@@ -150,6 +150,8 @@ defer(coro, label=None)        # fire-and-forget, channel push on completion
 no_display(value)              # return a value without re-printing it
 claude_sessions()              # connected Claude Code sessions
 current_session_id()           # the session that triggered the running code
+peers.get("voice-api")         # await .call("gist.fn", ...) runs it in another project's kernel
+peer_caller()                  # inside such a call: who asked (kernel, session, chain)
 ```
 
 A kernel you started with `repld` takes gate answers in its own pane, and a
@@ -202,7 +204,7 @@ app = await MyApp.connect()
 await app.accounts()
 ```
 
-Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (typed `_tool_*` functions, with `Annotated[T, "..."]` for per-parameter descriptions), and link across projects (`repld gist add <name>`). `repld gist fetch <gist-url>` copies someone else's gist in, and `repld gist lint` checks all of it. See `repld help gists` for details.
+Re-importing after edits auto-reloads. Gists can declare dependencies (`__repld_deps__`), register MCP tools (typed `_tool_*` functions, with `Annotated[T, "..."]` for per-parameter descriptions), and link across projects (`repld gist add <name>`). `repld gist fetch <gist-url>` copies someone else's gist in, and `repld gist lint` checks all of it. `repld gist stub <peer> <gist>` generates typed async shims for a gist in another project's running kernel, so its dependencies stay in that project's venv (`repld help peers`). See `repld help gists` for details.
 
 ## Scope
 

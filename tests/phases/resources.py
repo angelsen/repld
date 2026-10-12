@@ -27,6 +27,11 @@ from harness import Bridge, Kernel, assert_eq, assert_true
 # word "tab" before a capitalised one.
 _ATTR_RE = r"\b(?:tab|browser)\.([a-z_][a-z0-9_]*)"
 
+# Calls that take a coroutine and await it themselves.
+_AWAITING_WRAPPER_RE = re.compile(
+    r"\b(?:gather|create_task|ensure_future|wait_for|shield|defer)\("
+)
+
 
 def _class_members(pkg: pathlib.Path, *specs: tuple[str, str]) -> set[str]:
     """Public+private member names of the named classes, read from source.
@@ -115,6 +120,12 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
         "click" in tab and "watch" in pool,
         f"AST member extraction found the classes (tab={len(tab)}, pool={len(pool)})",
     )
+    peer_obj = _class_members(pkg, ("peer.py", "Peer"))
+    peers_obj = _class_members(pkg, ("peer.py", "_Peers"))
+    assert_true(
+        "call" in peer_obj and "get" in peers_obj,
+        f"AST member extraction found the peer classes ({len(peer_obj)}, {len(peers_obj)})",
+    )
 
     # Every module-level str in help.py, plus every topic. Deliberately
     # reflective rather than a hand-listed set: a doc constant added later is
@@ -133,12 +144,20 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     phantom = [
         f"{name}: {obj}.{attr}"
         for name, text in sorted(surfaces.items())
-        for obj, real in (("tab", tab), ("browser", pool))
+        for obj, real in (
+            ("tab", tab),
+            ("browser", pool),
+            ("peer", peer_obj),
+            ("peers", peers_obj),
+        )
         for attr in sorted(set(re.findall(rf"\b{obj}\.([a-z_][a-z0-9_]*)", text)))
         if attr not in real
     ]
     assert_eq(phantom, [], "docs reference no API that doesn't exist")
-    print(f"  ✓ {len(surfaces)} doc surfaces reference no phantom tab.*/browser.* API")
+    print(
+        f"  ✓ {len(surfaces)} doc surfaces reference no phantom "
+        "tab.*/browser.*/peer.*/peers.* API"
+    )
 
     # 2. The two browser surfaces cover the same symbols.
     guide = set(re.findall(_ATTR_RE, h.BROWSER_GUIDE))
@@ -161,6 +180,25 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     )
     print(
         f"  ✓ all {sum(1 for m in tab if not m.startswith('_'))} public Tab methods documented on both surfaces"
+    )
+
+    # 4. The peers guide and topic cover every public Peer / _Peers member, so a
+    # new method cannot ship documented on one surface only.
+    peer_public = sorted(m for m in peer_obj | peers_obj if not m.startswith("_"))
+    missing = [
+        f"{m} not in {where}"
+        for m in peer_public
+        for where, text in (
+            ("PEERS_GUIDE", h.PEERS_GUIDE),
+            ('_TOPICS["peers"]', h._TOPICS["peers"]),
+        )
+        if m not in text
+    ]
+    assert_eq(
+        missing, [], "every public Peer/_Peers member is documented on both surfaces"
+    )
+    print(
+        f"  ✓ all {len(peer_public)} public Peer/_Peers members documented on both surfaces"
     )
 
 
@@ -205,12 +243,16 @@ def phase_8_site_signatures(_kernel: Kernel) -> None:
         "browser": _member_kinds(
             pkg, ("browser/pool.py", "BrowserPool"), ("browser/pool.py", "LazyBrowser")
         ),
+        "peer": _member_kinds(pkg, ("peer.py", "Peer")),
+        "peers": _member_kinds(pkg, ("peer.py", "_Peers")),
     }
     assert_eq(
         kinds["browser"].get("patterns"), "attr", "AST reads patterns as a property"
     )
     assert_eq(kinds["browser"].get("pages"), "async", "AST reads pages as async")
     assert_eq(kinds["tab"].get("network"), "sync", "AST reads tab.network as sync")
+    assert_eq(kinds["peer"].get("call"), "async", "AST reads peer.call as async")
+    assert_eq(kinds["peers"].get("get"), "sync", "AST reads peers.get as sync")
 
     docs = sorted((REPO / "site/src/content/docs").rglob("*.md")) + [REPO / "README.md"]
     docs = [p for p in docs if p.is_file()]
@@ -227,7 +269,7 @@ def phase_8_site_signatures(_kernel: Kernel) -> None:
     # `await` is optional in the match so a bare async call is a *hit* to
     # classify, not a miss to skip — that being the failure with no symptom.
     call_re = re.compile(
-        rf"(await\s+)?{root}\b(tab|browser)\.([a-z_][a-z0-9_]*)\s*(\()?"
+        rf"(await\s+)?{root}\b(tab|browser|peers|peer)\.([a-z_][a-z0-9_]*)\s*(\()?"
     )
     problems: list[str] = []
     checked = 0
@@ -246,6 +288,9 @@ def phase_8_site_signatures(_kernel: Kernel) -> None:
 
         # 2/3. Shape rules, fenced Python only.
         for line in _python_fences(text):
+            # A coroutine handed to gather/create_task/... on the same line is
+            # awaited by the wrapper, so it is not a bare call.
+            wrapped = bool(_AWAITING_WRAPPER_RE.search(line))
             for awaited, obj, attr, called in call_re.findall(line):
                 kind = kinds[obj].get(attr)
                 if kind is None:
@@ -254,14 +299,14 @@ def phase_8_site_signatures(_kernel: Kernel) -> None:
                 where = f"{rel}: {line.strip()}"
                 if kind == "attr" and called:
                     problems.append(f"{where}\n      → {obj}.{attr} is a property")
-                elif kind == "async" and called and not awaited:
+                elif kind == "async" and called and not awaited and not wrapped:
                     problems.append(f"{where}\n      → {obj}.{attr} is async")
                 elif kind == "sync" and awaited:
                     problems.append(f"{where}\n      → {obj}.{attr} is not async")
 
     assert_eq(problems, [], "hand-written docs match the browser API's real shape")
     print(
-        f"  ✓ {len(docs)} doc file(s), {checked} tab.*/browser.* call(s): "
+        f"  ✓ {len(docs)} doc file(s), {checked} tab/browser/peer/peers call(s): "
         "no phantom API, no awaited-sync, no bare-async, no called-property"
     )
 
@@ -416,6 +461,15 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         )
         assert_eq(doc["mimeType"], "text/plain", "docs/guide mimeType")
         print(f"  ✓ repld://docs/guide read in full ({len(doc['text'])} bytes)")
+
+        resp = b.call("resources/read", {"uri": "repld://docs/peers"})
+        doc = resp["result"]["contents"][0]
+        assert_true(
+            len(doc["text"]) > 4096 and "[full output:" not in doc["text"],
+            f"docs/peers returned full text ({len(doc['text'])} bytes)",
+        )
+        assert_true("peers.get" in doc["text"], "docs/peers is the peers guide")
+        print(f"  ✓ repld://docs/peers read in full ({len(doc['text'])} bytes)")
 
         # scan_deps survives a dep whose dotted parent is missing —
         # find_spec("no_such_parent.sub") raises, _is_importable must swallow it

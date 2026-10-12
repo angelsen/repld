@@ -371,6 +371,10 @@ class Peer:
     the awaiting task cancels the call on the other side.
     """
 
+    cwd: str
+    name: str
+    start: bool
+
     def __init__(self, cwd: str, *, start: bool = False):
         self.cwd = cwd
         self.name = os.path.basename(cwd)

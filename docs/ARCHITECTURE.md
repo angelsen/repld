@@ -121,6 +121,7 @@ Research preview. The thesis is validated — full MCP-over-stdio with channel p
 - [x] Project-venv binding — `bind.py` re-execs entry points under the project's interpreter; version-matched `adopt()` splices a venv onto a running kernel, a mismatched one is refused
 - [x] Systemd-transient-unit spawn — a headless kernel lands in the user manager with its own cgroup and journal, falling back to plain `Popen` on any failure
 - [x] Dashboard — web control panel with token-gated `GET /` and Bearer-only `POST /api`, Host-header allowlist, cross-session sidebar
+- [x] Peers: kernel-to-kernel calls. `peers.get(project).call("gist.fn", ...)` runs a dotted name in another project's kernel (its own venv and warm state); per-call connection, cancel-by-hangup, per-call caller identity, typed errors that say whether it ran; `repld gist stub` generates typed shims and `--check` reports drift
 - [x] Cross-project gist links — `repld gist add` writes a committed `./gists/.links` manifest; `repld gist fetch` copies a GitHub gist in; `repld gist lint` checks both
 - [ ] `notify_on_logs` — stdlib logging → channel
 - [ ] `@watch("/path")` — poll-based file watcher → channel (stdlib only)

@@ -21,6 +21,7 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
                                                interactive → gist → trigger → production
       PRODUCTION     (repld://docs/production) graduation guide:
                                                gist → FastMCP/FastAPI with wiring examples
+      PEERS_GUIDE    (repld://docs/peers)      kernel-to-kernel calls: peers, stubs, identity
 """
 
 from pathlib import Path
@@ -64,6 +65,8 @@ _EXEC_MODEL = (
     "— kind is 'bg' for a `claude --bg` worker, else None. "
     "current_session_id() returns the claude_session_id of whoever triggered "
     "the code currently running, or None if there's nothing to attribute to. "
+    "peers calls other projects' kernels (see Peers below); peer_caller() names "
+    "who called this kernel from another one, else None. "
     "When you see a task that could run continuously — monitoring, polling, "
     "watching for changes — suggest wiring it with defer() + notify() or @every. "
     "The kernel persists; one-shot work can become background automation."
@@ -137,6 +140,19 @@ _GISTS_MODEL = (
     "entry marked (already here) is already resolvable in this one, so skip "
     "it; otherwise the user can link one in with `repld gist add <name>` "
     "(no copy)."
+)
+
+_PEERS_MODEL = (
+    "Peers: other projects' kernels are services you can call. peers.list() shows "
+    'the live ones; peer = peers.get("voice-api") takes a directory name or a path; '
+    'await peer.call("gist.fn", *args, **kwargs) runs any dotted name in THAT '
+    "kernel (its own venv, deps and warm state, so nothing to install here) and "
+    "returns a JSON value. Bulk data goes by file path. Each error says whether it "
+    "ran: PeerRefused / PeerUnavailable never did, PeerCallError ran and raised, "
+    "PeerDisconnected is unknown and is never retried. gather and asyncio.timeout "
+    "work, and cancelling the await cancels the call there. "
+    "`repld gist stub <peer> <gist>` writes typed async shims. "
+    "Read repld://docs/peers before calling another kernel."
 )
 
 _PLAYBOOK = (
@@ -1399,6 +1415,269 @@ Never navigate an iframe directly — it destroys the embedded session.
 """
 
 
+# repld://docs/peers: kernel-to-kernel calls. Keep the API lines in sync with
+# peer.py and with _TOPICS["peers"]; phase 8 checks both against the real classes.
+PEERS_GUIDE = """\
+repld peers: call another project's kernel
+
+A kernel is a long-lived process with its own interpreter, its own venv, its
+own deps and its own warm state (an open model, a logged-in session, a
+connection pool). `peers` lets one kernel call into another as an awaitable
+object, so the first does not install what the second already has. The
+function runs in THEIR kernel; only arguments and a JSON result cross.
+
+  peer = peers.get("voice-api")                       # a name, or a path
+  text = await peer.call("voice.transcribe", "/tmp/a.wav", lang="en")
+
+Nothing goes through the MCP bridge: the client lives inside the calling
+kernel, so cells, gists, @every tickers and defer() tasks can all use it.
+
+== Finding a peer ==
+
+  peers.list()      live kernels on this machine: [{name, cwd, pid, socket_path,
+                    started_at, self}]. name is the project directory's basename.
+  peers.get(target, *, start=False) -> Peer
+                    sync and cheap; nothing connects until the first await.
+
+target is a path (anything with a "/" or starting "." or "~") or the basename
+of exactly one live kernel's directory. A path need not be running. A name that
+matches nothing raises PeerNotFound listing the live names; one that matches
+two raises PeerNotFound listing both paths, and you pass a path. The handle is
+cached per project directory, so peers.get() twice returns the same object.
+
+A Peer has .cwd (the resolved project directory) and .name.
+
+== Calling ==
+
+  await peer.call(target, /, *args, **kwargs)
+
+target is any dotted name in the peer's kernel. Resolution, in order:
+  1. The first segment is a name in the peer's __main__ if it has one,
+     otherwise a module imported there. Gists import through the same
+     auto-reloading hook a cell uses, so an edited gist is picked up.
+  2. Each later segment is getattr; if the object is a module with no such
+     attribute, a submodule of that name is imported.
+  3. The result must be callable.
+So "voice.transcribe" (a gist), "os.path.join", "math.sqrt" and a function you
+defined in the peer's __main__ all work. There is no export list and no
+declaration: reach is exactly what exec has there. target is positional-only,
+so a remote parameter may itself be called "target".
+
+How it runs on the peer:
+  - async functions run on the peer's loop; everything else runs in a worker
+    thread (the rule for sync cells), so a blocking callee does not stall the
+    peer's kernel. A sync function that returns an awaitable is awaited.
+  - every call is a tracked task there: it has a task id, its output spills
+    like a cell's, it appears in `repld log` and `repld tasks`.
+  - the call waits for the peer's repld_init.py to finish (at most 30 s), so
+    the first call after a cold start does not see a bare __main__.
+
+== Values and bulk data ==
+
+JSON only, both ways. Arguments are checked before anything is sent: a value
+that is not JSON-serializable raises TypeError locally and the peer never hears
+of it. Tuples arrive as lists and dict keys as strings, as with any JSON.
+A return value that cannot be serialized, or is over 8 MiB of JSON, comes back
+as PeerCallError (remote_type "PayloadError"). The cap is the point: the socket
+carries control and small values, not bulk.
+
+Bulk data goes by file path. Both kernels run as the same user on the same
+machine, so write the data to a file and pass the path, or have the callee write
+its result and return the path. $XDG_RUNTIME_DIR is usually tmpfs (RAM-backed);
+put multi-GB files on disk instead. The caller owns a file it hands over and
+removes it afterwards; a peer's own spill files follow its normal eviction.
+
+== Errors: did it run? ==
+
+Every error says whether the target ran, which is what decides whether a retry
+is safe.
+
+  PeerNotFound(candidates)   a name that matches no/many live kernels. Never ran.
+  PeerUnavailable            no kernel is running there, or it predates peers.
+                             Never ran.
+  PeerRefused(reason, code, data)
+                             the peer declined before running anything. Never ran.
+                             reason: "unresolved" (name not found, not callable,
+                             import failed; data has the traceback), "bad_args"
+                             (the arguments do not bind to the signature),
+                             "cycle", "depth", "self".
+  PeerCallError              it ran and raised, or returned something that cannot
+                             travel. Carries remote_type, remote_message,
+                             remote_traceback, output (a 4 KB preview of what it
+                             printed), spill_path (the full output, on the peer's
+                             disk, readable from here) and task_id. str() ends
+                             with the remote traceback.
+  PeerDisconnected(clean)    the connection ended before an answer. Whether it
+                             ran is UNKNOWN, so nothing is retried. clean=True
+                             means the peer said goodbye first (an orderly stop);
+                             False is a crash or a kill.
+
+All derive from PeerError, and are also attributes of peers
+(peers.PeerCallError, ...). A call is never retried once its request is written;
+reconnecting before that is fine. A graceful stop of the peer mid-call usually
+answers as PeerCallError with remote_type "CancelledError" (it drained the task),
+not PeerDisconnected.
+
+== Async: gather, timeouts, cancellation ==
+
+Each call opens a connection of its own, so calls are independent:
+
+  a, b = await asyncio.gather(peer.call("svc.slow", 1), peer.call("svc.slow", 1))
+
+runs both at once. At most 32 calls per Peer are in flight; more wait.
+
+There is no timeout= argument (it could clash with a remote parameter). Use the
+caller's own:
+
+  async with asyncio.timeout(30):
+      await peer.call("svc.long_job")
+
+Cancelling the awaiting task, by timeout, by task.cancel(), by the MCP cancel of
+a deferred cell, closes the connection; the peer notices and cancels the target.
+It stops at the target's next await. A sync (threaded) target cannot be
+interrupted: its task is cancelled and its result discarded, but the thread runs
+to completion. If B must survive the caller going away, have the target defer()
+the work inside B and return a handle.
+
+A long peer call from an exec cell defers the cell like any slow cell: the
+{task_id, done:false} reply, then a channel push with the value.
+
+== Identity ==
+
+Every call carries who asked, in the peer's terms:
+
+  {"kernel": {"cwd", "pid", "socket"},
+   "claude_session_id", "project_dir", "session_kind",   # who started it all
+   "task_id",                                            # the calling task
+   "chain": [{kernel, claude_session_id, task_id}, ...], # every hop, this one last
+   "pid_verified", "peer_pid"}                           # added by the peer
+
+Inside a function called this way, `import repld; repld.peer_caller()` returns
+it (None otherwise). Gists are modules: builtins are not globals there, so reach
+them as repld.peer_caller(), repld.peers, repld.notify. (current_session_id()
+is None inside a peer call: the connection is not a Claude session.)
+
+The callee records it: the CellStart header in `repld log` reads
+"# peer call from <project> (pid N verified, session S, task T)", `repld tasks`
+shows from=peer:<project>/<session>, and get_task returns it as `caller`.
+
+Only pid_verified is checked: the peer compares the claimed kernel pid with the
+connecting process (SO_PEERCRED). The Claude session id and everything else is a
+claim by a same-user process, for attribution, not authorization.
+
+A peer call made from inside a peer call keeps the originating Claude session and
+extends the chain, so a three-kernel path still names the human's session.
+A defer() started inside a peer call is ambient on the peer: its completion push
+goes to the peer's own sessions, and it keeps the caller.
+
+== Cycles ==
+
+A call whose chain already contains the target kernel is refused ("cycle"), as is
+a call to your own kernel ("self") and a chain 8 kernels deep ("depth"). A -> B -> A
+fails in B with PeerRefused, which A sees as PeerCallError(remote_type
+"PeerRefused"). These calls would not deadlock (each side awaits, nothing blocks a
+loop); refusing keeps every chain a simple path, so "who asked" is never ambiguous.
+
+== A peer that is not running ==
+
+By default a stopped peer is PeerUnavailable, and the message names the fix:
+`repld --project DIR start`. Starting someone else's kernel is a decision, so a
+call does not do it unasked.
+
+  peer = peers.get("/home/me/voice-api", start=True)
+
+start=True makes the first call start that project's kernel if none is up:
+`python -m repld --project DIR start` as a subprocess (60 s), so it binds to its
+own ./.venv. The environment is cleaned first: REPLD_BOUND, REPLD_SOCKET,
+REPLD_PROJECT*, REPLD_OWNER_PID, VIRTUAL_ENV, PYTHONPATH and every variable this
+kernel read from its own .env are dropped, so the new kernel does not run in the
+wrong venv or inherit this project's secrets. start=True needs a path or a live
+name, since a name is looked up in the live registry.
+
+Use a path for services you start deliberately; a worktree path is a different
+project from its main checkout.
+
+== Typed shims (stubs) ==
+
+Calling by string works, but you get no signatures or completion. Generate a local
+gist whose functions forward to the peer:
+
+  repld gist stub voice-api voice                      # all public functions
+  repld gist stub voice-api voice.transcribe,detect    # just these
+  repld gist stub voice-api voice --as vo --start      # name it; its calls start a stopped peer
+
+  import voice
+  text = await voice.transcribe("/tmp/a.wav", lang="en")
+
+The stub is read from the peer's AST signatures (no import there), is ordinary
+async def with the same parameters, kinds (positional-only, keyword-only, *args,
+**kw), annotations and literal defaults. A default that is not a literal (a call
+or a name) cannot be copied, so the stub uses a sentinel and leaves that argument
+out of the forwarded call, and the peer applies its own default. It forwards what
+it was given and nothing else.
+
+Only public functions of a gist are stubbed (classes cannot cross as JSON). The
+stub carries a __repld_peer_stub__ marker and a header: regenerate, do not edit.
+
+  repld gist stub --check           every stub here: ok, stale or unchecked
+  repld gist stub --check voice     one
+
+--check re-reads each stub's peer and names the functions whose signature changed
+or vanished ("transcribe: signature changed"); exit 1 if any stub is stale. A
+peer that is not running is "unchecked", never "ok". Regenerate with
+`repld gist stub ... --force`; --force overwrites only an existing stub, never a
+hand-written gist. `repld gist list` marks stubs ("stub -> voice-api (voice)").
+
+== Writing the callee ==
+
+Nothing to declare: public functions in a gist, or functions in repld_init.py, are
+callable. Keep the contract in mind:
+  - arguments and return are JSON; return a path for bulk data;
+  - prefer async def for I/O so it runs on the loop, otherwise it takes a thread;
+  - to learn who asked: repld.peer_caller();
+  - print() goes to the peer's own log and the task's spill, not to the caller;
+    it comes back only inside a PeerCallError (output, spill_path).
+  - a function that must not be reachable from outside should not be public in a
+    gist, or should check peer_caller() itself. Remember "private" here only
+    means "not advertised": any dotted name can be called.
+
+Inspecting a peer without calling it:
+  info = await peer.info()          kernel identity (cwd, pid, python, venv), its
+                                    public gists with function signatures, and the
+                                    callables defined in its __main__
+  await peer.inspect("svc.add")     what that name resolves to: kind, signature,
+                                    async, doc, module, file. Runs nothing.
+
+== Security ==
+
+Any process of the same user can call any dotted name in a kernel. This is exactly
+exec's reach, nothing more and nothing less: the kernel's unix socket was already
+that door, and peers is a typed way through it. Caller identity is a claim; only
+the kernel pid is verified. Do not treat a peer call as authenticated to a Claude
+session. There is no remote access: the socket is local and uid-protected, and
+this adds no TCP surface.
+
+== Not in scope ==
+
+No cross-kernel event subscription: a peer cannot be told when something happens
+in another kernel. Poll with @every, or have the callee notify() its own sessions.
+Live objects do not cross; return the data, or a path to it.
+
+== Reference ==
+
+  peers.list() -> list[dict]
+  peers.get(target, *, start=False) -> Peer
+  await peer.call(target, /, *args, **kwargs) -> JSON value
+  await peer.info() -> dict
+  await peer.inspect(target) -> dict
+  repld.peer_caller() -> dict | None          (inside a call made to this kernel)
+  peers.PeerError / PeerNotFound / PeerUnavailable / PeerRefused / PeerCallError
+  / PeerDisconnected
+  repld gist stub <peer> <gist>[.fn,...] [--as NAME] [--global] [--start] [--force]
+  repld gist stub --check [NAME...]
+"""
+
+
 def _deps_hint() -> str:
     """The dependency paragraph. Reads cwd only — no kernel needed."""
     if (Path.cwd() / "uv.lock").exists():
@@ -1434,7 +1713,7 @@ def static_instructions() -> str:
     """
     # The join-a-list shape deliberately mirrors build_instructions below.
     return "\n\n".join(  # noqa: FLY002
-        [_EXEC_MODEL, _GISTS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
+        [_EXEC_MODEL, _GISTS_MODEL, _PEERS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
     )
 
 
@@ -1470,6 +1749,7 @@ def build_instructions() -> str:
             + " — call directly as MCP tools (no exec needed)."
         )
 
+    parts.append(_PEERS_MODEL)
     parts.append(_deps_hint())
     parts.append(_PLAYBOOK)
     parts.append(_reference())
@@ -1524,6 +1804,7 @@ Commands:
   repld gist rm NAME       Unlink a gist (--stale drops dead links + registry entries)
   repld gist list          Show local + linked gists
   repld gist lint [NAME]   Check gist(s) for common authoring gaps
+  repld gist stub PEER GIST  Typed shims that call another project's kernel
   repld browser ARGS...    Re-exec with browser deps (duckdb/websockets/pillow)
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
@@ -1532,6 +1813,7 @@ Topics:
   browser   Tab and Browser Python API
   gists     Auto-reloading module directories
   gates     ask / confirm / choose + notify
+  peers     Call another project's kernel as an awaitable service
 """
 
 
@@ -1840,6 +2122,8 @@ Writing gists:
   multiple tasks can interleave, no "loop blocked" warnings.
   Sync gists work (auto-threaded) but can't interleave with async work.
   Set __repld_usage__ = "sd = await SD.connect()" for a custom listing line.
+  A gist that calls another project's kernel is generated, not written:
+  `repld gist stub <peer> <gist>` (see the peers topic).
 """,
     "gates": """\
 await ask(prompt, *, tab=None, default=None, timeout=None)      → str
@@ -1882,6 +2166,31 @@ current_session_id()
   exclude= take. None with nothing to attribute to: an ambient context
   (repld_init.py, an @every tick, a bare kernel REPL) or a connected
   client with no Claude Code identity.
+""",
+    "peers": """\
+peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]
+peers.get(target, *, start=False)             -> Peer    sync; a path, or the basename of one live kernel
+await peer.call(target, /, *args, **kwargs)   -> JSON value; runs the dotted name in THEIR kernel
+await peer.info()                             -> {peer_protocol, kernel, gists, main}
+await peer.inspect(target)                    -> {target, kind, signature, async, doc, module, file}
+peer.cwd, peer.name, peer.start               the resolved directory, its basename, whether a call may start it
+
+Errors, all PeerError (also reachable as peers.PeerCallError, ...):
+  PeerNotFound(candidates)  PeerUnavailable   never ran (no/many live kernels; none running)
+  PeerRefused(reason)       never ran: unresolved | bad_args | cycle | depth | self
+  PeerCallError             ran and raised: remote_type, remote_message,
+                            remote_traceback, output, spill_path, task_id
+  PeerDisconnected(clean)   unknown whether it ran; never retried
+
+Timeouts and cancellation are the caller's own: asyncio.timeout(), task.cancel();
+the target is cancelled on the other side. Bulk data goes by file path (JSON, 8 MiB).
+repld.peer_caller() -> dict | None     who called this kernel, inside a peer call.
+
+repld gist stub <peer> <gist>[.fn,...] [--as NAME] [--global] [--start] [--force]
+repld gist stub --check [NAME...]      typed async shims; --check reports drift (exit 1)
+
+Resolution, errors, identity, cold peers, stubs and the security note:
+repld://docs/peers.
 """,
     "migration": """\
 Why a repld project has no state files (0.1.x → 0.2).
@@ -1927,7 +2236,8 @@ def _reference() -> str:
         f"Reference: `repld help <topic>` — topics: {', '.join(sorted(_TOPICS))}\n"
         "Read repld://docs/guide for exec patterns and gist conventions. "
         "Read repld://docs/browser for the full browser API and internals.\n"
-        "Read repld://docs/production when graduating gists to FastMCP/FastAPI."
+        "Read repld://docs/production when graduating gists to FastMCP/FastAPI.\n"
+        "Read repld://docs/peers before calling another project's kernel."
     )
 
 
@@ -2141,6 +2451,13 @@ Injected into __main__:
   current_session_id()         claude_session_id of whoever triggered the
                                code currently running, or None if there's
                                nothing to attribute to.
+  peers                        find and call other projects' kernels:
+                               await peers.get("voice-api").call("gist.fn", ...)
+                               runs it in THEIR kernel, returns JSON. Read
+                               repld://docs/peers before using it.
+  peer_caller()                inside a call another kernel made to this one:
+                               who asked (kernel, Claude session, call chain);
+                               None otherwise.
   defer(coro, label=)          fire-and-forget; channel push on completion
   every(seconds, delay=0)(fn)  periodic ticker; fn.cancel() stops it.
                                delay= defers the first tick — a watchdog
