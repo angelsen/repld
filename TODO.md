@@ -151,8 +151,9 @@ infinite scroll.
 - [x] **Auto-attach inheritance has no live test.** Done (`phase_6_auto_attach_owner`): it found a
   popup attaching at `''` took its opener's owner and never switched when the URL matched a
   watched pattern; `owner_from_opener` now lets the pattern watcher replace it.
-- [ ] **`set_files` probe against a real hidden tab.** The 5 s bound (`_files_probe_timeout`) is
-  verified only against a fake tab.
+- [x] **`set_files` probe against a real hidden tab.** Done (`phase_6_set_files_hidden`): a merely
+  backgrounded tab is not throttled and verifies normally; only `Page.setWebLifecycleState`
+  `frozen` stalls the probe, which then returns the 'not verified' note at the 5 s bound.
 - [ ] **To check out: typed call between project kernels (a peer session's proposal).** Today only
   `repld --project DIR exec 'CODE'` crosses kernels: code strings are fragile (multi-line
   f-strings fail before running), results are printed reprs, and siblings in `status --json`

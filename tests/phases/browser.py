@@ -281,7 +281,7 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
                 raise RuntimeError("Cannot reach Chrome on port 3333: refused")
 
         b = Browser(port=3333)
-        b._connected = True  # stale: was connected, Chrome died since
+        b._connected = True         # stale: was connected, Chrome died since
         b._session = _DeadSocket()  # type: ignore[assignment]
         try:
             await b._ensure_connected()
@@ -383,7 +383,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     def _stocked_pool() -> "BrowserPool":
         pool = BrowserPool()
         dead = _Dead(port=1111)
-        dead._connected = True  # sorts first, looks connected, isn't
+        dead._connected = True                           # sorts first, looks connected, isn't
         dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
             "dead-target", "http://dead/"
         )
@@ -473,7 +473,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute  # type: ignore[assignment]
+        session.execute = fake_execute     # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -569,7 +569,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
@@ -2711,7 +2711,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",  # bare tag — the regression
+        "main",    # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",
@@ -4409,4 +4409,71 @@ def phase_6_every_tab_fusion(kernel: Kernel) -> None:
 
         h.exec("_tab_fuse.cancel()")
     finally:
+        h.close()
+
+
+def phase_6_set_files_hidden(kernel: Kernel) -> None:
+    """set_files on a real backgrounded tab verifies readability; on a frozen one the
+    bounded probe reports instead of hanging or raising."""
+    if not _chrome_ready("phase 6 set_files hidden"):
+        return
+    import pathlib
+    import tempfile
+
+    h = _BridgeHarness(kernel)
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        f.write(b"hello")
+    path = f.name
+
+    def _set_files(tid: str) -> tuple[float, str]:
+        h.tool(
+            "browser_js",
+            {"target": tid, "code": "document.getElementById('f').click(); 1"},
+        )
+        t0 = time.monotonic()
+        text = content_text(
+            h.tool("browser_set_files", {"target": tid, "paths": [path]})
+        )
+        return time.monotonic() - t0, text
+
+    def _lifecycle(tid: str, state: str) -> None:
+        h.tool(
+            "browser_cdp",
+            {
+                "target": tid,
+                "method": "Page.setWebLifecycleState",
+                "params": {"state": state},
+            },
+        )
+
+    frozen = ""
+    try:
+        hidden = h.open_tab("<input type=file id=f>")
+        frozen = h.open_tab("<input type=file id=f>")
+        h.open_tab("<p>front</p>")  # a newer tab backgrounds both
+        vis = content_text(
+            h.tool("browser_js", {"target": hidden, "code": "document.visibilityState"})
+        )
+        assert_true("hidden" in vis, f"the first tab is really backgrounded ({vis!r})")
+
+        took, text = _set_files(hidden)
+        assert_true(
+            f"1 file(s) set on {hidden}" in text and "not verified" not in text,
+            f"a backgrounded tab's probe still verifies ({text[:200]!r})",
+        )
+        assert_true(took < 4, f"and answers well inside the bound ({took:.1f}s)")
+        print("  ✓ set_files probe: a real backgrounded tab verifies, no note")
+
+        _lifecycle(frozen, "frozen")
+        took, text = _set_files(frozen)
+        assert_true(
+            f"1 file(s) set on {frozen}" in text and "not verified" in text,
+            f"a frozen tab's stalled probe reports instead of raising ({text[:200]!r})",
+        )
+        assert_true(took < 15, f"and returns near the 5 s bound ({took:.1f}s)")
+        print("  ✓ set_files probe: a frozen tab returns the 'not verified' note")
+    finally:
+        if frozen:
+            _lifecycle(frozen, "active")
+        pathlib.Path(path).unlink(missing_ok=True)
         h.close()
