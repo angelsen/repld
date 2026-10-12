@@ -1442,7 +1442,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
 
     import repld as _repld_mod
 
-    from . import runtime
+    from . import peer, runtime
 
     _every = _make_every(loop)
     _defer = _make_defer(loop)
@@ -1457,6 +1457,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         "claude_sessions": _claude_sessions,
         "current_session_id": _current_session_id,
         "peer_caller": tasks.current_caller,
+        "peers": peer.peers,
     }
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)
