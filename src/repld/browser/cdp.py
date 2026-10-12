@@ -1050,10 +1050,19 @@ class CDPSession:
         )
 
     def _crashed_error(self) -> TabCrashedError:
-        return TabCrashedError(
-            f"tab {self.port}:{self.chrome_target_id[:6].lower()} has crashed; "
-            "browser_navigate(target, url) reloads it"
-        )
+        short_id = f"{self.port}:{self.chrome_target_id[:6].lower()}"
+        return TabCrashedError(f"tab {short_id} has crashed; {self.reload_hint()}")
+
+    def reload_hint(self) -> str:
+        """The command that revives this target after a crash."""
+        short_id = f"{self.port}:{self.chrome_target_id[:6].lower()}"
+        if self.target_info.get("type") == "iframe":
+            # browser_navigate refuses an iframe target without force=true.
+            return (
+                f"browser_navigate({short_id}, url, force=true) reloads the frame, "
+                "or navigate its parent page"
+            )
+        return f"browser_navigate({short_id}, url) reloads it"
 
     async def _race_dialog(self, call: Any) -> dict:
         """Await `call`, abandoning it if a human-owned dialog opens meanwhile.

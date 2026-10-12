@@ -140,8 +140,12 @@ infinite scroll.
   mutation report "the page crashed during this action" rather than a generic error.
 - [ ] **Crash/download edge cases, untested.** (a) A tab closed before `download_done`, and the
   256-entry `_downloads` cap evicting an entry mid-flight, both should degrade to a broadcast.
-  (b) A crashed out-of-process iframe: does the parent get `tab_crashed`, and does the guard
-  wrongly block the parent's calls? Needs a live look.
+  (b) ~~A crashed out-of-process iframe: does the parent get `tab_crashed`, and does the guard
+  wrongly block the parent's calls? Needs a live look.~~ Done (`phase_6_oopif_crash`, SIGKILL on
+  the frame's own renderer, found by CPU spin): one `tab_crashed` naming the iframe target, to the
+  frame's watcher; the parent's js/screenshot are untouched; `browser_tree`/`post_observe` on the
+  parent used to fail with the child's `TabCrashedError` (fixed: the frame composes as a crashed
+  line); the hint now carries `force=true`, which `browser_navigate` needs on an iframe target.
   (c) `post_observe`'s "the page crashed during this action" has no live test: the lifecycle
   test kills an idle tab, so no mutation is in flight when the renderer dies.
 - [ ] **Auto-attach inheritance has no live test.** `_inherited_owner` (watch pattern, opener) is

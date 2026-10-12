@@ -314,11 +314,23 @@ async def compose_aria_tree(
 
     child_trees: dict[str, list[str]] = {}
     for child in iframe_children:
-        child_trees[child.target_id] = await build_aria_tree(child)
+        try:
+            child_trees[child.target_id] = await build_aria_tree(child)
+        except TabCrashedError as exc:
+            child_trees[child.target_id] = [f"({exc})"]
     return (
         _inline_iframe_lines(lines, iframe_children, child_trees),
         iframe_children,
     )
+
+
+async def _child_tree_sig(child: Tab, max_depth: int) -> tuple[list[str], TreeSig]:
+    """build_tree_sig for an OOPIF child; a crashed frame is a line in place,
+    not the healthy parent's failure."""
+    try:
+        return await build_tree_sig(child, max_depth=max_depth)
+    except TabCrashedError as exc:
+        return [f"({exc})"], Counter()
 
 
 def _inline_iframe_lines(
@@ -469,7 +481,7 @@ async def compose_tree(
 
     child_trees: dict[str, list[str]] = {}
     for child in iframe_children:
-        child_lines, child_sig = await build_tree_sig(child, max_depth=max_depth - 2)
+        child_lines, child_sig = await _child_tree_sig(child, max_depth - 2)
         child_trees[child.target_id] = child_lines
         sigs[child.target_id] = child_sig
     return (
@@ -1031,7 +1043,7 @@ async def pre_observe(tab: Tab, session: BrowserSession) -> PreObservation:
     try:
         _, tree_sigs[tab.target_id] = await build_tree_sig(tab, max_depth=8)
         for child in iframe_children:
-            _, tree_sigs[child.target_id] = await build_tree_sig(child, max_depth=6)
+            _, tree_sigs[child.target_id] = await _child_tree_sig(child, 6)
     except Exception:
         tree_sigs = None
     return PreObservation(
@@ -1345,7 +1357,7 @@ async def post_observe(
     if tab._session.crashed:
         # A mutation that ran on a crashed tab raised before reaching here, so this crash was this action's.
         raise TabCrashedError(
-            f"the page crashed during this action; browser_navigate({tab._session.port}:{tab._session.chrome_target_id[:6].lower()}, url) reloads it"
+            f"the page crashed during this action; {tab._session.reload_hint()}"
         )
 
     # Build composed tree — re-discovers iframes, which may differ from

@@ -805,9 +805,30 @@ def _crashed_tab_guard() -> None:
         port=9222,
         chrome_target_id="ABCDEF123",
         last_caller=None,
+        target_info={"type": "page"},
     )
     tab._crashed_error = lambda: cast(Any, CDPSession._crashed_error)(tab)
+    tab.reload_hint = lambda: cast(Any, CDPSession.reload_hint)(tab)
     execute = cast(Any, CDPSession.execute)
+
+    assert_true(
+        "browser_navigate(9222:abcdef, url)" in str(tab._crashed_error()),
+        "a crashed page names the plain navigate as its recovery",
+    )
+    tab.target_info = {"type": "iframe"}
+    assert_true(
+        "force=true" in str(tab._crashed_error()),
+        "a crashed iframe's hint carries force=true, which browser_navigate requires on it",
+    )
+    tab.target_info = {"type": "page"}
+
+    from repld.browser.observe import _child_tree_sig
+
+    lines, sig = asyncio.run(_child_tree_sig(NS(_session=tab, target_id="X"), 6))
+    assert_true(
+        len(lines) == 1 and "crashed" in lines[0] and not sig,
+        f"a crashed OOPIF child composes as one line and an empty signature ({lines!r})",
+    )
 
     async def _run() -> None:
         try:

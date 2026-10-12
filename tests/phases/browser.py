@@ -2052,6 +2052,204 @@ def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
         b.b.close()
 
 
+def _proc_cpu_ticks(pid: int) -> int:
+    """utime + stime of `pid` from /proc, 0 once it is gone."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return 0
+    fields = stat.rsplit(")", 1)[1].split()
+    return int(fields[11]) + int(fields[12])
+
+
+def _renderer_pid_of(h: "_BridgeHarness", tid: str) -> int | None:
+    """The throwaway Chrome renderer hosting `tid`, found by spinning its main
+    thread for 400 ms and reading which renderer's CPU time moved. None when
+    no single renderer stands out."""
+    before = {pid: _proc_cpu_ticks(pid) for pid in _test_renderer_pids()}
+    h.tool(
+        "browser_js",
+        {
+            "target": tid,
+            "code": "const t = Date.now(); while (Date.now() - t < 400) {} 1",
+        },
+    )
+    threshold = os.sysconf("SC_CLK_TCK") // 5  # half the spin's worth of ticks
+    moved = [
+        pid for pid, t0 in before.items() if _proc_cpu_ticks(pid) - t0 >= threshold
+    ]
+    return moved[0] if len(moved) == 1 else None
+
+
+def phase_6_oopif_crash(kernel: Kernel) -> None:
+    """Killing only a cross-origin iframe's renderer crashes that target alone:
+    one tab_crashed naming the iframe, the parent's js/screenshot/tree keep
+    working, and the iframe's own calls fail fast."""
+    if not _chrome_ready("phase 6 oopif crash"):
+        return
+    import http.server
+    import threading
+
+    port_box: list[int] = []
+
+    class _TwoSites(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path.startswith("/frame"):
+                body = b"<button id=inner>inner-button</button>"
+            else:
+                body = (
+                    f"<h1>parent-heading</h1><iframe id=f "
+                    f'src="http://localhost:{port_box[0]}/frame"></iframe>'
+                ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _TwoSites)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    port_box.append(port)
+    frame_url = f"http://localhost:{port}/frame"
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        resp = a.tool("browser_open", {"url": f"http://127.0.0.1:{port}/?{_MARKER}"})
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert m, f"browser_open carries no target ({content_text(resp)[:200]!r})"
+        parent = m.group(1)
+
+        # 127.0.0.1 and localhost are different sites, so the frame is its own
+        # target; watching its URL attaches it the way a real page's would be.
+        a.tool("browser_watch", {"pattern": f"{frame_url}*"})
+        frame = None
+        tabs = ""
+        deadline = time.monotonic() + 10
+        while frame is None and time.monotonic() < deadline:
+            tabs = content_text(a.tool("browser_tabs", {}))
+            m = re.search(
+                r"(\d+:[0-9a-f]+)\s+iframe\s+\S+\s+" + re.escape(frame_url), tabs
+            )
+            if m:
+                frame = m.group(1)
+            else:
+                time.sleep(0.2)
+        assert_true(
+            frame is not None,
+            f"the cross-site frame is a separate iframe target ({tabs!r})",
+        )
+        assert frame is not None
+
+        parent_pid = _renderer_pid_of(a, parent)
+        frame_pid = _renderer_pid_of(a, frame)
+        if parent_pid is None or frame_pid is None:
+            print(
+                f"  - oopif crash: no throwaway Chrome renderer to pin down (parent {parent_pid}, frame {frame_pid}), skipping"
+            )
+            return
+        assert_true(
+            parent_pid != frame_pid,
+            f"the frame runs out of process (parent pid {parent_pid}, frame pid {frame_pid})",
+        )
+        print(
+            f"  ✓ oopif crash: frame {frame} is out of process ({frame_pid} vs {parent_pid})"
+        )
+
+        os.kill(frame_pid, signal.SIGKILL)
+
+        pushes: list[dict] = []
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            try:
+                pushes.append(
+                    a.b.wait_notification(
+                        "notifications/claude/channel",
+                        kind="tab_crashed",
+                        timeout=deadline - time.monotonic(),
+                    )
+                )
+            except TimeoutError:
+                break
+        targets = [p["params"]["meta"].get("target") for p in pushes]
+        assert_eq(targets, [frame], "exactly one tab_crashed, naming the frame target")
+        try:
+            b.b.wait_notification(
+                "notifications/claude/channel", kind="tab_crashed", timeout=1
+            )
+            raise AssertionError("the bystander must not hear the frame's crash")
+        except TimeoutError:
+            pass
+        print("  ✓ oopif crash: one tab_crashed names the frame, to its watcher only")
+
+        resp = a.tool("browser_js", {"target": frame, "code": "1 + 1"}, timeout=8)
+        err = _tool_error_text(resp)
+        assert_true(
+            "crashed" in err and "force=true" in err,
+            f"the frame's own call fails fast, with a hint browser_navigate accepts ({err!r})",
+        )
+
+        resp = b.tool("browser_js", {"target": parent, "code": "1 + 1"}, timeout=8)
+        assert_true(
+            "2" in content_text(resp),
+            f"the parent's js still works ({str(resp)[:200]!r})",
+        )
+        t0 = time.monotonic()
+        resp = b.tool("browser_screenshot", {"target": parent}, timeout=15)
+        assert_true(
+            not _tool_error_text(resp) and time.monotonic() - t0 < 8,
+            f"the parent's screenshot still works ({str(resp)[:200]!r})",
+        )
+        for mode in ("ax", None):
+            args: dict = {"target": parent}
+            if mode:
+                args["mode"] = mode
+            resp = b.tool("browser_tree", args, timeout=15)
+            text = content_text(resp)
+            assert_true(
+                not _tool_error_text(resp),
+                f"browser_tree(mode={mode}) on the parent survives the frame's crash ({str(resp)[:300]!r})",
+            )
+            assert_true(
+                "parent-heading" in text and f"{frame}\n" in text + "\n",
+                f"browser_tree(mode={mode}) still shows the parent and its frame marker ({text!r})",
+            )
+            assert_true(
+                "crashed" in text,
+                f"browser_tree(mode={mode}) reports the crashed frame in place ({text!r})",
+            )
+        resp = b.tool("browser_click", {"target": parent, "selector": "h1"}, timeout=20)
+        text = content_text(resp)
+        assert_true(
+            not _tool_error_text(resp) and "crashed" in text,
+            f"an observed mutation on the parent survives, showing the crashed frame ({str(resp)[:300]!r})",
+        )
+        print(
+            "  ✓ oopif crash: parent js/screenshot/tree/click survive a crashed frame"
+        )
+
+        nav = b.tool(
+            "browser_navigate",
+            {"target": frame, "url": frame_url, "force": True},
+            timeout=40,
+        )
+        resp = b.tool("browser_js", {"target": frame, "code": "1 + 1"}, timeout=8)
+        tree = content_text(b.tool("browser_tree", {"target": parent, "mode": "ax"}))
+        assert_true(
+            "2" in content_text(resp)
+            and "inner-button" in tree
+            and "crashed" not in tree,
+            f"the hinted forced navigate revives the frame in place (nav {str(nav)[:200]!r}, js {str(resp)[:200]!r}, tree {tree!r})",
+        )
+        print("  ✓ oopif crash: browser_navigate(frame, url, force=true) revives it")
+    finally:
+        srv.shutdown()
+        a.close()
+        b.b.close()
+
+
 def phase_6_key_native_activation(kernel: Kernel) -> None:
     """tab.key("Enter") / tab.key("Space") trigger native button activation.
 
