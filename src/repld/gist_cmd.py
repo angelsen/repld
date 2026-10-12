@@ -8,6 +8,7 @@ Dispatched from `cli.py`'s _SUBCOMMANDS table.
 from pathlib import Path
 
 from . import cli_args, paths
+from .core_schemas import PEER_LIST_METHOD
 
 _GIST_TEMPLATE = '''\
 """{name} — TODO: one-line description."""
@@ -351,6 +352,155 @@ def _gist_fetch(argv: list[str]) -> int:
     return 0
 
 
+def _live_surface(peer_cwd: str) -> dict | None:
+    """The `peer/list` body of the kernel running for *peer_cwd*, or None when
+    none is. Anything else wrong with the peer is raised as a PeerError."""
+    from . import peer, sessions
+
+    row = peer.pick_session(peer.resolve_cwd(peer_cwd, []), sessions.list_sessions())
+    if row is None:
+        return None
+    msg = peer.request_sync(str(row["socket_path"]), PEER_LIST_METHOD, {})
+    peer.raise_for_error(msg, Path(peer_cwd).name)
+    return msg["result"]
+
+
+def _gist_stub_check(names: list[str]) -> int:
+    from . import peer, peer_stub
+
+    stubs: list[Path] = []
+    for d in paths.gist_dirs():
+        if d.is_dir():
+            stubs += [p for p in sorted(d.glob("*.py")) if peer_stub.read_stub(p)]
+    if names:
+        wanted = set(names)
+        unknown = wanted - {p.stem for p in stubs}
+        if unknown:
+            print(f"error: not a peer stub: {', '.join(sorted(unknown))}")
+            return 1
+        stubs = [p for p in stubs if p.stem in wanted]
+    if not stubs:
+        print("no peer stubs here")
+        return 0
+    failed = 0
+    for path in stubs:
+        try:
+            status, details = peer_stub.check(path, _live_surface)
+        except peer.PeerError as e:
+            status, details = "unchecked", [str(e)]
+        if status != "ok":
+            failed += 1
+        suffix = f": {'; '.join(details)}" if details else ""
+        print(f"  {path.stem:<20} {status}{suffix}")
+    if failed:
+        print(
+            f"\n{failed} stub(s) need attention; regenerate with `repld gist stub ... --force`"
+        )
+    return 1 if failed else 0
+
+
+def _gist_stub(argv: list[str]) -> int:
+    import datetime
+
+    from . import gist_links, peer, peer_stub
+
+    usage = _usage("stub")
+    if cli_args.wants_help(argv):
+        print(usage)
+        return 0
+    if "--check" in argv:
+        rest = [a for a in argv if a != "--check"]
+        bad = cli_args.check_args(
+            "repld gist stub --check", rest, usage, positionals=None
+        )
+        return bad if bad is not None else _gist_stub_check(rest)
+    to_global = "--global" in argv
+    force = "--force" in argv
+    start = "--start" in argv
+    rest = [a for a in argv if a not in ("--global", "--force", "--start")]
+    rename: str | None = None
+    if "--as" in rest:
+        i = rest.index("--as")
+        if i + 1 >= len(rest):
+            print("error: --as needs a value")
+            return 2
+        rename = rest[i + 1]
+        del rest[i : i + 2]
+    bad = cli_args.check_args("repld gist stub", rest, usage, positionals=2)
+    if bad is not None:
+        return bad
+    if len(rest) != 2:
+        print(usage)
+        return 2
+    peer_arg, spec = rest
+    gist, _, fn_spec = spec.partition(".")
+    wanted = [n for n in fn_spec.split(",") if n] if fn_spec else None
+    name = rename or gist
+    if not name.isidentifier():
+        print(f"error: '{name}' is not a valid Python identifier")
+        return 2
+
+    from . import sessions
+
+    try:
+        cwd = peer.resolve_cwd(peer_arg, sessions.list_sessions())
+        surface = _live_surface(cwd)
+        if surface is None:
+            print(
+                f"error: no kernel is running for {cwd}\n"
+                f"       start one with `repld --project {cwd} start`"
+            )
+            return 1
+        entry, functions = peer_stub.select_functions(surface, gist, wanted)
+    except (peer.PeerError, LookupError) as e:
+        print(f"error: {e}")
+        return 1
+
+    local_dir = paths.local_gists_dir()
+    global_dir = paths.global_gists_dir()
+    dest_dir = global_dir if to_global else local_dir
+    target = dest_dir / f"{name}.py"
+    if target.exists():
+        if not force:
+            print(f"error: {target} already exists (use --force to overwrite)")
+            return 1
+        if peer_stub.read_stub(target) is None:
+            print(f"error: {target} is not a peer stub; refusing to overwrite it")
+            return 1
+    try:
+        links = gist_links.read_links(local_dir)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
+    conflict = _shadow_conflict(
+        name,
+        to_global=to_global,
+        local_dir=local_dir,
+        global_dir=global_dir,
+        links=links,
+    )
+    if conflict:
+        print(f"error: {conflict}")
+        return 1
+
+    source = peer_stub.render_stub(
+        cwd,
+        gist,
+        entry.get("doc", ""),
+        functions,
+        date=datetime.date.today().isoformat(),  # noqa: DTZ011
+        start=start,
+    )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target.write_text(source, encoding="utf-8")
+    print(f"stubbed: {target}  ({len(functions)} function(s) from {cwd})")
+    for fn in functions:
+        print(f"  async {fn['name']}{fn['signature']}")
+    print("\nClasses and private names are not stubbed; only public functions.")
+    print(f"Use it: import {name}; await {name}.{functions[0]['name']}(...)")
+    return 0
+
+
 def _gist_add(argv: list[str]) -> int:
     from . import gist_deps, gist_links
 
@@ -512,7 +662,7 @@ def _gist_lint(argv: list[str]) -> int:
 
 
 def _gist_list(argv: list[str]) -> int:
-    from . import gist_links
+    from . import gist_links, peer_stub
     from . import gists as _gists
 
     usage = _usage("list")
@@ -532,7 +682,14 @@ def _gist_list(argv: list[str]) -> int:
     if local:
         print("local (./gists):")
         for name in local:
-            sig = _gists.signature_for_path(gists_dir / f"{name}.py")
+            gist_path = gists_dir / f"{name}.py"
+            stub = peer_stub.read_stub(gist_path)
+            if stub is not None:
+                peer_name = Path(stub["peer"]).name
+                fns = ", ".join(stub["functions"])
+                print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
+                continue
+            sig = _gists.signature_for_path(gist_path)
             print(f"  {name:<20} {sig}")
 
     # Linked gists, flagging stale entries. A corrupt manifest is an error,
@@ -605,6 +762,18 @@ _GIST_COMMANDS = {
         (
             "Like `new`, but seeded from someone else's working code.\n"
             "flags: --global (install to ~/.repld/gists), --name NAME, --force"
+        ),
+    ),
+    "stub": (
+        _gist_stub,
+        "stub <peer> <gist>[.fn,...] | --check [name...]",
+        "generate typed async shims for a peer kernel's gist",
+        (
+            "The shim forwards each call to the peer (see repld://docs/peers), so\n"
+            "its dependencies stay in the peer's own venv.\n"
+            "flags: --as NAME, --global, --start (the stub starts a stopped peer),\n"
+            "--force (regenerate an existing stub; never a hand-written gist).\n"
+            "--check reports stubs that have drifted from their peer; exit 1 if any."
         ),
     ),
     "add": (_gist_add, "add <name>", "link a gist registered in another project", ""),

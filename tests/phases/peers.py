@@ -97,6 +97,12 @@ _SVC = textwrap.dedent('''
         return await repld.peers.get(cwd).call("svc.whoami")
 
     CONST = 3
+
+    def opt(x, y=len("ab")):
+        return [x, y]
+
+    def shape(a, /, b, *rest, k=1, **extra):
+        return [a, b, list(rest), k, extra]
 ''')
 
 _INIT = textwrap.dedent("""
@@ -469,6 +475,100 @@ def _nested_identity(a: Bridge, b_path: Path, c_path: Path) -> None:
     print("  ✓ peers: a nested call keeps the originating session and the whole chain")
 
 
+def _gist_cli(a_cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["uv", "run", "--project", str(REPO), "repld", "gist", *args],
+        cwd=str(a_cwd),
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+
+def _stubs(a: Bridge, kernel: Kernel, b_path: Path) -> None:
+    gists = kernel.cwd / "gists"
+    stub_path = gists / "pstub.py"
+    hand_path = gists / "handmade.py"
+    svc_path = b_path / "gists" / "svc.py"
+    original = svc_path.read_text()
+    try:
+        r = _gist_cli(kernel.cwd, "stub", str(b_path), "svc", "--as", "pstub")
+        assert_eq(r.returncode, 0, f"gist stub exits 0 ({r.stdout}{r.stderr})")
+        assert_true(stub_path.is_file(), "the stub is written into ./gists")
+        assert_true(
+            "async add(a, b=1)" in r.stdout, "the listing shows the peer's signatures"
+        )
+
+        out = _run(
+            a,
+            "import importlib, sys\nsys.modules.pop('pstub', None)\nimport pstub\n"
+            "print(json.dumps([await pstub.add(2, b=3), await pstub.slow(0), await pstub.opt(1), "
+            "await pstub.opt(1, 7), await pstub.shape(1, 2), await pstub.shape(1, 2, 3, 4, k=5, z=6)]))",
+        )
+        assert_eq(
+            _last_json(out),
+            [5, "ok", [1, 2], [1, 7], [1, 2, [], 1, {}], [1, 2, [3, 4], 5, {"z": 6}]],
+            "stub calls forward faithfully (non-literal default left to the peer, *args, kw-only, **kw)",
+        )
+        listing = _gist_cli(kernel.cwd, "list").stdout
+        assert_true(
+            "stub -> svc-peer (svc)" in listing,
+            f"gist list marks the stub ({listing[:300]})",
+        )
+
+        r = _gist_cli(kernel.cwd, "stub", "--check")
+        assert_eq(r.returncode, 0, f"--check is clean when nothing moved ({r.stdout})")
+        assert_true("pstub" in r.stdout and "ok" in r.stdout, "--check names the stub")
+
+        svc_path.write_text(
+            original.replace("def add(a, b=1):", "def add(a, b=1, c=0):")
+        )
+        r = _gist_cli(kernel.cwd, "stub", "--check", "pstub")
+        assert_eq(r.returncode, 1, "--check exits 1 on drift")
+        assert_true(
+            "add: signature changed" in r.stdout,
+            f"--check names the drifted function ({r.stdout})",
+        )
+
+        r = _gist_cli(kernel.cwd, "stub", str(b_path), "svc", "--as", "pstub")
+        assert_eq(r.returncode, 1, "regenerating without --force is refused")
+        r = _gist_cli(
+            kernel.cwd, "stub", str(b_path), "svc", "--as", "pstub", "--force"
+        )
+        assert_eq(r.returncode, 0, f"--force regenerates a stub ({r.stdout})")
+        assert_eq(
+            _gist_cli(kernel.cwd, "stub", "--check").returncode,
+            0,
+            "--check is clean after regenerating",
+        )
+
+        hand_path.write_text('"""Mine."""\n\ndef f():\n    return 1\n')
+        r = _gist_cli(
+            kernel.cwd, "stub", str(b_path), "svc", "--as", "handmade", "--force"
+        )
+        assert_eq(r.returncode, 1, "--force never overwrites a hand-written gist")
+        assert_true("not a peer stub" in r.stdout, f"the refusal says why ({r.stdout})")
+        assert_true(
+            "return 1" in hand_path.read_text(), "the hand-written gist is untouched"
+        )
+
+        r = _gist_cli(kernel.cwd, "stub", str(b_path), "nosuchgist", "--as", "x")
+        assert_eq(r.returncode, 1, "an unknown gist is an error")
+        assert_true("svc" in r.stdout, "the error lists the gists the peer does have")
+    finally:
+        svc_path.write_text(original)
+        for path in (stub_path, hand_path):
+            path.unlink(missing_ok=True)
+        try:
+            a.exec("import sys\nsys.modules.pop('pstub', None)")
+        except Exception:
+            pass
+    print(
+        "  ✓ peers: gist stub forwards faithfully, --check names drift, --force never clobbers a hand-written gist"
+    )
+
+
 def _death(a: Bridge, tmp: Path) -> None:
     # (signal, target, what the caller sees). A graceful stop drains the task
     # and answers it as cancelled; only a callee that cannot drain (a held loop)
@@ -587,6 +687,7 @@ def phase_19_peers(kernel: Kernel) -> None:
         _async_behaviour(a, b_path)
         _cycles(a, kernel)
         _nested_identity(a, b_path, c_path)
+        _stubs(a, kernel, b_path)
         _death(a, tmp)
         _cold_peer(a, tmp)
     finally:

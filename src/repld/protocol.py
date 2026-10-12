@@ -887,7 +887,7 @@ class Dispatcher(BrowserDispatchMixin):
             return self._tasks_wait(rid, req.get("params", {}), session)
         if method == "tasks/cancel":
             return self._tasks_cancel(rid, req.get("params", {}))
-        # Kernel-to-kernel calls — bare JSON-RPC for the same reason as the
+        # Kernel-to-kernel calls: bare JSON-RPC for the same reason as the
         # methods above: only `peer.py` calls them, on a connection of its own
         # that never sends `initialize`. See `_peer` for what that implies.
         if method in (PEER_LIST_METHOD, PEER_INSPECT_METHOD, PEER_CALL_METHOD):

@@ -75,8 +75,8 @@ def resolve_target(target: str) -> Callable:
     """The callable behind *target*.
 
     The first segment is a `__main__` name if one exists, else an import through
-    `builtins.__import__` — `gists._GistImportHook` wraps that, which is what
-    reloads an edited gist, and `importlib.import_module` would bypass it.
+    `builtins.__import__` (`gists._GistImportHook` wraps that, which is what
+    reloads an edited gist, and `importlib.import_module` would bypass it).
     Later segments are `getattr`, falling back to a submodule import when the
     object is a module.
     """

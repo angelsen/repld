@@ -27,6 +27,7 @@ from repld import (
     paths,
     peer,
     peer_host,
+    peer_stub,
     render,
     tasks,
 )
@@ -1210,6 +1211,162 @@ def _peer_describe() -> None:
     print("  ✓ peers: function descriptors for stubs, call header rendering")
 
 
+def _peer_stubs() -> None:
+    import tempfile
+
+    U = peer.UNSET
+    assert_eq(peer.stub_args([1, 2], {}, {}), ([1, 2], {}), "plain positional")
+    assert_eq(
+        peer.stub_args([1, U], {"b": U, "c": 3}, {"k": U, "m": 4}, (), {"z": 5}),
+        ([1], {"c": 3, "m": 4, "z": 5}),
+        "UNSET dropped, kw merged",
+    )
+    assert_eq(
+        peer.stub_args([1], {"b": 2}, {}, (7, 8)),
+        ([1, 2, 7, 8], {}),
+        "*args forces named params positional",
+    )
+    _expect(TypeError, peer.stub_args, [U, 2], {}, {})
+    _expect(TypeError, peer.stub_args, [1], {"b": U}, {}, (9,))
+
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "g.py"
+        src.write_text(
+            '"""Sample gist."""\n'
+            "def f(a, /, b=len('x'), *rest, k=1, **extra) -> dict:\n"
+            '    """Doc for f."""\n'
+            "async def g(x: int = 3, *, y=None):\n"
+            "    pass\n"
+            "def h(q, r='s'):\n"
+            "    pass\n"
+        )
+        fns = gist_api.functions_for_path(src)
+    by = {f["name"]: f for f in fns}
+    assert_eq(
+        peer_stub.function_hash(by["f"]),
+        peer_stub.function_hash({**by["f"], "doc": "reworded"}),
+        "a reworded docstring is not drift",
+    )
+    assert_true(
+        peer_stub.function_hash(by["h"])
+        != peer_stub.function_hash({**by["h"], "params": by["h"]["params"][:1]}),
+        "a changed signature is drift",
+    )
+    assert_eq(
+        peer_stub.render_params(by["f"]["params"]),
+        "a, /, b=_UNSET, *rest, k=1, **extra",
+        "non-literal default becomes the sentinel",
+    )
+    assert_eq(
+        peer_stub.render_params(by["g"]["params"]),
+        "x: int = 3, *, y=None",
+        "annotated default, keyword-only marker",
+    )
+
+    code = peer_stub.render_stub(
+        "/nowhere/peer", "g", "Sample gist.", fns, date="2026-01-01", start=True
+    )
+    assert_true("\u2014" not in code, "generated stubs stay ASCII")
+    ns: dict = {}
+    exec(compile(code, "<stub>", "exec"), ns)  # noqa: S102
+
+    class _Fake:
+        def __init__(self) -> None:
+            self.seen: list = []
+
+        async def call(self, target, /, *args, **kwargs):
+            self.seen.append((target, list(args), kwargs))
+            return "r"
+
+    fake = _Fake()
+    ns["_PEER"] = fake
+    assert_eq(asyncio.run(ns["f"](1)), "r", "stub returns what the peer returns")
+    asyncio.run(ns["f"](1, 2, 3, k=4, z=5))
+    asyncio.run(ns["g"](y=7))
+    assert_eq(
+        fake.seen,
+        [
+            ("g.f", [1], {"k": 1}),
+            ("g.f", [1, 2, 3], {"k": 4, "z": 5}),
+            ("g.g", [], {"x": 3, "y": 7}),
+        ],
+        "forwarding honours kinds, defaults and the sentinel",
+    )
+    assert_eq(
+        ns["__repld_peer_stub__"]["peer"], "/nowhere/peer", "marker names the peer"
+    )
+    assert_true(
+        ns["f"].__doc__ == "Doc for f." and ns["h"].__doc__ == "Call g.h on the peer.",
+        "docstrings carry over",
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        stub_file = Path(d) / "gstub.py"
+        stub_file.write_text(code)
+        marker = peer_stub.read_stub(stub_file)
+        assert_true(
+            marker is not None and set(marker["functions"]) == {"f", "g", "h"},
+            "marker round-trips through the AST",
+        )
+        (Path(d) / "plain.py").write_text("x = 1\n")
+        assert_eq(
+            peer_stub.read_stub(Path(d) / "plain.py"),
+            None,
+            "an ordinary gist is not a stub",
+        )
+
+        surface = {"gists": [{"name": "g", "doc": "", "functions": fns}]}
+        assert_eq(
+            peer_stub.check(stub_file, lambda _cwd: surface),
+            ("ok", []),
+            "an unchanged peer is clean",
+        )
+        changed = [
+            {**f, "params": f["params"][:1]} if f["name"] == "h" else f
+            for f in fns
+            if f["name"] != "g"
+        ]
+        status, items = peer_stub.check(
+            stub_file, lambda _cwd: {"gists": [{"name": "g", "functions": changed}]}
+        )
+        assert_eq(
+            (status, sorted(items)),
+            ("stale", ["g: removed", "h: signature changed"]),
+            "drift names each function",
+        )
+        assert_eq(
+            peer_stub.check(stub_file, lambda _cwd: {"gists": []})[0],
+            "stale",
+            "a vanished gist is stale",
+        )
+        assert_eq(
+            peer_stub.check(stub_file, lambda _cwd: None)[0],
+            "unchecked",
+            "a stopped peer is unchecked, not clean",
+        )
+
+    _entry, picked = peer_stub.select_functions(surface, "g", ["h"])
+    assert_eq([f["name"] for f in picked], ["h"], "function subset")
+    assert_eq(
+        len(peer_stub.select_functions(surface, "g", None)[1]),
+        3,
+        "all public functions by default",
+    )
+    assert_true(
+        "nope"
+        in str(
+            _expect(LookupError, peer_stub.select_functions, surface, "g", ["nope"])
+        ),
+        "unknown function named",
+    )
+    assert_true(
+        "g"
+        in str(_expect(LookupError, peer_stub.select_functions, surface, "x", None)),
+        "unknown gist lists what exists",
+    )
+    print("  \u2713 peers: stub rendering, forwarding semantics, hashes and drift")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1234,3 +1391,4 @@ def phase_2_pure() -> None:
     _peer_host_vetting()
     _peer_responses()
     _peer_describe()
+    _peer_stubs()

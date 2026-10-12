@@ -42,7 +42,7 @@ from .core_schemas import (
     PEER_MAX_PAYLOAD_BYTES,
 )
 
-__all__ = ["Peer", "PeerError", "peers"]
+__all__ = ["UNSET", "Peer", "PeerError", "peers", "stub_args"]
 
 # One StreamReader line can carry a full 8 MiB value, escaped, plus the error
 # envelope around it.
@@ -224,6 +224,48 @@ def build_caller() -> dict | None:
         "task_id": task_id,
         "chain": [*(inherited.get("chain") or []), hop],
     }
+
+
+# Default of a stub parameter whose peer-side default is not a literal: "leave
+# this argument out and let the peer apply its own".
+UNSET: Any = object()
+
+_SKIPPED = (
+    "a parameter with a non-literal default was left out before a later positional "
+    "one; pass it explicitly"
+)
+
+
+def stub_args(
+    posonly: list,
+    named: dict,
+    kwonly: dict,
+    varargs: tuple = (),
+    varkw: dict | None = None,
+) -> tuple[list, dict]:
+    """Turn a generated stub's parameters into the ``(args, kwargs)`` to forward.
+
+    `UNSET` values are dropped. Positional-only ones can only be dropped from the
+    end, and with `*args` present every positional must be sent positionally,
+    because `*args` lands after them; a gap in either case cannot be expressed
+    and raises TypeError rather than shifting an argument into the wrong slot.
+    """
+    if varargs:
+        positional = [*posonly, *named.values()]
+        if any(v is UNSET for v in positional):
+            raise TypeError(_SKIPPED)
+        args = [*positional, *varargs]
+        kwargs: dict = {}
+    else:
+        args = list(posonly)
+        while args and args[-1] is UNSET:
+            args.pop()
+        if any(v is UNSET for v in args):
+            raise TypeError(_SKIPPED)
+        kwargs = {k: v for k, v in named.items() if v is not UNSET}
+    kwargs.update({k: v for k, v in kwonly.items() if v is not UNSET})
+    kwargs.update(varkw or {})
+    return args, kwargs
 
 
 def raise_for_error(msg: dict, name: str) -> None:
