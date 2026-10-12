@@ -251,7 +251,7 @@ def _json_types() -> None:
         (list[str], "array"),
         (dict[str, int], "object"),
         (int | None, "integer"),
-        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[list[int]], "array"),  # noqa: UP045 — the typing.Union spelling is the case
         (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
         (int | str, None),
         (Path, None),
@@ -704,6 +704,7 @@ def _tab_owner_routing() -> None:
         _pattern_owners={"*app.test*": watcher},
         find_by_target_id=lambda tid: parent if tid == "P" else None,
     )
+    fake._pattern_owner = lambda url: BrowserSession._pattern_owner(fake, url)  # type: ignore[attr-defined]
     inherit = cast(Any, BrowserSession._inherited_owner)
     assert_eq(
         inherit(fake, {"url": "https://app.test/x", "openerId": "P"}),

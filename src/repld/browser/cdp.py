@@ -719,7 +719,7 @@ class CDPSession:
         target_info: dict,
         port: int,
         loop: asyncio.AbstractEventLoop | None = None,
-        send_nowait: Any = None,      # BrowserSession.send_nowait bound method
+        send_nowait: Any = None,  # BrowserSession.send_nowait bound method
         browser_session: Any = None,  # owning BrowserSession, for re-attach
     ) -> None:
         self._send = send
@@ -739,6 +739,9 @@ class CDPSession:
         # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
         # (inherited by tabs it auto-attaches), cleared by `release()`.
         self.owner: Session | None = None
+        self.owner_from_opener = (
+            False  # set by auto-attach; a later pattern match may replace it
+        )
         # Set by `Tab.close` so the resulting targetDestroyed isn't echoed back as `tab_closed`.
         self.closing: bool = False
 
@@ -914,6 +917,7 @@ class CDPSession:
         instead); `shared` leaves it to the human, who may be using the tab.
         """
         self.mode = mode
+        self.owner_from_opener = False
         if mode != "agent":
             self.owner = None
         elif (origin := tasks.current_origin()) is not None:

@@ -281,7 +281,7 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
                 raise RuntimeError("Cannot reach Chrome on port 3333: refused")
 
         b = Browser(port=3333)
-        b._connected = True         # stale: was connected, Chrome died since
+        b._connected = True  # stale: was connected, Chrome died since
         b._session = _DeadSocket()  # type: ignore[assignment]
         try:
             await b._ensure_connected()
@@ -383,7 +383,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     def _stocked_pool() -> "BrowserPool":
         pool = BrowserPool()
         dead = _Dead(port=1111)
-        dead._connected = True                           # sorts first, looks connected, isn't
+        dead._connected = True  # sorts first, looks connected, isn't
         dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
             "dead-target", "http://dead/"
         )
@@ -473,7 +473,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute     # type: ignore[assignment]
+        session.execute = fake_execute  # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -569,7 +569,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
@@ -1891,6 +1891,103 @@ def phase_6_tab_owner(kernel: Kernel) -> None:
         b.b.close()
 
 
+def phase_6_auto_attach_owner(kernel: Kernel) -> None:
+    """An auto-attached popup is owned by the watcher of its matching pattern,
+    else by its opener's owner, so its pushes reach the right session."""
+    if not _chrome_ready("phase 6 auto-attach owner"):
+        return
+    import http.server
+    import threading
+
+    class _Pages(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<p>popup</p>")
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Pages)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    opener = a.open_tab("<p>opener</p>")
+    try:
+        b.tool("browser_watch", {"pattern": f"{base}/watched*"})
+
+        def _popup(path: str) -> str:
+            a.tool(
+                "browser_js",
+                {
+                    "target": opener,
+                    "code": f"(window.__p ||= []).push(window.open('{base}{path}')); 1",
+                },
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                for line in content_text(a.tool("browser_tabs", {})).splitlines():
+                    if f"{base}{path}" in line and (
+                        m := re.search(r"\d+:[0-9a-f]+", line)
+                    ):
+                        return m.group(0)
+                time.sleep(0.2)
+            raise AssertionError(f"popup {path} never attached")
+
+        def _heard(h: _BridgeHarness, tid: str, text: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel",
+                    kind="console_error",
+                    where=lambda m: text in m["params"]["content"],
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        def _err(driver: _BridgeHarness, tid: str, text: str) -> None:
+            driver.tool(
+                "browser_js", {"target": tid, "code": f"console.error('{text}'); 1"}
+            )
+
+        plain = _popup("/plain")
+        _err(b, plain, f"{_MARKER}-inherit")
+        assert_true(
+            _heard(a, plain, f"{_MARKER}-inherit", 10),
+            "an unmatched popup is owned by its opener's owner",
+        )
+        assert_true(
+            not _heard(b, plain, f"{_MARKER}-inherit", 2),
+            "the session that only drove it is not woken",
+        )
+        print("  ✓ auto-attach owner: popup inherits its opener's owner")
+
+        watched = _popup("/watched")
+        _err(a, watched, f"{_MARKER}-pattern")
+        assert_true(
+            _heard(b, watched, f"{_MARKER}-pattern", 10),
+            "a pattern-matched popup is owned by the pattern's watcher",
+        )
+        assert_true(
+            not _heard(a, watched, f"{_MARKER}-pattern", 2),
+            "the opener's owner loses to the pattern watcher",
+        )
+        print("  ✓ auto-attach owner: pattern watcher outranks the opener")
+    finally:
+        # Popup URLs carry no marker (earlier phases leave `*{_MARKER}*` watches that
+        # would claim them), so `close()` cannot find them.
+        a.tool(
+            "browser_js",
+            {"target": opener, "code": "(window.__p || []).forEach(w => w.close()); 1"},
+        )
+        srv.shutdown()
+        a.close()
+        b.b.close()
+
+
 def _proc_cmdline(d: Path) -> bytes:
     try:
         return (d / "cmdline").read_bytes()
@@ -2614,7 +2711,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",    # bare tag — the regression
+        "main",  # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",

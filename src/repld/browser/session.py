@@ -748,6 +748,10 @@ class BrowserSession:
             cdp = self.find_by_target_id(chrome_tid)
             if cdp is not None:
                 cdp.target_info = target_info
+                if cdp.owner_from_opener and (
+                    owner := self._pattern_owner(target_info.get("url", ""))
+                ):
+                    cdp.owner, cdp.owner_from_opener = owner, False
                 return
             # Not attached yet — check if it now matches a pattern
             matched_id = self._resolve_target(target_info)
@@ -839,13 +843,18 @@ class BrowserSession:
             fallback_broadcast=True,
         )
 
-    def _inherited_owner(self, target_info: dict) -> "Session | None":
-        """Owner for an auto-attached target: its opener's, else the watcher of
-        the first matching pattern (the order `_resolve_target` matched in)."""
-        url = target_info.get("url", "")
+    def _pattern_owner(self, url: str) -> "Session | None":
         for pattern, owner in self._pattern_owners.items():
             if fnmatch(url, pattern):
                 return owner
+        return None
+
+    def _inherited_owner(self, target_info: dict) -> "Session | None":
+        """Owner for an auto-attached target: the watcher of the first matching
+        pattern, else its opener's. A popup's URL is empty at attach, so the
+        opener's pick is provisional (`owner_from_opener`)."""
+        if (owner := self._pattern_owner(target_info.get("url", ""))) is not None:
+            return owner
         opener = self.find_by_target_id(target_info.get("openerId", ""))
         return opener.owner if opener is not None else None
 
@@ -856,6 +865,9 @@ class BrowserSession:
             url = target_info.get("url", "")
             if cdp is not None and cdp.owner is None:
                 cdp.owner = self._inherited_owner(target_info)
+                cdp.owner_from_opener = (
+                    cdp.owner is not None and self._pattern_owner(url) is None
+                )
             # Update pattern tracking
             for pattern, ids in self._watched_patterns.items():
                 if fnmatch(url, pattern):

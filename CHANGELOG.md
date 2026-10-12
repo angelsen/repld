@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A popup that opens at an empty URL and then navigates to a `browser_watch` pattern is now owned by that pattern's watcher, not its opener's owner, so its console errors and other pushes reach the session that asked to watch it. `phase_6_auto_attach_owner` is the live test.
 - A crashed out-of-process iframe no longer fails `browser_tree` and observed mutations on its healthy parent page with the frame's `TabCrashedError`; the frame is composed as a `(tab ... has crashed; ...)` line under its `iframe` marker instead. The crash hint for an iframe target now reads `browser_navigate(target, url, force=true)`, since `browser_navigate` refuses an iframe target without `force`.
 
 ### Removed

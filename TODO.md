@@ -148,8 +148,9 @@ infinite scroll.
   line); the hint now carries `force=true`, which `browser_navigate` needs on an iframe target.
   (c) `post_observe`'s "the page crashed during this action" has no live test: the lifecycle
   test kills an idle tab, so no mutation is in flight when the renderer dies.
-- [ ] **Auto-attach inheritance has no live test.** `_inherited_owner` (watch pattern, opener) is
-  covered by phase-2 fakes only; `phase_6_tab_owner` covers `open()`/`take()`.
+- [x] **Auto-attach inheritance has no live test.** Done (`phase_6_auto_attach_owner`): it found a
+  popup attaching at `''` took its opener's owner and never switched when the URL matched a
+  watched pattern; `owner_from_opener` now lets the pattern watcher replace it.
 - [ ] **`set_files` probe against a real hidden tab.** The 5 s bound (`_files_probe_timeout`) is
   verified only against a fake tab.
 - [ ] **To check out: typed call between project kernels (a peer session's proposal).** Today only
