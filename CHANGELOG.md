@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - A peer-call connection is never a Claude session: `claude_sessions()` does not list it, broadcasts skip it, and work it started reads as ambient. A `defer()` started inside a peer call reports to the callee's own sessions and keeps the caller.
 - The kernel's IPC listen backlog is 64 (was 8), since a `gather` of peer calls opens one connection per call.
+- `repld --help` lists `stub` among the `repld gist` verbs.
 
 ### Fixed
 

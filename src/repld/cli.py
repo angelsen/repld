@@ -38,7 +38,7 @@ _SUBCOMMANDS = {
     "gate": ("gate_cmd", "run_gate", "list / answer pending human gates"),
     "tasks": ("tasks_cmd", "run_tasks", "in-flight tasks and active tickers"),
     "help": ("help", "run_help", "agent/human docs"),
-    "gist": ("gist_cmd", "run_gist", "new / fetch / add / rm / list / lint gists"),
+    "gist": ("gist_cmd", "run_gist", "new / fetch / stub / add / rm / list / lint gists"),
     "browser": (
         "relaunch",
         "run_browser",

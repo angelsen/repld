@@ -128,6 +128,8 @@ Nothing to pass — open `claude` (or run `repld` for the live display) and the 
 | `browser_cdp` | Raw CDP passthrough. |
 | `browser_clear` | Reset captured network/console. |
 | `browser_detach` | Remove watch pattern, detach tabs. |
+| `browser_take` | Make a tab agent-owned: repld answers its dialogs and suppresses its file picker. |
+| `browser_release` | Make a tab shared again: dialogs and the file picker go back to the human. |
 | `browser_controls` | Discover a page's `window.controls` schema. |
 | `browser_invoke` | Invoke a control action, with the full observation pipeline. |
 | `browser_set_files` | Resolve an open native file-chooser prompt with local paths. |
