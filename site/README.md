@@ -1,43 +1,26 @@
-# Astro Starter Kit: Minimal
+# repld site
 
-```sh
-pnpm create astro@latest -- --template minimal
-```
+Marketing pages, docs and blog for repld. Astro + Starlight + Tailwind, published to GitHub Pages under `/repld`.
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Layout
 
-## 🚀 Project Structure
+- `src/pages/`: editorial pages (home, quickstart, playbook, controls, production) and the blog routes.
+- `src/content/docs/`: Starlight docs (guides and reference).
+- `src/content/blog/`: blog posts, schema in `src/content.config.ts`.
+- `src/scripts/reveal.ts`: shared Lenis + GSAP scroll-reveal; the home page adds its own boot preloader on top.
 
-Inside of your Astro project, you'll see the following folders and files:
+## Commands
 
-```text
-/
-├── public/
-├── src/
-│   └── pages/
-│       └── index.astro
-└── package.json
-```
+Run from `site/`:
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+| Command          | Action                             |
+| :--------------- | :--------------------------------- |
+| `pnpm install`   | Install dependencies               |
+| `pnpm dev`       | Dev server at `localhost:4321`     |
+| `pnpm build`     | Build to `./dist/`                 |
+| `pnpm preview`   | Serve the build locally            |
+| `pnpm astro check` | Type-check pages and content     |
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+## Deploy
 
-Any static assets, like images, can be placed in the `public/` directory.
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `pnpm install`             | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+`make deploy` from the repo root builds the site and pushes it to the `gh-pages` branch.

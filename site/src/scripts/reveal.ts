@@ -6,27 +6,32 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { SplitText } from 'gsap/SplitText';
 import Lenis from 'lenis';
 
+// Gate heading reveals on just the heading font, not every font. Read the real
+// hashed family off a heading so it survives Astro's per-build font hashing.
+export async function headingFontReady(selector: string): Promise<unknown> {
+	const el = document.querySelector(selector);
+	if (!el) return document.fonts.ready;
+	const cs = getComputedStyle(el);
+	const family = cs.fontFamily.split(',')[0].trim();
+	return document.fonts.load(`${cs.fontWeight || '800'} 1em ${family}`).catch(() => {});
+}
+
+export function initSmoothScroll() {
+	gsap.registerPlugin(ScrollTrigger, SplitText);
+	const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
+	lenis.on('scroll', ScrollTrigger.update);
+	gsap.ticker.add((t) => lenis.raf(t * 1000));
+	gsap.ticker.lagSmoothing(0);
+}
+
 export function initReveal() {
 	gsap.registerPlugin(ScrollTrigger, SplitText);
 	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	if (reduced) return;
 
-	// Gate heading reveals on just the heading font, not every font. Read the real
-	// hashed family off a heading so it survives Astro's per-build font hashing.
-	const headingFontReady = (): Promise<unknown> => {
-		const el = document.querySelector('.hero h1, [data-anim] h2');
-		if (!el) return document.fonts.ready;
-		const cs = getComputedStyle(el);
-		const family = cs.fontFamily.split(',')[0].trim();
-		return document.fonts.load(`${cs.fontWeight || '800'} 1em ${family}`).catch(() => {});
-	};
+	initSmoothScroll();
 
-	const lenis = new Lenis({ autoRaf: false, lerp: 0.12 });
-	lenis.on('scroll', ScrollTrigger.update);
-	gsap.ticker.add((t) => lenis.raf(t * 1000));
-	gsap.ticker.lagSmoothing(0);
-
-	headingFontReady().then(() => {
+	headingFontReady('.hero h1, [data-anim] h2').then(() => {
 		const heroSplit = SplitText.create('.hero h1', { type: 'lines', mask: 'lines' });
 		gsap.set('.hero h1', { visibility: 'visible' }); // lines start masked offscreen — no flash
 		gsap.from(heroSplit.lines, {
