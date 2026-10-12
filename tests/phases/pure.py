@@ -946,6 +946,54 @@ def _files_probe_timeout() -> None:
     )
 
 
+def _download_cap() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser.session import BrowserSession
+
+    announce = cast(Any, BrowserSession._announce_download)
+
+    async def _run() -> tuple[int, list]:
+        pushed: list = []
+
+        async def _noop(*_a: object) -> None:
+            return None
+
+        async def _push(kind: str, name: str, owner: object, params: dict) -> None:
+            pushed.append((kind, name))
+
+        fake = SimpleNamespace(
+            _downloads={},
+            _resolve_download_owner=_noop,
+            _push_download=_push,
+        )
+        for i in range(257):
+            announce(
+                fake,
+                "Browser.downloadWillBegin",
+                {"guid": f"g{i}", "suggestedFilename": f"f{i}"},
+            )
+        size = len(fake._downloads)
+        for guid in ("g0", "g256"):
+            announce(
+                fake, "Browser.downloadProgress", {"guid": guid, "state": "completed"}
+            )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return size, pushed
+
+    size, pushed = asyncio.run(_run())
+    assert_eq(size, 256, "the in-flight map is capped")
+    assert_true(
+        ("download_done", "") in pushed and ("download_done", "f256") in pushed,
+        f"an evicted download still announces its end, unnamed ({pushed!r})",
+    )
+    print(
+        "  ✓ downloads: the 256 cap evicts the oldest, whose done push degrades to unnamed"
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -963,5 +1011,6 @@ def phase_2_pure() -> None:
     _tab_owner_routing()
     _tab_lifecycle_pushes()
     _crashed_tab_guard()
+    _download_cap()
     _inflight_crash_failure()
     _files_probe_timeout()

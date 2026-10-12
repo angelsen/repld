@@ -138,8 +138,10 @@ infinite scroll.
   `Target.`/`Browser.`/`Fetch.`/`Inspector.` allowlist and the navigate/reload recovery; add a
   live screenshot/tree test on a killed tab. Also have `post_observe` after a non-navigate
   mutation report "the page crashed during this action" rather than a generic error.
-- [ ] **Crash/download edge cases, untested.** (a) A tab closed before `download_done`, and the
-  256-entry `_downloads` cap evicting an entry mid-flight, both should degrade to a broadcast.
+- [x] **Crash/download edge cases, untested.** (a) ~~A tab closed before `download_done`, and the
+  256-entry `_downloads` cap.~~ Done: `phase_6_download_tab_closed` (the owner still gets
+  `download_done`, targeted, not a broadcast) and `_download_cap` (an evicted entry's done push
+  goes out unnamed).
   (b) ~~A crashed out-of-process iframe: does the parent get `tab_crashed`, and does the guard
   wrongly block the parent's calls? Needs a live look.~~ Done (`phase_6_oopif_crash`, SIGKILL on
   the frame's own renderer, found by CPU spin): one `tab_crashed` naming the iframe target, to the

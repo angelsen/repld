@@ -2041,6 +2041,90 @@ def phase_6_crash_mid_action(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_download_tab_closed(kernel: Kernel) -> None:
+    """A tab closed while its download is in flight: the done push still arrives."""
+    if not _chrome_ready("phase 6 download tab closed"):
+        return
+    import http.server
+    import threading
+
+    release = threading.Event()
+
+    class _Slow(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            if self.path == "/file":
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition", "attachment; filename=repld-slow.bin"
+                )
+                self.send_header("Content-Length", "10")
+                self.end_headers()
+                self.wfile.write(b"12345")
+                self.wfile.flush()
+                release.wait(20)
+                self.wfile.write(b"67890")
+            else:
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"<a id=d href=/file>dl</a>")
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Slow)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+
+    def _named(m: dict) -> bool:
+        return m["params"]["meta"].get("filename") == "repld-slow.bin"
+
+    try:
+        resp = a.tool(
+            "browser_open",
+            {"url": f"http://127.0.0.1:{srv.server_address[1]}/?{_MARKER}"},
+        )
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert m, f"browser_open carries no target ({content_text(resp)[:200]!r})"
+        tid = m.group(1)
+        a.tool("browser_click", {"target": tid, "selector": "#d"})
+        a.b.wait_notification(
+            "notifications/claude/channel",
+            kind="download_started",
+            where=_named,
+            timeout=15,
+        )
+        a.exec(f"_t = await browser.get({tid!r})\nawait _t.close()")
+        release.set()
+        n = a.b.wait_notification(
+            "notifications/claude/channel",
+            kind="download_done",
+            where=_named,
+            timeout=10,
+        )
+        assert_true(
+            n["params"]["meta"].get("filename") == "repld-slow.bin",
+            f"the owner still gets download_done after its tab closed ({n!r})",
+        )
+        try:
+            b.b.wait_notification(
+                "notifications/claude/channel",
+                kind="download_done",
+                where=_named,
+                timeout=2,
+            )
+            raise AssertionError("a session that never owned the tab was woken")
+        except TimeoutError:
+            pass
+        print("  ✓ download tab closed: download_done still reaches the owner, only")
+    finally:
+        release.set()
+        srv.shutdown()
+        a.close()
+        b.b.close()
+
+
 def _proc_cmdline(d: Path) -> bytes:
     try:
         return (d / "cmdline").read_bytes()
