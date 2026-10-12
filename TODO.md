@@ -138,8 +138,9 @@ infinite scroll.
   `Target.`/`Browser.`/`Fetch.`/`Inspector.` allowlist and the navigate/reload recovery; add a
   live screenshot/tree test on a killed tab. Also have `post_observe` after a non-navigate
   mutation report "the page crashed during this action" rather than a generic error.
-- [ ] **Confirm the `[dialog:beforeunload]` broadcast-spam fix on a live kernel.** Unverified since
-  the 0.12.0 restart: attach a tab, trigger a `beforeunload`, check no broadcast dialog push.
+- [x] **Confirm the `[dialog:beforeunload]` broadcast-spam fix on a live kernel.** Done on the 0.12.0
+  kernel: an armed `onbeforeunload` on an agent tab, navigated away, shows only the observation's
+  `dialog:` line; no channel push, nothing in `repld log`.
 - [ ] **Docs site is owed a `make deploy`.** `gh-pages` last deployed 2026-09-30; `site/src/content/docs/**`
   and README have changed in many commits since (e.g. `abcf19e2`, `b1e39b4d`). Hard-blocked via
   Bash, so the user runs it.
@@ -169,6 +170,15 @@ infinite scroll.
   event subscription so a sibling is notified without a Claude session. Context:
   `claude_code_research/docs/features/phone-channel.md`. Check against "substrate, not
   library" and the per-cwd, localhost-only invariant before building anything.
+  **Design read (2026-10-12), no code yet:** the typed surface already exists. A sibling's gist
+  `_tool_*` functions are typed MCP tools with inferred schemas (`gists.scan_tools`/`resolve_tool`),
+  and its unix socket already speaks `tools/call`. So the call is one primitive that resolves a
+  sibling by cwd basename or path via `sessions.list_sessions()`, connects with
+  `ipc.connect_to_kernel`, and sends `tools/call`, returning JSON or the tool's typed error. No
+  `module.fn` string dispatch and no new protocol. That keeps the uid-protected socket as the only
+  door (never the dashboard's TCP port) and adds no per-service helper. Open: whether the caller's
+  session id should ride along so the callee's pushes route back; the event subscription
+  (`.events` file vs a socket subscribe) is unexamined and should be a separate step.
 - [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
   `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
