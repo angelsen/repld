@@ -138,6 +138,11 @@ infinite scroll.
   `Target.`/`Browser.`/`Fetch.`/`Inspector.` allowlist and the navigate/reload recovery; add a
   live screenshot/tree test on a killed tab. Also have `post_observe` after a non-navigate
   mutation report "the page crashed during this action" rather than a generic error.
+- [ ] **Confirm the `[dialog:beforeunload]` broadcast-spam fix on a live kernel.** Unverified since
+  the 0.12.0 restart: attach a tab, trigger a `beforeunload`, check no broadcast dialog push.
+- [ ] **Docs site is owed a `make deploy`.** `gh-pages` last deployed 2026-09-30; `site/src/content/docs/**`
+  and README have changed in many commits since (e.g. `abcf19e2`, `b1e39b4d`). Hard-blocked via
+  Bash, so the user runs it.
 - [x] **Crash/download edge cases, untested.** (a) ~~A tab closed before `download_done`, and the
   256-entry `_downloads` cap.~~ Done: `phase_6_download_tab_closed` (the owner still gets
   `download_done`, targeted, not a broadcast) and `_download_cap` (an evicted entry's done push
