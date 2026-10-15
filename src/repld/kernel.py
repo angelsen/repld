@@ -90,11 +90,10 @@ def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> Non
         "started_at": time.time(),
         # Which interpreter this kernel actually got, so `repld status` can
         # flag one that cannot import the project. No launch command is stored
-        # alongside it: every path that spawns a kernel now re-execs through
-        # `bind.rebind_exec` first, so `sys.executable` is already the bound
-        # interpreter at spawn time and a fresh `uv run` overlay is built on
-        # demand — replaying a recorded argv would only pin a cache directory
-        # that `uv cache prune` is free to delete.
+        # alongside it: `bind.repld_argv` gives every spawned kernel its own
+        # `uv run` overlay, so `executable` lives as long as the kernel does,
+        # and replaying a recorded argv would only pin a cache directory that
+        # `uv cache prune` is free to delete.
         "python": f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}",
         "executable": sys.executable,
     }

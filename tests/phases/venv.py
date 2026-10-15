@@ -243,6 +243,60 @@ def _stop_restart_race(tmp: Path) -> None:
     print("  ✓ stop/restart race: _wait_gone holds for a deactivating unit")
 
 
+def _spawned_kernel_owns_overlay(tmp: Path) -> None:
+    """A kernel started by a rebound `repld start` outlives that command's overlay.
+
+    `start` re-execs into `uv run --with…`, whose overlay venv uv deletes when
+    the command exits. The kernel it spawns used to inherit that interpreter as
+    `sys.executable` and run on a deleted path from then on.
+    """
+    from repld import paths
+
+    proj = tmp / "overlayproj"
+    proj.mkdir()
+    if _make_venv(proj) is None:
+        print("  ⚠ uv can't build a project venv — skipping overlay lifetime check")
+        return
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (bind.SENTINEL, "VIRTUAL_ENV", "REPLD_SOCKET", "UV_RUN_RECURSION_DEPTH")
+    }
+    lock = paths.lock_for(paths.socket_path(proj))
+    cmd = [sys.executable, "-m", "repld", "--project", str(proj)]
+    try:
+        started = subprocess.run(
+            [*cmd, "start"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        assert_eq(started.returncode, 0, f"repld start succeeded ({started.stderr!r})")
+        info = json.loads(lock.read_text())
+        exe = Path(info["executable"])
+        pid = int(info["pid"])
+        assert_true(exe.exists(), f"the kernel's interpreter outlives `start` ({exe})")
+        assert_true("builds-v0" in str(exe), f"...and it is a uv overlay ({exe})")
+        venv_env = dict(
+            line.split("=", 1)
+            for line in Path(f"/proc/{pid}/environ").read_text().split("\0")
+            if "=" in line
+        )
+        assert_eq(
+            Path(venv_env["VIRTUAL_ENV"]),
+            exe.parent.parent,
+            "VIRTUAL_ENV names the live overlay the kernel runs from",
+        )
+        print("  ✓ a spawned kernel owns its uv overlay past the spawner's exit")
+    finally:
+        subprocess.run(
+            [*cmd, "stop"], env=env, capture_output=True, timeout=60, check=False
+        )
+
+
 def phase_16_venv_binding(_kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-venv-"))
     orig_cwd = os.getcwd()
@@ -343,6 +397,24 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
         assert_eq(cmd[1:3], ["run", "--with-editable"], f"uses uv run (got {cmd})")
         assert_eq(cmd[-2:], ["repld", "bridge"], "re-runs the same subcommand")
         print("  ✓ uv_run_argv targets a local checkout, preserving argv")
+
+        # --- a child that outlives us needs an overlay of its own, but only
+        # when ours is one: unbound, sys.executable is the stable interpreter ---
+        assert_eq(
+            bind.repld_argv(["--no-display"]),
+            [sys.executable, "-m", "repld", "--no-display"],
+            "unbound: the running interpreter launches the child",
+        )
+        os.environ[bind.SENTINEL] = "1"
+        try:
+            assert_eq(
+                bind.repld_argv(["--no-display"]),
+                bind.uv_run_argv(["--no-display"]),
+                "rebound: the child gets its own uv run",
+            )
+        finally:
+            os.environ.pop(bind.SENTINEL, None)
+        print("  ✓ repld_argv re-runs under uv only when this process is rebound")
 
         # `rebind_exec` documents that failures degrade to an unbound kernel,
         # and it runs before `repld bridge` does anything — so malformed
@@ -453,6 +525,7 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
         _systemd_spawn_argv(tmp)
         _systemd_spawn_live(tmp)
         _stop_restart_race(tmp)
+        _spawned_kernel_owns_overlay(tmp)
     finally:
         os.chdir(orig_cwd)
         if orig_virtual_env is None:

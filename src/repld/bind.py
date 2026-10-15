@@ -223,6 +223,20 @@ def uv_run_argv(argv: list[str]) -> list[str] | None:
     return [uv, "run", *with_arg, "repld", *argv]
 
 
+def repld_argv(argv: list[str]) -> list[str]:
+    """Command that launches a long-lived ``repld <argv>`` from this process.
+
+    After ``rebind_exec``, ``sys.executable`` is the overlay of an ancestor
+    ``uv run`` that deletes it when it exits, so a child that outlives us gets
+    its own ``uv run`` — and with it an overlay that lives as long as it does.
+    """
+    if os.environ.get(SENTINEL):
+        cmd = uv_run_argv(argv)
+        if cmd is not None:
+            return cmd
+    return [sys.executable, "-m", "repld", *argv]
+
+
 def rebind_exec(argv: list[str]) -> None:
     """Re-exec ``repld <argv>`` under the project venv. Returns only on failure.
 

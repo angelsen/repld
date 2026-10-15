@@ -47,7 +47,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import paths
+from . import bind, paths
 
 # Names systemd sets *for* a unit, or that describe the caller's own unit.
 # Forwarding them would tell the new service it is something it isn't.
@@ -128,9 +128,10 @@ def _systemd_run_argv(
 def _kernel_argv(sock_path: Path) -> list[str]:
     """`python -m repld` rather than the `repld` console script: the script may
     not be on PATH in the environment a client hands us, but the interpreter
-    running us always has the package importable.
+    running us always has the package importable. `bind.repld_argv` swaps in a
+    `uv run` of its own when ours is a rebind overlay that dies with us.
     """
-    cmd = [sys.executable, "-m", "repld", "--no-display"]
+    cmd = bind.repld_argv(["--no-display"])
     # Only forward --socket when it isn't the default this cwd would resolve to
     # anyway; REPLD_SOCKET is inherited through the environment.
     if sock_path != paths.socket_path():

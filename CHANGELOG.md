@@ -14,6 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A kernel started by a project-bound bridge, `repld start` or `repld restart` no longer runs on an interpreter that uv has deleted. It was inheriting the spawner's `uv run` overlay as `sys.executable`, which vanished when the spawner exited; the kernel now gets a `uv run` of its own, so `sys.executable`, `start=True` peers and the lockfile's `executable` stay valid.
+
 - Mid-session gist dependency installs no longer fail with `No interpreter found at path` in a project-bound kernel: `uv pip install --python` (and the printed manual command) uses the base interpreter, not the `uv run` overlay's `sys.executable`, which uv can delete.
 
 ### Removed
