@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `browser_reconnected` is pushed only when a tab could not be re-attached (`N of M tab(s) restored, K lost`). A full restore stays silent and is still logged.
+
 ### Fixed
 
 ### Removed

@@ -253,9 +253,11 @@ class BrowserSession:
                     raise
 
                 # Re-attach old targets, preserving CDPSession state
+                restored = 0
                 for target_id, cdp in old_cdps.items():
                     try:
                         await self._reattach_core(cdp)
+                        restored += 1
                     except Exception as exc:
                         logger.debug(
                             "reconnect: re-attach %s failed: %s", target_id, exc
@@ -274,16 +276,25 @@ class BrowserSession:
                 await self.execute("Target.setDiscoverTargets", {"discover": True})
                 await self._enable_download_events()
 
+                lost = len(old_cdps) - restored
                 logger.info(
-                    "Reconnected to Chrome on port %d (%d sessions restored)",
+                    "Reconnected to Chrome on port %d (%d of %d sessions restored)",
                     self.port,
-                    len(self._sessions),
+                    restored,
+                    len(old_cdps),
                 )
-                push_channel(
-                    f"[browser_reconnected] Chrome on port {self.port}: "
-                    f"{len(self._sessions)} tab(s) restored",
-                    {"kind": "browser_reconnected", "port": str(self.port)},
-                )
+                # A full restore is silent on purpose: nothing for the agent to act on.
+                if lost:
+                    push_channel(
+                        f"[browser_reconnected] Chrome on port {self.port}: "
+                        f"{restored} of {len(old_cdps)} tab(s) restored, {lost} lost",
+                        {
+                            "kind": "browser_reconnected",
+                            "port": str(self.port),
+                            "restored": str(restored),
+                            "lost": str(lost),
+                        },
+                    )
             finally:
                 self._reconnecting = False
 

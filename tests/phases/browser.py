@@ -3692,25 +3692,52 @@ def phase_6_download_routing(kernel: Kernel) -> None:
 
 
 def phase_6_reconnect_push(kernel: Kernel) -> None:
-    """A dropped Chrome socket is healed by the next call and announced to everyone."""
+    """A dropped Chrome socket is healed by the next call; only a lost tab is announced."""
     if not _chrome_ready("phase 6 reconnect push"):
         return
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
+    drop = (
+        "for _br in list(browser.peek()._browsers.values()):\n"
+        "    await _br._session._ws.close()\n"
+    )
+
+    def _reconnected(h: _BridgeHarness, timeout: float) -> dict:
+        return h.b.wait_notification(
+            "notifications/claude/channel", kind="browser_reconnected", timeout=timeout
+        )
+
     try:
         tid = a.open_tab("<p>reconnect</p>")
-        a.exec(
-            "for _br in list(browser.peek()._browsers.values()):\n"
-            "    await _br._session._ws.close()\n"
-        )
+        a.exec(drop)
         resp = b.tool("browser_js", {"target": tid, "code": "1 + 1"}, timeout=45)
         assert_true("2" in content_text(resp), "the call after a dropped socket works")
         for h, who in ((a, "A"), (b, "B")):
-            n = h.b.wait_notification(
-                "notifications/claude/channel", kind="browser_reconnected", timeout=15
-            )
-            assert_true("restored" in n["params"]["content"], f"{who} hears it ({n!r})")
-        print("  ✓ reconnect: browser_reconnected broadcasts to every session")
+            try:
+                n = _reconnected(h, 2)
+            except TimeoutError:
+                continue
+            raise AssertionError(f"{who} heard a full restore ({n!r})")
+        print("  ✓ reconnect: a full restore pushes nothing")
+
+        keep = a.open_tab("<p>keep</p>")
+        a.open_tab("<p>reconnect-doomed</p>")
+        a.exec(drop)
+        with urllib.request.urlopen(f"{_cdp()}/json/list", timeout=2) as r:
+            doomed = [t["id"] for t in json.load(r) if "reconnect-doomed" in t["url"]]
+        assert_true(len(doomed) == 1, f"found the tab to close ({doomed!r})")
+        with urllib.request.urlopen(f"{_cdp()}/json/close/{doomed[0]}", timeout=2) as r:
+            r.read()
+        resp = b.tool("browser_js", {"target": keep, "code": "1 + 1"}, timeout=45)
+        assert_true(
+            "2" in content_text(resp), "the surviving tab answers after reconnect"
+        )
+        for h, who in ((a, "A"), (b, "B")):
+            n = _reconnected(h, 15)
+            assert_true("1 lost" in n["params"]["content"], f"{who} hears it ({n!r})")
+        print(
+            "  ✓ reconnect: a tab that could not be re-attached broadcasts to every session"
+        )
     finally:
         a.close()
         b.b.close()
