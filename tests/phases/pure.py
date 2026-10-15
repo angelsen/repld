@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from harness import assert_eq, assert_true
 
@@ -1387,6 +1387,152 @@ def _install_python() -> None:
     print("  ✓ gist_deps: uv --python is the base interpreter, not the overlay")
 
 
+def _screencast() -> None:
+    """screencast.py's ack, ordering and lifecycle rules, with no Chrome."""
+    import asyncio
+    import base64
+
+    from repld.browser import screencast
+
+    class _Cdp:
+        def __init__(self) -> None:
+            self._screencast = None
+            self.sent: list[tuple[str, dict | None]] = []
+            self.fail_start = False
+
+        async def send_nowait(self, method: str, params: dict | None = None) -> None:
+            self.sent.append((method, params))
+
+        async def execute(self, method: str, params: dict | None = None) -> dict:
+            if self.fail_start and method == "Page.startScreencast":
+                raise RuntimeError("target gone")
+            self.sent.append((method, params))
+            return {}
+
+    def _begin(cdp: Any, handler, **kw):
+        opts = {
+            "format": "jpeg",
+            "quality": 60,
+            "max_width": None,
+            "max_height": None,
+            "every_nth_frame": 1,
+        }
+        return screencast.begin(cdp, handler, **{**opts, **kw})  # type: ignore[arg-type]
+
+    def _frame(n: int) -> dict:
+        data = base64.b64encode(b"\xff\xd8frame%d" % n).decode()
+        return {"data": data, "sessionId": 100 + n, "metadata": {"deviceWidth": 800}}
+
+    c: Any = _Cdp()
+    for bad, label in [
+        ({"format": "gif"}, "unknown format"),
+        ({"quality": 101}, "quality out of range"),
+        ({"every_nth_frame": 0}, "every_nth_frame below 1"),
+    ]:
+        try:
+            _begin(c, lambda f: None, **bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"screencast.begin accepted {label}")
+    assert_eq(c._screencast, None, "a rejected start registers nothing")
+    sc = _begin(c, lambda f: None, format="png", max_width=640)
+    assert_eq(
+        sc.params,
+        {"format": "png", "everyNthFrame": 1, "maxWidth": 640},
+        "png omits quality; max_width is forwarded",
+    )
+    try:
+        _begin(c, lambda f: None)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("a second stream on one tab was accepted")
+    screencast.discard(sc)
+    assert_eq(c._screencast, None, "discard() forgets a stream whose start failed")
+
+    async def _flow() -> None:
+        cdp: Any = _Cdp()
+        seen: list[tuple[bytes, dict]] = []
+        gate = asyncio.Event()
+
+        async def handler(f: screencast.Frame) -> None:
+            seen.append((f.data, f.meta))
+            await gate.wait()
+
+        sc = _begin(cdp, handler)
+        screencast.on_frame(cdp, _frame(1))
+        screencast.on_frame(cdp, _frame(2))
+        await asyncio.sleep(0.05)
+        assert_eq(len(seen), 1, "handler calls never overlap: frame 2 waits its turn")
+        assert_eq(seen[0], (b"\xff\xd8frame1", {"deviceWidth": 800}), "decoded + meta")
+        assert_eq(cdp.sent, [], "no ack while the handler is still running")
+        gate.set()
+        await asyncio.sleep(0.05)
+        assert_eq(
+            [m for m in cdp.sent],
+            [
+                ("Page.screencastFrameAck", {"sessionId": 101}),
+                ("Page.screencastFrameAck", {"sessionId": 102}),
+            ],
+            "acks follow their handlers, in frame order, with Chrome's frame id",
+        )
+        assert_eq(sc.frames, 2, "both frames counted")
+
+        # A raising handler is acked too, or Chrome stops sending.
+        await sc.stop()
+
+        def bad(f: screencast.Frame) -> None:
+            raise ValueError("boom")
+
+        cdp.sent.clear()
+        bad_sc = _begin(cdp, bad)
+        screencast.on_frame(cdp, _frame(3))
+        await asyncio.sleep(0.05)
+        assert_eq(bad_sc.errors, 1, "handler errors are counted")
+        assert_eq(
+            cdp.sent,
+            [("Page.screencastFrameAck", {"sessionId": 103})],
+            "a raising handler's frame is still acked",
+        )
+
+        # After stop(): no handler call, no ack, and Chrome is told.
+        cdp.sent.clear()
+        await bad_sc.stop()
+        await bad_sc.stop()
+        screencast.on_frame(cdp, _frame(4))
+        await asyncio.sleep(0.05)
+        assert_eq(
+            [m[0] for m in cdp.sent], ["Page.stopScreencast"], "stop() is idempotent"
+        )
+        assert_eq(bad_sc.errors, 1, "a frame in flight when stop() ran is dropped")
+
+    asyncio.run(_flow())
+    print("  ✓ screencast: ordered handler calls, ack-after-handler, stop() final")
+
+    async def _restore() -> None:
+        cdp: Any = _Cdp()
+        sc = _begin(cdp, lambda f: None, quality=30)
+        await screencast.restore(cdp)
+        assert_eq(
+            cdp.sent[-1],
+            (
+                "Page.startScreencast",
+                {"format": "jpeg", "everyNthFrame": 1, "quality": 30},
+            ),
+            "restore re-issues the original parameters",
+        )
+        cdp.fail_start = True
+        await screencast.restore(cdp)
+        assert_true(not sc.active, "a stream that cannot resume goes inactive")
+        assert_true(isinstance(sc.error, RuntimeError), "...and says why")
+        cdp.sent.clear()
+        await screencast.restore(cdp)
+        assert_eq(cdp.sent, [], "restore with no stream sends nothing")
+
+    asyncio.run(_restore())
+    print("  ✓ screencast: restore replays params; a failed resume is visible")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1398,6 +1544,7 @@ def phase_2_pure() -> None:
     _json_types()
     _lint_helpers()
     _install_python()
+    _screencast()
     _sibling_counts_concurrency()
     _loop_watchdog()
     _starvation_classification()

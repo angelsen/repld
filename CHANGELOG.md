@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tab.screencast(handler)` streams a tab's repaints (`Page.startScreencast`) to a sync or async handler as `Frame(data, meta)`: one stream per tab, frames acked after the handler returns so a slow handler lowers the frame rate, never written to the event store, and replayed after a Chrome reconnect. The primitive for a live-view gist; repld ships no viewer.
+
 ### Changed
 
 ### Fixed

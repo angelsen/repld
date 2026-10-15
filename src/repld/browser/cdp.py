@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .. import bg, tasks
 from ..channel import push_channel
 from ..loopguard import LoopOwned, loop_only, on_loop
+from . import screencast
 from .har import _create_views
 
 if TYPE_CHECKING:
@@ -886,6 +887,10 @@ class CDPSession:
         self._injected_lock = asyncio.Lock()
         self._frame_seq: int = next(_frame_seq_counter)
 
+        # At most one stream per tab. Session-scoped in Chrome, so
+        # `_reattach_core` replays it; see screencast.py.
+        self._screencast: screencast.Screencast | None = None
+
     def _setup_schema(self) -> None:
         """Create events table, indexes, and HAR views."""
         self.db.execute(
@@ -1128,6 +1133,10 @@ class CDPSession:
             request_id = params.get("requestId") or params.get("networkId")
 
             target_id = self.target_info.get("targetId", "")
+
+            if method == "Page.screencastFrame":
+                screencast.on_frame(self, params)
+                return
 
             # Synchronous insert — microseconds, no contention. store_event
             # owns the counter (see there); the prune trigger stays here so it
@@ -1475,6 +1484,7 @@ class CDPSession:
             if self._db_closed:
                 return
             self._db_closed = True
+            self._screencast = None
             try:
                 self.db.close()
             except Exception:

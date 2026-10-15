@@ -246,6 +246,22 @@ tab.capture_bodies = True   # Fetch-based, captures login redirect bodies.
 tab.cdp(method, **params)
 ```
 
+## Screencast
+
+`tab.screencast(handler)` streams a tab's repaints (`Page.startScreencast`) to
+`handler(Frame)`, so a gist can serve a live view. It is a primitive: repld ships
+no viewer, and input goes back through `tab.cdp("Input.dispatchMouseEvent", ...)`.
+
+- **Never stored.** `CDPSession._handle_event` diverts `Page.screencastFrame` before
+  `store_event`; a JPEG per repaint would evict the network and console history.
+- **Ack follows the handler, and handler calls never overlap.** Chrome stops
+  sending once a few frames are un-acked, so a slow consumer lowers the frame
+  rate. Measured against a 0.5 s handler: about 2 fps, not three handlers at once.
+- **Session-scoped, so replayed.** Chrome drops the stream when the session
+  detaches; `_reattach_core` re-issues it (`screencast.restore`). A resume that
+  fails leaves `sc.active` False and the reason in `sc.error`.
+- **Backgrounded tabs do not repaint.** `await tab.front()` before streaming one.
+
 The shipped surface is much larger than this block — `fetch`, `key`, `tap`,
 `swipe`, `scroll`, `tree`, `wait_for`, `pin` and the gate methods all arrived
 after it was written. See the reference for those. What's worth recording here

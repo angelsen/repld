@@ -456,6 +456,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
             self._label_color = "#3b82f6"
             self._label_script_id = "dead-identifier"
             self._injected = {None: "stale-engine-handle"}
+            self._screencast = None
             self.sent: list[str] = []
 
         async def _enable_domains(self) -> None:
@@ -3741,6 +3742,119 @@ def phase_6_reconnect_push(kernel: Kernel) -> None:
     finally:
         a.close()
         b.b.close()
+
+
+def phase_6_screencast(kernel: Kernel) -> None:
+    """`tab.screencast` streams repaints, acks per frame, and survives a reconnect."""
+    if not _chrome_ready("phase 6 screencast"):
+        return
+    h = _BridgeHarness(kernel)
+    anim = (
+        "<script>setInterval(()=>{document.body.style.background="
+        "'rgb('+(Date.now()%256)+',100,150)'},20)</script>"
+    )
+    try:
+        tid = h.open_tab(anim)
+        out = h.exec(
+            "import asyncio\n"
+            f"_t = await browser.get({tid!r})\n"
+            "_n = [0]; _first = []\n"
+            "def _on(f):\n"
+            "    _n[0] += 1\n"
+            "    if not _first: _first.append((f.data[:2], f.meta.get('deviceWidth')))\n"
+            "_sc = await _t.screencast(_on)\n"
+            "await asyncio.sleep(2)\n"
+            '_rows = _t._session.query("SELECT COUNT(*) FROM events"'
+            " \" WHERE method = 'Page.screencastFrame'\")\n"
+            "try:\n"
+            "    await _t.screencast(_on)\n"
+            "    _twice = 'allowed'\n"
+            "except RuntimeError:\n"
+            "    _twice = 'refused'\n"
+            "print('SC1', _n[0], _first[0][0], _first[0][1] > 0, _rows[0][0], _twice)"
+        )
+        m = re.search(r"SC1 (\d+) (b'[^']*') (\w+) (\d+) (\w+)", out)
+        assert_true(m is not None, f"stream cell printed its summary ({out!r})")
+        assert m is not None
+        # Chrome stops sending after a few un-acked frames, so a count well past
+        # that is the proof that every frame is being acked.
+        assert_true(int(m.group(1)) >= 15, f"frames keep flowing: {m.group(1)}")
+        assert_eq(m.group(2), "b'\\xff\\xd8'", "frames are JPEGs")
+        assert_eq(m.group(3), "True", "frame metadata carries the device width")
+        assert_eq(m.group(4), "0", "no frame reaches the event store")
+        assert_eq(m.group(5), "refused", "a second stream on one tab is refused")
+        print("  ✓ screencast: JPEG frames flow, are acked, never stored; one per tab")
+
+        out = h.exec(
+            "_before = _n[0]\n"
+            "await _t.navigate('data:text/html,'"
+            f" + {anim!r} + '<p>second</p>')\n"
+            "await asyncio.sleep(1.5)\n"
+            "print('SC2', _n[0] - _before >= 5)"
+        )
+        assert_true("SC2 True" in out, f"frames continue across a navigation ({out!r})")
+
+        out = h.exec(
+            "await _sc.stop()\n"
+            "_n1 = _n[0]; await asyncio.sleep(0.7)\n"
+            "print('SC3', _sc.active, _n[0] - _n1 <= 1)"
+        )
+        assert_true(
+            "SC3 False True" in out, f"stop() ends the stream and the frames ({out!r})"
+        )
+        print("  ✓ screencast: survives navigation, stop() is final")
+
+        out = h.exec(
+            "_slow = [0]\n"
+            "async def _hold(f):\n"
+            "    _slow[0] += 1\n"
+            "    await asyncio.sleep(0.5)\n"
+            "_sc = await _t.screencast(_hold)\n"
+            "await asyncio.sleep(3)\n"
+            "await _sc.stop()\n"
+            "print('SC4', _slow[0])"
+        )
+        m = re.search(r"SC4 (\d+)", out)
+        assert_true(m is not None, f"slow-handler cell printed ({out!r})")
+        assert m is not None
+        # Handlers run one at a time, so a 0.5 s handler is ~2 fps; Chrome's
+        # un-acked window would otherwise let it run three at once.
+        assert_true(
+            2 <= int(m.group(1)) <= 7, f"slow handler throttles Chrome: {m.group(1)}"
+        )
+
+        out = h.exec(
+            "def _bad(f): raise ValueError('boom')\n"
+            "_sc = await _t.screencast(_bad)\n"
+            "await asyncio.sleep(1)\n"
+            "print('SC5', _sc.errors >= 3, _sc.active)\n"
+            "await _sc.stop()"
+        )
+        assert_true(
+            "SC5 True True" in out,
+            f"a raising handler is acked, stream goes on ({out!r})",
+        )
+        print("  ✓ screencast: a slow handler throttles, a raising one does not stall")
+
+        out = h.exec(
+            "_n[0] = 0\n"
+            "_sc = await _t.screencast(_on)\n"
+            "await asyncio.sleep(0.5)\n"
+            "for _br in list(browser.peek()._browsers.values()):\n"
+            "    await _br._session._ws.close()\n"
+            "await _t.js('1 + 1')\n"
+            "_n1 = _n[0]; await asyncio.sleep(2)\n"
+            "print('SC6', _sc.active, _sc.error, _n[0] - _n1 >= 5)",
+            timeout=60,
+        )
+        assert_true(
+            "SC6 True None True" in out,
+            f"the stream resumes under the new session after a reconnect ({out!r})",
+        )
+        h.exec("await _sc.stop()")
+        print("  ✓ screencast: replayed by _reattach_core after a dropped socket")
+    finally:
+        h.close()
 
 
 def phase_6_tab_mode(kernel: Kernel) -> None:

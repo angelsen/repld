@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .. import bg, tasks
 from ..channel import push_channel
 from ..loopguard import LoopOwned
-from . import inject
+from . import inject, screencast
 from .cdp import CDPSession, crash_blocks
 from .pin import BINDING_NAME, reapply_label
 
@@ -492,6 +492,7 @@ class BrowserSession:
         # was the one piece of per-session state this didn't restore — see
         # `pin.reapply_label` for why it stayed hidden behind the binding bug.
         await reapply_label(cdp)
+        await screencast.restore(cdp)
         # The injected-engine handle is session-scoped too, but as *cache*
         # rather than registration: the objectId minted under old_sid resolves
         # to nothing under new_sid, so drop it and let the next selector call

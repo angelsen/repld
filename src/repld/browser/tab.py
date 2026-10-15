@@ -20,7 +20,7 @@ from .. import bg
 from ..channel import push_kind
 from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
-from . import inject
+from . import inject, screencast
 from . import selector as selector_mod
 from .cdp import CDPSession, unresolved_dialog_error, unresolved_filechooser_error
 from .pin import (
@@ -2093,6 +2093,38 @@ class Tab(TabQueryMixin):
     async def cdp(self, method: str, **params: Any) -> dict:
         """Raw CDP passthrough."""
         return await self._exec(method, params if params else None)
+
+    async def screencast(
+        self,
+        handler: screencast.Handler,
+        *,
+        format: str = "jpeg",
+        quality: int = 60,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        every_nth_frame: int = 1,
+    ) -> screencast.Screencast:
+        """Stream this tab's repaints to `handler(Frame)`, sync or async.
+
+        One stream per tab. A frame is acked after its handler returns, so a
+        slow handler lowers the frame rate. A backgrounded tab does not
+        repaint: `await tab.front()` first.
+        """
+        sc = screencast.begin(
+            self._session,
+            handler,
+            format=format,
+            quality=quality,
+            max_width=max_width,
+            max_height=max_height,
+            every_nth_frame=every_nth_frame,
+        )
+        try:
+            await self._exec("Page.startScreencast", sc.params)
+        except BaseException:
+            screencast.discard(sc)
+            raise
+        return sc
 
     def __repr__(self) -> str:
         rc = " ready=confirmed" if self.ready_confirmed else ""

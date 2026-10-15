@@ -821,6 +821,16 @@ on an already-attached tab still reports the original attach's value.
   tab.cdp(method, **params)                                   → dict
       Raw CDP passthrough — escape hatch for anything not wrapped.
 
+  tab.screencast(handler, format="jpeg", quality=60, max_width=, max_height=, every_nth_frame=1)  → Screencast
+      Stream the tab's repaints to handler(Frame), sync or async; Frame has .data
+      (bytes) and .meta (deviceWidth/Height, scrollOffsetX/Y, timestamp). One
+      stream per tab. A frame is acked after its handler returns and handler
+      calls never overlap, so a slow handler lowers the frame rate instead of
+      queueing. Frames are never stored (tab.network()/console() are unaffected).
+      sc.stop() ends it; it survives navigation and a Chrome reconnect (sc.active,
+      sc.error say if it could not resume). A backgrounded tab does not repaint:
+      `await tab.front()` first.
+
 === Pin + gate bridge ===
 
   tab.pin(reason='', guard_unload=True)  → None
@@ -1918,6 +1928,7 @@ Tab (async unless noted):
   tab.cookies()                                           → list[dict]
   tab.http_client(base_url=None, **kwargs)                → httpx.AsyncClient (requires `http` extra; copies tab's cookies for plain concurrent HTTP calls)
   tab.cdp(method, **params)                               → dict
+  tab.screencast(handler, **opts)                         → Screencast (stream repaints to handler(Frame); acked per frame, never stored; sc.stop())
 
 Tab — pin + gate bridge (see repld://docs/browser for pill lifecycle + heartbeat detail):
   tab.pin(reason="", guard_unload=True)  → None  inject pill + guard (guard_unload=False for dev-loop tabs); idempotent
