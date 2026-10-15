@@ -141,9 +141,8 @@ infinite scroll.
 - [x] **Confirm the `[dialog:beforeunload]` broadcast-spam fix on a live kernel.** Done on the 0.12.0
   kernel: an armed `onbeforeunload` on an agent tab, navigated away, shows only the observation's
   `dialog:` line; no channel push, nothing in `repld log`.
-- [ ] **Docs site is owed a `make deploy`.** `gh-pages` last deployed 2026-09-30; `site/src/content/docs/**`
-  and README have changed in many commits since (e.g. `abcf19e2`, `b1e39b4d`). Hard-blocked via
-  Bash, so the user runs it.
+- [x] **Docs site is owed a `make deploy`.** Done 2026-10-12 (`gh-pages` `65e2f178`), with the peers
+  pages and the 0.13.0 README. Hard-blocked via Bash, so the user runs it.
 - [x] **Crash/download edge cases, untested.** (a) ~~A tab closed before `download_done`, and the
   256-entry `_downloads` cap.~~ Done: `phase_6_download_tab_closed` (the owner still gets
   `download_done`, targeted, not a broadcast) and `_download_cap` (an evicted entry's done push
