@@ -10,6 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.13.1] - 2026-10-15
+
+### Changed
+
 - `browser_reconnected` is pushed only when a tab could not be re-attached (`N of M tab(s) restored, K lost`). A full restore stays silent and is still logged.
 
 ### Fixed
@@ -18,7 +26,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Mid-session gist dependency installs no longer fail with `No interpreter found at path` in a project-bound kernel: `uv pip install --python` (and the printed manual command) uses the base interpreter, not the `uv run` overlay's `sys.executable`, which uv can delete.
 
-### Removed
 
 ## [0.13.0] - 2026-10-12
 
