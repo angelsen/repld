@@ -27,6 +27,7 @@ import os
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..loopguard import LoopOwned
 from .browser import Browser
@@ -45,6 +46,10 @@ __all__ = ["BrowserPool", "LazyBrowser"]
 
 logger = logging.getLogger(__name__)
 
+# Registry keys for browsers attached by URL start above the TCP port range, so
+# they can never shadow a local Chrome and still parse as a `key:hex` target ID.
+REMOTE_KEY_BASE = 65536
+
 
 class BrowserPool:
     """Manages multiple Browser instances across Chrome ports.
@@ -61,6 +66,16 @@ class BrowserPool:
         # connected it, and the loser was left in `self._browsers`' place with a
         # live WebSocket nothing would ever close.
         self._connect_lock = asyncio.Lock()
+        # url -> registry key; kept after a disconnect so a reconnect to the same
+        # URL gets its old key (and target IDs) back.
+        self._remote_keys: dict[str, int] = {}
+
+    def _remote_key(self, url: str) -> int:
+        key = self._remote_keys.get(url)
+        if key is None:
+            key = REMOTE_KEY_BASE + len(self._remote_keys)
+            self._remote_keys[url] = key
+        return key
 
     async def _ensure_any(self) -> None:
         """Auto-connect to the default port if no browsers are connected.
@@ -83,14 +98,34 @@ class BrowserPool:
             pass
 
     async def connect(
-        self, port: int | None = None, *, profile: str | None = None
+        self,
+        port: int | None = None,
+        *,
+        profile: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Browser:
         """Connect to a Chrome instance. Returns the Browser (new or existing).
 
         Pass profile=<user-data-dir> to resolve the port from that profile's
         DevToolsActivePort file — Chrome writes it when launched with
         --remote-debugging-port (including port 0 for an ephemeral port).
+
+        Pass url= to attach to a browser that is not on a local port: an
+        http(s) base (``https://host:9222``, discovered through its
+        /json/version) or a browser-level ``ws(s)://`` URL as a provider hands
+        it out. headers= goes on both requests. The Browser's key (the "port" in
+        its target IDs) is >= 65536, stable per url, and never persisted: the url
+        may carry a token.
         """
+        if url is not None:
+            if port is not None or profile is not None:
+                raise ValueError("connect(): url= excludes port= and profile=")
+            if urlsplit(url).scheme not in ("http", "https", "ws", "wss"):
+                raise ValueError(
+                    f"connect(url=): expected http(s) or ws(s), got {url!r}"
+                )
+            port = self._remote_key(url)
         if profile is not None:
             port_file = Path(profile).expanduser() / "DevToolsActivePort"
             try:
@@ -110,7 +145,11 @@ class BrowserPool:
             # be holding the object, and `_ensure_connected` on it either
             # reconnects in place (preserving its CDPSessions and their event
             # stores) or connects fresh, both of which beat orphaning it.
-            b = existing if existing is not None else Browser(port=port)
+            b = (
+                existing
+                if existing is not None
+                else Browser(port=port, url=url, headers=headers)
+            )
             await b._ensure_connected()
             self._browsers[port] = b
         self._save_hint()
@@ -224,7 +263,9 @@ class BrowserPool:
     @property
     def connected_ports(self) -> list[int]:
         """Ports whose Browser is currently connected (for hint persistence)."""
-        return [p for p, b in self._browsers.items() if b._connected]
+        return [
+            p for p, b in self._browsers.items() if b._connected and p < REMOTE_KEY_BASE
+        ]
 
     @property
     def tabs(self) -> Rows:

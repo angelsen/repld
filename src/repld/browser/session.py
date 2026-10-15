@@ -38,12 +38,29 @@ if TYPE_CHECKING:
 __all__ = ["BrowserSession"]
 
 
-def _fetch_version_info(port: int) -> dict:
+def _fetch_version_info(base: str, headers: dict[str, str] | None = None) -> dict:
     """Blocking /json/version fetch — call via asyncio.to_thread."""
-    with urllib.request.urlopen(
-        f"http://localhost:{port}/json/version", timeout=5
-    ) as resp:
+    req = urllib.request.Request(f"{base}/json/version", headers=headers or {})
+    with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read())
+
+
+def _redact(url: str) -> str:
+    """`url` without its query or userinfo: a provider's token rides in either."""
+    p = urlsplit(url)
+    return urlunsplit((p.scheme, p.netloc.rpartition("@")[2], p.path, "", ""))
+
+
+def endpoint_ws_url(base: str, advertised: str) -> str:
+    """The WebSocket to dial for an http(s) `base` whose /json/version said `advertised`.
+
+    Takes only the path and query from `advertised`: behind a proxy or a hosted
+    provider its host is the browser's own (`ws://127.0.0.1/...`), unreachable
+    from here, while `base` is the address we actually reached.
+    """
+    b, a = urlsplit(base), urlsplit(advertised)
+    scheme = "wss" if b.scheme == "https" else "ws"
+    return urlunsplit((scheme, b.netloc, a.path, a.query, ""))
 
 
 def dialable_ws_url(ws_url: str, port: int) -> str:
@@ -68,8 +85,18 @@ class BrowserSession:
     Multiple CDPSessions attach through this browser connection.
     """
 
-    def __init__(self, port: int = 9222) -> None:
+    def __init__(
+        self,
+        port: int = 9222,
+        *,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        # `port` stays the identity everywhere (target IDs, registry); `url`, when
+        # set, is the address actually dialled and `port` is only its pool key.
         self.port = port
+        self.url = url
+        self.headers = headers
         self._ws: Any = None  # websockets.ClientConnection
         self._recv_task: asyncio.Task | None = None
 
@@ -112,26 +139,13 @@ class BrowserSession:
         """Connect to Chrome DevTools WebSocket endpoint."""
         import websockets  # type: ignore[import-untyped]
 
-        # Fetch browser WS URL from /json/version using stdlib urllib.
-        # Off-loop: urlopen blocks up to 5s and this runs on the kernel loop.
-        try:
-            version_info = await asyncio.to_thread(_fetch_version_info, self.port)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Cannot reach Chrome on port {self.port}: {exc}"
-            ) from exc
-
-        ws_url = version_info.get("webSocketDebuggerUrl")
-        if not ws_url:
-            raise RuntimeError(
-                f"No webSocketDebuggerUrl in /json/version response: {version_info}"
-            )
-
+        ws_url = await self._resolve_ws_url()
         self._ws = await websockets.connect(
-            dialable_ws_url(ws_url, self.port),
+            ws_url,
             max_size=64 * 1024 * 1024,  # 64 MB
             ping_interval=30,
             ping_timeout=10,
+            additional_headers=self.headers,
         )
 
         # Start receive loop
@@ -141,6 +155,29 @@ class BrowserSession:
         if discover:
             await self.execute("Target.setDiscoverTargets", {"discover": True})
         await self._enable_download_events()
+
+    async def _resolve_ws_url(self) -> str:
+        """The browser-level WebSocket URL, re-resolved on every (re)connect."""
+        if self.url is not None and urlsplit(self.url).scheme in ("ws", "wss"):
+            return self.url
+        base = self.url.rstrip("/") if self.url else f"http://localhost:{self.port}"
+        where = _redact(self.url) if self.url else f"port {self.port}"
+        # Off-loop: urlopen blocks up to 5s and this runs on the kernel loop.
+        try:
+            version_info = await asyncio.to_thread(
+                _fetch_version_info, base, self.headers
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Cannot reach Chrome on {where}: {exc}") from exc
+
+        ws_url = version_info.get("webSocketDebuggerUrl")
+        if not ws_url:
+            raise RuntimeError(
+                f"No webSocketDebuggerUrl in /json/version response: {version_info}"
+            )
+        if self.url:
+            return endpoint_ws_url(base, ws_url)
+        return dialable_ws_url(ws_url, self.port)
 
     async def _enable_download_events(self) -> None:
         # behavior "default" leaves the human's Save-As and download folder alone;

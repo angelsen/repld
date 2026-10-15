@@ -24,6 +24,7 @@ browser.clear(target=)             # clear captured data
 
 await browser.connect(9223)                        # add another Chrome instance
 await browser.connect(profile="/path/to/profile")  # port from DevToolsActivePort
+await browser.connect(url="https://host:9222")     # attach by URL (http(s) base or ws(s) CDP URL)
 await browser.disconnect()                         # unpin tabs, close all WebSockets
 await browser.disconnect(port=9222)                # unpin + close one Chrome instance
 ```

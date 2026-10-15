@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `browser.connect(url=, headers=)` attaches to a browser that has no local port: an `http(s)://` base (resolved through `/json/version`, dialled at the address reached, not the one Chrome advertises) or a browser-level `ws(s)://` URL as a hosted provider hands it out. Such a browser gets a registry key from 65536 up (the `N` in `N:abc123` target IDs), stable per URL; it is never written to the restore hint, and errors name the URL without its query or userinfo.
+
 - `tab.click()` and the `browser_click` tool take an `'x,y'` (or `(x, y)`) viewport point for targets with no DOM to resolve, such as a canvas or a remote-screen viewer; `click_count=2` is two counted presses so a double click fires `dblclick`. New `tab.wheel(x, y, dy=, dx=)` dispatches a real wheel event at a point. Together with `hover`/`drag` (already point-aware), `key`/`keys` and `screenshot`, this is the minimal computer-use surface.
 
 - `tab.screencast(handler)` streams a tab's repaints (`Page.startScreencast`) to a sync or async handler as `Frame(data, meta)`: one stream per tab, frames acked after the handler returns so a slow handler lowers the frame rate, never written to the event store, and replayed after a Chrome reconnect. The primitive for a live-view gist; repld ships no viewer.

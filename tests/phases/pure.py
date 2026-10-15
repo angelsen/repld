@@ -1552,6 +1552,49 @@ def _dialable_ws_url() -> None:
     print("  ✓ session: dialable_ws_url fills a missing advertised port")
 
 
+def _connect_url() -> None:
+    from repld.browser.pool import REMOTE_KEY_BASE, BrowserPool
+    from repld.browser.session import _redact, endpoint_ws_url
+
+    assert_eq(
+        endpoint_ws_url(
+            "https://b.example.com", "ws://127.0.0.1/devtools/browser/x?t=1"
+        ),
+        "wss://b.example.com/devtools/browser/x?t=1",
+        "the reached host replaces the advertised one; path and query survive",
+    )
+    assert_eq(
+        endpoint_ws_url(
+            "http://10.0.0.5:9222", "ws://localhost:9222/devtools/browser/x"
+        ),
+        "ws://10.0.0.5:9222/devtools/browser/x",
+        "an http base dials ws on its own host:port",
+    )
+    assert_eq(
+        _redact("wss://user:pw@h.example:9/devtools/browser/x?token=SECRET"),
+        "wss://h.example:9/devtools/browser/x",
+        "a url in an error loses its query and userinfo",
+    )
+
+    async def _pool() -> None:
+        pool = BrowserPool()
+        a = pool._remote_key("https://a.example")
+        b = pool._remote_key("https://b.example")
+        assert_eq(
+            (a, b), (REMOTE_KEY_BASE, REMOTE_KEY_BASE + 1), "keys start above 65535"
+        )
+        assert_eq(pool._remote_key("https://a.example"), a, "a url keeps its key")
+        for kw in ({"url": "ftp://x"}, {"url": "https://x", "port": 9222}):
+            try:
+                await pool.connect(**kw)  # type: ignore[arg-type]
+            except ValueError:
+                continue
+            raise AssertionError(f"connect({kw}) was accepted")
+
+    asyncio.run(_pool())
+    print("  ✓ connect(url=): ws derivation, redaction, stable keys >= 65536, refusals")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -1611,6 +1654,7 @@ def phase_2_pure() -> None:
     _inflight_crash_failure()
     _files_probe_timeout()
     _dialable_ws_url()
+    _connect_url()
     _stop_flushes_inflight_reply()
     _peer_resolution()
     _peer_host_vetting()

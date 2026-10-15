@@ -78,9 +78,14 @@ class Browser:
     def __init__(
         self,
         port: int | None = None,
+        *,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
-        self._session: BrowserSession = BrowserSession(self.port)
+        self._session: BrowserSession = BrowserSession(
+            self.port, url=url, headers=headers
+        )
         self._connected: bool = False
         # Serializes the first connect. BrowserSession already guards the
         # *re*connect path with its own lock; this is the same shape one step

@@ -516,6 +516,7 @@ object.  Read this instead of diving into source code.
 
   await browser.connect(9223)                        # add another Chrome instance
   await browser.connect(profile="/tmp/my-chrome")    # connect by user-data-dir
+  await browser.connect(url="https://host:9222")     # attach by URL (hosted / remote Chrome)
   await browser.disconnect()                         # unpin tabs, close all WebSockets
   await browser.disconnect(port=9222)                # unpin + close one Chrome instance
 
@@ -534,6 +535,12 @@ Quirks:
   - browser.connect(profile=path) reads DevToolsActivePort from a Chrome
     user-data-dir to discover the debug port.  Works with --remote-debugging-port=0
     (random port) — Chrome writes the actual port to that file on startup.
+  - browser.connect(url=) attaches to a browser with no local port: an http(s)
+    base (found through its /json/version) or a browser-level ws(s):// URL as
+    a provider hands it out; headers= goes on both requests. Its key (the
+    number before ':' in target IDs) is >= 65536, stable per URL, and never
+    written to the restore hint, since the URL may carry a token. Errors name
+    the URL without its query.
 
 === ready= parameter ===
 
@@ -984,6 +991,7 @@ browser.connect(port) adds a Chrome instance to the pool.  Call it multiple
   await browser.connect(42829)
   await browser.connect(43213)
   await browser.connect(profile="/tmp/my-chrome")  # port from DevToolsActivePort
+  await browser.connect(url="wss://prov.example/devtools/browser/x?token=...")
   await browser.watch("*localhost:5200*")   # watches across both
   browser.tabs                              # tabs from all instances
 
@@ -1971,10 +1979,10 @@ Tab properties:
   tab.label                               str | None  colored ID bar; set "text" / ("text", "#hex") / None to clear; survives navigation
 
 Browser:
-  browser.connect(port=, profile=)               → Browser  (add Chrome instance; profile= reads DevToolsActivePort)
-  browser.get(target, timeout=, fresh=, ready=)  → Tab  (glob or target ID; skips workers for globs)
-  browser.watch(pattern)                         → str  (watch all matching, auto-attach new)
-  browser.open(url)                              → Tab
+  browser.connect(port=, profile=, url=, headers=)  → Browser  (add Chrome instance; profile= reads DevToolsActivePort; url= attaches by http(s)/ws(s) URL)
+  browser.get(target, timeout=, fresh=, ready=)     → Tab  (glob or target ID; skips workers for globs)
+  browser.watch(pattern)                            → str  (watch all matching, auto-attach new)
+  browser.open(url)                                 → Tab
   browser.acquire(pattern, open=, ready=, timeout=) → Tab  (get(), falling back to open() on a miss)
   browser.tabs                  → list[Tab]
   browser.pages()               → list[dict]

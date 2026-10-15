@@ -175,8 +175,8 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
         real = mod.Browser
 
         class _Spy(real):
-            def __init__(self, port=None):
-                super().__init__(port)
+            def __init__(self, port=None, **kw):
+                super().__init__(port, **kw)
                 made.append(self)
 
             async def _ensure_connected(self) -> None:
@@ -3932,6 +3932,48 @@ def phase_6_click_point(kernel: Kernel) -> None:
             f"browser_click takes an 'x,y' selector ({text[:160]!r})",
         )
         print("  ✓ browser_click accepts 'x,y' for targets with no DOM")
+    finally:
+        h.close()
+
+
+def phase_6_connect_url(kernel: Kernel) -> None:
+    """connect(url=) attaches by http base or ws URL, heals a drop, and persists nothing."""
+    if not _chrome_ready("phase 6 connect url"):
+        return
+    base = _cdp().replace("localhost", "127.0.0.1")
+    with urllib.request.urlopen(f"{base}/json/version", timeout=2) as r:
+        ws = json.load(r)["webSocketDebuggerUrl"]
+    h = _BridgeHarness(kernel)
+    try:
+        for label, url in (("http base", base), ("ws url", ws)):
+            out = h.exec(
+                f"_b = await browser.connect(url={url!r})\n"
+                "_t = await _b.open('data:text/html,<p>connect-url "
+                f"{_MARKER}</p>')\n"
+                "_tid = _t.target_id\n"
+                "_one = await _t.js('1 + 1')\n"
+                "await _b._session._ws.close()\n"
+                "_two = await _t.js('2 + 2')\n"
+                "print('CU', _b.port >= 65536, _tid.split(':')[0] == str(_b.port),"
+                " _one, _two, _b.port in browser.connected_ports)\n"
+                "await browser.disconnect(_b.port)"
+            )
+            assert_true(
+                "CU True True 2 4 False" in out,
+                f"{label}: keyed above the port range, usable, healed, not persisted ({out!r})",
+            )
+        out = h.exec(
+            "try:\n"
+            "    await browser.connect(url='http://127.0.0.1:1/?token=SECRETTOKEN')\n"
+            "except RuntimeError as e:\n"
+            "    print('ERR', 'SECRETTOKEN' in str(e), '127.0.0.1:1' in str(e))"
+        )
+        assert_true(
+            "ERR False True" in out, f"a dead url errors without its token ({out!r})"
+        )
+        print(
+            "  ✓ connect(url=): http base and ws URL attach, heal, stay out of the hint"
+        )
     finally:
         h.close()
 
