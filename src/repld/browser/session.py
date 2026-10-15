@@ -17,6 +17,7 @@ import urllib.request
 from collections.abc import Callable
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .. import bg, tasks
 from ..channel import push_channel
@@ -43,6 +44,21 @@ def _fetch_version_info(port: int) -> dict:
         f"http://localhost:{port}/json/version", timeout=5
     ) as resp:
         return json.loads(resp.read())
+
+
+def dialable_ws_url(ws_url: str, port: int) -> str:
+    """`ws_url` with the dialled port filled in when the advertised one has none.
+
+    A proxy in front of Chrome (Steel's) rewrites Host, so /json/version advertises
+    `ws://127.0.0.1/devtools/...`; following it verbatim dials port 80.
+    """
+    parts = urlsplit(ws_url)
+    if parts.port is not None:
+        return ws_url
+    host = parts.hostname or "localhost"
+    if ":" in host:
+        host = f"[{host}]"
+    return urlunsplit(parts._replace(netloc=f"{host}:{port}"))
 
 
 class BrowserSession:
@@ -112,7 +128,7 @@ class BrowserSession:
             )
 
         self._ws = await websockets.connect(
-            ws_url,
+            dialable_ws_url(ws_url, self.port),
             max_size=64 * 1024 * 1024,  # 64 MB
             ping_interval=30,
             ping_timeout=10,

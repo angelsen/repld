@@ -1533,6 +1533,25 @@ def _screencast() -> None:
     print("  ✓ screencast: restore replays params; a failed resume is visible")
 
 
+def _dialable_ws_url() -> None:
+    from repld.browser.session import dialable_ws_url
+
+    adv = "ws://127.0.0.1/devtools/browser/abc"
+    assert_eq(
+        dialable_ws_url(adv, 19223),
+        "ws://127.0.0.1:19223/devtools/browser/abc",
+        "a portless advertised URL gets the dialled port",
+    )
+    full = "ws://localhost:9222/devtools/browser/abc"
+    assert_eq(dialable_ws_url(full, 9222), full, "an advertised port is kept")
+    assert_eq(
+        dialable_ws_url("ws://[::1]/devtools/browser/x?a=1", 5),
+        "ws://[::1]:5/devtools/browser/x?a=1",
+        "IPv6 host and query survive",
+    )
+    print("  ✓ session: dialable_ws_url fills a missing advertised port")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1555,6 +1574,7 @@ def phase_2_pure() -> None:
     _download_cap()
     _inflight_crash_failure()
     _files_probe_timeout()
+    _dialable_ws_url()
     _peer_resolution()
     _peer_host_vetting()
     _peer_responses()

@@ -16,6 +16,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser.connect(port)` follows `/json/version`'s `webSocketDebuggerUrl` only when it names a port; a Chrome behind a proxy that rewrites `Host` (Steel's browser server) advertises `ws://127.0.0.1/...` and was dialled on port 80. The port it connected to is used instead.
+
 ### Removed
 
 ## [0.13.1] - 2026-10-15
