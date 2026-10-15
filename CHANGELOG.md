@@ -14,6 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Mid-session gist dependency installs no longer fail with `No interpreter found at path` in a project-bound kernel: `uv pip install --python` (and the printed manual command) uses the base interpreter, not the `uv run` overlay's `sys.executable`, which uv can delete.
+
 ### Removed
 
 ## [0.13.0] - 2026-10-12

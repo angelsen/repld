@@ -1367,6 +1367,26 @@ def _peer_stubs() -> None:
     print("  \u2713 peers: stub rendering, forwarding semantics, hashes and drift")
 
 
+def _install_python() -> None:
+    """`install_deps` must not hand uv a `sys.executable` that can vanish."""
+    import sys
+    from pathlib import Path
+
+    from repld import gist_deps
+
+    real = sys.executable
+    sys.executable = "/nonexistent/uv-overlay/bin/python"
+    try:
+        target = gist_deps._target_python()
+    finally:
+        sys.executable = real
+    assert_true(
+        Path(target).exists(),
+        f"--python survives a gone overlay interpreter (got {target!r})",
+    )
+    print("  ✓ gist_deps: uv --python is the base interpreter, not the overlay")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1377,6 +1397,7 @@ def phase_2_pure() -> None:
     _cli_args()
     _json_types()
     _lint_helpers()
+    _install_python()
     _sibling_counts_concurrency()
     _loop_watchdog()
     _starvation_classification()

@@ -458,6 +458,17 @@ def _merge_manifest(selected: list[_DepInfo]) -> tuple[dict[str, str], list[str]
     return manifest, req_args
 
 
+def _target_python() -> str:
+    """Interpreter handed to `uv pip install --python`.
+
+    Not `sys.executable`: under a `uv run` rebind that is an overlay in uv's
+    build cache which can vanish mid-session ("No interpreter found at path"),
+    and a printed hint outlives it too. `--target` needs only a same-version
+    interpreter, and the overlay's python is a symlink to this one.
+    """
+    return getattr(sys, "_base_executable", None) or sys.executable
+
+
 def install_deps(missing: list[_DepInfo]) -> bool:
     """Prompt user and install missing deps. Returns True if anything was installed."""
     import shutil
@@ -467,7 +478,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
         return False
 
     # No system-Python gate: deps go to `_deps_dir()` via `--target` +
-    # `--python sys.executable`, which resolves with or without a venv. Refusing
+    # `--python _target_python()`, which resolves with or without a venv. Refusing
     # when `sys.prefix == sys.base_prefix` would block a `pip install --user`
     # install from ever accepting the prompt, for no gain.
 
@@ -507,7 +518,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
             )
         _tty_write(
             reason
-            + f"    uv pip install --target {_deps_dir()} --python {sys.executable} "
+            + f"    uv pip install --target {_deps_dir()} --python {_target_python()} "
             + " ".join(d.requirement for d in missing)
             + "\n"
         )
@@ -530,7 +541,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
     if uv:
         # --python pins resolution to the interpreter actually running this
         # kernel. Without it, uv resolves against its own default/preferred
-        # Python, which can silently differ from sys.executable — a binary
+        # Python, which can silently differ from this kernel's — a binary
         # wheel (cffi, cryptography, numpy, ...) built for the wrong ABI lands
         # in the deps dir and fails with a bare ModuleNotFoundError for its
         # compiled extension, not an obviously-version-related error.
@@ -541,7 +552,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
             "--target",
             str(target),
             "--python",
-            sys.executable,
+            _target_python(),
             *full_req_args,
         ]
     else:
