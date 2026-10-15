@@ -356,6 +356,10 @@ class Session:
                 self._write_msg(_notification(BRIDGE_GOODBYE_METHOD, {}))
 
 
+# How long `Server.stop` lets requests already being served finish writing their reply.
+STOP_GRACE_S = 1.0
+
+
 class Server:
     def __init__(self, socket_path: Path, handler: Handler):
         self.socket_path = Path(socket_path)
@@ -368,6 +372,11 @@ class Server:
         # mutate together on register/disconnect.
         self._claude_sessions: dict[str, Session] = {}
         self._stop = False
+        # Requests between "handler called" and "reply written", so `stop` can let a
+        # reply the shutdown drain just unblocked (a cancelled peer call) reach the wire
+        # before the goodbye and the close turn it into an EOF.
+        self._inflight = 0
+        self._inflight_cv = threading.Condition()
 
     def start(self) -> None:
         if self.socket_path.exists():
@@ -417,16 +426,23 @@ class Server:
                     req = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                with self._inflight_cv:
+                    self._inflight += 1
                 try:
-                    resp = self.handler(req, session)
-                except Exception as e:
-                    rid = req.get("id")
-                    if rid is not None:
-                        resp = _error(rid, -32603, f"internal: {e!r}")
-                    else:
-                        resp = None
-                if resp is not None:
-                    session.write(resp)
+                    try:
+                        resp = self.handler(req, session)
+                    except Exception as e:
+                        rid = req.get("id")
+                        if rid is not None:
+                            resp = _error(rid, -32603, f"internal: {e!r}")
+                        else:
+                            resp = None
+                    if resp is not None:
+                        session.write(resp)
+                finally:
+                    with self._inflight_cv:
+                        self._inflight -= 1
+                        self._inflight_cv.notify_all()
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
@@ -588,6 +604,8 @@ class Server:
                 self.sock.close()
             except OSError:
                 pass
+        with self._inflight_cv:
+            self._inflight_cv.wait_for(lambda: self._inflight == 0, STOP_GRACE_S)
         with self.sessions_lock:
             sessions = list(self.sessions)
             self.sessions.clear()

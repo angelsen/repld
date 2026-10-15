@@ -16,6 +16,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A graceful stop (`SIGTERM`) no longer drops the reply of a request the shutdown drain just unblocked: `ipc.Server.stop` waits up to a second for in-flight handlers to write before the goodbye and close, so a peer call cancelled by the drain reaches its caller as `call_error`, not a clean `disconnected`.
+
 - `browser.connect(port)` follows `/json/version`'s `webSocketDebuggerUrl` only when it names a port; a Chrome behind a proxy that rewrites `Host` (Steel's browser server) advertises `ws://127.0.0.1/...` and was dialled on port 80. The port it connected to is used instead.
 
 ### Removed

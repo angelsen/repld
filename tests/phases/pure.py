@@ -1552,6 +1552,42 @@ def _dialable_ws_url() -> None:
     print("  ✓ session: dialable_ws_url fills a missing advertised port")
 
 
+def _stop_flushes_inflight_reply() -> None:
+    import json
+    import socket
+    import tempfile
+
+    from repld import ipc
+
+    with tempfile.TemporaryDirectory() as d:
+        entered, release = threading.Event(), threading.Event()
+
+        def handler(req: dict, _session: Any) -> dict:
+            entered.set()
+            release.wait(5)
+            return {"jsonrpc": "2.0", "id": req["id"], "result": "late"}
+
+        srv = ipc.Server(Path(d) / "k.sock", handler)
+        srv.start()
+        c = socket.socket(socket.AF_UNIX)
+        c.connect(str(srv.socket_path))
+        c.sendall(b'{"jsonrpc":"2.0","id":1,"method":"x"}\n')
+        assert_true(entered.wait(5), "the handler is mid-request")
+        # What the shutdown drain does: unblock the handler just as stop() begins.
+        threading.Timer(0.2, release.set).start()
+        srv.stop()
+        c.settimeout(5)
+        lines = c.makefile("rb").read().splitlines()
+        methods = [json.loads(ln).get("method", "reply") for ln in lines]
+        assert_eq(
+            methods,
+            ["reply", ipc.BRIDGE_GOODBYE_METHOD],
+            "the in-flight reply reaches the wire before the goodbye",
+        )
+        c.close()
+    print("  ✓ ipc: stop() lets an in-flight reply out before the goodbye and close")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1575,6 +1611,7 @@ def phase_2_pure() -> None:
     _inflight_crash_failure()
     _files_probe_timeout()
     _dialable_ws_url()
+    _stop_flushes_inflight_reply()
     _peer_resolution()
     _peer_host_vetting()
     _peer_responses()
