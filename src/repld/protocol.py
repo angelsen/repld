@@ -366,7 +366,9 @@ TOOLS = [
             "candidate list instead of guessing. Auto-waits 2s for presence, "
             "then for visible/enabled/stable. Returns a receipt line naming "
             "what the click actually hit, plus the observation (tree + "
-            "network + console delta after settle)."
+            "network + console delta after settle). A selector of the form "
+            "'x,y' clicks that viewport point (CSS px) with no resolution, "
+            "for a canvas or remote-screen viewer that has no DOM to target."
         ),
         "inputSchema": {
             "type": "object",

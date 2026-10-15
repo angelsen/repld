@@ -220,7 +220,8 @@ rest are async where this shows them sync — `watch`, `detach`, `get` and
 ```python
 # interaction
 tab.js(expr, *, await_promise=True, user_gesture=True)
-tab.click(selector, *, button="left", click_count=1)
+tab.click(selector, *, button="left", click_count=1)  # or "x,y" / (x, y): a viewport point
+tab.wheel(x, y, *, dy=0.0, dx=0.0)                    # real wheel event at a point
 tab.type_text(selector, text, *, delay_ms=0, press_enter=False)
 tab.navigate(url)
 tab.reload()

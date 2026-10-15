@@ -979,12 +979,13 @@ class Tab(TabQueryMixin):
 
     async def click(
         self,
-        selector: str,
+        selector: "str | tuple[float, float]",
         *,
         button: str = "left",
         click_count: int = 1,
     ) -> Receipt:
-        """Click an element. Auto-waits up to 2s, strictly resolved.
+        """Click an element, or an (x, y) / 'x,y' page point. Auto-waits up to
+        2s, strictly resolved.
 
         Selector: CSS, text=Label, role=button[name='OK'], label=Name,
         tag:has-text('...'), or aria-ref=e12 from browser_tree. A selector
@@ -992,15 +993,76 @@ class Tab(TabQueryMixin):
         with a candidate digest instead of guessing. Waits for the element to
         be visible, enabled and stable, and returns a Receipt naming what the
         click actually hit.
+
+        A point is CSS pixels in the viewport, for targets with no DOM to
+        resolve (a canvas, a remote-screen viewer): nothing is waited for or
+        checked, the receipt only names the element under the point.
         """
+        pt = self._parse_point(selector)
+        if pt is not None:
+            async with self._ensure_front():
+                return await self._click_point(
+                    pt[0], pt[1], button=button, click_count=click_count
+                )
+        sel = selector if isinstance(selector, str) else str(selector)
         async with self._ensure_front():
-            el = await inject.resolve_element(self, selector)
+            el = await inject.resolve_element(self, sel)
             await inject.check_actionable(
-                self, el, ("visible", "enabled", "stable"), selector=selector
+                self, el, ("visible", "enabled", "stable"), selector=sel
             )
             return await self._click_element(
-                el, selector=selector, button=button, click_count=click_count
+                el, selector=sel, button=button, click_count=click_count
             )
+
+    async def _click_point(
+        self, x: float, y: float, *, button: str, click_count: int
+    ) -> Receipt:
+        """Mouse arrives first, then one press/release pair per click, counted.
+
+        Same arrival rule as `_click_element`; `clickCount` runs 1..n so a
+        double click reaches the page as `dblclick` rather than one press that
+        claims a count of 2.
+        """
+        await self._exec(
+            "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
+        )
+        under = await self.js(
+            f"(() => {{ const e = document.elementFromPoint({x}, {y}); if (!e) return null;"
+            " return e.tagName.toLowerCase() + (e.id ? '#' + e.id : ''); })()",
+            user_gesture=False,
+        )
+        for n in range(1, click_count + 1):
+            for event_type in ("mousePressed", "mouseReleased"):
+                await self._exec(
+                    "Input.dispatchMouseEvent",
+                    {
+                        "type": event_type,
+                        "x": x,
+                        "y": y,
+                        "button": button,
+                        "clickCount": n,
+                    },
+                )
+        return Receipt(line=f"clicked: ({x:.0f},{y:.0f}) on {under or 'nothing'}")
+
+    async def wheel(
+        self, x: float, y: float, *, dy: float = 0.0, dx: float = 0.0
+    ) -> Receipt:
+        """Scroll wheel at an (x, y) viewport point; positive dy scrolls down.
+
+        A real wheel event, not a scroll offset: it reaches whatever listens
+        for `wheel` at that point (a canvas, a map, a remote-screen viewer),
+        which `tab.scroll()`'s touch gesture and `scrollBy` do not.
+        """
+        async with self._ensure_front():
+            await self._exec(
+                "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}
+            )
+            await self._exec(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy},
+            )
+        return Receipt(line=f"wheel: ({x:.0f},{y:.0f}) dx={dx:g} dy={dy:g}")
 
     async def hover(self, selector: "str | tuple[float, float]") -> Receipt:
         """Move the mouse over an element — or an (x, y) / 'x,y' point — and

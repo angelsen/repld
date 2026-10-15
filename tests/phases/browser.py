@@ -3857,6 +3857,85 @@ def phase_6_screencast(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_click_point(kernel: Kernel) -> None:
+    """click('x,y') and wheel() reach a DOM-less target at exact coordinates."""
+    if not _chrome_ready("phase 6 click point"):
+        return
+    h = _BridgeHarness(kernel)
+    page = (
+        "<body style='margin:0'><canvas id=c width=400 height=300 "
+        "style='display:block;position:absolute;left:0;top:0'></canvas>"
+        "<script>window.__ev=[];const c=document.getElementById('c');"
+        "['pointermove','pointerdown','pointerup','click','dblclick','contextmenu','wheel']"
+        ".forEach(t=>c.addEventListener(t,e=>window.__ev.push([t,e.clientX,e.clientY,"
+        "e.button,e.detail||0,e.deltaY||0])))</script>"
+    )
+    try:
+        resp = h.tool(
+            "browser_open",
+            {"url": f"data:text/html,{page}<i>{_MARKER}</i>", "viewport": "800x600"},
+        )
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert_true(m is not None, "opened the event-recording canvas page")
+        assert m is not None
+        tid = m.group(1)
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "import json\n"
+            "async def _grab():\n"
+            "    return await _t.js('window.__ev.splice(0)')\n"
+            "await _grab()\n"
+            "_r1 = str(await _t.click('120,80'))\n"
+            "_g1 = await _grab()\n"
+            "await _t.click((200, 150), click_count=2)\n"
+            "_g2 = await _grab()\n"
+            "await _t.click('60,40', button='right')\n"
+            "_g3 = await _grab()\n"
+            "_r4 = str(await _t.wheel(100, 100, dy=240))\n"
+            "_g4 = await _grab()\n"
+            "print('CP', json.dumps([_r1, _g1, _g2, _g3, _r4, _g4]))"
+        )
+        mm = re.search(r"CP (\[.*\])", out)
+        assert_true(mm is not None, f"point-click cell printed its events ({out!r})")
+        assert mm is not None
+        r1, g1, g2, g3, r4, g4 = json.loads(mm.group(1))
+        names1 = [e[0] for e in g1]
+        assert_true(
+            names1.index("pointermove") < names1.index("pointerdown"),
+            f"the pointer arrives before it presses ({names1})",
+        )
+        click1 = next(e for e in g1 if e[0] == "click")
+        assert_eq((click1[1], click1[2]), (120, 80), "the click landed on the point")
+        assert_true(
+            "canvas#c" in r1, f"the receipt names the element under it ({r1!r})"
+        )
+        details = [e[4] for e in g2 if e[0] == "click"]
+        assert_eq(details, [1, 2], "a double click is two counted presses")
+        assert_true(any(e[0] == "dblclick" for e in g2), "...and fires dblclick")
+        assert_true(
+            any(e[0] == "contextmenu" and e[3] == 2 for e in g3),
+            f"a right click reaches the page as contextmenu ({g3})",
+        )
+        wheel = next(e for e in g4 if e[0] == "wheel")
+        assert_eq(
+            (wheel[1], wheel[2], wheel[5]), (100, 100, 240), "wheel point + delta"
+        )
+        assert_true("dy=240" in r4, f"the wheel receipt says what it did ({r4!r})")
+        print(
+            "  ✓ click('x,y') / wheel(): exact coordinates, counted clicks, canvas hit"
+        )
+
+        resp = h.tool("browser_click", {"target": tid, "selector": "300,200"})
+        text = content_text(resp)
+        assert_true(
+            "clicked: (300,200)" in text and "canvas#c" in text,
+            f"browser_click takes an 'x,y' selector ({text[:160]!r})",
+        )
+        print("  ✓ browser_click accepts 'x,y' for targets with no DOM")
+    finally:
+        h.close()
+
+
 def phase_6_tab_mode(kernel: Kernel) -> None:
     """A tab's mode (agent/shared) decides who owns its native prompts, is
     shown in browser_tabs, and moves only through browser_take/browser_release.

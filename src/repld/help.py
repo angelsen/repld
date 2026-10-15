@@ -598,6 +598,9 @@ on an already-attached tab still reports the original attach's value.
       Raises BrowserJSError on JS exceptions (with preserved stack trace).
 
   tab.click(selector, *, button='left', click_count=1)       → Receipt
+      selector may be an (x, y) / 'x,y' viewport point (CSS px): nothing is resolved or
+      waited for, for a canvas or remote-screen viewer with no DOM; the receipt names
+      the element under the point, and click_count=2 is two counted presses (dblclick).
       Mouse click: arrives (mouseMoved) then Input.dispatchMouseEvent
       (mousePressed + mouseReleased).  The arrival matters beyond hover
       styling — Chromium's native click synthesis can silently fail without
@@ -817,6 +820,11 @@ on an already-attached tab still reports the original attach's value.
       needed to establish the session; every read after that is a plain
       concurrent-safe HTTP call, no shared-tab-state races and no per-call
       CDP round trip the way tab.fetch() pays.
+
+  tab.wheel(x, y, *, dy=0.0, dx=0.0)                         → Receipt
+      Scroll wheel at a viewport point (mouseMoved, then mouseWheel). A real wheel event,
+      so it reaches whatever listens at that point (canvas, map, remote-screen viewer);
+      tab.scroll()'s touch gesture does not.
 
   tab.cdp(method, **params)                                   → dict
       Raw CDP passthrough — escape hatch for anything not wrapped.
@@ -1896,9 +1904,10 @@ Channel kinds:
 """,
     "browser": """\
 Tab (async unless noted):
-  tab.js(expr, await_promise=, user_gesture=)      → any
-  tab.tree(mode="aria", at=None, in_crop=None)     → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
-  tab.click(selector, button=, click_count=)       → Receipt (strict resolve + actionability wait; names what was hit)
+  tab.js(expr, await_promise=, user_gesture=)   → any
+  tab.tree(mode="aria", at=None, in_crop=None)  → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
+  tab.click(selector_or_x_y, button=, click_count=) → Receipt (strict resolve + actionability wait; names what was hit; 'x,y' clicks a viewport point with no DOM to resolve)
+  tab.wheel(x, y, dy=, dx=)                        → Receipt (a real wheel event at a viewport point; positive dy scrolls down)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
   tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
