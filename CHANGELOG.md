@@ -20,6 +20,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A local Chrome connection no longer sends WebSocket keepalive pings: a loopback socket cannot go half-open, and a ping timeout while Chrome was starved (a large WASM page loading) dropped the socket and reconnected every attached tab. A `connect(url=)` endpoint keeps its ping.
+- A CDP call that fails because the socket just died, while another caller is already reconnecting, waits for that reconnect and retries once; it used to raise the raw `WS recv loop ended` error straight to its caller.
+
 - `tab.click()` on an element sends the scroll with the quads read, and `mousePressed` with `mouseReleased`, back to back: two fewer sequential round trips per click (11 to 9 on a warm tab), which is about 200 ms at 100 ms RTT.
 
 - Selector actions (`click`, `hover`, `drag`, `type_text`, `select`, `tap`) read the "N matches, 1 visible" note inside the actionability call instead of a call of their own: one fewer round trip.

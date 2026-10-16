@@ -133,6 +133,7 @@ class BrowserSession:
         self._reconnect_lock = asyncio.Lock()
         self.on_gone: Callable[[], None] | None = None
         self._reconnecting: bool = False
+        self._reconnect_task: asyncio.Task | None = None
         # old sessionId → new sessionId (valid for one reconnect cycle)
         self._session_remap: dict[str, str] = {}
 
@@ -145,12 +146,19 @@ class BrowserSession:
         import websockets  # type: ignore[import-untyped]
 
         ws_url = await self._resolve_ws_url()
+        # A loopback socket cannot go half-open, so a ping there only misfires when
+        # Chrome is starved (a large WASM page load) and costs every tab its session.
+        # A url= endpoint sits behind proxies that drop idle sockets: keep pinging.
+        pings: dict[str, Any] = (
+            {"ping_interval": 30, "ping_timeout": 10}
+            if self.url
+            else {"ping_interval": None}
+        )
         self._ws = await websockets.connect(
             ws_url,
             max_size=64 * 1024 * 1024,  # 64 MB
-            ping_interval=30,
-            ping_timeout=10,
             additional_headers=self.headers,
+            **pings,
         )
 
         # Start receive loop
@@ -280,6 +288,7 @@ class BrowserSession:
                 return  # another caller already reconnected
 
             self._reconnecting = True
+            self._reconnect_task = asyncio.current_task()
             try:
                 # Save CDPSessions keyed by Chrome targetId
                 old_cdps: dict[str, CDPSession] = {}
@@ -355,6 +364,7 @@ class BrowserSession:
                     )
             finally:
                 self._reconnecting = False
+                self._reconnect_task = None
 
     # ------------------------------------------------------------------
     # Command execution
@@ -370,16 +380,24 @@ class BrowserSession:
         """Send a CDP command and await the response.
 
         On WebSocket failure, triggers reconnect and retries once.
-        During reconnect (_reconnecting=True), failures propagate directly
-        to avoid recursive reconnect loops.
+        The task driving a reconnect gets its failures directly, to avoid
+        recursive reconnect loops; every other caller waits for it and retries.
         """
         try:
             return await self._execute_once(method, params, session_id, timeout)
         except Exception as exc:
-            if self._reconnecting or not self._is_recoverable(exc):
+            if not self._is_recoverable(exc):
                 raise
-            # Connection died — reconnect and retry
-            await self._reconnect()
+            if self._reconnecting:
+                # The driver's own calls must propagate (its lock is not reentrant);
+                # any other caller waits out the heal and retries instead of failing.
+                if self._reconnect_task is asyncio.current_task():
+                    raise
+                async with self._reconnect_lock:
+                    pass
+            else:
+                # Connection died — reconnect and retry
+                await self._reconnect()
             # Remap session_id if it changed during reconnect
             if session_id and session_id in self._session_remap:
                 session_id = self._session_remap[session_id]

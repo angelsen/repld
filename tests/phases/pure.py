@@ -192,6 +192,93 @@ def _format_args() -> None:
     print("  ✓ gist_api._format_args: positional, keyword-only, variadic, skip_self")
 
 
+def _ws_ping_policy() -> None:
+    import websockets  # type: ignore[import-untyped]
+
+    from repld.browser.session import BrowserSession
+
+    class _Empty:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    seen: list[dict[str, Any]] = []
+
+    async def fake_connect(url, **kw):
+        seen.append(kw)
+        return _Empty()
+
+    async def dial(bs: BrowserSession) -> None:
+        async def resolved() -> str:
+            return "ws://127.0.0.1:1/x"
+
+        bs._resolve_ws_url = resolved  # type: ignore[method-assign]
+        await bs.connect(discover=False)
+        bs._recv_task.cancel()  # type: ignore[union-attr]
+
+    real = websockets.connect
+    websockets.connect = fake_connect
+    try:
+        asyncio.run(dial(BrowserSession(9222)))
+        asyncio.run(dial(BrowserSession(65536, url="wss://host/x")))
+    finally:
+        websockets.connect = real
+    local, remote = seen
+    assert_eq(local.get("ping_interval", "unset"), None, "a local port never pings")
+    assert_eq(
+        (remote["ping_interval"], remote["ping_timeout"]),
+        (30, 10),
+        "a url= endpoint keeps its keepalive",
+    )
+    print("  ✓ ws keepalive: off on loopback, on for a url= endpoint")
+
+
+def _reconnect_waiters() -> None:
+    from repld.browser.session import BrowserSession
+
+    async def scenario() -> tuple[object, int, str | None]:
+        bs = BrowserSession(9222)
+        calls = 0
+
+        async def once(*_a: Any) -> dict:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("WS recv loop ended: keepalive ping timeout")
+            return {"ok": 1}
+
+        bs._execute_once = once  # type: ignore[method-assign]
+        # Another task is mid-reconnect: this caller must wait it out, then retry.
+        bs._reconnecting = True
+        bs._reconnect_task = asyncio.ensure_future(asyncio.sleep(0))
+        await bs._reconnect_lock.acquire()
+        waiter = asyncio.ensure_future(bs.execute("X"))
+        await asyncio.sleep(0.05)
+        assert_true(not waiter.done(), "the caller waits while a reconnect runs")
+        bs._reconnecting = False
+        bs._reconnect_lock.release()
+        result = await asyncio.wait_for(waiter, 2)
+
+        # The task driving the reconnect gets its own failure, never a wait.
+        calls = 0
+        bs._reconnecting = True
+        bs._reconnect_task = asyncio.current_task()
+        err = None
+        try:
+            await bs.execute("X")
+        except RuntimeError as exc:
+            err = str(exc)
+        return result, calls, err
+
+    result, calls, err = asyncio.run(scenario())
+    assert_eq(result, {"ok": 1}, "a caller caught mid-reconnect retries and succeeds")
+    assert_eq(calls, 1, "the driver's failure was not retried")
+    assert_true(err is not None and "recv loop ended" in err, "the driver propagates")
+    print("  ✓ reconnect: a mid-flight caller waits and retries, the driver propagates")
+
+
 def _envelopes() -> None:
     assert_eq(
         core_schemas.response(7, {"ok": 1}),
@@ -1638,6 +1725,8 @@ def phase_2_pure() -> None:
     _render()
     _format_args()
     _envelopes()
+    _ws_ping_policy()
+    _reconnect_waiters()
     _cli_args()
     _json_types()
     _lint_helpers()
