@@ -1,6 +1,6 @@
 """Regenerate src/repld/browser/injected_source.py from the pinned Playwright commit.
 
-Dev-time only — node/npm and git are needed here and nowhere else; the wheel
+Dev-time only: node/npm and git are needed here and nowhere else; the wheel
 ships the generated .py. Run via `make injected`. To bump Playwright: change
 PLAYWRIGHT_COMMIT, rebuild, and re-run the phase-6 browser tests.
 """
@@ -97,7 +97,7 @@ def _ensure_checkout() -> Path:
     """The pinned commit's sources, fetched once into the build cache."""
     root = PLAYWRIGHT_CHECKOUT
     if shutil.which("git") is None:
-        _fail("git not found — needed to fetch the pinned Playwright commit")
+        _fail("git not found: needed to fetch the pinned Playwright commit")
     if not (root / ".git").is_dir():
         shutil.rmtree(root, ignore_errors=True)  # a half-made earlier attempt
         root.mkdir(parents=True)

@@ -10,6 +10,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-narration-comments.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__termtap2__run",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-termtap-vars.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
