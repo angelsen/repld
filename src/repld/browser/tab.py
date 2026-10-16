@@ -849,11 +849,17 @@ class Tab(TabQueryMixin):
         bounding-rect fallback keeps a lone hidden match (an off-screen real
         control behind a styled proxy) addressable, per the resolve policy.
         """
-        try:
-            await self._exec("DOM.scrollIntoViewIfNeeded", {"objectId": el.object_id})
-        except RuntimeError:
-            pass
-        quads = await self._exec("DOM.getContentQuads", {"objectId": el.object_id})
+        # One round trip, not two: Chrome runs a session's commands in order,
+        # so the quads are read after the scroll lands.
+        scroll, quads = await asyncio.gather(
+            self._exec("DOM.scrollIntoViewIfNeeded", {"objectId": el.object_id}),
+            self._exec("DOM.getContentQuads", {"objectId": el.object_id}),
+            return_exceptions=True,
+        )
+        if isinstance(scroll, BaseException) and not isinstance(scroll, RuntimeError):
+            raise scroll
+        if isinstance(quads, BaseException):
+            raise quads
         qs = quads.get("quads") or []
         if qs:
             return self._quad_center(qs)
@@ -964,17 +970,22 @@ class Tab(TabQueryMixin):
                 line += f" [{el.note}]"
             receipt = Receipt(line=line)
 
-        for event_type in ("mousePressed", "mouseReleased"):
-            await self._exec(
-                "Input.dispatchMouseEvent",
-                {
-                    "type": event_type,
-                    "x": x,
-                    "y": y,
-                    "button": button,
-                    "clickCount": click_count,
-                },
+        # Sent back to back, as Playwright's down/up are (see above).
+        await asyncio.gather(
+            *(
+                self._exec(
+                    "Input.dispatchMouseEvent",
+                    {
+                        "type": event_type,
+                        "x": x,
+                        "y": y,
+                        "button": button,
+                        "clickCount": click_count,
+                    },
+                )
+                for event_type in ("mousePressed", "mouseReleased")
             )
+        )
         return receipt
 
     async def click(
