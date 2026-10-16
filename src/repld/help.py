@@ -634,6 +634,9 @@ on an already-attached tab still reports the original attach's value.
       say what it will do; `await action.run()` performs it at the planned
       point and returns the Receipt.  run() never re-resolves, so a page that
       moved in between is clicked where it was.
+      `await action.gate(prompt=None, *, default=None, timeout=None)` holds it behind a
+      confirm gate (the tab's pill when pinned), then runs it; a "no" raises
+      ActionDeclined with nothing dispatched.
 
   tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
       Focus element, select-all existing content, type character-by-character
@@ -1924,6 +1927,7 @@ Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=)   → any
   tab.tree(mode="aria", at=None, in_crop=None)  → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
   tab.click(selector_or_x_y, button=, click_count=) → Receipt (strict resolve + actionability wait; names what was hit; 'x,y' clicks a viewport point with no DOM to resolve)
+  tab.plan_click(selector_or_x_y, button=, click_count=) → Action (resolves and hit-tests, presses nothing; action.run() clicks at the planned point, action.gate() holds it behind a confirm gate and raises ActionDeclined on no)
   tab.wheel(x, y, dy=, dx=)                        → Receipt (a real wheel event at a viewport point; positive dy scrolls down)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)

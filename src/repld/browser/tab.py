@@ -35,7 +35,7 @@ from .png import _png_size, check_budget, save_capture
 from .tab_query import TabQueryMixin
 from .target import make_target
 
-__all__ = ["Action", "BrowserJSError", "Receipt", "Tab"]
+__all__ = ["Action", "ActionDeclined", "BrowserJSError", "Receipt", "Tab"]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
 # heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
@@ -166,6 +166,33 @@ class Action:
         """Front the tab, then perform the action."""
         async with self.tab._ensure_front():
             return await self.dispatch()
+
+    async def gate(
+        self,
+        prompt: str | None = None,
+        *,
+        default: bool | None = None,
+        timeout: float | None = None,
+    ) -> Receipt:
+        """Hold the action behind a human `confirm` gate, then `run()` it.
+
+        Raises `ActionDeclined` when the human says no (or `default=False`
+        applies on timeout), so a caller that ignores the result cannot
+        mistake a decline for a click. Without `default=` a `timeout` raises
+        `TimeoutError`, as for any gate. The gate renders on this tab's pill
+        when it is pinned. The wait is not bounded, and the page can move
+        during it: see the class docstring.
+        """
+        from ..gates import confirm
+
+        text = prompt or f"Allow this action? {self.description}"
+        if not await confirm(text, tab=self.tab, default=default, timeout=timeout):
+            raise ActionDeclined(self.description)
+        return await self.run()
+
+
+class ActionDeclined(Exception):
+    """A human declined a gated `Action`; nothing was dispatched."""
 
 
 class BrowserJSError(Exception):

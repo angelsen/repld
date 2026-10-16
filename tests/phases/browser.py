@@ -3964,13 +3964,32 @@ def phase_6_plan_click(kernel: Kernel) -> None:
             "_n1 = await _t.js('window.__n')\n"
             "_p = await _t.plan_click('30,30', click_count=2)\n"
             "_pr = await _p.run()\n"
+            "import repld.gates as _g\n"
+            "async def _gated(answer):\n"
+            "    _act = await _t.plan_click('#b')\n"
+            "    _task = asyncio.ensure_future(_act.gate())\n"
+            "    for _ in range(50):\n"
+            "        if _g.open_gates(): break\n"
+            "        await asyncio.sleep(0.05)\n"
+            "    _gid = _g.open_gates()[-1]['gate_id']\n"
+            "    _n = await _t.js('window.__n')\n"
+            "    _g.resolve_gate(_gid, answer)\n"
+            "    try:\n"
+            "        _res = str(await _task)\n"
+            "    except Exception as _e:\n"
+            "        _res = type(_e).__name__\n"
+            "    return [_n, _res, await _t.js('window.__n')]\n"
+            "_no = await _gated(False)\n"
+            "_yes = await _gated(True)\n"
             "print('PC', json.dumps([_a.kind, _a.description, list(_a.point), _a.warning,"
-            " _n0, str(_r), _n1, _p.kind, _p.description, str(_pr)]))"
+            " _n0, str(_r), _n1, _p.kind, _p.description, str(_pr), _no, _yes]))"
         )
         mm = re.search(r"PC (\[.*\])", out)
         assert_true(mm is not None, f"plan cell printed its result ({out!r})")
         assert mm is not None
-        kind, desc, point, warn, n0, r, n1, pkind, pdesc, pr = json.loads(mm.group(1))
+        kind, desc, point, warn, n0, r, n1, pkind, pdesc, pr, no, yes = json.loads(
+            mm.group(1)
+        )
         assert_eq(n0, 0, "planning a click presses nothing")
         assert_eq(n1, 1, "run() delivers exactly one click")
         assert_eq(kind, "click", "an element plan is kind click")
@@ -3984,7 +4003,12 @@ def phase_6_plan_click(kernel: Kernel) -> None:
         )
         assert_eq((pkind, pdesc), ("click_point", "click (30,30)"), "a point plan")
         assert_true("(30,30)" in pr, f"a point plan runs at its point ({pr!r})")
+        assert_eq(no[:2], [1, "ActionDeclined"], "a declined gate raises, pending")
+        assert_eq(no[2], 1, "...and dispatches nothing")
+        assert_eq(yes[0], 1, "an accepted gate has not clicked while it waits")
+        assert_true("clicked:" in yes[1] and yes[2] == 2, f"accept runs it ({yes})")
         print("  \u2713 plan_click(): holds the dispatch, run() clicks at the plan")
+        print("  \u2713 Action.gate(): decline raises with nothing sent, accept runs")
     finally:
         h.close()
 
