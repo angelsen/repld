@@ -627,6 +627,14 @@ on an already-attached tab still reports the original attach's value.
       assistive tech does — isTrusted=false, and the receipt says so);
       modified clicks keep the coordinate dispatch plus a warning.
 
+  tab.plan_click(selector, *, button='left', click_count=1)  → Action
+      Resolve and hit-test a click like tab.click() but press nothing: the
+      pointer moves onto the target, and the Action holds the dispatch.
+      action.description / .point / .kind ('click' | 'click_point') / .warning
+      say what it will do; `await action.run()` performs it at the planned
+      point and returns the Receipt.  run() never re-resolves, so a page that
+      moved in between is clicked where it was.
+
   tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
       Focus element, select-all existing content, type character-by-character
       via Input.dispatchKeyEvent.  Auto-waits + actionability like click.

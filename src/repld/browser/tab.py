@@ -12,8 +12,9 @@ import json
 import pathlib
 import re
 import urllib.parse
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .. import bg
@@ -34,7 +35,7 @@ from .png import _png_size, check_budget, save_capture
 from .tab_query import TabQueryMixin
 from .target import make_target
 
-__all__ = ["BrowserJSError", "Receipt", "Tab"]
+__all__ = ["Action", "BrowserJSError", "Receipt", "Tab"]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
 # heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
@@ -141,6 +142,30 @@ class Receipt:
 
     def __repr__(self) -> str:
         return self.line
+
+
+@dataclass(frozen=True, slots=True)
+class Action:
+    """An input action planned but not yet performed, from `Tab.plan_click`.
+
+    `description` is what `run()` will do, taken from the plan (the receipt
+    line for an element click, so it names the target and any occlusion).
+    `point` is where it lands, in CSS viewport pixels. `run()` dispatches at
+    the *planned* point and never resolves again: a page that moved in between
+    is clicked where it was, and an element handle from the plan can die.
+    """
+
+    kind: str
+    description: str
+    point: tuple[float, float]
+    warning: bool
+    tab: "Tab" = field(repr=False, compare=False)
+    dispatch: Callable[[], Awaitable[Receipt]] = field(repr=False, compare=False)
+
+    async def run(self) -> Receipt:
+        """Front the tab, then perform the action."""
+        async with self.tab._ensure_front():
+            return await self.dispatch()
 
 
 class BrowserJSError(Exception):
@@ -896,15 +921,16 @@ class Tab(TabQueryMixin):
             warning=True,
         )
 
-    async def _click_element(
+    async def _plan_click_element(
         self,
         el: inject.ResolvedElement,
         *,
         selector: str,
         button: str = "left",
         click_count: int = 1,
-    ) -> Receipt:
-        """Coordinate resolution + hit receipt + dispatch for a resolved element.
+    ) -> Action:
+        """Coordinate resolution + hit receipt for a resolved element; the
+        returned `Action` holds the dispatch. Planning moves the pointer.
 
         The mouse arrives (`mouseMoved`) before anything else runs. Found
         live: `mousePressed`/`mouseReleased` with no preceding move on an
@@ -948,18 +974,23 @@ class Tab(TabQueryMixin):
         if hit is not None and not data.get("related", True):
             hdesc = " — ".join(p for p in (hit.get("preview"), hit.get("sel")) if p)
             if button == "left" and click_count == 1:
-                await inject.call_engine(
-                    self,
-                    "function(el) { el.click(); }",
-                    [{"objectId": el.object_id}],
-                    frame_id=el.frame_id,
-                )
-                return Receipt(
+                receipt = Receipt(
                     line=(
                         f"clicked via element.click(): {tdesc} — point "
                         f"({x:.0f},{y:.0f}) occluded by {hdesc}"
                     )
                 )
+
+                async def dispatch() -> Receipt:
+                    await inject.call_engine(
+                        self,
+                        "function(el) { el.click(); }",
+                        [{"objectId": el.object_id}],
+                        frame_id=el.frame_id,
+                    )
+                    return receipt
+
+                return Action("click", receipt.line, (x, y), False, self, dispatch)
             receipt = Receipt(
                 line=f"warning: clicked at ({x:.0f},{y:.0f}) hits {hdesc}, not {tdesc}",
                 warning=True,
@@ -970,23 +1001,40 @@ class Tab(TabQueryMixin):
                 line += f" [{el.note}]"
             receipt = Receipt(line=line)
 
-        # Sent back to back, as Playwright's down/up are (see above).
-        await asyncio.gather(
-            *(
-                self._exec(
-                    "Input.dispatchMouseEvent",
-                    {
-                        "type": event_type,
-                        "x": x,
-                        "y": y,
-                        "button": button,
-                        "clickCount": click_count,
-                    },
+        async def dispatch() -> Receipt:
+            # Sent back to back, as Playwright's down/up are (see above).
+            await asyncio.gather(
+                *(
+                    self._exec(
+                        "Input.dispatchMouseEvent",
+                        {
+                            "type": event_type,
+                            "x": x,
+                            "y": y,
+                            "button": button,
+                            "clickCount": click_count,
+                        },
+                    )
+                    for event_type in ("mousePressed", "mouseReleased")
                 )
-                for event_type in ("mousePressed", "mouseReleased")
             )
+            return receipt
+
+        return Action("click", receipt.line, (x, y), receipt.warning, self, dispatch)
+
+    async def _click_element(
+        self,
+        el: inject.ResolvedElement,
+        *,
+        selector: str,
+        button: str = "left",
+        click_count: int = 1,
+    ) -> Receipt:
+        """Plan and dispatch in one step, for callers already holding the front lock."""
+        action = await self._plan_click_element(
+            el, selector=selector, button=button, click_count=click_count
         )
-        return receipt
+        return await action.dispatch()
 
     async def click(
         self,
@@ -1009,20 +1057,56 @@ class Tab(TabQueryMixin):
         resolve (a canvas, a remote-screen viewer): nothing is waited for or
         checked, the receipt only names the element under the point.
         """
+        async with self._ensure_front():
+            action = await self._plan_click(
+                selector, button=button, click_count=click_count
+            )
+            return await action.dispatch()
+
+    async def plan_click(
+        self,
+        selector: "str | tuple[float, float]",
+        *,
+        button: str = "left",
+        click_count: int = 1,
+    ) -> Action:
+        """Resolve a click like `click()` but hold the dispatch: nothing is
+        pressed until `.run()`. Takes the same selector or point.
+
+        An element selector is resolved and hit-tested now, and the pointer
+        moves onto it; a point is not checked at all until it runs.
+        """
+        async with self._ensure_front():
+            return await self._plan_click(
+                selector, button=button, click_count=click_count
+            )
+
+    async def _plan_click(
+        self,
+        selector: "str | tuple[float, float]",
+        *,
+        button: str,
+        click_count: int,
+    ) -> Action:
+        """Unlocked core of `click`/`plan_click`; the caller holds `_ensure_front`."""
         pt = self._parse_point(selector)
         if pt is not None:
-            async with self._ensure_front():
-                return await self._click_point(
-                    pt[0], pt[1], button=button, click_count=click_count
-                )
+            x, y = pt
+            return Action(
+                "click_point",
+                f"click ({x:.0f},{y:.0f})",
+                (x, y),
+                False,
+                self,
+                lambda: self._click_point(x, y, button=button, click_count=click_count),
+            )
         sel = selector if isinstance(selector, str) else str(selector)
-        async with self._ensure_front():
-            el = await inject.resolve_actionable(
-                self, sel, ("visible", "enabled", "stable")
-            )
-            return await self._click_element(
-                el, selector=sel, button=button, click_count=click_count
-            )
+        el = await inject.resolve_actionable(
+            self, sel, ("visible", "enabled", "stable")
+        )
+        return await self._plan_click_element(
+            el, selector=sel, button=button, click_count=click_count
+        )
 
     async def _click_point(
         self, x: float, y: float, *, button: str, click_count: int

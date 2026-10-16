@@ -14,6 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `tab.screencast(handler)` streams a tab's repaints (`Page.startScreencast`) to a sync or async handler as `Frame(data, meta)`: one stream per tab, frames acked after the handler returns so a slow handler lowers the frame rate, never written to the event store, and replayed after a Chrome reconnect. The primitive for a live-view gist; repld ships no viewer.
 
+- `tab.plan_click(selector, button=, click_count=)` resolves and hit-tests a click like `tab.click()` but presses nothing, and returns an `Action` (`kind`, `description`, `point`, `warning`) whose `await action.run()` dispatches at the planned point without resolving again. `click()` is `plan_click` plus `run` under one front lock, so its behavior is unchanged. The seam for a viewer or a gate that holds an action until a human accepts it.
+
 ### Changed
 
 - On a `connect(url=)` browser, the `download_started`/`download_done` push carries the file's location as `remote_path` (no `path`) and says it is on the browser's host: the file is not readable locally.

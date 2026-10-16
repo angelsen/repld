@@ -3936,6 +3936,59 @@ def phase_6_click_point(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_plan_click(kernel: Kernel) -> None:
+    """plan_click resolves and hit-tests without pressing; run() dispatches at the plan."""
+    if not _chrome_ready("phase 6 plan click"):
+        return
+    h = _BridgeHarness(kernel)
+    page = (
+        "<body style='margin:0'><button id=b style='position:absolute;left:100px;"
+        "top:60px;width:120px;height:40px'>Go</button>"
+        "<script>window.__n=0;document.getElementById('b')"
+        ".addEventListener('click',()=>window.__n++)</script>"
+    )
+    try:
+        resp = h.tool(
+            "browser_open",
+            {"url": f"data:text/html,{page}<i>{_MARKER}</i>", "viewport": "800x600"},
+        )
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert_true(m is not None, "opened the button page")
+        assert m is not None
+        out = h.exec(
+            f"_t = await browser.get({m.group(1)!r})\n"
+            "import json\n"
+            "_a = await _t.plan_click('#b')\n"
+            "_n0 = await _t.js('window.__n')\n"
+            "_r = await _a.run()\n"
+            "_n1 = await _t.js('window.__n')\n"
+            "_p = await _t.plan_click('30,30', click_count=2)\n"
+            "_pr = await _p.run()\n"
+            "print('PC', json.dumps([_a.kind, _a.description, list(_a.point), _a.warning,"
+            " _n0, str(_r), _n1, _p.kind, _p.description, str(_pr)]))"
+        )
+        mm = re.search(r"PC (\[.*\])", out)
+        assert_true(mm is not None, f"plan cell printed its result ({out!r})")
+        assert mm is not None
+        kind, desc, point, warn, n0, r, n1, pkind, pdesc, pr = json.loads(mm.group(1))
+        assert_eq(n0, 0, "planning a click presses nothing")
+        assert_eq(n1, 1, "run() delivers exactly one click")
+        assert_eq(kind, "click", "an element plan is kind click")
+        assert_true(
+            "button" in desc.lower() and desc == r,
+            f"the plan describes what run() reports ({desc!r} vs {r!r})",
+        )
+        assert_true(
+            100 <= point[0] <= 220 and 60 <= point[1] <= 100 and not warn,
+            f"the planned point is inside the button ({point})",
+        )
+        assert_eq((pkind, pdesc), ("click_point", "click (30,30)"), "a point plan")
+        assert_true("(30,30)" in pr, f"a point plan runs at its point ({pr!r})")
+        print("  \u2713 plan_click(): holds the dispatch, run() clicks at the plan")
+    finally:
+        h.close()
+
+
 def phase_6_session_gone(kernel: Kernel) -> None:
     """A provider closing 4410 retires the pool entry and pushes one browser_disconnected."""
     h = _BridgeHarness(kernel)
