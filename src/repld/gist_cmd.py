@@ -318,7 +318,7 @@ def _gist_fetch(argv: list[str]) -> int:
 
     url = f"https://gist.github.com/{gist_id}"
     # Local date on purpose: a human-facing provenance stamp, not a timestamp.
-    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())  # noqa: DTZ011
+    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())
     dest_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for fname, content in sorted(files.items()):
@@ -482,7 +482,7 @@ def _gist_stub(argv: list[str]) -> int:
         gist,
         entry.get("doc", ""),
         functions,
-        date=datetime.date.today().isoformat(),  # noqa: DTZ011
+        date=datetime.date.today().isoformat(),
         start=start,
     )
     dest_dir.mkdir(parents=True, exist_ok=True)

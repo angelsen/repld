@@ -3978,11 +3978,12 @@ def phase_6_session_gone(kernel: Kernel) -> None:
         text = n["params"]["content"]
         assert_true("SECRETTOKEN" not in text, f"the push carries no token ({text!r})")
         out = h.exec(
-            "print('GONE after', _b.port in browser.peek()._browsers)\n"
-            "_srv.close()"
+            "print('GONE after', _b.port in browser.peek()._browsers)\n_srv.close()"
         )
         assert_true("GONE after False" in out, f"the entry is retired ({out!r})")
-        print("  ✓ session gone: 4410 retires the entry and pushes browser_disconnected")
+        print(
+            "  ✓ session gone: 4410 retires the entry and pushes browser_disconnected"
+        )
     finally:
         h.close()
 
