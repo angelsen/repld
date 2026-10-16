@@ -11,12 +11,12 @@ Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), h
 Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
 
 ```bash
-uv sync                                                                                         # install deps into .venv
-uv run repld                                                                                    # runs the `repld:main` entrypoint
-uv build                                                                                        # wheel + sdist via uv_build
-uv run tests/smoketest.py --phase 12                                                            # end-to-end smoketest
-ruff check --fix && ruff format && python3 scripts/align-comments.py --fix-all && basedpyright  # lint / format / align / type-check
-make injected                                                                                   # regenerate src/repld/browser/injected_source.py
+uv sync                                                                                                 # install deps into .venv
+uv run repld                                                                                            # runs the `repld:main` entrypoint
+uv build                                                                                                # wheel + sdist via uv_build
+uv run tests/smoketest.py --phase 12                                                                    # end-to-end smoketest
+ruff check --fix && ruff format . gists && python3 scripts/align-comments.py --fix-all && basedpyright  # lint / format / align / type-check
+make injected                                                                                           # regenerate src/repld/browser/injected_source.py
 ```
 
 `scripts/align-comments.py --fix-all` runs last on purpose — it re-applies

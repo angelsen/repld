@@ -23,14 +23,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The standard sweep for --fix-all: the tracked codebase + doc surfaces with
-# embedded Python examples. Deliberately excludes ./gists (personal,
-# gitignored, not part of the lint gate) and CHANGELOG/TODO/LICENSE files
-# (no code-comment groups worth aligning).
+# The standard sweep for --fix-all: the tracked codebase, ./gists (gitignored,
+# so ruff only visits them when named) + doc surfaces with embedded Python
+# examples. Excludes CHANGELOG/TODO/LICENSE files (no code-comment groups
+# worth aligning).
 _SWEEP_GLOBS = [
     "src/**/*.py",
     "tests/**/*.py",
     "scripts/*.py",
+    "gists/*.py",
     "README.md",
     "CLAUDE.md",
     "docs/*.md",
