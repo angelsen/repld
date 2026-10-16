@@ -195,9 +195,15 @@ async def confirm(
     tab=None,
     default: bool | None = None,
     timeout: float | None = None,
+    on_open=None,
 ) -> bool:
-    """Prompt the human for a yes/no response. Returns bool."""
-    value = await _gate("confirm", prompt, None, default, timeout, tab=tab)
+    """Prompt the human for a yes/no response. Returns bool.
+
+    `on_open(gate_id)` is called once the gate is registered and answerable, for a
+    surface that must tell this gate from another with the same prompt."""
+    value = await _gate(
+        "confirm", prompt, None, default, timeout, tab=tab, on_open=on_open
+    )
     return bool(value)
 
 
@@ -222,6 +228,7 @@ async def _gate(
     timeout: float | None,
     *,
     tab=None,
+    on_open=None,
 ) -> str | bool:
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
@@ -268,6 +275,8 @@ async def _gate(
             content, meta, session=tasks.current_origin(), fallback_broadcast=True
         )
         emit(HumanPromptOpen(gate_id, kind, prompt, options))
+        if on_open is not None:
+            on_open(gate_id)
 
         # Route to pill UI if tab is pinned
         if use_pill and tab is not None:

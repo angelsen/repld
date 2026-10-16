@@ -173,8 +173,12 @@ class Action:
         *,
         default: bool | None = None,
         timeout: float | None = None,
+        on_open: Callable[[str], None] | None = None,
     ) -> Receipt:
         """Hold the action behind a human `confirm` gate, then `run()` it.
+
+        `on_open(gate_id)` fires once the gate is answerable, so a viewer can
+        show this action against exactly this gate.
 
         Raises `ActionDeclined` when the human says no (or `default=False`
         applies on timeout), so a caller that ignores the result cannot
@@ -186,7 +190,9 @@ class Action:
         from ..gates import confirm
 
         text = prompt or f"Allow this action? {self.description}"
-        if not await confirm(text, tab=self.tab, default=default, timeout=timeout):
+        if not await confirm(
+            text, tab=self.tab, default=default, timeout=timeout, on_open=on_open
+        ):
             raise ActionDeclined(self.description)
         return await self.run()
 

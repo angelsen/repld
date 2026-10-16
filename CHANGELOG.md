@@ -18,7 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The dashboard answers human gates: `gates` lists the pending ones and `gate_answer` resolves one (`POST /api`, Bearer-only, never an MCP tool), with a strip above the tabs that shows each gate's Accept/Decline, option buttons or text box. Answers are coerced by the same `gates.answer_gate` that `repld gate answer` now uses.
 
-- `Action.gate()` on a `tab.plan_click(...)` plan holds the click behind a `confirm` gate and runs it on yes; a no raises `ActionDeclined` with nothing dispatched.
+- `Action.gate()` on a `tab.plan_click(...)` plan holds the click behind a `confirm` gate and runs it on yes; a no raises `ActionDeclined` with nothing dispatched. `gate(on_open=)` (and `confirm(on_open=)`) hands the caller the gate's id once it is answerable, so a viewer shows an action against exactly that gate.
 
 ### Changed
 

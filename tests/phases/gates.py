@@ -392,8 +392,15 @@ def _dashboard_answers_a_gate(b: Bridge, kernel: Kernel) -> None:
     token = json.loads(paths.hint_for(paths.socket_path(kernel.cwd)).read_text())[
         "token"
     ]
-    task_id = _open_gate(b, 'await confirm("Allow the click?")')
+    task_id = _open_gate(
+        b,
+        '_seen = []\nawait confirm("Allow the click?", on_open=_seen.append)',
+    )
     gate_id = _pending(kernel)[0]["gate_id"]
+    seen = b.exec("print(_seen)", timeout=5.0)["result"]["content"][0]["text"]
+    assert_true(
+        gate_id in seen, f"on_open handed the caller the pending gate's id ({seen!r})"
+    )
 
     status, _ = _dashboard_rpc(kernel, "gates", {}, None)
     assert_eq(status, 401, "the gates RPC needs the token")
