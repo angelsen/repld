@@ -1017,9 +1017,8 @@ class Tab(TabQueryMixin):
                 )
         sel = selector if isinstance(selector, str) else str(selector)
         async with self._ensure_front():
-            el = await inject.resolve_element(self, sel)
-            await inject.check_actionable(
-                self, el, ("visible", "enabled", "stable"), selector=sel
+            el = await inject.resolve_actionable(
+                self, sel, ("visible", "enabled", "stable")
             )
             return await self._click_element(
                 el, selector=sel, button=button, click_count=click_count
@@ -1095,10 +1094,7 @@ class Tab(TabQueryMixin):
                 receipt = Receipt(line=f"hovering: ({x:.0f},{y:.0f})")
             else:
                 sel = selector if isinstance(selector, str) else str(selector)
-                el = await inject.resolve_element(self, sel)
-                await inject.check_actionable(
-                    self, el, ("visible", "stable"), selector=sel
-                )
+                el = await inject.resolve_actionable(self, sel, ("visible", "stable"))
                 x, y = await self._element_center_of(el, sel)
                 receipt = await self._receipt_for(el, x, y, verb="hovering")
             await self._exec(
@@ -1124,10 +1120,8 @@ class Tab(TabQueryMixin):
         pt = self._parse_point(spec)
         if pt is not None:
             return pt[0], pt[1], None, f"({pt[0]:.0f},{pt[1]:.0f})"
-        kw = {} if timeout is None else {"timeout": timeout}
-        el = await inject.resolve_element(self, spec, **kw)
-        await inject.check_actionable(
-            self, el, ("visible", "stable"), selector=spec, **kw
+        el = await inject.resolve_actionable(
+            self, spec, ("visible", "stable"), timeout=timeout
         )
         x, y = await self._element_center_of(el, spec)
         preview, sel = await inject.describe_element(self, el)
@@ -1306,12 +1300,8 @@ class Tab(TabQueryMixin):
         path the text took.
         """
         async with self._ensure_front():
-            el = await inject.resolve_element(self, selector)
-            await inject.check_actionable(
-                self,
-                el,
-                ("visible", "enabled", "editable", "stable"),
-                selector=selector,
+            el = await inject.resolve_actionable(
+                self, selector, ("visible", "enabled", "editable", "stable")
             )
             await self._exec("DOM.focus", {"objectId": el.object_id})
             await inject.call_engine(
@@ -1383,9 +1373,8 @@ class Tab(TabQueryMixin):
         A miss lists the visible options' accessible names.
         """
         async with self._ensure_front():
-            el = await inject.resolve_element(self, selector)
-            await inject.check_actionable(
-                self, el, ("visible", "enabled", "stable"), selector=selector
+            el = await inject.resolve_actionable(
+                self, selector, ("visible", "enabled", "stable")
             )
             tag_r = await inject.call_engine(
                 self,
@@ -1598,9 +1587,8 @@ class Tab(TabQueryMixin):
                 receipt = Receipt(line=f"tapped ({x:.0f},{y:.0f})")
             else:
                 selector = selector_or_x
-                el = await inject.resolve_element(self, selector)
-                await inject.check_actionable(
-                    self, el, ("visible", "stable"), selector=selector
+                el = await inject.resolve_actionable(
+                    self, selector, ("visible", "stable")
                 )
                 x, y = await self._element_center_of(el, selector)
                 receipt = await self._receipt_for(el, x, y, verb="tapped")

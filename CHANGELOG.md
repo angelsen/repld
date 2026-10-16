@@ -22,6 +22,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `tab.click()` on an element sends the scroll with the quads read, and `mousePressed` with `mouseReleased`, back to back: two fewer sequential round trips per click (11 to 9 on a warm tab), which is about 200 ms at 100 ms RTT.
 
+- Selector actions (`click`, `hover`, `drag`, `type_text`, `select`, `tap`) read the "N matches, 1 visible" note inside the actionability call instead of a call of their own: one fewer round trip.
+
 - A hosted browser whose provider ended the session (WebSocket close 4410), or whose reconnect fails on a `url=` browser, is dropped from the pool with one `browser_disconnected` push naming its key and redacted URL; it used to stay as a dead entry forever.
 - A CDP call failed by a dying socket after its caller had timed out no longer surfaces as a taskless `bg_task_error`.
 

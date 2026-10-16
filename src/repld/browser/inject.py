@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from . import selector as selector_mod
@@ -268,7 +268,11 @@ function(selectors) {
 
 
 async def resolve_element(
-    tab: "Tab", selector: str, *, timeout: float = _RESOLVE_TIMEOUT_S
+    tab: "Tab",
+    selector: str,
+    *,
+    timeout: float = _RESOLVE_TIMEOUT_S,
+    defer_note: bool = False,
 ) -> ResolvedElement:
     """Strict-resolve a repld selector to an element handle. Auto-waits.
 
@@ -277,12 +281,21 @@ async def resolve_element(
     the deadline.
     """
     return await resolve_engine_selectors(
-        tab, selector_mod.translate_fallbacks(selector), selector, timeout=timeout
+        tab,
+        selector_mod.translate_fallbacks(selector),
+        selector,
+        timeout=timeout,
+        defer_note=defer_note,
     )
 
 
 async def _match_in_frame(
-    tab: "Tab", sel: str, frame_id: str | None, describe: str
+    tab: "Tab",
+    sel: str,
+    frame_id: str | None,
+    describe: str,
+    *,
+    defer_note: bool = False,
 ) -> ResolvedElement | None:
     """One selector against one frame. Returns a match or None (no match /
     frame not injectable — same disposition as no match).
@@ -314,6 +327,11 @@ async def _match_in_frame(
     exc_details = result.get("exceptionDetails")
     if exc_details is None:
         obj = result.get("result", {})
+        if defer_note:
+            # `__repld_note` stays on the element for `check_actionable` to read.
+            return ResolvedElement(
+                object_id=obj["objectId"], note="", frame_id=frame_id
+            )
         note_r = await call_engine(
             tab,
             "function(el) { const n = el.__repld_note; delete el.__repld_note;"
@@ -342,6 +360,7 @@ async def resolve_engine_selectors(
     describe: str,
     *,
     timeout: float = _RESOLVE_TIMEOUT_S,
+    defer_note: bool = False,
 ) -> ResolvedElement:
     """resolve_element over already-translated engine selectors.
 
@@ -366,7 +385,9 @@ async def resolve_engine_selectors(
         for sel in selectors:
             matches: list[ResolvedElement] = []
             for frame_id in frame_ids:
-                outcome = await _match_in_frame(tab, sel, frame_id, selector)
+                outcome = await _match_in_frame(
+                    tab, sel, frame_id, selector, defer_note=defer_note
+                )
                 if outcome is not None:
                     matches.append(outcome)
             if len(matches) > 1:
@@ -434,6 +455,17 @@ async def selector_exists(tab: "Tab", selector: str) -> bool:
     return False
 
 
+# Also collects the `__repld_note` expando a `defer_note` resolve left behind:
+# one call instead of a separate read.
+_ACTIONABLE_FN = """
+async function(node, states) {
+  const note = node.__repld_note;
+  delete node.__repld_note;
+  return { state: await this.checkElementStates(node, states), note: note || 0 };
+}
+"""
+
+
 async def check_actionable(
     tab: "Tab",
     el: ResolvedElement,
@@ -441,7 +473,7 @@ async def check_actionable(
     *,
     selector: str = "",
     timeout: float = _ACTIONABLE_TIMEOUT_S,
-) -> None:
+) -> ResolvedElement:
     """Wait until the element passes every state check, or raise naming the miss.
 
     checkElementStates resolves promptly per call ('stable' resolves after
@@ -449,20 +481,26 @@ async def check_actionable(
     open-ended), so the wait bound lives here. Must run after _ensure_front():
     the stable check counts requestAnimationFrame, which Chrome throttles on
     hidden tabs.
+
+    Returns `el` with its `note` filled from a `defer_note` resolve.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    n = 0
     while True:
         result = await call_engine(
             tab,
-            "function(node, states) { return this.checkElementStates(node, states); }",
+            _ACTIONABLE_FN,
             [{"objectId": el.object_id}, {"value": list(states)}],
             frame_id=el.frame_id,
             await_promise=True,
         )
-        value = result.get("result", {}).get("value")
+        payload = result.get("result", {}).get("value")
+        value = payload.get("state") if isinstance(payload, dict) else None
+        # The first call consumes the expando; later polls see 0.
+        n = (payload.get("note") if isinstance(payload, dict) else 0) or n
         if value is None and "exceptionDetails" not in result:
-            return
+            return replace(el, note=f"{n} matches, 1 visible") if n else el
         if value == "error:notconnected":
             raise RuntimeError(
                 f"element for {selector!r} detached from the DOM mid-action"
@@ -473,6 +511,19 @@ async def check_actionable(
                 f"element not {missing or 'actionable'} after {timeout:.0f}s: {selector}"
             )
         await asyncio.sleep(_POLL_S)
+
+
+async def resolve_actionable(
+    tab: "Tab",
+    selector: str,
+    states: tuple[str, ...],
+    *,
+    timeout: float | None = None,
+) -> ResolvedElement:
+    """Strict-resolve `selector`, then wait for `states`, with the note read folded in."""
+    kw = {} if timeout is None else {"timeout": timeout}
+    el = await resolve_element(tab, selector, defer_note=True, **kw)
+    return await check_actionable(tab, el, states, selector=selector, **kw)
 
 
 # Pre-dispatch hit test: "what will this click land on" is the honest receipt —
