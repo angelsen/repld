@@ -138,6 +138,9 @@ td.level.warning { color: var(--amber); }
 td.level.log { color: var(--dim); }
 td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px; }
 
+.gate-row { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.gate-row .prompt { flex: 1; }
+.gate-row input { width: 14em; }
 .empty { color: var(--dim); font-style: italic; font-size: 12px; padding: 12px 0; }
 
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -171,6 +174,8 @@ td.console-text { white-space: pre-wrap; word-break: break-all; max-width: 600px
     <span id="ki-tickers"></span>
   </div>
 </div>
+
+<div id="gates" hidden></div>
 
 <div class="tab-bar" id="tab-bar">
   <button class="active" data-tab="browser">Browser</button>
@@ -330,7 +335,7 @@ function render() {
   $('#hdr-uptime').textContent = formatUptime(k.uptime_s);
   $('#ki-tasks').textContent = k.tasks_active ? k.tasks_active + ' task' + (k.tasks_active > 1 ? 's' : '') : '';
   $('#ki-tickers').textContent = k.tickers.length ? k.tickers.map(t => t.label).join(', ') : '';
-  $('#ki-tickers').title = k.tickers.map(t => t.label + ' every ' + t.seconds + 's' + (t.tab ? ' tab=' + t.tab : '')).join('\n');
+  $('#ki-tickers').title = k.tickers.map(t => t.label + ' every ' + t.seconds + 's' + (t.tab ? ' tab=' + t.tab : '')).join('\\n');
   $('#ft-socket').textContent = k.socket;
 
   const b = state.browser;
@@ -637,6 +642,45 @@ setInterval(refreshSessions, 10000);
 // browser.watch) never showed up at all.
 refreshState();
 setInterval(refreshState, 10000);
+
+// --- human gates ---
+// A gate is answered here, by the kernel, with the same coercion as `repld gate answer`.
+async function answerGate(id, value) {
+  try { await rpc('gate_answer', { gate_id: id, value }); } catch (e) {}
+  await refreshGates();
+}
+async function refreshGates() {
+  let list;
+  try { list = await rpc('gates'); } catch (e) { return; }
+  const box = $('#gates');
+  box.hidden = list.length === 0;
+  box.replaceChildren(...list.map(g => {
+    const row = document.createElement('div');
+    row.className = 'gate-row';
+    const prompt = document.createElement('span');
+    prompt.className = 'prompt';
+    prompt.textContent = g.prompt;
+    row.append(prompt);
+    const add = (label, value) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.onclick = () => answerGate(g.gate_id, value);
+      row.append(b);
+    };
+    if (g.kind === 'confirm') { add('Accept', 'y'); add('Decline', 'n'); }
+    else if (g.kind === 'choose') g.options.forEach(o => add(o, o));
+    else {
+      const input = document.createElement('input');
+      const b = document.createElement('button');
+      b.textContent = 'Send';
+      b.onclick = () => answerGate(g.gate_id, input.value);
+      row.append(input, b);
+    }
+    return row;
+  }));
+}
+setInterval(refreshGates, 2000);
+refreshGates();
 
 // --- util ---
 function formatUptime(s) {

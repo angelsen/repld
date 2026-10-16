@@ -5,11 +5,14 @@ have no answering surface at all: no pane reading stdin, no pinned tab. So these
 assertions run against the configuration that matters.
 """
 
+import http.client
 import json
 import subprocess
 import time
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true
+
+from repld import paths
 
 
 def _gate_cli(kernel: Kernel, *args: str) -> subprocess.CompletedProcess:
@@ -242,6 +245,7 @@ def phase_17_gates(kernel: Kernel) -> None:
         print("  ✓ ask on a pinned tab keeps its headless answer route")
 
         _timeout_closes_the_gate(b, kernel)
+        _dashboard_answers_a_gate(b, kernel)
         _pane_reshows_the_question()
         _pane_drops_a_timed_out_gate()
         _tty_prompt_declines_once_display_owns_stdin()
@@ -362,3 +366,57 @@ def _pane_drops_a_timed_out_gate() -> None:
         display._open_gates.clear()
         display._open_gates.update(real_gates)
     print("  ✓ pane drops an expired gate instead of routing stdin at it forever")
+
+
+def _dashboard_rpc(kernel: Kernel, method: str, params: dict, token: str | None):
+    port = json.loads(kernel.lock_path.read_text())["dashboard_port"]
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        conn.request(
+            "POST",
+            "/api",
+            json.dumps({"method": method, "params": params, "id": 1}),
+            headers,
+        )
+        resp = conn.getresponse()
+        return resp.status, resp.read().decode()
+    finally:
+        conn.close()
+
+
+def _dashboard_answers_a_gate(b: Bridge, kernel: Kernel) -> None:
+    """The dashboard is a fourth `resolve_gate` caller: Bearer-only, same coercion."""
+    token = json.loads(paths.hint_for(paths.socket_path(kernel.cwd)).read_text())[
+        "token"
+    ]
+    task_id = _open_gate(b, 'await confirm("Allow the click?")')
+    gate_id = _pending(kernel)[0]["gate_id"]
+
+    status, _ = _dashboard_rpc(kernel, "gates", {}, None)
+    assert_eq(status, 401, "the gates RPC needs the token")
+    status, body = _dashboard_rpc(kernel, "gates", {}, token)
+    listed = json.loads(body)["result"]
+    assert_eq([g["gate_id"] for g in listed], [gate_id], "gates lists the pending one")
+
+    _, body = _dashboard_rpc(
+        kernel, "gate_answer", {"gate_id": gate_id, "value": "maybe"}, token
+    )
+    assert_true("error" in json.loads(body), "a confirm rejects a non-y/n answer")
+    assert_eq(len(_pending(kernel)), 1, "and stays open")
+
+    _, body = _dashboard_rpc(
+        kernel, "gate_answer", {"gate_id": gate_id, "value": "y"}, token
+    )
+    assert_eq(json.loads(body)["result"]["value"], True, "y resolves it to True")
+    assert_eq(_await_task(b, task_id).strip(), "True", "the awaiting cell got True")
+
+    _, body = _dashboard_rpc(
+        kernel, "gate_answer", {"gate_id": gate_id, "value": "y"}, token
+    )
+    assert_true(
+        "error" in json.loads(body), "an answered gate cannot be answered twice"
+    )
+    print("  ✓ dashboard gates / gate_answer: Bearer-only, same coercion, first wins")

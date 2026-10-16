@@ -16,11 +16,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `tab.plan_click(selector, button=, click_count=)` resolves and hit-tests a click like `tab.click()` but presses nothing, and returns an `Action` (`kind`, `description`, `point`, `warning`) whose `await action.run()` dispatches at the planned point without resolving again. `click()` is `plan_click` plus `run` under one front lock, so its behavior is unchanged. The seam for a viewer or a gate that holds an action until a human accepts it.
 
+- The dashboard answers human gates: `gates` lists the pending ones and `gate_answer` resolves one (`POST /api`, Bearer-only, never an MCP tool), with a strip above the tabs that shows each gate's Accept/Decline, option buttons or text box. Answers are coerced by the same `gates.answer_gate` that `repld gate answer` now uses.
+
+- `Action.gate()` on a `tab.plan_click(...)` plan holds the click behind a `confirm` gate and runs it on yes; a no raises `ActionDeclined` with nothing dispatched.
+
 ### Changed
 
 - On a `connect(url=)` browser, the `download_started`/`download_done` push carries the file's location as `remote_path` (no `path`) and says it is on the browser's host: the file is not readable locally.
 
 ### Fixed
+
+- The dashboard page's script no longer fails to parse: a `join('\n')` in the non-raw page string became a newline inside a JS string literal, which stopped every handler on the page from running. A phase 14 `node --check` guards it.
 
 - A local Chrome connection no longer sends WebSocket keepalive pings: a loopback socket cannot go half-open, and a ping timeout while Chrome was starved (a large WASM page loading) dropped the socket and reconnected every attached tab. A `connect(url=)` endpoint keeps its ping.
 - A CDP call that fails because the socket just died, while another caller is already reconnecting, waits for that reconnect and retries once; it used to raise the raw `WS recv loop ended` error straight to its caller.

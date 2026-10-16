@@ -235,11 +235,7 @@ infinite scroll.
 
 ## Deferred by design
 
-- [ ] **Dashboard gate surface.** `gates/list` and `gates/resolve` are kernel JSON-RPC methods
-  and `gates.open_gates()` returns a JSON-ready shape specifically so a second surface is
-  cheap — but only `repld gate` calls them. The dashboard already has the token, the RPC
-  dispatch table, and a UI; wiring a pending-gates card is maybe 40 lines. Deliberately not
-  MCP tools: an agent able to answer its own `confirm()` defeats the primitive.
+- [x] **Dashboard gate surface.** Done: `gates` and `gate_answer` on `POST /api` (Bearer-only) and a pending-gates strip on the page, both over `gates.answer_gate`. Deliberately not MCP tools: an agent able to answer its own `confirm()` defeats the primitive. Not exercised in a real browser: the strip's rendering and buttons were checked for syntax (`node --check`) and through the RPCs only.
 - [ ] **Per-parameter descriptions beyond a bare string.** `Annotated[T, "..."]` carries a
   description and nothing else. Enum/min/max would need a dict metadata item; no demand yet,
   and `repld` staying dependency-free rules out borrowing pydantic's `Field`.

@@ -2,7 +2,11 @@
 
 import http.client
 import json
+import re
+import shutil
 import socket
+import subprocess
+import tempfile
 
 from harness import Kernel, assert_eq, assert_true
 
@@ -221,3 +225,27 @@ def phase_14_dashboard(kernel: Kernel) -> None:
         "including this kernel's own",
     )
     print("  ✓ sessions RPC carries per-session tokens for the sidebar links")
+
+    _page_script_parses()
+
+
+def _page_script_parses() -> None:
+    """The served script must parse: PAGE is a non-raw string, so a `'\\n'` typed
+    in the JS becomes a real newline inside a string literal and kills the page."""
+    from repld.dashboard_html import PAGE
+
+    node = shutil.which("node")
+    if node is None:
+        print("  - page script syntax check skipped (no node)")
+        return
+    m = re.search(r"<script>(.*)</script>", PAGE, re.DOTALL)
+    assert_true(m is not None, "PAGE has an inline script")
+    assert m is not None
+    with tempfile.NamedTemporaryFile("w", suffix=".js") as f:
+        f.write(m.group(1).replace("__DASHBOARD_TOKEN__", "x"))
+        f.flush()
+        proc = subprocess.run(
+            [node, "--check", f.name], capture_output=True, text=True, check=False
+        )
+    assert_eq(proc.returncode, 0, f"the dashboard script parses ({proc.stderr[:300]})")
+    print("  ✓ the dashboard page script parses (node --check)")

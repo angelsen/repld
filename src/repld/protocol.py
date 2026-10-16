@@ -1017,33 +1017,18 @@ class Dispatcher(BrowserDispatchMixin):
         return _response(rid, result)
 
     def _gates_resolve(self, rid, params: dict) -> dict:
-        """Answer one pending gate, coercing the value the way its kind needs.
-
-        Coercion happens here rather than in the CLI so the kernel stays the
-        authority on what a gate accepts — the caller only knows the string a
-        human typed, and `open_gates` is what says whether it's a confirm.
-        """
+        """Answer one pending gate; `gates.answer_gate` owns the coercion."""
         from . import gates
 
         gate_id = params.get("gate_id")
         if not gate_id:
             return _error(rid, -32602, "missing gate_id")
-        pending = {g["gate_id"]: g for g in gates.open_gates()}
-        gate = pending.get(gate_id)
-        if gate is None:
-            return _error(rid, -32602, f"no gate awaiting an answer: {gate_id}")
         if "value" not in params:
             return _error(rid, -32602, "missing value")
         try:
-            value = gates.parse_response(
-                gate["kind"], str(params["value"]), gate["options"]
-            )
-        except ValueError as exc:
+            value = gates.answer_gate(gate_id, str(params["value"]))
+        except gates.GateAnswerError as exc:
             return _error(rid, -32602, str(exc))
-        if not gates.resolve_gate(gate_id, value):
-            # Raced: a pane or a browser pill answered between the lookup and
-            # here. The cell is unblocked either way, which is what was wanted.
-            return _error(rid, -32602, f"gate {gate_id} was already answered")
         return _response(rid, {"gate_id": gate_id, "value": value})
 
     def _initialize(self, rid, params: dict, session=None) -> dict:

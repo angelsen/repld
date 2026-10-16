@@ -355,6 +355,24 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
     if method == "sessions":
         return _sessions_with_tokens()
 
+    # A fourth `resolve_gate` caller, behind the Bearer token. JSON-RPC only,
+    # never an MCP tool: an agent answering its own `confirm()` defeats the gate.
+    if method == "gates":
+        from . import gates
+
+        return gates.open_gates()
+
+    if method == "gate_answer":
+        from . import gates
+
+        gate_id, value = params.get("gate_id"), params.get("value")
+        if not gate_id or value is None:
+            raise RuntimeError("gate_answer needs gate_id and value")
+        return {
+            "gate_id": gate_id,
+            "value": gates.answer_gate(str(gate_id), str(value)),
+        }
+
     handler = _BROWSER_RPCS.get(method)
     if handler is None:
         raise RuntimeError(f"Unknown method: {method}")

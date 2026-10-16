@@ -124,9 +124,8 @@ def open_gates() -> list[dict]:
     """Every gate currently waiting on a human, oldest first.
 
     Serialisable by construction: it crosses the IPC socket to `repld gate`,
-    via the kernel's `gates/list` method. That is the only caller today; the
-    shape is JSON-ready so a second surface (the dashboard) wouldn't need a
-    different accessor.
+    via the kernel's `gates/list` method, and the dashboard's `gates` RPC reads
+    the same shape.
     """
     now = time.monotonic()
     with _gates_lock:
@@ -309,8 +308,8 @@ async def _gate(
 def resolve_gate(gate_id: str, value) -> bool:
     """Answer a pending gate. Returns whether this call is the one that did.
 
-    The pane's stdin reader, a browser pill, and `repld gate answer` can all
-    race to resolve the same gate — first one wins by design; set_result on an
+    The pane's stdin reader, a browser pill, `repld gate answer` and the
+    dashboard can all race to resolve the same gate — first one wins by design; set_result on an
     already-done future raises InvalidStateError, which we swallow rather than
     crash the caller.
 
@@ -333,6 +332,30 @@ def resolve_gate(gate_id: str, value) -> bool:
         return False
     emit(HumanPromptResponse(gate_id, value))
     return True
+
+
+class GateAnswerError(ValueError):
+    """An answer a gate refused: unknown or already-answered id, or a value its kind rejects."""
+
+
+def answer_gate(gate_id: str, text: str):
+    """Coerce `text` for the named pending gate and resolve it; returns the value.
+
+    The one place a remote answer (`repld gate answer`, the dashboard) is turned
+    into a gate value, so the kernel stays the authority on what a gate accepts.
+    Raises `GateAnswerError` rather than returning False: a lost race is still
+    an error to the caller, though the cell is unblocked either way.
+    """
+    gate = next((g for g in open_gates() if g["gate_id"] == gate_id), None)
+    if gate is None:
+        raise GateAnswerError(f"no gate awaiting an answer: {gate_id}")
+    try:
+        value = parse_response(gate["kind"], text, gate["options"])
+    except ValueError as exc:
+        raise GateAnswerError(str(exc)) from None
+    if not resolve_gate(gate_id, value):
+        raise GateAnswerError(f"gate {gate_id} was already answered")
+    return value
 
 
 # ---------------------------------------------------------------------------
