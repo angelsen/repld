@@ -131,6 +131,8 @@ class Browser:
                     # instead of every future call re-attempting and re-
                     # raising the same dead reconnect.
                     self._connected = False
+                    if on_gone := getattr(self._session, "on_gone", None):
+                        on_gone()
                     raise
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:

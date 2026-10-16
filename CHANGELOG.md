@@ -16,7 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- On a `connect(url=)` browser, the `download_started`/`download_done` push carries the file's location as `remote_path` (no `path`) and says it is on the browser's host: the file is not readable locally.
+
 ### Fixed
+
+- A hosted browser whose provider ended the session (WebSocket close 4410), or whose reconnect fails on a `url=` browser, is dropped from the pool with one `browser_disconnected` push naming its key and redacted URL; it used to stay as a dead entry forever.
+- A CDP call failed by a dying socket after its caller had timed out no longer surfaces as a taskless `bg_task_error`.
 
 - A graceful stop (`SIGTERM`) no longer drops the reply of a request the shutdown drain just unblocked: `ipc.Server.stop` waits up to a second for in-flight handlers to write before the goodbye and close, so a peer call cancelled by the drain reaches its caller as `call_error`, not a clean `disconnected`.
 

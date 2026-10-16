@@ -45,6 +45,10 @@ def _fetch_version_info(base: str, headers: dict[str, str] | None = None) -> dic
         return json.loads(resp.read())
 
 
+# Kernel Cloud closes with 4410 "session no longer exists"; a redial can never succeed.
+SESSION_GONE_CLOSE_CODE = 4410
+
+
 def _redact(url: str) -> str:
     """`url` without its query or userinfo: a provider's token rides in either."""
     p = urlsplit(url)
@@ -127,6 +131,7 @@ class BrowserSession:
 
         # Reconnect state
         self._reconnect_lock = asyncio.Lock()
+        self.on_gone: Callable[[], None] | None = None
         self._reconnecting: bool = False
         # old sessionId → new sessionId (valid for one reconnect cycle)
         self._session_remap: dict[str, str] = {}
@@ -700,6 +705,9 @@ class BrowserSession:
         for fut in self._pending.values():
             if not fut.done():
                 fut.set_exception(RuntimeError(reason))
+                # An awaiter that already timed out or was cancelled never
+                # reads this; unretrieved, asyncio reports it as a taskless bg_task_error.
+                fut.exception()
         self._pending.clear()
 
     async def _recv_loop(self) -> None:
@@ -727,6 +735,8 @@ class BrowserSession:
         except Exception as exc:
             logger.debug("recv_loop ended: %s", exc)
             self._fail_pending(f"WS recv loop ended: {exc}")
+            rcvd = getattr(exc, "rcvd", None)
+            self._note_closed(getattr(rcvd, "code", None))
         else:
             # Fell out of the `async for` with nothing raised, which means a
             # *clean* close (1000/1001 — a `Browser.close`, Chrome shutting the
@@ -739,6 +749,12 @@ class BrowserSession:
             # wording as above so both endings read as recoverable.
             logger.debug("recv_loop ended: connection closed")
             self._fail_pending("WS recv loop ended: connection closed")
+            self._note_closed(getattr(self._ws, "close_code", None))
+
+    def _note_closed(self, code: int | None) -> None:
+        """Report a close that no reconnect can undo: the provider ended the session."""
+        if code == SESSION_GONE_CLOSE_CODE and self.on_gone is not None:
+            self.on_gone()
 
     async def _dispatch(self, data: dict) -> None:
         """Route a parsed CDP message to the right handler."""
@@ -897,10 +913,13 @@ class BrowserSession:
         )
         meta = {"kind": kind, "target": short_id, "filename": name}
         if params.get("filePath"):
-            meta["path"] = params["filePath"]
+            # A url= browser's filesystem is not ours; a bare "path" invites a Read that fails.
+            meta["remote_path" if self.url else "path"] = params["filePath"]
         elif params.get("url"):
             meta["url"] = params["url"]
         detail = meta.get("path") or meta.get("url") or ""
+        if remote := meta.get("remote_path"):
+            detail = f"{remote} (on the remote browser's host, not readable here)"
         push_channel(
             f"[{kind}] {short_id}: {name} {detail}".rstrip(),
             meta,

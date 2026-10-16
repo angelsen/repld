@@ -1248,7 +1248,8 @@ Permission prompts (camera/mic/geolocation/notifications):
 Downloads are observed, not redirected: Chrome's own Save-As and download
 folder behave as the human configured. A download_started / download_done
 channel push names the file; its path (when Chrome reports one) is in the
-push meta, not at a fixed location.
+push meta, not at a fixed location. On a connect(url=) browser it is
+`remote_path`: that file is on the browser's host, not readable locally.
 
 == Internals ==
 

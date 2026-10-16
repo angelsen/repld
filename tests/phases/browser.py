@@ -3936,6 +3936,57 @@ def phase_6_click_point(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_session_gone(kernel: Kernel) -> None:
+    """A provider closing 4410 retires the pool entry and pushes one browser_disconnected."""
+    h = _BridgeHarness(kernel)
+    try:
+        out = h.exec(
+            "import json as _j, websockets as _w\n"
+            "_kill = asyncio.Event()\n"
+            "async def _fake(ws):\n"
+            "    async def _rd():\n"
+            "        async for m in ws:\n"
+            "            m = _j.loads(m)\n"
+            "            r = {'targetInfos': []} if m['method'] == 'Target.getTargets' else {}\n"
+            "            await ws.send(_j.dumps({'id': m['id'], 'result': r}))\n"
+            "    t = asyncio.ensure_future(_rd())\n"
+            "    await _kill.wait()\n"
+            "    await ws.close(4410, 'session no longer exists')\n"
+            "    t.cancel()\n"
+            "_srv = await _w.serve(_fake, '127.0.0.1', 0)\n"
+            "_u = f'ws://127.0.0.1:{_srv.sockets[0].getsockname()[1]}/?token=SECRETTOKEN'\n"
+            "_b = await browser.connect(url=_u)\n"
+            "print('GONE up', _b._connected)"
+        )
+        assert_true("GONE up True" in out, f"the fake provider attaches ({out!r})")
+        h.exec(
+            "await _b._session._push_download("
+            "'download_done', 'a.txt', None, {'filePath': '/remote/a.txt'})"
+        )
+        n = h.b.wait_notification(
+            "notifications/claude/channel", kind="download_done", timeout=10
+        )
+        meta = n["params"]["meta"]
+        assert_true(
+            meta.get("remote_path") == "/remote/a.txt" and "path" not in meta,
+            f"a url= browser's download path is marked remote ({meta!r})",
+        )
+        h.exec("_kill.set()")
+        n = h.b.wait_notification(
+            "notifications/claude/channel", kind="browser_disconnected", timeout=15
+        )
+        text = n["params"]["content"]
+        assert_true("SECRETTOKEN" not in text, f"the push carries no token ({text!r})")
+        out = h.exec(
+            "print('GONE after', _b.port in browser.peek()._browsers)\n"
+            "_srv.close()"
+        )
+        assert_true("GONE after False" in out, f"the entry is retired ({out!r})")
+        print("  ✓ session gone: 4410 retires the entry and pushes browser_disconnected")
+    finally:
+        h.close()
+
+
 def phase_6_connect_url(kernel: Kernel) -> None:
     """connect(url=) attaches by http base or ws URL, heals a drop, and persists nothing."""
     if not _chrome_ready("phase 6 connect url"):

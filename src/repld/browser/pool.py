@@ -25,13 +25,17 @@ import asyncio
 import logging
 import os
 from fnmatch import fnmatch
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .. import bg
+from ..channel import push_channel
 from ..loopguard import LoopOwned
 from .browser import Browser
 from .row import Rows
+from .session import _redact
 from .tab import Tab
 from .target import (
     _NO_TABS,
@@ -150,10 +154,29 @@ class BrowserPool:
                 if existing is not None
                 else Browser(port=port, url=url, headers=headers)
             )
+            if url is not None:
+                b._session.on_gone = partial(self._gone, port, b)
             await b._ensure_connected()
             self._browsers[port] = b
         self._save_hint()
         return b
+
+    def _gone(self, port: int, b: Browser) -> None:
+        bg.spawn(self._retire(port, b), name=f"repld-retire-{port}")
+
+    async def _retire(self, port: int, b: Browser) -> None:
+        """Drop a url= browser whose provider session ended; a redial can never succeed."""
+        # Identity check: a later connect(url=) may already hold this key.
+        if self._browsers.get(port) is not b:
+            return
+        self._browsers.pop(port, None)
+        await b.disconnect()
+        self._save_hint()
+        where = _redact(b._session.url or "")
+        push_channel(
+            f"[browser_disconnected] {port}: {where} ended its session",
+            {"kind": "browser_disconnected", "port": str(port), "url": where},
+        )
 
     async def disconnect(self, port: int | None = None) -> str:
         """Disconnect one or all browsers. Returns a summary string."""
