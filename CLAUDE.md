@@ -30,9 +30,11 @@ entirely (`pyproject.toml`'s `extend-exclude`) for the same reason — ruff
 collapsed the same alignment in README/docs/site examples.
 
 `injected_source.py` is generated — never hand-edit it. `make injected` rebuilds
-it from the pinned microsoft/playwright clone via `scripts/build_injected.py`
-(node/esbuild needed at dev time only; the wheel ships the .py). Bumping the
-engine means updating the clone, changing `PLAYWRIGHT_COMMIT` in the script,
+it via `scripts/build_injected.py` from the pinned microsoft/playwright commit,
+which the script fetches itself into `~/.cache/repld-build` (a sparse, blobless
+fetch of about 21 MB; any `gclone` checkout is unrelated and may move freely).
+node/esbuild and git are needed at dev time only; the wheel ships the .py.
+Bumping the engine means changing `PLAYWRIGHT_COMMIT` in the script,
 rebuilding, and re-running the phase-6 browser tests.
 
 No CI configured yet. If you add any, update this file.

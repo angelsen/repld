@@ -1,7 +1,7 @@
 """Playwright's InjectedScript engine, bundled — GENERATED, do not hand-edit.
 
 Regenerate with `make injected` (runs scripts/build_injected.py against the
-pinned microsoft/playwright clone). A JS bundle in a Python module for the same
+pinned microsoft/playwright commit). A JS bundle in a Python module for the same
 reason as dashboard_html.py: it ships in the wheel with no package-data entry.
 
 Vendored from https://github.com/microsoft/playwright
