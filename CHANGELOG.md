@@ -10,11 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `tools/call` refuses an argument the tool's `inputSchema` does not declare, for `exec`, `get_task`, `cancel`, the browser tools and the bridge's `repld_restart`, instead of dropping it: an invented `get_task(wait=45)` used to return at once and read as a stuck task. The refusal is an `isError` result naming the extra argument and what the tool takes, and the call does not run. Gist tools already refused an unknown keyword through their own signature.
-
 ### Fixed
 
 ### Removed
+
+## [0.15.0] - 2026-10-17
+
+### Changed
+
+- `tools/call` refuses an argument the tool's `inputSchema` does not declare, for `exec`, `get_task`, `cancel`, the browser tools and the bridge's `repld_restart`, instead of dropping it: an invented `get_task(wait=45)` used to return at once and read as a stuck task. The refusal is an `isError` result naming the extra argument and what the tool takes, and the call does not run. Gist tools already refused an unknown keyword through their own signature.
+
 
 ## [0.14.0] - 2026-10-17
 
