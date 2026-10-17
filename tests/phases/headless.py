@@ -218,6 +218,19 @@ def _bridge_served_tools(tmp: Path) -> None:
         b.exec("SENTINEL = 1")
 
         resp = b.call(
+            "tools/call",
+            {"name": "repld_restart", "arguments": {"force": True}},
+            timeout=10,
+        )
+        assert_true(
+            resp.get("result", {}).get("isError") is True
+            and "unknown argument" in content_text(resp),
+            f"bridge tool refuses an undeclared argument (got {resp!r})",
+        )
+        assert_eq(_wait_lock(tmp)["pid"], first_pid, "the refused restart never ran")
+        print("  ✓ bridge tool refuses an undeclared argument without restarting")
+
+        resp = b.call(
             "tools/call", {"name": "repld_restart", "arguments": {}}, timeout=60
         )
         assert_true("error" not in resp, f"answered in-band, not orphaned: {resp}")

@@ -295,6 +295,20 @@ RESOURCE_TEMPLATES = [
 ]
 
 
+def unknown_arguments(schema: dict, args: dict) -> str | None:
+    """The tool error for `tools/call` arguments `schema` does not declare. -> None when there are none
+
+    A handler that reads `args.get(...)` would otherwise drop a misspelled or invented argument
+    silently, and the call would look like it ran as asked. Callers answer with `tool_error`, not
+    `error`: a model that never sees the refusal cannot correct the call (SEP-1303)."""
+    declared = schema.get("inputSchema", {}).get("properties", {})
+    extra = sorted(set(args) - set(declared))
+    if not extra:
+        return None
+    takes = ", ".join(sorted(declared)) or "no arguments"
+    return f"{schema['name']}: unknown argument {', '.join(extra)} (it takes {takes})"
+
+
 def wire(resources: list[dict]) -> list[dict]:
     """Strip internal `_`-prefixed keys so a resource dict is MCP-clean."""
     return [{k: v for k, v in r.items() if not k.startswith("_")} for r in resources]

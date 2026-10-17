@@ -135,6 +135,26 @@ def phase_3(kernel: Kernel) -> None:
         )
         print("  ✓ get_task: unknown task_id → JSON-RPC error")
 
+        # An argument no schema declares is refused in-band (isError, so the model sees it), never dropped.
+        for name, args in (
+            ("get_task", {"task_id": "bogus-tid", "wait": 45}),
+            ("exec", {"code": "RAN_WITH_EXTRA = 1", "label": "x"}),
+            ("browser_tabs", {"bogus": 1}),
+        ):
+            resp = b.call("tools/call", {"name": name, "arguments": args})
+            res = resp.get("result", {})
+            assert_true(
+                res.get("isError") is True and "unknown argument" in content_text(resp),
+                f"{name} refuses an undeclared argument (got {resp!r})",
+            )
+        assert_true(
+            "False" in content_text(b.exec("print('RAN_WITH_EXTRA' in dir())")),
+            "refused exec never ran",
+        )
+        print(
+            "  ✓ undeclared arguments → isError naming them; the refused exec never ran"
+        )
+
         # Spill test — every cell with output now spills; large output
         # additionally trips the truncated-preview path.
         resp = b.exec("print('x' * 70000)", timeout=5.0, call_timeout=10.0)

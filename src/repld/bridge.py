@@ -61,6 +61,8 @@ from .core_schemas import (
     BRIDGE_REBIND_METHOD,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
+    tool_error,
+    unknown_arguments,
 )
 from .core_schemas import (
     error as _error,
@@ -582,6 +584,11 @@ class Bridge:
 
     def _handle_bridge_tool(self, rid, name: str, args: dict) -> None:
         entry = bridge_tools.BRIDGE_TOOLS[name]
+        problem = unknown_arguments(entry["schema"], args)
+        if problem:
+            if rid is not None:
+                self._to_client(tool_error(rid, problem))
+            return
         try:
             result = entry["handler"](self, args)
         except Exception as e:  # a bridge tool must never take the session down

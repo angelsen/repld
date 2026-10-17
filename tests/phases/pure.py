@@ -301,6 +301,38 @@ def _envelopes() -> None:
     print("  ✓ core_schemas: response/error/notification envelopes, wire()")
 
 
+def _unknown_arguments() -> None:
+    from repld.protocol import TOOLS
+
+    by_name = {t["name"]: t for t in TOOLS}
+    ua = core_schemas.unknown_arguments
+    assert_eq(
+        ua(by_name["get_task"], {"task_id": "x"}), None, "declared argument passes"
+    )
+    assert_eq(
+        ua(by_name["exec"], {}),
+        None,
+        "no arguments pass (required is the handler's call)",
+    )
+    msg = ua(by_name["get_task"], {"task_id": "x", "wait": 45})
+    assert_true(
+        msg is not None and "wait" in msg and "task_id" in msg,
+        f"names the extra and what it takes: {msg!r}",
+    )
+    msg = ua(by_name["exec"], {"code": "1", "zeta": 1, "alpha": 2})
+    assert_true(
+        msg is not None and msg.index("alpha") < msg.index("zeta"),
+        f"extras sorted: {msg!r}",
+    )
+    no_args = {"name": "t", "inputSchema": {"type": "object", "properties": {}}}
+    assert_true(
+        "no arguments" in (ua(no_args, {"x": 1}) or ""), "a no-argument tool says so"
+    )
+    print(
+        "  ✓ core_schemas.unknown_arguments: passes declared, names extras and what the tool takes"
+    )
+
+
 def _cli_args() -> None:
     assert_true(cli_args.wants_help(["foo", "--help"]), "help after a positional")
     assert_true(cli_args.wants_help(["-h"]), "-h")
@@ -1725,6 +1757,7 @@ def phase_2_pure() -> None:
     _render()
     _format_args()
     _envelopes()
+    _unknown_arguments()
     _ws_ping_policy()
     _reconnect_waiters()
     _cli_args()

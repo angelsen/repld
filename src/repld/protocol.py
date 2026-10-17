@@ -29,6 +29,7 @@ from .core_schemas import (
     PROTOCOL_VERSION,
     RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
+    unknown_arguments,
 )
 from .core_schemas import (
     error as _error,
@@ -753,6 +754,9 @@ TOOLS = [
     },
 ]
 
+# Core and browser tools by name, for `unknown_arguments`; a gist tool's own signature refuses an unknown keyword.
+_STATIC_SCHEMAS = {t["name"]: t for t in TOOLS}
+
 # MCP tool annotations (2025-03-26), applied by name so the classification
 # reads as one table. Hints only — clients use readOnlyHint for permission
 # ergonomics, openWorldHint marks tools that reach the live web rather than
@@ -1063,6 +1067,13 @@ class Dispatcher(BrowserDispatchMixin):
     def _tools_call(self, rid, params: dict, session=None) -> dict:
         name = params.get("name")
         args = params.get("arguments") or {}
+        problem = (
+            unknown_arguments(_STATIC_SCHEMAS[name], args)
+            if name in _STATIC_SCHEMAS
+            else None
+        )
+        if problem:
+            return _tool_error(rid, problem)
         if name == "exec":
             return self._exec(rid, args, session)
         if name == "get_task":
