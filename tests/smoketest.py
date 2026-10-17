@@ -84,6 +84,7 @@ from phases.browser import (
     phase_6_tab_mode,
     phase_6_tab_owner,
     phase_6_tools_and_gists,
+    phase_6_url_redial,
     phase_6_viewport_param,
 )
 from phases.channels import (
@@ -206,6 +207,7 @@ PHASES = {
         phase_6_plan_click(k),
         phase_6_connect_url(k),
         phase_6_session_gone(k),
+        phase_6_url_redial(k),
         phase_6_actionability(k),
         phase_6_react_controlled_input(k),
         phase_6_select_option(k),

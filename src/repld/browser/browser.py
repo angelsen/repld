@@ -111,29 +111,35 @@ class Browser:
         async with self._connect_lock:
             # Re-check: a caller that queued behind the lock is usually looking
             # at work the holder already did.
-            if not self._connected:
-                await self._session.connect()
-                self._session._on_target_created = self._on_target_created
-                self._session._on_target_destroyed = self._on_target_destroyed
-                self._connected = True
-                logger.debug("BrowserSession connected on port %s", self.port)
-            elif not self._session._is_connected():
+            #
+            # A failed `url=` redial leaves `_connected` False but keeps the tab
+            # sessions on the session (`_stranded`), and only `_reconnect` hands
+            # them back: a fresh `connect()` would orphan them.
+            if self._session._stranded or (
+                self._connected and not self._session._is_connected()
+            ):
                 # _reconnect takes _reconnect_lock, never _connect_lock, and
                 # nothing under it re-enters here — so holding this across it
                 # can't deadlock.
                 try:
                     await self._session._reconnect()
                 except Exception:
-                    # Chrome is genuinely gone, not just a dropped socket:
-                    # self-correct so BrowserPool's _connected-gated reads
-                    # (open/get's first-live routing, connected_ports, tabs,
-                    # patterns) stop trusting this entry on the next look,
-                    # instead of every future call re-attempting and re-
-                    # raising the same dead reconnect.
+                    # The redial failed: self-correct so BrowserPool's
+                    # _connected-gated reads (open/get's first-live routing,
+                    # connected_ports, tabs, patterns) stop trusting this entry
+                    # on the next look, instead of every future call re-
+                    # attempting and re-raising the same dead reconnect. Whether
+                    # a `url=` provider is retired is `_note_redial_failed`'s
+                    # call: a refusal for good or a long silence, not one 503.
                     self._connected = False
-                    if on_gone := getattr(self._session, "on_gone", None):
-                        on_gone()
                     raise
+                self._connected = True
+            elif not self._connected:
+                await self._session.connect()
+                self._session._on_target_created = self._on_target_created
+                self._session._on_target_destroyed = self._on_target_destroyed
+                self._connected = True
+                logger.debug("BrowserSession connected on port %s", self.port)
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:
         """Called when a new tab is auto-attached."""
@@ -550,6 +556,8 @@ class Browser:
         if self._connected:
             for tab in self._iter_tabs():
                 await self._safe_unpin(tab)
+        # Also when a failed `url=` redial left tab sessions stranded on an unconnected session.
+        if self._connected or self._session._stranded:
             try:
                 await self._session.disconnect()
             except Exception:

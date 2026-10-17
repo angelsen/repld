@@ -274,6 +274,9 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
         reconnect failure, instead of leaving the stale flag set forever."""
 
         class _DeadSocket:
+            def __init__(self) -> None:
+                self._stranded: dict = {}
+
             def _is_connected(self) -> bool:
                 return False
 
@@ -4062,6 +4065,134 @@ def phase_6_session_gone(kernel: Kernel) -> None:
             "  ✓ session gone: 4410 retires the entry and pushes browser_disconnected"
         )
     finally:
+        h.close()
+
+
+_REDIAL_PROVIDER = (
+    "import json as _j, websockets as _w\n"
+    "from websockets.datastructures import Headers as _H\n"
+    "from websockets.http11 import Response as _R\n"
+    "_mode = {'v': 'ok', 'n': 0}\n"
+    "async def _fake(ws):\n"
+    "    async for m in ws:\n"
+    "        m = _j.loads(m)\n"
+    "        if m['method'] == 'Target.getTargets':\n"
+    "            r = {'targetInfos': [{'targetId': 'AAAA1111', 'type': 'page', 'url': 'https://x.test/', 'title': 'T'}]}\n"
+    "        elif m['method'] == 'Target.attachToTarget':\n"
+    "            _mode['n'] += 1\n"
+    "            r = {'sessionId': f'S{_mode[\"n\"]}'}\n"
+    "        else:\n"
+    "            r = {}\n"
+    "        out = {'id': m['id'], 'result': r}\n"
+    "        if 'sessionId' in m:\n"
+    "            out['sessionId'] = m['sessionId']\n"
+    "        await ws.send(_j.dumps(out))\n"
+    "async def _gate(conn, req):\n"
+    "    if _mode['v'] != 'ok':\n"
+    "        return _R(_mode['v'], 'X', _H(), b'')\n"
+    "async def _redial_up():\n"
+    "    _mode['v'] = 'ok'\n"
+    "    srv = await _w.serve(_fake, '127.0.0.1', 0, process_request=_gate)\n"
+    "    url = f'ws://127.0.0.1:{srv.sockets[0].getsockname()[1]}/?token=SECRETTOKEN'\n"
+    "    b = await browser.connect(url=url)\n"
+    "    cdp = await b._session.attach('AAAA1111')\n"
+    "    return srv, b, cdp\n"
+    "async def _redial_drop(srv, status):\n"
+    "    _mode['v'] = status\n"
+    "    for c in list(srv.connections):\n"
+    "        await c.close(1012)\n"
+    "    await asyncio.sleep(0.3)\n"
+    "async def _redial_call(b):\n"
+    "    try:\n"
+    "        await asyncio.wait_for(b.pages(), 10)\n"
+    "        return 'ok'\n"
+    "    except Exception as e:\n"
+    "        return type(e).__name__\n"
+)
+
+
+def phase_6_url_redial(kernel: Kernel) -> None:
+    """A url= browser survives a provider that is only away, and retires on a refusal for good."""
+    h = _BridgeHarness(kernel)
+    try:
+        h.exec(_REDIAL_PROVIDER)
+
+        # -- transient: 503s keep the entry and its tab, and a later redial hands it back --
+        out = h.exec(
+            "_srv, _b, _cdp = await _redial_up()\n"
+            "await _redial_drop(_srv, 503)\n"
+            "_calls = [await _redial_call(_b) for _ in range(4)]\n"
+            "_kept = _b.port in browser.peek()._browsers\n"
+            "_stranded = list(_b._session._stranded)\n"
+            "_mode['v'] = 'ok'\n"
+            "_healed = await _redial_call(_b)\n"
+            "_same = _b._session.find_by_target_id('AAAA1111') is _cdp\n"
+            "print('RD', _j.dumps([_calls, _kept, _stranded, _healed, _same, "
+            "list(_b._session._stranded), _b._session._unreachable_since]))"
+        )
+        mm = re.search(r"RD (\[.*\])", out)
+        assert_true(mm is not None, f"transient cell printed ({out!r})")
+        assert mm is not None
+        calls, kept, stranded, healed, same, left, since = json.loads(mm.group(1))
+        assert_eq(calls, ["InvalidStatus"] * 4, "every call during the 503s fails")
+        assert_true(kept, "the browser stays registered through repeated 503s")
+        assert_eq(stranded, ["AAAA1111"], "its tab session is held for the next redial")
+        assert_eq(healed, "ok", "the redial after the provider returns heals")
+        assert_true(same, "the same CDPSession (and its history) came back")
+        assert_eq((left, since), ([], None), "nothing stranded once healed")
+        print("  ✓ url= redial: 503s keep the entry and the tab, a return heals it")
+
+        # -- a refusal for good: retire at the first failure, with the real reason --
+        h.exec("_srv.close()\n_srv, _b, _cdp = await _redial_up()")
+        h.exec("await _redial_drop(_srv, 404)\nprint(await _redial_call(_b))")
+        n = h.b.wait_notification(
+            "notifications/claude/channel",
+            kind="browser_disconnected",
+            where=lambda m: "HTTP 404" in m["params"]["content"],
+            timeout=15,
+        )
+        text = n["params"]["content"]
+        assert_true(
+            "SECRETTOKEN" not in text and "ended its session" not in text,
+            f"the push names the refusal and carries no token ({text!r})",
+        )
+        out = h.exec(
+            "print('RD2', _b.port in browser.peek()._browsers, list(_b._session._stranded))\n"
+            "_srv.close()"
+        )
+        assert_true("RD2 False []" in out, f"retired, and nothing left open ({out!r})")
+        print("  ✓ url= redial: a 404 retires at once and says why")
+
+        # -- a provider that stays away is retired after the bound --
+        h.exec(
+            "import sys as _sy\n_sm = _sy.modules['repld.browser.session']\n"
+            "_sm.URL_UNREACHABLE_RETIRE_S = 0.4\n"
+            "_srv, _b, _cdp = await _redial_up()\n"
+            "await _redial_drop(_srv, 503)\n"
+            "await _redial_call(_b)\n"
+            "await asyncio.sleep(0.6)\n"
+            "await _redial_call(_b)"
+        )
+        n = h.b.wait_notification(
+            "notifications/claude/channel",
+            kind="browser_disconnected",
+            where=lambda m: "unreachable for" in m["params"]["content"],
+            timeout=15,
+        )
+        out = h.exec(
+            "print('RD3', _b.port in browser.peek()._browsers, list(_b._session._stranded))\n"
+            "_srv.close()"
+        )
+        assert_true("RD3 False []" in out, f"retired after the bound ({out!r})")
+        print("  ✓ url= redial: an unreachable provider is retired after the bound")
+    finally:
+        # The kernel is shared with later phases: put the retire bound back.
+        try:
+            h.exec(
+                "import sys as _sy\n_sm = _sy.modules['repld.browser.session']\n_sm.URL_UNREACHABLE_RETIRE_S = 300.0"
+            )
+        except Exception:
+            pass
         h.close()
 
 

@@ -161,10 +161,12 @@ class BrowserPool:
         self._save_hint()
         return b
 
-    def _gone(self, port: int, b: Browser) -> None:
-        bg.spawn(self._retire(port, b), name=f"repld-retire-{port}")
+    def _gone(self, port: int, b: Browser, why: str = "ended its session") -> None:
+        bg.spawn(self._retire(port, b, why), name=f"repld-retire-{port}")
 
-    async def _retire(self, port: int, b: Browser) -> None:
+    async def _retire(
+        self, port: int, b: Browser, why: str = "ended its session"
+    ) -> None:
         """Drop a url= browser whose provider session ended; a redial can never succeed."""
         # Identity check: a later connect(url=) may already hold this key.
         if self._browsers.get(port) is not b:
@@ -174,7 +176,7 @@ class BrowserPool:
         self._save_hint()
         where = _redact(b._session.url or "")
         push_channel(
-            f"[browser_disconnected] {port}: {where} ended its session",
+            f"[browser_disconnected] {port}: {where} {why}",
             {"kind": "browser_disconnected", "port": str(port), "url": where},
         )
 

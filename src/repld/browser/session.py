@@ -13,6 +13,8 @@ including DuckDB event stores), and retries the command once.
 import asyncio
 import json
 import logging
+import os
+import time
 import urllib.request
 from collections.abc import Callable
 from fnmatch import fnmatch
@@ -47,6 +49,15 @@ def _fetch_version_info(base: str, headers: dict[str, str] | None = None) -> dic
 
 # Kernel Cloud closes with 4410 "session no longer exists"; a redial can never succeed.
 SESSION_GONE_CLOSE_CODE = 4410
+
+# An upgrade answered with one of these says the provider will not take this session back: the
+# lease ended or was never ours (404/410), or its credential is no longer good (401/403). Any other
+# failure (5xx, refused, timeout) is the provider being away, and the session may well return.
+REFUSED_FOR_GOOD_STATUSES = frozenset({401, 403, 404, 410})
+
+# A `url=` browser that has failed every redial for this long is retired. Short of that it stays
+# registered, with its tabs and event history, so a provider that was only away picks up where it left.
+URL_UNREACHABLE_RETIRE_S = float(os.environ.get("REPLD_URL_UNREACHABLE_S", "300"))
 
 
 def _redact(url: str) -> str:
@@ -131,7 +142,11 @@ class BrowserSession:
 
         # Reconnect state
         self._reconnect_lock = asyncio.Lock()
-        self.on_gone: Callable[[], None] | None = None
+        self.on_gone: Callable[[str], None] | None = None
+        # Monotonic time of the first redial failure in the current run, None while connected.
+        self._unreachable_since: float | None = None
+        # Tab sessions a `url=` redial could not reattach, kept for the next attempt; closed by `disconnect()`.
+        self._stranded: dict[str, CDPSession] = {}
         self._reconnecting: bool = False
         self._reconnect_task: asyncio.Task | None = None
         # old sessionId → new sessionId (valid for one reconnect cycle)
@@ -239,9 +254,10 @@ class BrowserSession:
         """
         await self._teardown_ws()
 
-        for cdp in self._sessions.values():
+        for cdp in [*self._sessions.values(), *self._stranded.values()]:
             cdp.cleanup()
         self._sessions.clear()
+        self._stranded.clear()
 
         # Deliberately *not* a "recv loop ended" message: this teardown was
         # asked for, so the in-flight callers must see a plain failure rather
@@ -291,7 +307,8 @@ class BrowserSession:
             self._reconnect_task = asyncio.current_task()
             try:
                 # Save CDPSessions keyed by Chrome targetId
-                old_cdps: dict[str, CDPSession] = {}
+                old_cdps: dict[str, CDPSession] = dict(self._stranded)
+                self._stranded.clear()
                 for cdp in self._sessions.values():
                     tid = cdp.chrome_target_id
                     if tid:
@@ -314,10 +331,17 @@ class BrowserSession:
                 # there is nothing left that could reach them.
                 try:
                     await self.connect(discover=False)
-                except Exception:
-                    for cdp in old_cdps.values():
-                        cdp.cleanup()
+                except Exception as exc:
+                    if self.on_gone is None:
+                        for cdp in old_cdps.values():
+                            cdp.cleanup()
+                    else:
+                        # A provider that was only away hands the tabs back on the next redial;
+                        # keeping them reachable here is what keeps `disconnect()` able to close them.
+                        self._stranded = old_cdps
+                    self._note_redial_failed(exc)
                     raise
+                self._unreachable_since = None
 
                 # Re-attach old targets, preserving CDPSession state
                 restored = 0
@@ -772,7 +796,35 @@ class BrowserSession:
     def _note_closed(self, code: int | None) -> None:
         """Report a close that no reconnect can undo: the provider ended the session."""
         if code == SESSION_GONE_CLOSE_CODE and self.on_gone is not None:
-            self.on_gone()
+            self.on_gone("ended its session")
+
+    @staticmethod
+    def _refused_status(exc: Exception) -> int | None:
+        """The HTTP status a WebSocket upgrade was refused with, else None."""
+        import websockets.exceptions  # type: ignore[import-untyped]
+
+        if isinstance(exc, websockets.exceptions.InvalidStatus):
+            return exc.response.status_code
+        return None
+
+    def _note_redial_failed(self, exc: Exception) -> None:
+        """Retire a `url=` browser the provider refused for good, or that stayed unreachable.
+
+        A transient failure (a 503 while the provider is between owners, a refused
+        connection) keeps the entry and its tab history; only a refusal that says the
+        session is over, or `URL_UNREACHABLE_RETIRE_S` of silence, ends it.
+        """
+        if self.on_gone is None:
+            return
+        status = self._refused_status(exc)
+        if status in REFUSED_FOR_GOOD_STATUSES:
+            self.on_gone(f"refused the session (HTTP {status})")
+            return
+        now = time.monotonic()
+        if self._unreachable_since is None:
+            self._unreachable_since = now
+        elif now - self._unreachable_since >= URL_UNREACHABLE_RETIRE_S:
+            self.on_gone(f"unreachable for {round(now - self._unreachable_since)} s")
 
     async def _dispatch(self, data: dict) -> None:
         """Route a parsed CDP message to the right handler."""
