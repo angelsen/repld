@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.14.0] - 2026-10-17
+
+### Added
+
 - `browser.connect(url=, headers=)` attaches to a browser that has no local port: an `http(s)://` base (resolved through `/json/version`, dialled at the address reached, not the one Chrome advertises) or a browser-level `ws(s)://` URL as a hosted provider hands it out. Such a browser gets a registry key from 65536 up (the `N` in `N:abc123` target IDs), stable per URL; it is never written to the restore hint, and errors name the URL without its query or userinfo.
 
 - `tab.click()` and the `browser_click` tool take an `'x,y'` (or `(x, y)`) viewport point for targets with no DOM to resolve, such as a canvas or a remote-screen viewer; `click_count=2` is two counted presses so a double click fires `dblclick`. New `tab.wheel(x, y, dy=, dx=)` dispatches a real wheel event at a point. Together with `hover`/`drag` (already point-aware), `key`/`keys` and `screenshot`, this is the minimal computer-use surface.
@@ -46,7 +56,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `browser.connect(port)` follows `/json/version`'s `webSocketDebuggerUrl` only when it names a port; a Chrome behind a proxy that rewrites `Host` (Steel's browser server) advertises `ws://127.0.0.1/...` and was dialled on port 80. The port it connected to is used instead.
 
-### Removed
 
 ## [0.13.1] - 2026-10-15
 
