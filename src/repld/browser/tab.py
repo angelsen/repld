@@ -32,6 +32,7 @@ from .pin import (
     label_script,
 )
 from .png import _png_size, check_budget, save_capture
+from .session import is_scope_refusal
 from .tab_query import TabQueryMixin
 from .target import make_target
 
@@ -751,10 +752,18 @@ class Tab(TabQueryMixin):
         fd = await asyncio.to_thread(acquire_lock_blocking, front_lock_for(self._port))
         try:
             front_target = await self._front_target()
-            result = await front_target._exec(
-                "Runtime.evaluate",
-                {"expression": "document.visibilityState", "returnByValue": True},
-            )
+            try:
+                result = await front_target._exec(
+                    "Runtime.evaluate",
+                    {"expression": "document.visibilityState", "returnByValue": True},
+                )
+            except RuntimeError as exc:
+                # A `view` lease forbids Runtime and bringToFront alike, so visibility
+                # cannot be probed or fixed: carry on without fronting. A hidden tab
+                # then hangs its capture to the command timeout, as it would unfronted.
+                if not is_scope_refusal(exc):
+                    raise
+                result = {}
             if (
                 result.get("result", {}).get("value") == "hidden"
                 and front_target.type != "iframe"

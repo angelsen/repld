@@ -4196,6 +4196,72 @@ def phase_6_url_redial(kernel: Kernel) -> None:
         h.close()
 
 
+_PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+
+def phase_6_scoped_lease(kernel: Kernel) -> None:
+    """On a `view` lease Tab.screenshot() works, while scripts and input stay refused."""
+    h = _BridgeHarness(kernel)
+    try:
+        out = h.exec(
+            "import json as _j, websockets as _w\n"
+            f"_png = {_PNG_1X1!r}\n"
+            "_probe = {'err': \"Runtime.evaluate is outside this lease's view scope\"}\n"
+            "async def _scoped(ws):\n"
+            "    async for m in ws:\n"
+            "        m = _j.loads(m)\n"
+            "        meth = m['method']\n"
+            "        out = {'id': m['id']}\n"
+            "        if meth == 'Target.getTargets':\n"
+            "            out['result'] = {'targetInfos': [{'targetId': 'BBBB2222', 'type': 'page', 'url': 'https://x.test/', 'title': 'T'}]}\n"
+            "        elif meth == 'Target.attachToTarget':\n"
+            "            out['result'] = {'sessionId': 'S1'}\n"
+            "        elif meth in ('Runtime.evaluate', 'Input.dispatchMouseEvent'):\n"
+            "            out['error'] = {'code': -32000, 'message': _probe['err']}\n"
+            "        elif meth == 'Page.captureScreenshot':\n"
+            "            out['result'] = {'data': _png}\n"
+            "        else:\n"
+            "            out['result'] = {}\n"
+            "        if 'sessionId' in m:\n"
+            "            out['sessionId'] = m['sessionId']\n"
+            "        await ws.send(_j.dumps(out))\n"
+            "_ssrv = await _w.serve(_scoped, '127.0.0.1', 0)\n"
+            "_sb = await browser.connect(url=f'ws://127.0.0.1:{_ssrv.sockets[0].getsockname()[1]}/?token=T')\n"
+            "_scdp = await _sb._session.attach('BBBB2222')\n"
+            "_stab = _sb._iter_tabs()[0]\n"
+            "async def _try(coro):\n"
+            "    try:\n"
+            "        return 'ok ' + str(await asyncio.wait_for(coro, 10))[:60]\n"
+            "    except Exception as e:\n"
+            "        return type(e).__name__ + ': ' + str(e)[:90]\n"
+            "_r_shot = await _try(_stab.screenshot())\n"
+            "_r_js = await _try(_stab.js('1'))\n"
+            "_r_click = await _try(_stab.click('10,10'))\n"
+            "_probe['err'] = 'boom'\n"
+            "_r_boom = await _try(_stab.screenshot())\n"
+            "print('SC', _j.dumps([_r_shot, _r_js, _r_click, _r_boom]))\n"
+            "_ssrv.close()"
+        )
+        mm = re.search(r"SC (\[.*\])", out)
+        assert_true(mm is not None, f"scoped cell printed its results ({out!r})")
+        assert mm is not None
+        shot, js, click, boom = json.loads(mm.group(1))
+        assert_true(shot.startswith("ok "), f"screenshot works at view ({shot!r})")
+        assert_true(
+            "outside this lease" in js and "outside this lease" in click,
+            f"scripts and input stay refused ({js!r}, {click!r})",
+        )
+        assert_true(
+            "boom" in boom,
+            f"a probe error that is not a scope refusal still propagates ({boom!r})",
+        )
+        print(
+            "  ✓ view lease: screenshot works, js/click refused, other errors propagate"
+        )
+    finally:
+        h.close()
+
+
 def phase_6_connect_url(kernel: Kernel) -> None:
     """connect(url=) attaches by http base or ws URL, heals a drop, and persists nothing."""
     if not _chrome_ready("phase 6 connect url"):

@@ -28,6 +28,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - A `connect(url=)` browser is no longer retired by one transient failure. A 503 while a provider is between owners used to retire it on the second failed call, drop every tab's event history on the first, and push `browser_disconnected ... ended its session`, none of which was true. It is now retired at once on a 4410 close or an upgrade refused 401/403/404/410, saying so in the push, or after `REPLD_URL_UNREACHABLE_S` (default 300) of failed redials; short of that, tabs are kept and reattached, same objects and history, when the provider returns.
 
+- `tab.screenshot()` works on a scoped lease that forbids `Runtime`: when the lease refuses `_ensure_front`'s visibility probe as outside its scope, fronting is skipped instead of failing the call. Other probe errors still propagate.
+
 - The dashboard page's script no longer fails to parse: a `join('\n')` in the non-raw page string became a newline inside a JS string literal, which stopped every handler on the page from running. A phase 14 `node --check` guards it.
 
 - A local Chrome connection no longer sends WebSocket keepalive pings: a loopback socket cannot go half-open, and a ping timeout while Chrome was starved (a large WASM page loading) dropped the socket and reconnected every attached tab. A `connect(url=)` endpoint keeps its ping.

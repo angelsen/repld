@@ -55,6 +55,16 @@ SESSION_GONE_CLOSE_CODE = 4410
 # failure (5xx, refused, timeout) is the provider being away, and the session may well return.
 REFUSED_FOR_GOOD_STATUSES = frozenset({401, 403, 404, 410})
 
+# A scoped lease provider (lend) answers a call outside the granted scope with a CDP error that says so.
+# It is the provider's contract, not Chrome's: repld reads it only to degrade, never to bypass.
+SCOPE_REFUSAL_MARKER = "is outside this lease's"
+
+
+def is_scope_refusal(exc: BaseException) -> bool:
+    """True if a CDP call failed because the lease's scope does not allow the method."""
+    return SCOPE_REFUSAL_MARKER in str(exc)
+
+
 # A `url=` browser that has failed every redial for this long is retired. Short of that it stays
 # registered, with its tabs and event history, so a provider that was only away picks up where it left.
 URL_UNREACHABLE_RETIRE_S = float(os.environ.get("REPLD_URL_UNREACHABLE_S", "300"))
