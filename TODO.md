@@ -235,7 +235,7 @@ infinite scroll.
 
 ## Deferred by design
 
-- [x] **Dashboard gate surface.** Done: `gates` and `gate_answer` on `POST /api` (Bearer-only) and a pending-gates strip on the page, both over `gates.answer_gate`. Deliberately not MCP tools: an agent able to answer its own `confirm()` defeats the primitive. Not exercised in a real browser: the strip's rendering and buttons were checked for syntax (`node --check`) and through the RPCs only.
+- [x] **Dashboard gate surface.** Done: `gates` and `gate_answer` on `POST /api` (Bearer-only) and a pending-gates strip on the page, both over `gates.answer_gate`. Deliberately not MCP tools: an agent able to answer its own `confirm()` defeats the primitive. Checked in a real headless Chrome for Testing against a live kernel: confirm (Accept/Decline), choose (one button per option), ask (text box and Send, answer passed verbatim), a prompt containing markup renders as text with nothing injected, and the strip clears when a gate times out. Not checked: a human on a real display, or several gates open at once.
 - [ ] **Per-parameter descriptions beyond a bare string.** `Annotated[T, "..."]` carries a
   description and nothing else. Enum/min/max would need a dict metadata item; no demand yet,
   and `repld` staying dependency-free rules out borrowing pydantic's `Field`.
