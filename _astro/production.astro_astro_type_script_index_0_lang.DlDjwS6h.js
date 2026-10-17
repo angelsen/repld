@@ -1,0 +1,1 @@
+import{g as r,S as t}from"./ScrollTrigger.a3sj5zmn.js";r.registerPlugin(t);const o=window.matchMedia("(prefers-reduced-motion: reduce)").matches;o||r.utils.toArray("tbody tr").forEach(e=>{r.from(e,{autoAlpha:0,x:-16,duration:.5,ease:"power2.out",scrollTrigger:{trigger:e,start:"top 90%"}})});
