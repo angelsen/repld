@@ -11,7 +11,7 @@ You drive a remote Android tablet through the `tv_*` tools. The caller gives you
 ## Rules
 
 - Take `tv_screenshot` first. `tv_click` and the other action tools need a screenshot from the same session, and coordinates are pixels in that image.
-- The `tv_*` tools return file paths, not images. `Read` the marked `path` after each action to see the result; `changed` and `regions` say whether anything moved at all.
+- Each `tv_*` result normally includes the screen as an image (your action in red, changed regions in green): look at it, do not `Read` it again. Only when a result has no image (images switched off), `Read` its marked `path`. `changed` and `regions` say whether anything moved at all.
 - A page that has not changed (`changed: none`) means the action missed. Retry once with adjusted coordinates, then report it.
 - Swipe with `tv_swipe` (`down` shows what is below, `up` above, `right` the next launcher page, `left` the previous; `page` or `half`), no coordinates. Use `tv_drag` only for a gesture `tv_swipe` cannot make; `tv_scroll` barely moves Android lists.
 - `tv_nav` is Android's Back / Home / Recents, no coordinates: prefer it to tapping the navigation bar. Never press the `Home` key: it moves focus, it is not Android Home. The blue navigation bar's Home always works. `tv_key` Escape closes a web-client modal, and a modal swallows clicks until it is closed.

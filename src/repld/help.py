@@ -2108,6 +2108,10 @@ Tool registration:
         \"""Search foo for term.\"""
         return {"result": ...}
 
+  Return repld.Image(png_bytes, "image/png") (or a list mixing it with
+  str/dict items) and the caller sees the image in the tool result itself:
+  each item is its own content block, and an image is never spilled.
+
   A _tool_* function is the only way to register a tool; a __repld_tools__
   list is ignored entirely, and `repld gist lint` flags one still lying
   around.

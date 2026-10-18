@@ -5,6 +5,7 @@ replays the client's handshake onto a fresh kernel — but it never interprets a
 tool call, so every schema and handler below lives on this side of the socket.
 """
 
+import base64
 import inspect
 import json
 import socket
@@ -1196,9 +1197,11 @@ class Dispatcher(BrowserDispatchMixin):
         through the same spill pipeline as exec/browser tools, since a
         handler is arbitrary code with no more bound on its output than an
         exec cell. `structuredContent` carries the dict as-is — it has no
-        text-shaped preview to spill.
+        text-shaped preview to spill. A `content.Image`, or a list holding
+        one, becomes one content block per item; an image is never spilled.
         """
         from . import gists
+        from .content import Image
 
         try:
             handler = gists.resolve_tool(name)
@@ -1211,15 +1214,38 @@ class Dispatcher(BrowserDispatchMixin):
             if inspect.iscoroutine(result):
                 result = self._run_async(result)
             body: dict = {}
-            if isinstance(result, dict):
-                # Dict returns ride as structuredContent too — no outputSchema
-                # (nothing to infer one from), which the spec allows; only
-                # objects qualify, since structuredContent is object-typed in
-                # 2025-06-18. The text block stays the canonical fallback.
-                body["structuredContent"] = result
-            text = result if isinstance(result, str) else json.dumps(result, indent=2)
-            sp = _spill_text(text, label=name)
-            body["content"] = [{"type": "text", "text": _format_spill(sp, text)}]
+            # A plain list stays one JSON text block; only an Image makes a list a sequence of blocks.
+            mixed = isinstance(result, Image) or (
+                isinstance(result, (list, tuple))
+                and any(isinstance(i, Image) for i in result)
+            )
+            items = (
+                list(result)
+                if isinstance(result, (list, tuple)) and mixed
+                else [result]
+            )
+            body["content"] = []
+            for item in items:
+                if isinstance(item, Image):
+                    body["content"].append(
+                        {
+                            "type": "image",
+                            "data": base64.b64encode(item.data).decode("ascii"),
+                            "mimeType": item.mime_type,
+                        }
+                    )
+                    continue
+                if isinstance(item, dict) and "structuredContent" not in body:
+                    # Dict returns ride as structuredContent too — no outputSchema
+                    # (nothing to infer one from), which the spec allows; only
+                    # objects qualify, since structuredContent is object-typed in
+                    # 2025-06-18. The text block stays the canonical fallback.
+                    body["structuredContent"] = item
+                text = item if isinstance(item, str) else json.dumps(item, indent=2)
+                sp = _spill_text(text, label=name)
+                body["content"].append(
+                    {"type": "text", "text": _format_spill(sp, text)}
+                )
             return _response(rid, body)
         except Exception as exc:
             return _tool_error(rid, f"{name}: {exc}")

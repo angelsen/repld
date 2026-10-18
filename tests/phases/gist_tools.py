@@ -1,5 +1,6 @@
 """Phase 9: Gist-registered MCP tools — discovery, dispatch, auto-reload, error handling."""
 
+import base64
 import json
 import re
 import time
@@ -25,6 +26,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _single_dict_param(b, gists_dir)
         _handler_error(b, gists_dir)
         _oversized_result_spills(b, gists_dir)
+        _image_result(b, gists_dir)
         _bad_tool_calls(b)
         _list_changed(b, gists_dir)
     finally:
@@ -312,6 +314,64 @@ def _oversized_result_spills(b: Bridge, gists_dir: Path) -> None:
             full = f.read()
         assert_eq(len(full), 10000, "spill file holds the untruncated result")
         print(f"  ✓ oversized gist tool result spilled to {spill_path}")
+
+
+def _image_result(b: Bridge, gists_dir: Path) -> None:
+    """A handler returning repld.Image, alone or in a list with str/dict, gets
+    one content block per item; the image is base64 in an `image` block, never
+    spilled, and a plain list without an image stays one JSON text block."""
+    source = (
+        '"""Smoketest gist — image results."""\n\n'
+        "import repld\n\n"
+        "PNG = bytes.fromhex('89504e470d0a1a0a') + b'smoke'\n\n"
+        "async def _tool_smoke_image() -> str:\n"
+        '    """Return an image alone."""\n'
+        "    return repld.Image(PNG, 'image/png')\n\n"
+        "async def _tool_smoke_mixed() -> str:\n"
+        '    """Return text, a dict and an image."""\n'
+        "    return ['shot', {'changed': 'none'}, repld.Image(PNG * 4000, 'image/jpeg')]\n\n"
+        "async def _tool_smoke_plain_list() -> str:\n"
+        '    """Return a plain list."""\n'
+        "    return [1, 2, 3]\n"
+    )
+    png = bytes.fromhex("89504e470d0a1a0a") + b"smoke"
+    with _gist(gists_dir, "smoke_images", source):
+        alone = _call(b, "smoke_image", {})["result"]["content"]
+        assert_eq(
+            alone,
+            [
+                {
+                    "type": "image",
+                    "data": base64.b64encode(png).decode(),
+                    "mimeType": "image/png",
+                }
+            ],
+            "an Image alone is one image block",
+        )
+        mixed = _call(b, "smoke_mixed", {})["result"]
+        kinds = [c["type"] for c in mixed["content"]]
+        assert_eq(kinds, ["text", "text", "image"], "one block per item, in order")
+        assert_eq(
+            mixed["structuredContent"],
+            {"changed": "none"},
+            "the dict item is the structuredContent",
+        )
+        image = mixed["content"][2]
+        assert_eq(
+            base64.b64decode(image["data"]),
+            png * 4000,
+            "a large image is inlined whole, never spilled",
+        )
+        assert_eq(image["mimeType"], "image/jpeg", "the mime type is the handler's")
+        plain = _call(b, "smoke_plain_list", {})["result"]["content"]
+        assert_eq(
+            [c["type"] for c in plain],
+            ["text"],
+            "a list without an image stays one text block",
+        )
+        print(
+            "  ✓ gist tool images: alone, mixed with text/dict, never spilled; plain list unchanged"
+        )
 
 
 def _bad_tool_calls(b: Bridge) -> None:

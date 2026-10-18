@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A gist `_tool_*` handler can return `repld.Image(data, mime_type)`, or a list mixing it with str/dict items, and the caller sees the image in the tool result itself: one MCP content block per item (`image` blocks are never spilled). A plain list still returns as one JSON text block.
+
 ### Changed
 
 ### Fixed
