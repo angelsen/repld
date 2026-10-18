@@ -8,19 +8,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.16.0] - 2026-10-18
+
+### Added
+
 - A gist `_tool_*` handler can return `repld.Image(data, mime_type)`, or a list mixing it with str/dict items, and the caller sees the image in the tool result itself: one MCP content block per item (`image` blocks are never spilled). A plain list still returns as one JSON text block.
 - A gist tool parameter typed `Literal[...]` (also inside `Annotated` or `| None`) is advertised with its values as a JSON Schema `enum`, where it used to be a bare `string` and an unmapped-type warning.
 - A gist tool parameter typed `list[T]` is advertised with `items` (T's own schema, `Literal` and nested lists included), where it used to be a bare `array`.
 - `@repld.tool(title=, read_only=, destructive=, idempotent=, open_world=)` on a `_tool_*` handler sends a display title and the MCP tool annotations. Claude Code shows the title and runs a `read_only` tool in parallel with other calls.
-
-### Changed
 
 ### Fixed
 
 - A failed import in the kernel no longer rescans every `sys.path` directory each time. The gist import hook invalidated Python's import caches and retried on every `ModuleNotFoundError`, so a library's guarded import on a hot path paid for it on every call: DuckDB tries `import pandas` on each query, which made every stored browser event cost ~4 ms of the kernel loop instead of ~0.5 ms, and a page with a busy WebSocket (TeamViewer's web client) stalled the loop for seconds. A failed top-level name is now remembered with each `sys.path` directory's mtime and the project venv, and retried only after one of them changes, so a package installed mid-session is still picked up.
 - `browser.open()` (and `acquire()`, `browser_open`) skips a connected browser that has no `Target.createTarget`, such as a lend lease, and opens in the next one. With a lease connected first it used to fail every time, even with a port-connected Chrome in the pool. A CDP error now raises `CDPCommandError`, a `RuntimeError` that keeps the JSON-RPC `code`.
 
-### Removed
 
 ## [0.15.0] - 2026-10-17
 
