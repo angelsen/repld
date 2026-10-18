@@ -2093,7 +2093,8 @@ Tool registration:
   tool description. Tools appear in tools/list automatically; no exec
   round-trip needed.
   Type map: str→string, int→integer, float→number, bool→boolean,
-  list→array, dict→object. No annotation → string. No default → required.
+  list→array (list[T] adds items), dict→object, Literal[...]→its values
+  as an enum. No annotation → string. No default → required.
   Describe a *parameter* with Annotated[T, "..."] — the docstring's first
   line is spent on the tool description, so this is the only place to say
   what a date format or an id refers to. Composes with `| None`.
@@ -2107,6 +2108,10 @@ Tool registration:
     ) -> dict:
         \"""Search foo for term.\"""
         return {"result": ...}
+
+  @repld.tool(title=, read_only=, destructive=, idempotent=, open_world=)
+  on the handler sends a display title and the MCP behavior hints; a
+  read_only tool may run in parallel with others. Unset hints aren't sent.
 
   Return repld.Image(png_bytes, "image/png") (or a list mixing it with
   str/dict items) and the caller sees the image in the tool result itself:

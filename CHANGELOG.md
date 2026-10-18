@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - A gist `_tool_*` handler can return `repld.Image(data, mime_type)`, or a list mixing it with str/dict items, and the caller sees the image in the tool result itself: one MCP content block per item (`image` blocks are never spilled). A plain list still returns as one JSON text block.
+- A gist tool parameter typed `Literal[...]` (also inside `Annotated` or `| None`) is advertised with its values as a JSON Schema `enum`, where it used to be a bare `string` and an unmapped-type warning.
+- A gist tool parameter typed `list[T]` is advertised with `items` (T's own schema, `Literal` and nested lists included), where it used to be a bare `array`.
+- `@repld.tool(title=, read_only=, destructive=, idempotent=, open_world=)` on a `_tool_*` handler sends a display title and the MCP tool annotations. Claude Code shows the title and runs a `read_only` tool in parallel with other calls.
 
 ### Changed
 

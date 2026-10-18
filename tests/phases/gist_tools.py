@@ -114,18 +114,25 @@ def _annotated_params(b: Bridge, gists_dir: Path) -> None:
     docstring's first line is spent on the tool description."""
     source = (
         '"""Smoketest gist with annotated params."""\n\n'
-        "from typing import Annotated\n\n"
+        "from typing import Annotated, Literal\n\n"
+        "import repld\n\n"
+        "@repld.tool(title='Smoke annotated', read_only=True)\n"
         "async def _tool_smoke_annotated(\n"
         "    query: Annotated[str, \"Search term (e.g. 'strom')\"],\n"
         '    fra: Annotated[str | None, "From date YYYY-MM-DD"] = None,\n'
         "    plain: int = 7,\n"
         "    tagged: Annotated[int, 42] = 1,\n"
+        '    way: Annotated[Literal["below", "above"], "Which way"] = "below",\n'
+        "    level: Literal[1, 2] | None = None,\n"
+        "    mixed: Literal['a', 1] = 'a',\n"
+        "    tags: list[str] | None = None,\n"
         ") -> str:\n"
         '    """Annotated tool."""\n'
         '    return f"{query}|{fra}|{plain}|{tagged}"\n'
     )
     with _gist(gists_dir, "smoke_annotated", source):
-        props = _tool(b, "smoke_annotated")["inputSchema"]["properties"]
+        schema = _tool(b, "smoke_annotated")
+        props = schema["inputSchema"]["properties"]
         assert_eq(
             props["query"]["description"],
             "Search term (e.g. 'strom')",
@@ -141,6 +148,34 @@ def _annotated_params(b: Bridge, gists_dir: Path) -> None:
         assert_eq(props["plain"]["type"], "integer", "un-annotated type unaffected")
         assert_true("description" not in props["tagged"], "non-str metadata ignored")
         assert_eq(props["tagged"]["type"], "integer", "non-str metadata keeps type")
+        # Literal lists its values as an enum, through Annotated and `| None` too;
+        # mixed-type values have no single JSON type, so neither type nor enum.
+        assert_eq(
+            (props["way"]["type"], props["way"]["enum"]),
+            ("string", ["below", "above"]),
+            "Literal enum",
+        )
+        assert_eq(
+            props["way"]["description"], "Which way", "Literal keeps its description"
+        )
+        assert_eq(
+            (props["level"]["type"], props["level"]["enum"]),
+            ("integer", [1, 2]),
+            "Optional Literal enum",
+        )
+        assert_true("enum" not in props["mixed"], "a mixed Literal gets no enum")
+        assert_eq(
+            props["tags"],
+            {"type": "array", "items": {"type": "string"}, "default": None},
+            "list[str] carries items",
+        )
+        # The decorator reaches tools/list as both the spec's title and
+        # annotations.title, which is the one Claude Code displays.
+        assert_eq(
+            (schema.get("title"), schema.get("annotations")),
+            ("Smoke annotated", {"title": "Smoke annotated", "readOnlyHint": True}),
+            "@repld.tool title + hints",
+        )
 
         resp = _call(b, "smoke_annotated", {"query": "q", "fra": "2026-01-01"})
         assert_eq(

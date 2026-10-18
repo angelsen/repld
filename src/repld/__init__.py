@@ -4,7 +4,7 @@ import importlib.metadata
 from typing import TYPE_CHECKING
 
 from .cli import main
-from .content import Image
+from .content import Image, tool
 
 __version__ = importlib.metadata.version("repld-tool")
 
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     browser: _LazyBrowser
 
 
-__all__ = ["Image", "load_dotenv", "main", "socket_path"]
+__all__ = ["Image", "load_dotenv", "main", "socket_path", "tool"]
 
 
 def __getattr__(name: str):

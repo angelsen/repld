@@ -688,28 +688,47 @@ def _annotation_parts(annotation) -> tuple[object, str | None]:
     return base, next((m for m in meta if isinstance(m, str)), None)
 
 
-def _resolve_json_type(annotation) -> str | None:
-    """Map a parameter annotation to a JSON Schema type, unwrapping
-    ``Annotated[X, ...]``, ``X | None`` / ``Optional[X]`` to the non-None arm,
-    and parameterized generics (``list[str]``, ``dict[str, int]``) to their
-    base type. None if unmapped."""
+def _unwrap(annotation):
+    """Strip ``Annotated[X, ...]`` and ``X | None`` / ``Optional[X]`` down to X,
+    in any nesting; a union with two non-None arms is returned as is."""
+    while True:
+        origin = typing.get_origin(annotation)
+        if origin is typing.Annotated:
+            annotation = typing.get_args(annotation)[0]
+        elif origin is typing.Union or origin is types.UnionType:
+            args = [a for a in typing.get_args(annotation) if a is not type(None)]
+            if len(args) != 1:
+                return annotation
+            annotation = args[0]
+        else:
+            return annotation
+
+
+def _type_schema(annotation) -> dict | None:
+    """The JSON Schema for a parameter annotation: its ``type``, plus ``enum``
+    for a ``Literal`` and ``items`` for a ``list[T]`` whose T maps. None if
+    unmapped, including a ``Literal`` mixing JSON types."""
+    annotation = _unwrap(annotation)
     mapped = _TYPE_MAP.get(annotation)
     if mapped is not None:
-        return mapped
+        return {"type": mapped}
     origin = typing.get_origin(annotation)
-    # Also handled by `_annotation_parts` before this is called; repeated here
-    # so a nested form like `Optional[Annotated[str, "..."]]` still resolves
-    # its type instead of falling through to the unmapped-type warning.
-    if origin is typing.Annotated:
-        return _resolve_json_type(typing.get_args(annotation)[0])
-    if origin is typing.Union or origin is types.UnionType:
-        args = [a for a in typing.get_args(annotation) if a is not type(None)]
-        if len(args) == 1:
-            return _resolve_json_type(args[0])
+    if origin is typing.Literal:
+        values = list(typing.get_args(annotation))
+        kinds = {_TYPE_MAP.get(type(v)) for v in values}
+        if len(kinds) != 1 or None in kinds:
+            return None
+        return {"type": kinds.pop(), "enum": values}
+    mapped = _TYPE_MAP.get(origin) if origin is not None else None
+    if mapped is None:
         return None
-    if origin is not None:
-        return _TYPE_MAP.get(origin)
-    return None
+    schema: dict = {"type": mapped}
+    args = typing.get_args(annotation)
+    if origin is list and len(args) == 1:
+        items = _type_schema(args[0])
+        if items is not None:
+            schema["items"] = items
+    return schema
 
 
 def _schema_from_signature(func, tool_name: str) -> dict:
@@ -736,16 +755,15 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     required: list[str] = []
     for pname, param in sig.parameters.items():
         annotation, param_doc = _annotation_parts(hints.get(pname, param.annotation))
-        json_type = _resolve_json_type(annotation)
-        if json_type is None:
+        prop = _type_schema(annotation)
+        if prop is None:
             if annotation is not inspect.Parameter.empty:
                 _warn_once(
                     f"{tool_name}:{pname}:type",
                     f"repld: tool '{tool_name}' param '{pname}' has unmapped "
                     f"type {annotation!r} — treating as string",
                 )
-            json_type = "string"
-        prop: dict = {"type": json_type}
+            prop = {"type": "string"}
         if param_doc:
             prop["description"] = param_doc
         if param.default is not inspect.Parameter.empty:
@@ -764,6 +782,13 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     }
     if required:
         schema["inputSchema"]["required"] = required
+    hints = dict(getattr(func, "__repld_tool__", None) or {})
+    if "title" in hints:
+        # Claude Code names a tool by `annotations.title`, not the top-level
+        # `title` the spec added in 2025-06-18, so send it in both places.
+        schema["title"] = hints["title"]
+    if hints:
+        schema["annotations"] = hints
     return schema
 
 

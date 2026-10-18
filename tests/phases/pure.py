@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from harness import assert_eq, assert_true
 
@@ -30,6 +30,7 @@ from repld import (
     peer_stub,
     render,
     tasks,
+    tool,
 )
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -358,7 +359,7 @@ def _cli_args() -> None:
 
 
 def _json_types() -> None:
-    parts, resolve = gists._annotation_parts, gists._resolve_json_type
+    parts, resolve = gists._annotation_parts, gists._type_schema
     assert_eq(parts(int), (int, None), "bare type")
     assert_eq(parts(Annotated[str, "an id"]), (str, "an id"), "Annotated description")
     assert_eq(
@@ -367,20 +368,33 @@ def _json_types() -> None:
     assert_eq(parts(Annotated[str, 3]), (str, None), "no str metadata")
 
     for annotation, want in (
-        (str, "string"),
-        (int, "integer"),
-        (float, "number"),
-        (bool, "boolean"),
-        (list[str], "array"),
-        (dict[str, int], "object"),
-        (int | None, "integer"),
-        (Optional[list[int]], "array"),             # noqa: UP045 — the typing.Union spelling is the case
-        (Optional[Annotated[str, "x"]], "string"),  # noqa: UP045
+        (str, {"type": "string"}),
+        (int, {"type": "integer"}),
+        (float, {"type": "number"}),
+        (bool, {"type": "boolean"}),
+        (list, {"type": "array"}),
+        (list[str], {"type": "array", "items": {"type": "string"}}),
+        (dict[str, int], {"type": "object"}),
+        (int | None, {"type": "integer"}),
+        (Optional[list[int]], {"type": "array", "items": {"type": "integer"}}),  # noqa: UP045 — the typing.Union spelling is the case
+        (Optional[Annotated[str, "x"]], {"type": "string"}),                     # noqa: UP045
+        (Literal["a", "b"], {"type": "string", "enum": ["a", "b"]}),
+        (Literal[True], {"type": "boolean", "enum": [True]}),
+        (
+            list[Literal[1, 2]] | None,
+            {"type": "array", "items": {"type": "integer", "enum": [1, 2]}},
+        ),
+        (
+            list[list[str]],
+            {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+        ),
+        (list[Path], {"type": "array"}),
+        (Literal["a", 1], None),
         (int | str, None),
         (Path, None),
         (tuple[int, ...], None),
     ):
-        assert_eq(resolve(annotation), want, f"_resolve_json_type({annotation!r})")
+        assert_eq(resolve(annotation), want, f"_type_schema({annotation!r})")
 
     def _tool_lookup(
         org: Annotated[str, "9-digit org number"], limit: int = 5, deep=False
@@ -412,7 +426,24 @@ def _json_types() -> None:
     bare = gists._schema_from_signature(_tool_bare, "bare")
     assert_eq(bare["description"], "bare", "no docstring falls back to the tool name")
     assert_true("required" not in bare["inputSchema"], "no required key when empty")
-    print("  ✓ gists: Annotated split, JSON type resolution, schema from signature")
+    assert_true(
+        "title" not in bare and "annotations" not in bare, "undecorated: no hints"
+    )
+
+    @tool(title="Look up", read_only=True, destructive=None, open_world=False)
+    def _tool_marked():
+        """Marked."""
+
+    marked = gists._schema_from_signature(_tool_marked, "marked")
+    assert_eq(marked["title"], "Look up", "decorator title")
+    # Claude Code names the tool from annotations.title; a None hint is not sent.
+    assert_eq(
+        marked["annotations"],
+        {"title": "Look up", "readOnlyHint": True, "openWorldHint": False},
+        "decorator hints",
+    )
+    assert_true(tool()(_tool_bare) is _tool_bare, "decorator returns the function")
+    print("  ✓ gists: Annotated split, JSON type schema, schema from signature, @tool")
 
 
 def _lint_helpers() -> None:

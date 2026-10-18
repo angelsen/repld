@@ -121,7 +121,7 @@ async def _tool_lookup_company(org_number: str) -> dict:
     return await b.company(org_number)
 ```
 
-Type hints and defaults become the JSON schema (`str`→string, `int`→integer, `float`→number, `bool`→boolean, `list`→array, `dict`→object; no annotation defaults to string; no default marks the param required). The first docstring line becomes the tool description. Tools appear in `tools/list` automatically — no exec round-trip needed. `repld gist new <name>` scaffolds this pattern.
+Type hints and defaults become the JSON schema (`str`→string, `int`→integer, `float`→number, `bool`→boolean, `list`→array, `list[T]`→array with T's schema as `items`, `dict`→object, `Literal[...]`→its values as an `enum`; no annotation defaults to string; no default marks the param required). The first docstring line becomes the tool description. Tools appear in `tools/list` automatically — no exec round-trip needed. `repld gist new <name>` scaffolds this pattern.
 
 Describe an individual parameter by wrapping its type in `Annotated`:
 
@@ -132,6 +132,15 @@ async def _tool_lookup_company(
     org_number: Annotated[str, "Nine-digit Norwegian organisation number"],
     include_roles: Annotated[bool, "Also fetch board members"] = False,
 ) -> dict: ...
+```
+
+Describe the tool itself with `@repld.tool`: a display title and the MCP behavior hints (`read_only`, `destructive`, `idempotent`, `open_world`). Claude Code shows the title, and runs a `read_only` tool in parallel with other calls. A hint you leave out is not sent.
+
+```python
+import repld
+
+@repld.tool(title="Look up company", read_only=True, open_world=True)
+async def _tool_lookup_company(org_number: str) -> dict: ...
 ```
 
 :::caution[Removed in 0.2]
