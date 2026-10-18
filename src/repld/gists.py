@@ -343,6 +343,23 @@ class _GistFinder(importlib.abc.MetaPathFinder):
 # Python version mismatch, and this process's version cannot change.
 _unusable_venvs: set[Path] = set()
 
+# A top-level import that failed even after recovery, with the sys.path state it failed against.
+_missing: dict[str, tuple[tuple, ModuleNotFoundError]] = {}
+
+
+def _path_state() -> tuple:
+    """sys.path with each entry's directory mtime, plus the project venv: installing a top-level package changes
+    its directory's mtime, and a `.venv` that appears after boot is adopted by `_recover_missing_import`."""
+    from . import bind
+
+    state = []
+    for entry in sys.path:
+        try:
+            state.append((entry, os.stat(entry or ".").st_mtime_ns))
+        except OSError:
+            state.append((entry, None))
+    return tuple(state), str(bind.project_venv())
+
 
 def _recover_missing_import(original, args):
     """Last chance for a failed import: adopt a late project venv, then retry.
@@ -356,30 +373,50 @@ def _recover_missing_import(original, args):
     caches the failed lookup, so it stays missing until the caches are
     invalidated), and a ``.venv`` that only appeared after boot.
 
-    The retry is unconditional on purpose. Remembering "module X is missing"
-    would be faster but wrong: a `uv add` mid-session has to be picked up, and
-    a memo would keep reporting the package missing after it was installed.
-    The venv check is memoized instead, which is safe — see `_unusable_venvs`.
-    Guarded imports (`try: import x / except ImportError`) pay for that retry
-    too; there is no way to see the caller's `try` from inside `__import__`,
-    and the alternative is missing the case the recovery exists for.
+    A plain "module X is missing" memo would be wrong: a `uv add` mid-session
+    has to be picked up. So a failed top-level name is remembered together
+    with `_path_state()`, and the retry is skipped only while no sys.path
+    directory has changed; installing a package changes its directory's mtime.
+    Guarded imports (`try: import x / except ImportError`) on a hot path are
+    why this matters: DuckDB tries `import pandas` on every query, and an
+    unconditional invalidate_caches + retry rescanned every sys.path entry each
+    time. The venv check stays per call and is memoized — see `_unusable_venvs`.
     """
     import importlib
 
     from . import bind
 
     venv = bind.project_venv()
+    adopted = False
     if venv is not None and venv not in _unusable_venvs and not bind.is_bound(venv):
         added = bind.adopt(venv)
         if added is None:
             _unusable_venvs.add(venv)
         else:
+            adopted = True
             push_kind(f"[repld] bound {venv} — its packages are now importable", "venv")
+    name, level = args[0], args[4]
+    # Only a top-level absolute name can be memoized: a submodule appearing inside an existing package changes
+    # that package's directory, which `_path_state` does not look at.
+    key = name if level == 0 and name and "." not in name else None
+    state = _path_state() if key else None
+    seen = _missing.get(key) if key else None
+    if seen is not None and not adopted and seen[0] == state:
+        # Same failure against the same directories: invalidate_caches + retry would rescan every sys.path
+        # entry for nothing (a library's guarded `import pandas` on every call costs ~4 ms each).
+        prev = seen[1]
+        raise ModuleNotFoundError(str(prev), name=prev.name, path=prev.path) from None
     importlib.invalidate_caches()
     try:
-        return original(*args)
+        result = original(*args)
     except ModuleNotFoundError as retried:
-        raise _explain_missing(retried, venv) from None
+        explained = _explain_missing(retried, venv)
+        if key and state is not None:
+            _missing[key] = (state, explained)
+        raise explained from None
+    if key:
+        _missing.pop(key, None)
+    return result
 
 
 def _explain_missing(
@@ -444,6 +481,12 @@ class _GistImportHook:
         for candidate in {base, top}:
             _check_reload(candidate)
 
+        if level == 0 and name in _missing:
+            # Checked before the import machinery runs: a remembered failure would otherwise still walk every
+            # finder (~140 µs) before `_recover_missing_import` could replay it.
+            state, prev = _missing[name]
+            if state == _path_state():
+                raise ModuleNotFoundError(str(prev), name=prev.name, path=prev.path)
         try:
             result = self._original(name, globals, locals, fromlist, level)
         except ModuleNotFoundError:

@@ -446,6 +446,69 @@ def _json_types() -> None:
     print("  ✓ gists: Annotated split, JSON type schema, schema from signature, @tool")
 
 
+def _missing_import_memo() -> None:
+    """A failed top-level import is retried only after a sys.path directory changes.
+
+    DuckDB tries `import pandas` on every query; each failure used to run
+    `importlib.invalidate_caches()` and a retry, rescanning every sys.path
+    entry (~4 ms per query inside the kernel). The memo keys on each entry's
+    mtime, so a package installed mid-session is still picked up.
+    """
+    import builtins
+    import importlib
+    import sys
+    import tempfile
+
+    d = Path(tempfile.mkdtemp(prefix="repld-missing-"))
+    name = "repld_smoke_missing_mod"
+    calls = []
+    real_invalidate = importlib.invalidate_caches
+    importlib.invalidate_caches = lambda: (calls.append(1), real_invalidate())[1]
+    sys.path.insert(0, str(d))
+    gists._missing.pop(name, None)
+    args = (name, None, None, (), 0)
+    try:
+        for attempt in (1, 2):
+            try:
+                gists._recover_missing_import(builtins.__import__, args)
+                raise AssertionError("imported a module that does not exist")
+            except ModuleNotFoundError as e:
+                assert_eq(e.name, name, f"attempt {attempt} names the module")
+        assert_eq(len(calls), 1, "a second identical failure skips invalidate_caches")
+
+        searched = []
+
+        def counting_import(*a):
+            searched.append(a[0])
+            return builtins.__import__(*a)
+
+        hook = gists._GistImportHook(counting_import)
+        with contextlib.suppress(ModuleNotFoundError):
+            hook(*args)
+        assert_eq(
+            searched, [], "the hook replays a remembered failure without searching"
+        )
+
+        time.sleep(0.01)
+        (d / f"{name}.py").write_text("VALUE = 7\n")
+        mod = gists._recover_missing_import(builtins.__import__, args)
+        assert_eq(mod.VALUE, 7, "a module written into a sys.path dir is picked up")
+        assert_eq(len(calls), 2, "and that retry did invalidate the caches")
+        assert_true(name not in gists._missing, "success clears the memo")
+
+        dotted = ("repld_smoke_nopkg.sub", None, None, (), 0)
+        for _ in range(2):
+            with contextlib.suppress(ModuleNotFoundError):
+                gists._recover_missing_import(builtins.__import__, dotted)
+        assert_eq(len(calls), 4, "a dotted name is never memoized")
+    finally:
+        importlib.invalidate_caches = real_invalidate
+        sys.path.remove(str(d))
+        sys.modules.pop(name, None)
+        gists._missing.pop(name, None)
+    print("  ✓ gists: a failed import is retried only after a sys.path dir changes")
+
+
 def _lint_helpers() -> None:
     src = (
         "x = 1  # gistlint: ignore=deps,shape\n"
@@ -1793,6 +1856,7 @@ def phase_2_pure() -> None:
     _reconnect_waiters()
     _cli_args()
     _json_types()
+    _missing_import_memo()
     _lint_helpers()
     _install_python()
     _screencast()

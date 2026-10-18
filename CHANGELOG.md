@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A failed import in the kernel no longer rescans every `sys.path` directory each time. The gist import hook invalidated Python's import caches and retried on every `ModuleNotFoundError`, so a library's guarded import on a hot path paid for it on every call: DuckDB tries `import pandas` on each query, which made every stored browser event cost ~4 ms of the kernel loop instead of ~0.5 ms, and a page with a busy WebSocket (TeamViewer's web client) stalled the loop for seconds. A failed top-level name is now remembered with each `sys.path` directory's mtime and the project venv, and retried only after one of them changes, so a package installed mid-session is still picked up.
 - `browser.open()` (and `acquire()`, `browser_open`) skips a connected browser that has no `Target.createTarget`, such as a lend lease, and opens in the next one. With a lease connected first it used to fail every time, even with a port-connected Chrome in the pool. A CDP error now raises `CDPCommandError`, a `RuntimeError` that keeps the JSON-RPC `code`.
 
 ### Removed
