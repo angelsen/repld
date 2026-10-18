@@ -377,7 +377,7 @@ def _json_types() -> None:
         (dict[str, int], {"type": "object"}),
         (int | None, {"type": "integer"}),
         (Optional[list[int]], {"type": "array", "items": {"type": "integer"}}),  # noqa: UP045 — the typing.Union spelling is the case
-        (Optional[Annotated[str, "x"]], {"type": "string"}),  # noqa: UP045
+        (Optional[Annotated[str, "x"]], {"type": "string"}),                     # noqa: UP045
         (Literal["a", "b"], {"type": "string", "enum": ["a", "b"]}),
         (Literal[True], {"type": "boolean", "enum": [True]}),
         (
