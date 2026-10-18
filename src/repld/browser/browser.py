@@ -15,10 +15,11 @@ from .. import tasks
 from ..events import BrowserTabAttached, BrowserTabDetached, emit
 from .cdp import CDPSession, _no_capture_patterns
 from .row import Rows
-from .session import WORKER_TYPES, BrowserSession
+from .session import METHOD_NOT_FOUND, WORKER_TYPES, BrowserSession, CDPCommandError
 from .tab import Tab
 from .target import (
     _NO_TABS,
+    OpenRefused,
     TabNotFoundError,
     _is_target_id,
     _print_browser_help,
@@ -447,7 +448,12 @@ class Browser:
         client-rendered SPA has anything in the DOM worth reading.
         """
         await self._ensure_connected()
-        result = await self._session.execute("Target.createTarget", {"url": url})
+        try:
+            result = await self._session.execute("Target.createTarget", {"url": url})
+        except CDPCommandError as exc:
+            if exc.code == METHOD_NOT_FOUND:
+                raise OpenRefused(str(exc)) from exc
+            raise
         tid = result["targetId"]
         tab = await self._attach_racing(tid, ready=ready, mode="agent")
         if tab is None:

@@ -60,6 +60,18 @@ REFUSED_FOR_GOOD_STATUSES = frozenset({401, 403, 404, 410})
 SCOPE_REFUSAL_MARKER = "is outside this lease's"
 
 
+class CDPCommandError(RuntimeError):
+    """A CDP command answered with an error; `code` is its JSON-RPC code (None if it had none)."""
+
+    def __init__(self, message: str, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+# JSON-RPC "method not found": the endpoint has no such method, so the call never ran.
+METHOD_NOT_FOUND = -32601
+
+
 def is_scope_refusal(exc: BaseException) -> bool:
     """True if a CDP call failed because the lease's scope does not allow the method."""
     return SCOPE_REFUSAL_MARKER in str(exc)
@@ -845,13 +857,15 @@ class BrowserSession:
             if fut and not fut.done():
                 if "error" in data:
                     err = data["error"]
+                    code = None
                     if isinstance(err, dict):
                         msg = err.get("message", str(err))
                         if "data" in err:
                             msg = f"{msg} ({err['data']})"
+                        code = err.get("code")
                     else:
                         msg = str(err)
-                    fut.set_exception(RuntimeError(msg))
+                    fut.set_exception(CDPCommandError(msg, code))
                 else:
                     fut.set_result(data.get("result", {}))
 

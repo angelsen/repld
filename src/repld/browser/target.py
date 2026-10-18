@@ -17,13 +17,18 @@ cycle the alternative costs.
 
 import re
 
-__all__ = ["TabNotFoundError", "make_target"]
+__all__ = ["OpenRefused", "TabNotFoundError", "make_target"]
 
 
 class TabNotFoundError(RuntimeError):
     """Raised when a target ID or glob pattern matches no tab — distinct from
     other RuntimeErrors (CDP/ready-signal/reattach failures) so BrowserPool.get()
     can retry across browsers on this specific error without masking real ones."""
+
+
+class OpenRefused(RuntimeError):
+    """Raised by Browser.open() when the browser has no Target.createTarget at all (a lend lease
+    shares one tab), so BrowserPool.open() can try the next browser: no tab was created."""
 
 
 _TARGET_ID_RE = re.compile(r"^\d+:[0-9a-f]{6}$", re.IGNORECASE)

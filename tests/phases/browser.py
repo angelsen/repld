@@ -351,6 +351,120 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
     print("  ✓ BrowserPool.open()/get() skip a dead entry rather than failing on it")
 
 
+def phase_6_lease_open_skip(_kernel: Kernel) -> None:
+    """BrowserPool.open() skips a browser that has no Target.createTarget.
+
+    A lend lease answers createTarget with JSON-RPC -32601 ("a lease shares one
+    tab"). With a lease connected first, every browser.open() used to fail on it
+    even though a port-connected Chrome later in the pool could open the tab.
+    -32601 means the call never ran, so trying the next browser creates nothing
+    twice; any other createTarget error still propagates.
+    """
+    from repld.browser import Browser, BrowserPool
+    from repld.browser.session import BrowserSession, CDPCommandError
+    from repld.browser.target import OpenRefused
+
+    async def _dispatch_keeps_code() -> BaseException | None:
+        s = BrowserSession(port=1)
+        fut = asyncio.get_running_loop().create_future()
+        s._pending[7] = fut
+        await s._dispatch(
+            {
+                "id": 7,
+                "error": {
+                    "code": -32601,
+                    "message": "Target.createTarget is not available: a lease shares one tab",
+                },
+            }
+        )
+        return fut.exception()
+
+    exc = asyncio.run(_dispatch_keeps_code())
+    assert_true(
+        isinstance(exc, CDPCommandError) and isinstance(exc, RuntimeError),
+        "a CDP error reply is a CDPCommandError, still a RuntimeError",
+    )
+    assert_eq(getattr(exc, "code", None), -32601, "and keeps its JSON-RPC code")
+
+    class _Session:
+        def __init__(self, code: int) -> None:
+            self.code = code
+
+        async def execute(
+            self, method: str, params: dict | None = None, **_kw: object
+        ) -> dict:
+            raise CDPCommandError(f"{method} refused", self.code)
+
+    class _Lease(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = True
+
+    async def _open_with(code: int) -> BaseException:
+        b = _Lease(port=65536)
+        b._session = _Session(code)  # type: ignore[assignment]
+        try:
+            await b.open("http://x")
+        except BaseException as e:
+            return e
+        raise AssertionError("open() succeeded on a refusing session")
+
+    assert_true(
+        isinstance(asyncio.run(_open_with(-32601)), OpenRefused),
+        "Browser.open(): createTarget -32601 is OpenRefused",
+    )
+    other = asyncio.run(_open_with(-32000))
+    assert_true(
+        isinstance(other, CDPCommandError) and not isinstance(other, OpenRefused),
+        "any other createTarget error propagates as itself",
+    )
+
+    class _Refusing(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = True
+
+        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+            raise OpenRefused(
+                "Target.createTarget is not available: a lease shares one tab"
+            )
+
+    class _Live(Browser):
+        async def _ensure_connected(self) -> None:
+            self._connected = True
+
+        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+            return f"opened:{url}"
+
+    async def _pool(with_live: bool) -> object:
+        pool = BrowserPool()
+        lease = _Refusing(port=65536)
+        lease._connected = True
+        pool._browsers[65536] = lease
+        if with_live:
+            live = _Live(port=9222)
+            live._connected = True
+            pool._browsers[9222] = live
+        try:
+            return await pool.open("http://x")
+        except RuntimeError as e:
+            return e
+
+    assert_eq(
+        asyncio.run(_pool(True)),
+        "opened:http://x",
+        "pool.open() skips the lease for the Chrome after it",
+    )
+    alone = asyncio.run(_pool(False))
+    assert_true(
+        isinstance(alone, RuntimeError)
+        and "can open a tab" in str(alone)
+        and "65536" in str(alone),
+        f"a lease alone says why, naming it (got {alone!r})",
+    )
+    print(
+        "  ✓ BrowserPool.open() skips a lease that refuses Target.createTarget (-32601)"
+    )
+
+
 def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     """A stale-connected dead pool entry doesn't leak into tab listings either.
 

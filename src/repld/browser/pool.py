@@ -39,6 +39,7 @@ from .session import _redact
 from .tab import Tab
 from .target import (
     _NO_TABS,
+    OpenRefused,
     TabNotFoundError,
     _is_target_id,
     _print_browser_help,
@@ -438,7 +439,7 @@ class BrowserPool:
         )
 
     async def open(self, url: str, *, ready: str | None = None) -> Tab:
-        """Open a URL in the first *live* connected browser.
+        """Open a URL in the first *live* connected browser that can open tabs (a lend lease cannot).
 
         `_connected` means "was reachable last time we checked", not "is
         reachable now" — a Browser whose Chrome died without going through
@@ -449,6 +450,7 @@ class BrowserPool:
         """
         await self._ensure_any()
         unreachable: list[int] = []
+        refused: list[int] = []
         for port, b in self._browsers.items():
             if not b._connected:
                 continue
@@ -457,7 +459,17 @@ class BrowserPool:
             except RuntimeError:
                 unreachable.append(port)  # b._connected is now False too
                 continue
-            return await b.open(url, ready=ready)
+            try:
+                return await b.open(url, ready=ready)
+            except OpenRefused:
+                # A lend lease has no Target.createTarget; the next browser may.
+                refused.append(port)
+        if refused:
+            raise RuntimeError(
+                f"No connected browser can open a tab: {refused} refuse Target.createTarget "
+                "(a lease shares one tab); connect one that can, e.g. browser.connect(9222)"
+                + (f" (unreachable: {unreachable})" if unreachable else "")
+            )
         hint = f" (unreachable: {unreachable})" if unreachable else ""
         raise RuntimeError(f"No browsers connected{hint}")
 

@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `browser.open()` (and `acquire()`, `browser_open`) skips a connected browser that has no `Target.createTarget`, such as a lend lease, and opens in the next one. With a lease connected first it used to fail every time, even with a port-connected Chrome in the pool. A CDP error now raises `CDPCommandError`, a `RuntimeError` that keeps the JSON-RPC `code`.
+
 ### Removed
 
 ## [0.15.0] - 2026-10-17
