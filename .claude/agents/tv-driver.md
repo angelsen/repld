@@ -23,11 +23,22 @@ Navigate only. Do not start a diagnostic, write, flash, delete, install or updat
 
 ## Report
 
-Final answer is text only, at most 5 lines, no paths and no pixel dumps:
+Final answer is text only, no pixel dumps:
 
 ```
 done: yes|no
 screen: <one line, what is on screen now>
 steps: <number of actions taken>
 issue: <one line, or none>
+shots:
+<path>: <what the image showed, a few words>
+```
+
+`shots:` has one line for every `tv_*` result, in order, using the result's `path`. Describe what the image showed, not what you hoped, so a missed tap reads as one:
+
+```
+shots:
+/run/user/1000/repld/tv/00012.png: Settings app, main list
+/run/user/1000/repld/tv/00013.png: launcher page 1, the Settings tap missed
+/run/user/1000/repld/tv/00014.png: MaxiSys DTC list, engine ECU, 3 codes
 ```
