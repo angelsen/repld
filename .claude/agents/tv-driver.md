@@ -38,7 +38,7 @@ shots:
 
 ```
 shots:
-/run/user/1000/repld/tv/00012.png: Settings app, main list
-/run/user/1000/repld/tv/00013.png: launcher page 1, the Settings tap missed
-/run/user/1000/repld/tv/00014.png: MaxiSys DTC list, engine ECU, 3 codes
+~/.local/state/repld/tv/20261018-091502-00012.png: Settings app, main list
+~/.local/state/repld/tv/20261018-091509-00013.png: launcher page 1, the Settings tap missed
+~/.local/state/repld/tv/20261018-091517-00014.png: MaxiSys DTC list, engine ECU, 3 codes
 ```
