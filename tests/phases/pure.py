@@ -377,7 +377,7 @@ def _json_types() -> None:
         (dict[str, int], {"type": "object"}),
         (int | None, {"type": "integer"}),
         (Optional[list[int]], {"type": "array", "items": {"type": "integer"}}),  # noqa: UP045 — the typing.Union spelling is the case
-        (Optional[Annotated[str, "x"]], {"type": "string"}),                     # noqa: UP045
+        (Optional[Annotated[str, "x"]], {"type": "string"}),  # noqa: UP045
         (Literal["a", "b"], {"type": "string", "enum": ["a", "b"]}),
         (Literal[True], {"type": "boolean", "enum": [True]}),
         (
@@ -1808,6 +1808,39 @@ def _connect_url() -> None:
     print("  ✓ connect(url=): ws derivation, redaction, stable keys >= 65536, refusals")
 
 
+def _lease_routes() -> None:
+    from repld.browser.pool import _lease_routes
+
+    routes = _lease_routes("ws://127.0.0.1:8787/cdp/ab12-cd?token=t0k")
+    assert routes is not None
+    open_url, cdp_url_for = routes
+    assert_eq(
+        open_url,
+        "http://127.0.0.1:8787/leases/ab12-cd/open?token=t0k",
+        "open route keeps the token",
+    )
+    assert_eq(
+        cdp_url_for("ef34"),
+        "ws://127.0.0.1:8787/cdp/ef34?token=t0k",
+        "sibling lease, same broker",
+    )
+    routes = _lease_routes("wss://prelo.test/lend/cdp/x1")
+    assert routes is not None
+    assert_eq(
+        routes[0],
+        "https://prelo.test/lend/leases/x1/open",
+        "wss -> https under a path prefix",
+    )
+    for url in (
+        "http://127.0.0.1:9222",
+        "ws://127.0.0.1:9222/devtools/browser/abc",
+        "ws://h/cdp/a/b",
+        "",
+    ):
+        assert_eq(_lease_routes(url), None, f"not a lease: {url!r}")
+    print("  ✓ lease open route: derived from a /cdp/<lease> url, nothing else")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -1872,6 +1905,7 @@ def phase_2_pure() -> None:
     _files_probe_timeout()
     _dialable_ws_url()
     _connect_url()
+    _lease_routes()
     _stop_flushes_inflight_reply()
     _peer_resolution()
     _peer_host_vetting()

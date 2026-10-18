@@ -528,6 +528,8 @@ Quirks:
     them — returns only tabs that appear *after* the call.
   - open() creates a tab via Target.createTarget, then waits the same ready=
     signal as get() before returning (default: document.readyState === 'complete').
+    A lend lease refuses createTarget; when every browser does, open() asks a
+    lease's owner (POST /leases/<id>/open) and returns the tab of the new lease.
   - acquire(pattern, open=, ready=, timeout=) is get() falling back to open()
     on a miss — the try-get/except-open dance every gist that returns to one
     recurring site ends up hand-rolling. open= is the URL to navigate to on

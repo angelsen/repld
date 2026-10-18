@@ -22,13 +22,18 @@ method may run off-loop.
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from fnmatch import fnmatch
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from .. import bg
 from ..channel import push_channel
@@ -54,6 +59,29 @@ logger = logging.getLogger(__name__)
 # Registry keys for browsers attached by URL start above the TCP port range, so
 # they can never shadow a local Chrome and still parse as a `key:hex` target ID.
 REMOTE_KEY_BASE = 65536
+
+
+_LEASE_PATH = re.compile(r"^(?P<root>.*)/cdp/(?P<lease>[\w-]+)$")
+
+
+def _lease_routes(url: str) -> tuple[str, Callable[[str], str]] | None:
+    """A lend consumer url `ws(s)://host[/prefix]/cdp/<lease>[?query]`. -> (its POST open route, the consumer url of
+    another lease on the same broker), the query (a dev-shell token) kept on both; None for any other url."""
+    parts = urlsplit(url)
+    m = _LEASE_PATH.match(parts.path)
+    if parts.scheme not in ("ws", "wss") or m is None:
+        return None
+    http = "https" if parts.scheme == "wss" else "http"
+    open_url = urlunsplit(
+        (http, parts.netloc, f"{m['root']}/leases/{m['lease']}/open", parts.query, "")
+    )
+
+    def cdp_url_for(lease: str) -> str:
+        return urlunsplit(
+            (parts.scheme, parts.netloc, f"{m['root']}/cdp/{lease}", parts.query, "")
+        )
+
+    return open_url, cdp_url_for
 
 
 class BrowserPool:
@@ -439,7 +467,10 @@ class BrowserPool:
         )
 
     async def open(self, url: str, *, ready: str | None = None) -> Tab:
-        """Open a URL in the first *live* connected browser that can open tabs (a lend lease cannot).
+        """Open a URL in the first *live* connected browser that can open tabs, else ask a lend lease's owner to.
+
+        A lease shares one tab and refuses Target.createTarget; only when every browser refused does this try
+        `_open_through_lease`, so a Chrome that can open a tab itself always wins.
 
         `_connected` means "was reachable last time we checked", not "is
         reachable now" — a Browser whose Chrome died without going through
@@ -464,14 +495,73 @@ class BrowserPool:
             except OpenRefused:
                 # A lend lease has no Target.createTarget; the next browser may.
                 refused.append(port)
+        notes: list[str] = []
+        for port in refused:
+            b = self._browsers.get(port)
+            if b is None:
+                continue
+            try:
+                tab = await self._open_through_lease(b, url, ready)
+            except RuntimeError as exc:
+                notes.append(f"{port}: {exc}")
+                continue
+            if tab is not None:
+                return tab
         if refused:
             raise RuntimeError(
                 f"No connected browser can open a tab: {refused} refuse Target.createTarget "
                 "(a lease shares one tab); connect one that can, e.g. browser.connect(9222)"
+                + (f" ({'; '.join(notes)})" if notes else "")
                 + (f" (unreachable: {unreachable})" if unreachable else "")
             )
         hint = f" (unreachable: {unreachable})" if unreachable else ""
         raise RuntimeError(f"No browsers connected{hint}")
+
+    async def _open_through_lease(
+        self, b: Browser, url: str, ready: str | None
+    ) -> Tab | None:
+        """POST the lease's open route; its owner lends `url` as a new lease, which is connected and its tab returned.
+
+        -> None when `b` is no lend lease or its owner cannot open tabs (404/405/501); RuntimeError on any other refusal.
+        """
+        routes = _lease_routes(b._session.url or "")
+        if routes is None:
+            return None
+        open_url, cdp_url_for = routes
+        headers = dict(b._session.headers or {})
+
+        def post() -> dict:
+            req = urllib.request.Request(
+                open_url,
+                data=json.dumps({"url": url}).encode(),
+                headers={**headers, "content-type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                return json.load(resp)
+
+        try:
+            lease = await asyncio.to_thread(post)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 405, 501):
+                return None
+            try:
+                why = json.loads(exc.read() or b"{}").get("error") or exc.reason
+            except ValueError:
+                why = exc.reason
+            raise RuntimeError(
+                f"the lease's owner refused to open it: {exc.code} {why}"
+            ) from exc
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"the lease's open route failed: {exc}") from exc
+        nb = await self.connect(url=cdp_url_for(lease["id"]), headers=headers or None)
+        pages = [t for t in await nb._session.list_targets() if t.get("type") == "page"]
+        if not pages:
+            raise RuntimeError(f"lease {lease['id']} lists no page")
+        tab = await nb._attach_racing(pages[0]["targetId"], ready=ready, mode="agent")
+        if tab is None:
+            raise RuntimeError(f"could not attach to lease {lease['id']}'s tab")
+        return tab
 
     async def acquire(
         self,

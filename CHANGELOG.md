@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `browser.open()` (and `acquire()`, `browser_open`) with only lend leases connected asks a lease's owner to open the tab: it POSTs the broker's `/leases/<id>/open`, connects the new lease and returns its tab. A browser that can create a tab itself is still used first; an owner that cannot open tabs reads as before.
+
 ### Changed
 
 ### Fixed
