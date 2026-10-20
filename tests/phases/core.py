@@ -133,6 +133,10 @@ def phase_3(kernel: Kernel) -> None:
             "error" in resp and "unknown task_id" in resp["error"]["message"],
             f"get_task rejects unknown task_id (got {resp!r})",
         )
+        assert_true(
+            f"(kernel: {kernel.cwd}" in resp["error"]["message"],
+            f"and names the kernel asked (got {resp['error']['message']!r})",
+        )
         print("  ✓ get_task: unknown task_id → JSON-RPC error")
 
         # An argument no schema declares is refused in-band (isError, so the model sees it), never dropped.

@@ -8,6 +8,7 @@ tool call, so every schema and handler below lives on this side of the socket.
 import base64
 import inspect
 import json
+import os
 import socket
 import time
 from typing import ClassVar
@@ -49,8 +50,26 @@ from .core_schemas import (
 )
 from .help import build_instructions as _build_instructions
 from .kernel_context import KernelContext
+from .paths import lock_for
+from .state import read_lock
 from .tasks import spill_marker
 from .tasks import spill_text as _spill_text
+
+
+def _unknown_task(rid, tid: str) -> dict:
+    """Names the kernel asked: an id is only known to the kernel it ran on, and
+    `repld tasks wait` picks its kernel from the caller's cwd."""
+    try:
+        lock = read_lock(lock_for(ipc.socket_path()))
+        cwd = lock.get("cwd") if isinstance(lock, dict) else None
+    except Exception:
+        cwd = None
+    return _error(
+        rid,
+        -32602,
+        f"unknown task_id: {tid} (kernel: {cwd or os.getcwd()}; a task is known "
+        "only to the kernel it ran on, for an hour after it finishes)",
+    )
 
 
 def _peer_gone(sock: socket.socket) -> bool:
@@ -921,7 +940,7 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, "missing task_id")
         task = tasks.get(tid)
         if task is None:
-            return _error(rid, -32602, f"unknown task_id: {tid}")
+            return _unknown_task(rid, tid)
         done_event = task["done_event"]
         while not done_event.wait(timeout=2.0):
             if session.closed or _peer_gone(session.sock):
@@ -1159,7 +1178,7 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, "missing task_id")
         snap = self.ctx.snapshot(tid)
         if snap is None:
-            return _error(rid, -32602, f"unknown task_id: {tid}")
+            return _unknown_task(rid, tid)
         # get_task declares an outputSchema (core_schemas.CORE_TOOLS), which
         # commits every success result to a conforming structuredContent; the
         # text block mirrors it, as the spec asks for pre-2025-06-18 clients.

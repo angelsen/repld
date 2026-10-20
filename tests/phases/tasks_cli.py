@@ -139,7 +139,11 @@ def _wait_unknown_id(kernel: Kernel) -> None:
         "deadbeef0000" in (proc.stderr + proc.stdout),
         "the unknown-task error names the id",
     )
-    print("  ✓ tasks wait: unknown task_id reported, not silently swallowed")
+    assert_true(
+        f"(kernel: {kernel.cwd}" in proc.stderr,
+        f"and the kernel it asked, by cwd (got {proc.stderr!r})",
+    )
+    print("  ✓ tasks wait: unknown task_id reported, naming the kernel asked")
 
 
 def _cancel_running(b: Bridge, kernel: Kernel) -> None:
