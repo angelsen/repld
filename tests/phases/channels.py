@@ -468,3 +468,109 @@ def phase_4d_channel_spill(kernel: Kernel) -> None:
         print(f"  ✓ oversized meta value clipped in place ({len(blob)} chars)")
     finally:
         b.close()
+
+
+def phase_4g_owed_push(kernel: Kernel) -> None:
+    """A task's completion push is owed to its session id, not its connection:
+    queued while no connection carries the id, delivered exactly once to the
+    next one that registers it, and straight to a successor already connected
+    when the task finishes. A connection with no id still reads `failed`."""
+
+    def get_task(b: Bridge, task_id: str) -> dict:
+        resp = b.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": task_id}}
+        )
+        return resp["result"]["structuredContent"]
+
+    def start(b: Bridge, seconds: float) -> str:
+        out = content_text(
+            b.exec(
+                "import asyncio\n"
+                "async def _owed():\n"
+                f"    await asyncio.sleep({seconds})\n"
+                "    print('owed done')\n"
+                "print('tid=' + defer(_owed(), 'owed'))",
+                call_timeout=5.0,
+            )
+        )
+        return out.split("tid=", 1)[1].split()[0]
+
+    def wait_done(b: Bridge, task_id: str) -> dict:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            snap = get_task(b, task_id)
+            if snap["done"] and snap["push_state"] != "none":
+                return snap
+            time.sleep(0.2)
+        raise AssertionError(f"task {task_id} never finished")
+
+    def is_task(task_id: str):
+        return lambda n: n["params"]["meta"].get("task_id") == task_id
+
+    def bridge(session_id: str | None) -> Bridge:
+        b = Bridge(
+            kernel.cwd,
+            env={"CLAUDE_CODE_SESSION_ID": session_id, "CLAUDE_PROJECT_DIR": None},
+        )
+        opened.append(b)
+        b.handshake()
+        return b
+
+    opened: list[Bridge] = []
+    try:
+        obs = bridge("owed-obs")
+        a = bridge("owed-A")
+        tid = start(a, 1.0)
+        a.close()
+        snap = wait_done(obs, tid)
+        assert_eq(snap["push_state"], "queued", "no connection carries the id")
+        assert_eq(snap["push_delivered"], None, "push_delivered reads null")
+        print("  ✓ a result whose session left reads push_state queued")
+
+        a2 = bridge("owed-A")
+        note = a2.wait_notification(
+            "notifications/claude/channel", kind="task_done", where=is_task(tid)
+        )
+        assert_true("owed done" in note["params"]["content"], "the result's output")
+        snap = get_task(obs, tid)
+        assert_eq(snap["push_state"], "written", "flips to written on delivery")
+        assert_eq(snap["push_delivered"], True, "and push_delivered to true")
+        print("  ✓ the same id registering from a new connection gets the push")
+
+        a3 = bridge("owed-A")
+        for b in (a2, a3, obs):
+            try:
+                b.wait_notification(
+                    "notifications/claude/channel",
+                    kind="task_done",
+                    timeout=1,
+                    where=is_task(tid),
+                )
+                raise AssertionError("an owed push was delivered twice")
+            except TimeoutError:
+                pass
+        print("  ✓ exactly once: a later registration of the id gets nothing")
+
+        b1 = bridge("owed-B")
+        tid = start(b1, 1.5)
+        b1.close()
+        b2 = bridge("owed-B")
+        b2.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=8,
+            where=is_task(tid),
+        )
+        assert_eq(wait_done(obs, tid)["push_state"], "written", "written directly")
+        print("  ✓ a successor connected before the task finishes gets it directly")
+
+        n = bridge(None)
+        tid = start(n, 0.5)
+        n.close()
+        snap = wait_done(obs, tid)
+        assert_eq(snap["push_state"], "failed", "no id, nothing to owe it to")
+        assert_eq(snap["push_delivered"], False, "push_delivered false")
+        print("  ✓ a connection with no session id still reads failed")
+    finally:
+        for b in opened:
+            b.close()

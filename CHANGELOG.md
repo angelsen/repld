@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A task's completion push is owed to the asking session's `claude_session_id` for the result's lifetime (an hour), not to the connection that asked: when that connection is gone (a `claude --bg` host that exited after its turn, a bridge that restarted), the push waits and goes, once, to the next connection registering the same id, or straight to one already connected under it. `get_task`'s `push_state` gains `queued` for the wait; `failed` now means a write error on a live connection, no session id to owe it to, or expiry. A held (parked) push whose connection closes moves to the same queue instead of vanishing with `push_state` stuck at `held`. `notify(session=...)` is unchanged: still `False` when the session isn't connected.
+
 ### Removed
 
 ## [0.17.0] - 2026-10-18

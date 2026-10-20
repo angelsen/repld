@@ -113,11 +113,28 @@ class Post(enum.Enum):
     WRITTEN = "written"  # on the wire to the bridge or inbox, or queued only pending `initialized`
     HELD = "held"        # parked: queued, not yet on the wire
     FAILED = "failed"    # connection closed, or the inbox write failed
+    QUEUED = "queued"    # owed to its claude_session_id; no connection carries it yet
 
 
 class Rebind(NamedTuple):
     old_id: str | None
-    flushed: int  # parked pushes this rebind delivered to the successor
+    flushed: int  # parked or outbox pushes this rebind delivered to the successor
+
+
+class _Owed(NamedTuple):
+    msg: dict
+    cb: "Callable[[bool], None] | None"
+    until: float | None  # monotonic deadline; None = owed to this connection only
+
+
+def _fire(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> None:
+    """Run delivery callbacks with no lock held: they are caller code
+    (`tasks.mark_push_delivered`)."""
+    for cb, ok in callbacks:
+        try:
+            cb(ok)
+        except Exception:
+            pass  # a broken callback must not break the flush
 
 
 class Session:
@@ -136,7 +153,7 @@ class Session:
         # Channel notifications are held here instead of written while
         # `parked` is set — see `park()`.
         self.parked = False
-        self.parked_queue: list[tuple[dict, Callable[[bool], None] | None]] = []
+        self.parked_queue: list[_Owed] = []
         self.park_deadline: float | None = None
         self._park_timer: threading.Timer | None = None
         self._closed = False
@@ -219,7 +236,11 @@ class Session:
             self._write_msg(msg)
 
     def post_channel(
-        self, msg: dict, *, on_parked_flush: "Callable[[bool], None] | None" = None
+        self,
+        msg: dict,
+        *,
+        on_parked_flush: "Callable[[bool], None] | None" = None,
+        owed_until: float | None = None,
     ) -> Post:
         """Server-initiated notification (channel push).
 
@@ -233,7 +254,8 @@ class Session:
         is `WRITTEN`, a startup-only gap nothing has needed to tell apart.
         `on_parked_flush`, if given, fires with whether the write succeeded
         once the park releases (`unpark()` or its own timeout), and never for
-        any other path.
+        any other path. `owed_until` marks a held push the `Server` outbox
+        takes over if this connection closes before the park releases.
         """
         with self.write_lock:
             if self._closed or self.peer:
@@ -242,7 +264,7 @@ class Session:
                 self.pending.append(msg)
                 return Post.WRITTEN
             if self.parked:
-                self.parked_queue.append((msg, on_parked_flush))
+                self.parked_queue.append(_Owed(msg, on_parked_flush, owed_until))
                 return Post.HELD
             return Post.WRITTEN if self._emit(msg) else Post.FAILED
 
@@ -296,17 +318,25 @@ class Session:
                 self._park_timer.cancel()
                 self._park_timer = None
             queued, self.parked_queue = self.parked_queue, []
-            for msg, cb in queued:
-                ok = (not self._closed) and self._emit(msg)
+            for item in queued:
+                ok = (not self._closed) and self._emit(item.msg)
+                if not ok and self._closed and item.until is not None:
+                    # `take_parked` hands it to the outbox once the reader exits.
+                    self.parked_queue.append(item)
+                    continue
                 flushed += ok
-                if cb is not None:
-                    callbacks.append((cb, ok))
-        for cb, ok in callbacks:
-            try:
-                cb(ok)
-            except Exception:
-                pass  # a broken callback must not break the flush
+                if item.cb is not None:
+                    callbacks.append((item.cb, ok))
+        _fire(callbacks)
         return flushed
+
+    def take_parked(self) -> list["_Owed"]:
+        """Empty a closed connection's park queue for the `Server` to settle.
+        Only after close: `post_channel` refuses then, so nothing lands behind it."""
+        with self.write_lock:
+            assert self._closed
+            queued, self.parked_queue = self.parked_queue, []
+        return queued
 
     def set_initialized(self) -> None:
         with self.write_lock:
@@ -371,6 +401,10 @@ class Server:
         # claude_session_id -> Session, same lock as `sessions` since both
         # mutate together on register/disconnect.
         self._claude_sessions: dict[str, Session] = {}
+        # claude_session_id -> pushes owed to whichever connection next
+        # carries that id, oldest first. Same lock as `_claude_sessions`, so
+        # a register and an enqueue can't miss each other.
+        self._outbox: dict[str, list[_Owed]] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
         # reply the shutdown drain just unblocked (a cancelled peer call) reach the wire
@@ -456,6 +490,7 @@ class Server:
                 ):
                     del self._claude_sessions[session.claude_session_id]
             session.close()
+            self._settle_parked(session)
 
     def broadcast_channel(self, msg: dict, *, exclude: "Session | None" = None) -> None:
         """Post a server-initiated notification to every connected session.
@@ -488,14 +523,117 @@ class Server:
         (written now, or queued only pending notifications/initialized).
         False also for a write that failed (a `bg` inbox that is gone).
         """
-        with self.sessions_lock:
-            live = session in self.sessions
-        if not live or session.closed:
-            return False
-        outcome = session.post_channel(msg, on_parked_flush=on_parked_flush)
-        if session.closed or outcome is Post.FAILED:
+        outcome = self.deliver(session, msg, on_flush=on_parked_flush)
+        if outcome is Post.FAILED or session.closed:
             return False
         return None if outcome is Post.HELD else True
+
+    def deliver(
+        self,
+        session: Session,
+        msg: dict,
+        *,
+        on_flush: "Callable[[bool], None] | None" = None,
+        owed_until: float | None = None,
+    ) -> Post:
+        """`post_to` with the outcome spelled out, and, given `owed_until` (a
+        `time.monotonic()` deadline), owed to `session`'s claude_session_id
+        rather than to the connection: once `session` is gone it goes to the
+        live connection carrying that id, else the outbox (`Post.QUEUED`)
+        until one registers. `on_flush` fires once for any outcome not known
+        at return (`HELD`, `QUEUED`), `False` on expiry.
+        """
+        with self.sessions_lock:
+            live = session in self.sessions
+        if live and not session.closed:
+            outcome = session.post_channel(
+                msg, on_parked_flush=on_flush, owed_until=owed_until
+            )
+            if outcome is not Post.FAILED or not session.closed:
+                return outcome
+        if owed_until is None or session.claude_session_id is None:
+            return Post.FAILED
+        return self._owe(session.claude_session_id, _Owed(msg, on_flush, owed_until))
+
+    def _owe(self, session_id: str, item: "_Owed") -> Post:
+        if item.until is not None and item.until <= time.monotonic():
+            return Post.FAILED
+        with self.sessions_lock:
+            target = self._claude_sessions.get(session_id)
+            if target is None or target.closed or target not in self.sessions:
+                self._outbox.setdefault(session_id, []).append(item)
+                return Post.QUEUED
+        outcome = target.post_channel(
+            item.msg, on_parked_flush=item.cb, owed_until=item.until
+        )
+        if outcome is Post.FAILED and target.closed:
+            return self._owe(session_id, item)
+        return outcome
+
+    def _drain_outbox(self, session_id: str, session: Session) -> int:
+        """Post what is owed to `session_id` to `session`, in order; call after
+        registering it, so a push owed meanwhile goes to it directly rather than
+        into an outbox nothing drains. Returns how many went out (or were parked)."""
+        with self.sessions_lock:
+            owed = self._outbox.pop(session_id, [])
+        sent = 0
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        now = time.monotonic()
+        for item in owed:
+            if item.until is not None and item.until <= now:
+                if item.cb is not None:
+                    callbacks.append((item.cb, False))
+                continue
+            outcome = session.post_channel(
+                item.msg, on_parked_flush=item.cb, owed_until=item.until
+            )
+            if outcome is Post.FAILED and session.closed:
+                outcome = self._owe(session_id, item)
+            if outcome is Post.QUEUED or outcome is Post.HELD:
+                sent += outcome is Post.HELD
+                continue
+            sent += outcome is Post.WRITTEN
+            if item.cb is not None:
+                callbacks.append((item.cb, outcome is Post.WRITTEN))
+        _fire(callbacks)
+        return sent
+
+    def _settle_parked(self, session: Session) -> None:
+        """A closed connection's held pushes: owed ones move to its id's
+        outbox, the rest report `False` instead of vanishing."""
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        sid = session.claude_session_id
+        for item in session.take_parked():
+            if item.until is not None and sid is not None:
+                outcome = self._owe(sid, item)
+                if outcome is Post.QUEUED or outcome is Post.HELD:
+                    continue
+                ok = outcome is Post.WRITTEN
+            else:
+                ok = False
+            if item.cb is not None:
+                callbacks.append((item.cb, ok))
+        _fire(callbacks)
+
+    def expire_outbox(self) -> int:
+        """Drop owed pushes past their deadline, reporting each `False`."""
+        now = time.monotonic()
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        with self.sessions_lock:
+            for sid in list(self._outbox):
+                keep = []
+                for item in self._outbox[sid]:
+                    if item.until is not None and item.until <= now:
+                        if item.cb is not None:
+                            callbacks.append((item.cb, False))
+                    else:
+                        keep.append(item)
+                if keep:
+                    self._outbox[sid] = keep
+                else:
+                    del self._outbox[sid]
+        _fire(callbacks)
+        return len(callbacks)
 
     def register_claude_session(
         self,
@@ -510,6 +648,7 @@ class Server:
         Replaces any existing entry for the same id without unregistering
         it first — a reconnecting bridge (kernel restart) presents the same
         id on a fresh Session, and the old one is already gone or going.
+        Whatever the outbox holds for the id is delivered here.
         """
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
@@ -517,6 +656,7 @@ class Server:
         session.inbox_socket = _valid_inbox_socket(inbox_socket)
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
+        self._drain_outbox(session_id, session)
 
     def rebind_claude_session(
         self, new_id: str, pid: int, old_id: str | None = None
@@ -527,9 +667,9 @@ class Server:
         whose nearest shared ancestor also carries a subagent's own connection.
         It must still share `pid`'s tree, else LookupError.
 
-        Returns the id it replaced and how many parked pushes the rebind
-        flushed to the successor (0 when nothing was parked, or when the park
-        timeout had already delivered them). The match is the connected session whose
+        Returns the id it replaced and how many parked or outbox pushes the
+        rebind delivered to the successor (0 when nothing was held, or when the
+        park timeout had already delivered them). The match is the connected session whose
         bridge shares the nearest ancestor with `pid`, the one closest to that
         ancestor if several do; raises LookupError on no match and ValueError
         when two are equally close.
@@ -574,7 +714,7 @@ class Server:
         # Release before posting anything: a park held for the handoff this
         # rebind completes must flush to the successor, and unconditionally
         # calling it costs nothing when nothing was parked (unpark() no-ops).
-        flushed = session.unpark()
+        flushed = session.unpark() + self._drain_outbox(new_id, session)
         # The bridge re-stamps `initialize` from this on every kernel restart,
         # or the next kernel would re-register the stale id.
         session.post_channel(
@@ -610,6 +750,7 @@ class Server:
             sessions = list(self.sessions)
             self.sessions.clear()
             self._claude_sessions.clear()
+            self._outbox.clear()
         for s in sessions:
             s.say_goodbye()
             s.close()
@@ -667,6 +808,25 @@ def post_to(
     if _server is None:
         return False
     return _server.post_to(session, msg, on_parked_flush=on_parked_flush)
+
+
+def deliver(
+    session: Session,
+    msg: dict,
+    *,
+    on_flush: "Callable[[bool], None] | None" = None,
+    owed_until: float | None = None,
+) -> Post:
+    """See `Server.deliver`: a push owed to a session id, not a connection."""
+    if _server is None:
+        return Post.FAILED
+    return _server.deliver(session, msg, on_flush=on_flush, owed_until=owed_until)
+
+
+def expire_outbox() -> int:
+    if _server is None:
+        return 0
+    return _server.expire_outbox()
 
 
 def register_claude_session(

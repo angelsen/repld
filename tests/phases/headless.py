@@ -478,8 +478,9 @@ def _inflight_never_stranded(tmp: Path) -> None:
 
 def _targeted_push(tmp: Path) -> None:
     """A task's completion notifies the session that started it, and only it."""
-    a = Bridge(tmp)
-    c = Bridge(tmp)
+    a = Bridge(tmp, env={"CLAUDE_CODE_SESSION_ID": "targeted-a"})
+    # No session id: an id would make C's orphaned push owed, not failed (phase 4g).
+    c = Bridge(tmp, env={"CLAUDE_CODE_SESSION_ID": None})
     try:
         _handshake(a)
         _handshake(c)

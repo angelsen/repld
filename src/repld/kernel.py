@@ -32,7 +32,7 @@ from pathlib import Path
 import __main__
 
 from . import eventlog, events, gates, ipc, paths, render, sessions, state, tasks
-from .channel import push_channel
+from .channel import push_channel, push_owed
 from .channel import push_kind as _push
 from .events import CellDone, CellStart
 from .paths import default_socket_path, lock_for
@@ -613,6 +613,7 @@ def _loop_watchdog(
         # reclaimed by running *more* cells (tasks.finalize), which an idle
         # kernel never does.
         tasks.maybe_prune()
+        ipc.expire_outbox()
         # Probe first so `threshold` is the actual hang-detection time
         # (not threshold + interval).
         probed_at = time.monotonic()
@@ -659,24 +660,20 @@ def _maybe_push_done(task_id: str) -> None:
     if label:
         meta_dict["label"] = label
     origin = task.get("origin")
-    task["push_delivered"] = delivered = push_channel(
+    if origin is None:
+        push_channel("\n".join(parts), meta_dict)
+        tasks.record_push(task_id, None, "broadcast")
+        return
+    # Owed to origin's session id for as long as get_task can report on it.
+    outcome = push_owed(
         "\n".join(parts),
         meta_dict,
         session=origin,
-        # None (parked, not yet on the wire) flips to True/False here once
-        # the park releases -- push_channel's synchronous return only knows
-        # "parked" at call time, same as "not attempted".
-        on_parked_flush=lambda ok: tasks.mark_push_delivered(task_id, ok),
+        owed_s=tasks._EVICT_AGE,
+        on_flush=lambda ok: tasks.mark_push_delivered(task_id, ok),
     )
-    task["push_state"] = (
-        "broadcast"
-        if origin is None
-        else "held"
-        if delivered is None
-        else "written"
-        if delivered
-        else "failed"
-    )
+    delivered = {ipc.Post.WRITTEN: True, ipc.Post.FAILED: False}.get(outcome)
+    tasks.record_push(task_id, delivered, outcome.value)
 
 
 def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:

@@ -16,6 +16,7 @@ each of them import it at module level rather than reaching for a
 function-local `from .kernel import push_channel` to dodge a cycle.
 """
 
+import time
 from collections.abc import Callable
 
 from . import events, ipc
@@ -69,7 +70,8 @@ def push_channel(
     targets the one that asked for the work. If that session has since
     disconnected the push is *dropped*, never downgraded to a broadcast:
     leaking one session's output into every other one is worse than silence,
-    and the local event still reaches `repld log`.
+    and the local event still reaches `repld log`. A task result goes through
+    `push_owed` instead, which waits for the id to come back.
 
     `exclude` only applies to the broadcast path (`session=None`): skip one
     session — the caller's own — that already has this update some other way
@@ -104,6 +106,40 @@ def push_channel(
     does not fire for it. `on_parked_flush`, ignored unless `session` is
     set, reports the eventual outcome once the park releases.
     """
+    msg = _channel_msg(content, meta)
+    delivered = None
+    if session is None:
+        ipc.broadcast_channel(msg, exclude=exclude)
+    else:
+        delivered = ipc.post_to(session, msg, on_parked_flush=on_parked_flush)
+        if delivered is False and fallback_broadcast and not session.closed:
+            ipc.broadcast_channel(msg)
+    _emit_local(msg)
+    return delivered
+
+
+def push_owed(
+    content: str,
+    meta: dict,
+    *,
+    session: "ipc.Session",
+    owed_s: float,
+    on_flush: "Callable[[bool], None] | None" = None,
+) -> "ipc.Post":
+    """A targeted push owed to `session`'s claude_session_id for `owed_s`
+    seconds rather than to the connection (`ipc.Server.deliver`): a task
+    result whose session re-registers from a new host still gets it, once.
+    Never a broadcast. `on_flush` reports an outcome `HELD`/`QUEUED` left open.
+    """
+    msg = _channel_msg(content, meta)
+    outcome = ipc.deliver(
+        session, msg, on_flush=on_flush, owed_until=time.monotonic() + owed_s
+    )
+    _emit_local(msg)
+    return outcome
+
+
+def _channel_msg(content: str, meta: dict | None) -> dict:
     if _meta_augmenter is not None:
         try:
             meta = {**_meta_augmenter(), **(meta or {})}
@@ -116,18 +152,14 @@ def push_channel(
         marker = _spill_marker(sp["spill_path"])
         content = f"{content}\n{marker}" if content else marker
     meta = {k: _clip(str(v), _META_VALUE_LIMIT) for k, v in meta.items()}
-    msg = _notification(
+    return _notification(
         "notifications/claude/channel", {"content": content, "meta": meta}
     )
-    delivered = None
-    if session is None:
-        ipc.broadcast_channel(msg, exclude=exclude)
-    else:
-        delivered = ipc.post_to(session, msg, on_parked_flush=on_parked_flush)
-        if delivered is False and fallback_broadcast and not session.closed:
-            ipc.broadcast_channel(msg)
-    events.emit(ChannelPush(content, meta))
-    return delivered
+
+
+def _emit_local(msg: dict) -> None:
+    params = msg["params"]
+    events.emit(ChannelPush(params["content"], params["meta"]))
 
 
 def push_kind(content: str, kind: str, *, session=None, **meta: str) -> None:

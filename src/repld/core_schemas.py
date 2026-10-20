@@ -159,18 +159,27 @@ CORE_TOOLS = [
                     "description": (
                         "whether the completion push reached the session that "
                         "asked; false means nobody saw it, null means no push was "
-                        "owed, or the session was parked (ipc.park_pushes) at "
-                        "push time and hasn't been released yet"
+                        "owed, or it is still held (parked) or queued (see "
+                        "push_state)"
                     ),
                 },
                 "push_state": {
                     "type": "string",
-                    "enum": ["none", "broadcast", "held", "written", "failed"],
+                    "enum": [
+                        "none",
+                        "broadcast",
+                        "held",
+                        "queued",
+                        "written",
+                        "failed",
+                    ],
                     "description": (
                         "what push_delivered's null hides: none = no push owed "
                         "(answered inline, still running, ambient), broadcast = "
                         "sent to every session, held = parked and not yet on the "
-                        "wire; written/failed once the push's outcome is known"
+                        "wire, queued = the asking session id has no connection, "
+                        "delivered once one registers with it (for the result's "
+                        "lifetime); written/failed once the outcome is known"
                     ),
                 },
                 "caller": {

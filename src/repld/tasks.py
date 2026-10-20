@@ -185,13 +185,12 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         "nudged": False,
         # True/False once a completion push to `origin` was attempted; None
         # if none was owed (answered inline, still running), it broadcast,
-        # or `origin` was parked (ipc.park_pushes) at push time — that last
-        # case flips to True/False later, via mark_push_delivered(), once
-        # the park releases.
+        # or it is held (parked) or queued (`origin`'s id has no connection)
+        # — those flip to True/False later via mark_push_delivered().
         "push_delivered": None,
         # What `push_delivered`'s None hides: "none" (no push owed: inline,
-        # still running, ambient), "broadcast", "held" (parked), then
-        # "written" or "failed" once known. Always a string.
+        # still running, ambient), "broadcast", "held" (parked), "queued"
+        # (in ipc's per-id outbox), then "written" or "failed" once known.
         "push_state": "none",
         "nudge_cutoff": 0,
         "asyncio_task": None,  # asyncio.Task handle, set from inside _run_cell
@@ -216,12 +215,22 @@ def get(task_id: str) -> dict | None:
         return _tasks.get(task_id)
 
 
+def record_push(task_id: str, delivered: bool | None, push_state: str) -> None:
+    """`kernel._maybe_push_done`'s synchronous outcome. Loses to a
+    `mark_push_delivered` that already settled it: a held or queued push can
+    flush on another thread before the pusher gets here."""
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task is not None and task.get("push_state") not in ("written", "failed"):
+            task["push_delivered"] = delivered
+            task["push_state"] = push_state
+
+
 def mark_push_delivered(task_id: str, delivered: bool) -> None:
-    """Update `push_delivered` once a parked completion push actually
-    flushes — `kernel._maybe_push_done`'s own synchronous set only knows
-    "parked" (recorded as `None`, same as "not attempted") at push time, not
-    the eventual outcome. `ipc.Session`'s `on_parked_flush` callback is the
-    caller; a no-op if the task is gone by the time it fires.
+    """Update `push_delivered` once a held or queued completion push actually
+    flushes, or expires — `kernel._maybe_push_done`'s own synchronous set only
+    knows "held"/"queued" at push time, not the eventual outcome. `ipc`'s
+    flush callback is the caller; a no-op if the task is gone by then.
     """
     with _tasks_lock:
         task = _tasks.get(task_id)
