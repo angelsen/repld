@@ -466,8 +466,12 @@ class BrowserPool:
             f"No tab matching '{target}' across {len(self._browsers)} browser(s)"
         )
 
-    async def open(self, url: str, *, ready: str | None = None) -> Tab:
+    async def open(
+        self, url: str, *, ready: str | None = None, new_window: bool = False
+    ) -> Tab:
         """Open a URL in the first *live* connected browser that can open tabs, else ask a lend lease's owner to.
+
+        `new_window` puts the tab in a window of its own (a lease's owner decides that itself).
 
         A lease shares one tab and refuses Target.createTarget; only when every browser refused does this try
         `_open_through_lease`, so a Chrome that can open a tab itself always wins.
@@ -491,7 +495,7 @@ class BrowserPool:
                 unreachable.append(port)  # b._connected is now False too
                 continue
             try:
-                return await b.open(url, ready=ready)
+                return await b.open(url, ready=ready, new_window=new_window)
             except OpenRefused:
                 # A lend lease has no Target.createTarget; the next browser may.
                 refused.append(port)

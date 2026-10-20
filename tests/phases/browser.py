@@ -306,7 +306,9 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
             self._connected = False
             raise RuntimeError(f"Cannot reach Chrome on port {self.port}: refused")
 
-        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+        async def open(
+            self, url: str, *, ready: str | None = None, new_window: bool = False
+        ) -> str:  # type: ignore[override]
             raise AssertionError("open() reached the dead browser")
 
         async def get(self, target: str, **_kw: object) -> str:  # type: ignore[override]
@@ -316,7 +318,9 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+        async def open(
+            self, url: str, *, ready: str | None = None, new_window: bool = False
+        ) -> str:  # type: ignore[override]
             return f"opened:{url}"
 
         async def get(  # type: ignore[override]
@@ -422,7 +426,9 @@ def phase_6_lease_open_skip(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+        async def open(
+            self, url: str, *, ready: str | None = None, new_window: bool = False
+        ) -> str:  # type: ignore[override]
             raise OpenRefused(
                 "Target.createTarget is not available: a lease shares one tab"
             )
@@ -431,7 +437,9 @@ def phase_6_lease_open_skip(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(self, url: str, *, ready: str | None = None) -> str:  # type: ignore[override]
+        async def open(
+            self, url: str, *, ready: str | None = None, new_window: bool = False
+        ) -> str:  # type: ignore[override]
             return f"opened:{url}"
 
     async def _pool(with_live: bool) -> object:
@@ -1929,6 +1937,34 @@ def phase_6_tab_close(kernel: Kernel) -> None:
             "  ✓ tab.close() removes the target from Chrome, "
             "not just repld's bookkeeping"
         )
+    finally:
+        _close_marked_tabs()
+        b.close()
+
+
+def phase_6_open_new_window(kernel: Kernel) -> None:
+    """`browser.open(url, new_window=True)` puts the tab in a window of its own; a plain open() shares one."""
+    if not _chrome_ready("phase 6 open new window"):
+        return
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+        out = _exec(
+            b,
+            f"_w = lambda t: t.cdp('Browser.getWindowForTarget')\n"
+            f"_a = await browser.open('data:text/html,<p>{_MARKER}-a</p>')\n"
+            f"_b = await browser.open('data:text/html,<p>{_MARKER}-b</p>')\n"
+            f"_n = await browser.open('data:text/html,<p>{_MARKER}-n</p>', new_window=True)\n"
+            "_ids = [(await _w(t))['windowId'] for t in (_a, _b, _n)]\n"
+            "print('WINDOWS=%s,%s,%s' % tuple(_ids))\n"
+            "for t in (_a, _b, _n): await t.close()\n",
+        )
+        m = re.search(r"WINDOWS=(\d+),(\d+),(\d+)", out)
+        assert m is not None, f"window ids not printed ({out[:300]!r})"
+        a, b2, n = m.groups()
+        assert_eq(a, b2, "two plain open() tabs share a window")
+        assert_true(n != a, f"new_window=True opens its own window ({n} vs {a})")
+        print("  ✓ browser.open(new_window=True) opens the tab in a window of its own")
     finally:
         _close_marked_tabs()
         b.close()

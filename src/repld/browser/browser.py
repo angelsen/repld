@@ -430,8 +430,10 @@ class Browser:
             msg += f" {len(failures)} attach attempt(s) failed: {detail}"
         return msg
 
-    async def open(self, url: str, *, ready: str | None = None) -> "Tab":
-        """Create a new tab and attach to it.
+    async def open(
+        self, url: str, *, ready: str | None = None, new_window: bool = False
+    ) -> "Tab":
+        """Create a new tab (in a window of its own with `new_window`) and attach to it.
 
         Target.createTarget → attach → enable Fetch → wait for ready → return Tab.
 
@@ -449,7 +451,10 @@ class Browser:
         """
         await self._ensure_connected()
         try:
-            result = await self._session.execute("Target.createTarget", {"url": url})
+            params: dict = {"url": url}
+            if new_window:
+                params["newWindow"] = True
+            result = await self._session.execute("Target.createTarget", params)
         except CDPCommandError as exc:
             if exc.code == METHOD_NOT_FOUND:
                 raise OpenRefused(str(exc)) from exc

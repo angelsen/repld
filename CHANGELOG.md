@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `browser.open(url, new_window=True)` opens the tab in a window of its own. A background tab is `hidden`, and Chrome reclaims an idle video decoder there ("Codec reclaimed due to inactivity"), freezing a video or remote-screen canvas; a window of its own stays visible behind other windows (on Linux, until it is minimized).
+
 ### Changed
 
 ### Fixed

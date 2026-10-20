@@ -12,6 +12,7 @@ tab = await browser.get("*app*", fresh=True)     # only newly-appearing tabs
 tab = await browser.get("*app*", timeout=10)     # wait up to 10s
 tab = await browser.get("*app*", ready="#root")  # wait for element after attach
 tab = await browser.open("https://...")          # open new tab
+tab = await browser.open(url, new_window=True)   # ...in a window of its own
 tab = await browser.acquire("*pattern*")         # get(), falling back to open() on a miss
 await browser.watch("*pattern*")                 # auto-attach current + future
 

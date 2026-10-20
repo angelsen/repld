@@ -504,6 +504,7 @@ object.  Read this instead of diving into source code.
   tab = await browser.get("*app*", fresh=True)       # only newly-appearing tabs
   tab = await browser.get("*app*", timeout=10)       # wait up to 10s for match
   tab = await browser.open("https://example.com")    # open new tab
+  tab = await browser.open(url, new_window=True)     # ...in a window of its own
   tab = await browser.acquire("*example.com*")        # get(), or open() on a miss
   await browser.watch("*example.com*")               # auto-attach current + future
 
@@ -530,6 +531,9 @@ Quirks:
     signal as get() before returning (default: document.readyState === 'complete').
     A lend lease refuses createTarget; when every browser does, open() asks a
     lease's owner (POST /leases/<id>/open) and returns the tab of the new lease.
+    new_window=True gives the tab a window of its own: a page that must keep
+    painting (a video or remote-screen canvas) stays visible behind other
+    windows, where a background tab is hidden and Chrome reclaims its decoders.
   - acquire(pattern, open=, ready=, timeout=) is get() falling back to open()
     on a miss — the try-get/except-open dance every gist that returns to one
     recurring site ends up hand-rolling. open= is the URL to navigate to on
