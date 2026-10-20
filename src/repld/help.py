@@ -727,6 +727,11 @@ on an already-attached tab still reports the original attach's value.
       to raise a tab for its own sake, or to skip the per-call visibility
       check in a script doing a lot of input against one tab.
 
+  tab.auto_front = False                                      (default True)
+      Never raise this tab's window, for one whose window belongs to someone
+      else (a lent tab): input and screenshot() skip the fronting. Kept on
+      the tab's session, so later get()s of it keep it.
+
   tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300)   → None
       Touch swipe: touchStart → touchMove × steps → touchEnd.
       For scrolling on mobile Chrome via ADB.
@@ -1940,6 +1945,7 @@ Tab (async unless noted):
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
   tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
   tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
+  tab.auto_front                                   → bool (settable; False never raises this tab's window, e.g. a lent tab; default True)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
   tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)

@@ -750,6 +750,7 @@ class _EngineFakeSession:
         self._frame_seq = 1
         self._dialog_log: list[dict] = []
         self._filechooser_log: list[dict] = []
+        self.auto_front = True
 
     async def execute(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -1319,6 +1320,29 @@ def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
         f"a visible tab is never raised (sent {visible_sent!r})",
     )
     print("  ✓ a visible tab isn't raised — the guard checks, doesn't always act")
+
+    async def _never_fronted(name: str):
+        tab, session = _make_tab("hidden")
+        tab.auto_front = False
+        await {"click": lambda: tab.click("#x"), "key": lambda: tab.key("Enter")}[
+            name
+        ]()
+        return session
+
+    for name in ("click", "key"):
+        session = asyncio.run(_never_fronted(name))
+        assert_true(
+            "Page.bringToFront" not in session.sent
+            and any(m.startswith("Input.dispatch") for m in session.sent),
+            f"{name}() with auto_front=False dispatches to a hidden tab without raising it (sent {session.sent!r})",
+        )
+        assert_true(
+            session.auto_front is False,
+            "auto_front is kept on the session, so a later get() of the tab keeps it",
+        )
+    print(
+        "  ✓ auto_front=False: a hidden (lent) tab gets input without its window raised"
+    )
 
 
 def phase_6_offloop_writes(_kernel: Kernel) -> None:

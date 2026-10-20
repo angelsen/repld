@@ -752,18 +752,22 @@ class Tab(TabQueryMixin):
         fd = await asyncio.to_thread(acquire_lock_blocking, front_lock_for(self._port))
         try:
             front_target = await self._front_target()
-            try:
-                result = await front_target._exec(
-                    "Runtime.evaluate",
-                    {"expression": "document.visibilityState", "returnByValue": True},
-                )
-            except RuntimeError as exc:
-                # A `view` lease forbids Runtime and bringToFront alike, so visibility
-                # cannot be probed or fixed: carry on without fronting. A hidden tab
-                # then hangs its capture to the command timeout, as it would unfronted.
-                if not is_scope_refusal(exc):
-                    raise
-                result = {}
+            result = {}
+            if front_target._session.auto_front:
+                try:
+                    result = await front_target._exec(
+                        "Runtime.evaluate",
+                        {
+                            "expression": "document.visibilityState",
+                            "returnByValue": True,
+                        },
+                    )
+                except RuntimeError as exc:
+                    # A `view` lease forbids Runtime and bringToFront alike, so visibility
+                    # cannot be probed or fixed: carry on without fronting. A hidden tab
+                    # then hangs its capture to the command timeout, as it would unfronted.
+                    if not is_scope_refusal(exc):
+                        raise
             if (
                 result.get("result", {}).get("value") == "hidden"
                 and front_target.type != "iframe"
@@ -816,6 +820,20 @@ class Tab(TabQueryMixin):
         knows it's about to do a lot of input against one tab.
         """
         await self._exec("Page.bringToFront")
+
+    @property
+    def auto_front(self) -> bool:
+        """Whether input actions and screenshot() raise this tab's window when
+        Chrome reports it hidden (default True). Set False for a tab whose
+        window belongs to someone else, a lent tab say: their window stays
+        where they put it, and input to it while hidden may be dropped.
+        Kept on the tab's session, so it holds for every later `get()`.
+        """
+        return self._session.auto_front
+
+    @auto_front.setter
+    def auto_front(self, value: bool) -> None:
+        self._session.auto_front = bool(value)
 
     # ------------------------------------------------------------------
 

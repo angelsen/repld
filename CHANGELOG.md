@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `browser.open(url, new_window=True)` opens the tab in a window of its own. A background tab is `hidden`, and Chrome reclaims an idle video decoder there ("Codec reclaimed due to inactivity"), freezing a video or remote-screen canvas; a window of its own stays visible behind other windows (on Linux, until it is minimized).
+- `tab.auto_front = False` stops input actions and `screenshot()` from raising that tab's window when Chrome reports it hidden, for a tab whose window belongs to someone else (a lent tab). Kept on the tab's session.
 
 ### Changed
 

@@ -856,6 +856,9 @@ class CDPSession:
         # using the tab, so their dialogs and file picker stay native. Set at
         # attach (open() → agent), changed only by Tab.take()/release().
         self.mode: str = "shared"
+        # `Tab.auto_front`: False keeps `_ensure_front` from raising this tab's window, for a tab whose window belongs
+        # to someone else (a lent tab); input to it while hidden may then be dropped.
+        self.auto_front: bool = True
         # Dialog left open for the human (`_leave_dialog_to_human`), cleared by
         # `_record_dialog_closed`; `_dialog_waiters` are the in-flight
         # renderer-bound commands to wake when one opens.
