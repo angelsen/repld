@@ -10,13 +10,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+### Fixed
+
+### Removed
+
+## [0.17.1] - 2026-10-20
+
+### Changed
+
 - `get_task` and `repld tasks wait` name the kernel they asked when a task id is unknown (`unknown task_id: X (kernel: /path; ...)`): an id is known only to the kernel it ran on, and `repld tasks wait` picks its kernel from the cwd, so a wait from another project's directory reads as unknown.
 
 ### Fixed
 
 - A task's completion push is owed to the asking session's `claude_session_id` for the result's lifetime (an hour), not to the connection that asked: when that connection is gone (a `claude --bg` host that exited after its turn, a bridge that restarted), the push waits and goes, once, to the next connection registering the same id, or straight to one already connected under it. `get_task`'s `push_state` gains `queued` for the wait; `failed` now means a write error on a live connection, no session id to owe it to, or expiry. A held (parked) push whose connection closes moves to the same queue instead of vanishing with `push_state` stuck at `held`. `notify(session=...)` is unchanged: still `False` when the session isn't connected.
 
-### Removed
 
 ## [0.17.0] - 2026-10-18
 
