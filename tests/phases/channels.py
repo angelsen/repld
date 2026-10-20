@@ -2,7 +2,12 @@
 pre-gate queuing, notify(session=)/claude_sessions() identity targeting."""
 
 import ast
+import json
 import re
+import shutil
+import socket
+import tempfile
+import threading
 import time
 from pathlib import Path
 from queue import Empty
@@ -474,7 +479,8 @@ def phase_4g_owed_push(kernel: Kernel) -> None:
     """A task's completion push is owed to its session id, not its connection:
     queued while no connection carries the id, delivered exactly once to the
     next one that registers it, and straight to a successor already connected
-    when the task finishes. A connection with no id still reads `failed`."""
+    when the task finishes, including a `bg` session re-hosted with a new inbox
+    socket. A connection with no id, or a push past its deadline, reads `failed`."""
 
     def get_task(b: Bridge, task_id: str) -> dict:
         resp = b.call(
@@ -507,15 +513,50 @@ def phase_4g_owed_push(kernel: Kernel) -> None:
     def is_task(task_id: str):
         return lambda n: n["params"]["meta"].get("task_id") == task_id
 
-    def bridge(session_id: str | None) -> Bridge:
-        b = Bridge(
-            kernel.cwd,
-            env={"CLAUDE_CODE_SESSION_ID": session_id, "CLAUDE_PROJECT_DIR": None},
-        )
+    def bridge(session_id: str | None, inbox: Path | None = None) -> Bridge:
+        env: dict[str, str | None] = {
+            "CLAUDE_CODE_SESSION_ID": session_id,
+            "CLAUDE_PROJECT_DIR": None,
+            "CLAUDE_JOB_DIR": None,
+            "CLAUDE_CODE_MESSAGING_SOCKET": None,
+        }
+        if inbox is not None:
+            env["CLAUDE_JOB_DIR"] = str(root)
+            env["CLAUDE_CODE_MESSAGING_SOCKET"] = str(inbox)
+        b = Bridge(kernel.cwd, env=env)
         opened.append(b)
         b.handshake()
         return b
 
+    def listen(path: Path) -> list[str]:
+        """A stand-in `claude --bg` inbox: collects each line's text."""
+        got: list[str] = []
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(str(path))
+        srv.listen(4)
+        servers.append(srv)
+
+        def serve() -> None:
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                with conn:
+                    data = b""
+                    while chunk := conn.recv(4096):
+                        data += chunk
+                got.extend(
+                    json.loads(ln)["message"]["content"]
+                    for ln in data.decode().splitlines()
+                )
+
+        threading.Thread(target=serve, daemon=True).start()
+        return got
+
+    root = Path(tempfile.mkdtemp(prefix="repld-owed-"))
+    (root / "cc-socks").mkdir()
+    servers: list[socket.socket] = []
     opened: list[Bridge] = []
     try:
         obs = bridge("owed-obs")
@@ -571,6 +612,61 @@ def phase_4g_owed_push(kernel: Kernel) -> None:
         assert_eq(snap["push_state"], "failed", "no id, nothing to owe it to")
         assert_eq(snap["push_delivered"], False, "push_delivered false")
         print("  ✓ a connection with no session id still reads failed")
+
+        # The supervise case: a `bg` host exits mid-task and the same id comes
+        # back from a new host with its own inbox socket.
+        first_inbox, second_inbox = (root / "cc-socks" / f"{n}.sock" for n in (1, 2))
+        first = listen(first_inbox)
+        second = listen(second_inbox)
+        g1 = bridge("owed-bg", first_inbox)
+        tid = start(g1, 1.0)
+        g1.close()
+        assert_eq(wait_done(obs, tid)["push_state"], "queued", "bg result queued")
+        bridge("owed-bg", second_inbox)
+        deadline = time.monotonic() + 5
+        while not second and time.monotonic() < deadline:
+            time.sleep(0.1)
+        time.sleep(0.5)
+        assert_eq(len(second), 1, f"one push to the new host's inbox (got {second})")
+        assert_true(
+            f'task_id="{tid}"' in second[0] and "owed done" in second[0],
+            f"it is that task's result (got {second[0]!r})",
+        )
+        assert_eq(first, [], "the old host's inbox got nothing")
+        assert_eq(get_task(obs, tid)["push_state"], "written", "written via the inbox")
+        print("  ✓ a re-hosted bg session gets its result once, at its new inbox")
+
+        # Expiry: the deadline is fixed at push time from tasks._EVICT_AGE.
+        obs.exec(
+            "from repld import tasks\n_saved_evict = tasks._EVICT_AGE\ntasks._EVICT_AGE = 1.0"
+        )
+        try:
+            e = bridge("owed-E")
+            tid = start(e, 0.3)
+            e.close()
+            assert_eq(wait_done(obs, tid)["push_state"], "queued", "queued first")
+        finally:
+            obs.exec("from repld import tasks\ntasks._EVICT_AGE = _saved_evict")
+        time.sleep(1.2)
+        obs.exec("from repld import ipc\nipc.expire_outbox()")
+        snap = get_task(obs, tid)
+        assert_eq(snap["push_state"], "failed", "expired reads failed")
+        assert_eq(snap["push_delivered"], False, "push_delivered false")
+        e2 = bridge("owed-E")
+        try:
+            e2.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=1,
+                where=is_task(tid),
+            )
+            raise AssertionError("an expired push was still delivered")
+        except TimeoutError:
+            pass
+        print("  ✓ an owed push past its deadline reads failed and is never delivered")
     finally:
         for b in opened:
             b.close()
+        for srv in servers:
+            srv.close()
+        shutil.rmtree(root, ignore_errors=True)
