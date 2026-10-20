@@ -40,7 +40,7 @@ import base64
 import logging
 import time
 
-from .cdp import _STREAMING_MIME_TYPES, CDPSession
+from .cdp import CDPSession, is_endless
 
 __all__ = ["disable", "enable", "handle_paused"]
 
@@ -151,8 +151,8 @@ def _should_capture_body(params: dict) -> bool:
     """Decide whether to even attempt a response body fetch.
 
     Skips redirects (CDP puts them in kRedirectReceived state —
-    getResponseBody errors), SSE (infinite stream — getResponseBody
-    blocks forever), and assets (see the module docstring: the fetch +
+    getResponseBody errors), endless streams (`cdp.is_endless` — getResponseBody
+    blocks until the stream closes), and assets (see the module docstring: the fetch +
     fulfill round trip costs more than the body is worth, and
     `fetch_body` can still get it on demand).
 
@@ -170,18 +170,20 @@ def _should_capture_body(params: dict) -> bool:
 
     response_headers = params.get("responseHeaders", [])
     content_type = ""
+    has_length = False
     for h in response_headers:
-        if h.get("name", "").lower() == "content-type":
+        name = h.get("name", "").lower()
+        if name == "content-type":
             content_type = h.get("value", "").lower()
-            break
+        elif name == "content-length":
+            has_length = True
 
-    # `cdp._STREAMING_MIME_TYPES`, not a literal: "which mime types have a body
-    # that never ends" is one fact with two consumers that must agree, the same
-    # way the asset lists above mirror har.py's `is_asset`. cdp drops these from
-    # `_inflight` so settle stops waiting on them; here we skip the body fetch,
-    # because getResponseBody on a stream blocks until it closes. A type added
-    # to one list and not the other reintroduces exactly one of those hangs.
-    if any(mime in content_type for mime in _STREAMING_MIME_TYPES):
+    # `cdp.is_endless`, not a local list: cdp drops the same responses from
+    # `_inflight`, and a rule that drifts between the two reintroduces one of
+    # the two hangs. The 5 s timeout below does not cover this: a timed-out
+    # getResponseBody leaves the response paused, and continueResponse after it
+    # never releases the page's fetch.
+    if is_endless(content_type, has_length):
         return False
 
     return not any(marker in content_type for marker in _ASSET_MIME_MARKERS)

@@ -1450,11 +1450,18 @@ def phase_6_capture_filter(_kernel: Kernel) -> None:
     by default, which is the expensive half of the mistake.
     """
     from repld.browser.capture import _should_capture_body
+    from repld.browser.cdp import _is_streaming
 
-    def _params(status: int = 200, rtype: str = "XHR", ctype: str = "") -> dict:
+    def _params(
+        status: int = 200, rtype: str = "XHR", ctype: str = "", length: bool = False
+    ) -> dict:
         p: dict = {"responseStatusCode": status, "resourceType": rtype}
         if ctype:
             p["responseHeaders"] = [{"name": "Content-Type", "value": ctype}]
+        if length:
+            p.setdefault("responseHeaders", []).append(
+                {"name": "Content-Length", "value": "10"}
+            )
         return p
 
     for rtype in ("Image", "Font", "Stylesheet", "Media", "Script"):
@@ -1477,6 +1484,26 @@ def phase_6_capture_filter(_kernel: Kernel) -> None:
         not _should_capture_body(_params(ctype="text/event-stream")),
         "SSE is not captured (getResponseBody never returns)",
     )
+    # An endless fetch() of frames: octet-stream with no Content-Length. With a
+    # length it's a download, which has an end and stays captured.
+    for ctype in ("application/octet-stream", "multipart/x-mixed-replace; boundary=f"):
+        assert_true(
+            not _should_capture_body(_params(ctype=ctype)),
+            f"{ctype} without Content-Length is not captured",
+        )
+        assert_true(
+            _should_capture_body(_params(ctype=ctype, length=True)),
+            f"{ctype} with Content-Length is still captured",
+        )
+    # cdp's settle side reads Network.responseReceived (a header dict) and must agree.
+    for ctype, headers, want in [
+        ("text/event-stream", {}, True),
+        ("application/octet-stream", {}, True),
+        ("application/octet-stream", {"content-length": "10"}, False),
+        ("application/json", {}, False),
+    ]:
+        resp = {"response": {"mimeType": ctype, "headers": headers}}
+        assert_eq(_is_streaming(resp), want, f"_is_streaming({ctype}, {headers})")
     # The traffic the capture store exists for still goes through.
     for rtype, ctype in [
         ("XHR", "application/json"),
@@ -2104,6 +2131,79 @@ def phase_6_auto_attach_owner(kernel: Kernel) -> None:
         srv.shutdown()
         a.close()
         b.b.close()
+
+
+def phase_6_endless_stream(kernel: Kernel) -> None:
+    """A page `fetch()` of an endless octet-stream body keeps flowing on a capture-on tab,
+    across a re-navigation: getResponseBody on it never returns, and its 5 s timeout leaves
+    the response paused, so only skipping it at header time keeps the page's fetch alive."""
+    if not _chrome_ready("phase 6 endless stream"):
+        return
+    import http.server
+    import threading
+    import time
+
+    page = (
+        b"<script>window.__n = 0; fetch('/stream?' + Math.random()).then(async (r) => {"
+        b" const rd = r.body.getReader(); for (;;) { const {value, done} = await rd.read();"
+        b" if (done) break; window.__n += value.length; } });</script>"
+    )
+
+    class _Stream(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
+
+        def do_GET(self) -> None:
+            self.send_response(200)
+            if self.path.startswith("/stream"):
+                self.send_header("Content-Type", "application/octet-stream")
+                self.end_headers()
+                try:
+                    while not stop.is_set():
+                        self.wfile.write(b"x" * 1000)
+                        self.wfile.flush()
+                        time.sleep(0.2)
+                except OSError:
+                    pass
+                return
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    stop = threading.Event()
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Stream)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/?{_MARKER}"
+    h = _BridgeHarness(kernel)
+
+    def _bytes(tid: str) -> int:
+        time.sleep(1.5)
+        text = content_text(h.tool("browser_js", {"target": tid, "code": "window.__n"}))
+        m = re.search(r"\d+", text)
+        return int(m.group()) if m else -1
+
+    try:
+        resp = h.tool("browser_open", {"url": url})
+        m = re.search(r"target: (\S+)", content_text(resp))
+        assert m, f"browser_open carries no target ({content_text(resp)[:200]!r})"
+        tid = m.group(1)
+        assert_true(
+            _bytes(tid) > 0, "an endless octet-stream reaches the page on first load"
+        )
+        h.tool("browser_navigate", {"target": tid, "url": url})
+        first = _bytes(tid)
+        assert_true(first > 0, f"and after a re-navigation ({first} bytes)")
+        assert_true(_bytes(tid) > first, "and keeps flowing")
+        print(
+            "  ✓ endless stream: a capture-on tab's octet-stream fetch survives re-navigation"
+        )
+    finally:
+        stop.set()
+        srv.shutdown()
+        h.close()
 
 
 def phase_6_crash_mid_action(kernel: Kernel) -> None:

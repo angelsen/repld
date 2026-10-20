@@ -1285,7 +1285,9 @@ Two tiers of body access:
       (full body, not the ~64KB-truncated Network.requestWillBeSent.postData)
     - Response stage: bodies under 500KB stored in DuckDB as synthetic
       Network.responseBodyCaptured events.  Skips redirects (CDP limitation)
-      and SSE (infinite stream).  Captured bodies replayed via fulfillRequest.
+      and endless streams (SSE; octet-stream, multipart/x-mixed-replace or
+      ndjson with no Content-Length).  Captured bodies replayed via
+      fulfillRequest.
     - Non-captured responses use fire-and-forget continue commands (no roundtrip)
 
     tab.body() checks DuckDB first (microsecond lookup), falls back to
@@ -1307,8 +1309,8 @@ wait_for_idle() and the MCP observation pipeline use the same settle logic:
 
   A request enters on Network.requestWillBeSent and leaves on
   loadingFinished/loadingFailed.  WebSockets never enter (no
-  requestWillBeSent).  Streamed responses (text/event-stream) leave as soon as
-  their headers arrive: the body stays open by design, and waiting for it
+  requestWillBeSent).  Streamed responses (the same endless streams capture
+  skips) leave as soon as their headers arrive: the body stays open by design, and waiting for it
   would mean this tab never settles again.  Anything still open after 60s is
   aged out as stuck.
 

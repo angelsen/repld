@@ -63,14 +63,33 @@ def crash_blocks(method: str) -> bool:
 
 # Response mime types whose body stays open by design: the response has
 # arrived, and waiting for `loadingFinished` means waiting for the stream to
-# end. Matched against Network.responseReceived, where Chrome has already
-# parsed the header for us.
+# end. `_UNBOUNDED_MIME_TYPES` count only without a Content-Length: an endless
+# `fetch()` of octet-stream frames looks like that, a download does not.
 _STREAMING_MIME_TYPES = ("text/event-stream",)
+_UNBOUNDED_MIME_TYPES = (
+    "application/octet-stream",
+    "multipart/x-mixed-replace",
+    "application/x-ndjson",
+    "application/jsonl",
+)
+
+
+def is_endless(content_type: str, has_length: bool) -> bool:
+    """True for a response body that may never end. One rule for both
+    consumers: `_handle_event` stops counting it as inflight, and
+    `capture._should_capture_body` never calls `Fetch.getResponseBody` on it,
+    which blocks until the body closes and leaves the page's response paused."""
+    mime = content_type.split(";")[0].strip().lower()
+    if mime in _STREAMING_MIME_TYPES:
+        return True
+    return not has_length and mime in _UNBOUNDED_MIME_TYPES
 
 
 def _is_streaming(params: dict) -> bool:
-    mime = (params.get("response") or {}).get("mimeType") or ""
-    return mime.split(";")[0].strip().lower() in _STREAMING_MIME_TYPES
+    response = params.get("response") or {}
+    headers = response.get("headers") or {}
+    has_length = any(k.lower() == "content-length" for k in headers)
+    return is_endless(response.get("mimeType") or "", has_length)
 
 
 # ---------------------------------------------------------------------------

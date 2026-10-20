@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A page `fetch()` of an endless body other than SSE (`application/octet-stream`, `multipart/x-mixed-replace`, `application/x-ndjson` or `application/jsonl` with no `Content-Length`) no longer stalls on a `get()`/`open()` tab with body capture on: capture skips it at header time, as it already did `text/event-stream`, and settle stops counting it as in flight once its headers land. The capped `Fetch.getResponseBody` wait never covered this, since a timed-out read left the response paused. The skipped body is still one `tab.body()` away once the stream ends.
+
 ### Removed
 
 ## [0.17.1] - 2026-10-20
