@@ -27,14 +27,29 @@ class _NoDisplay:
     """Marker wrapper: suppress auto-display of an otherwise-displayable
     result while still returning the real value for programmatic use,
     direct assignment, and `_`/`_N` history binding. Constructed via
-    `no_display()`, unwrapped in `run_cell()` — never meant to be
-    instantiated or inspected elsewhere.
+    `no_display()`, unwrapped in `run_cell()` and `defer()`. A caller that
+    gets the wrapper itself (a function returning `no_display(x)`) sees x's
+    `str()`, `repr()`, `==` and `hash()`; nothing else is proxied.
     """
 
     __slots__ = ("value",)
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _NoDisplay):
+            other = other.value
+        return self.value == other
+
+    def __hash__(self) -> int:
+        return hash(self.value)
 
 
 def no_display(value: Any) -> Any:
