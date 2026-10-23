@@ -29,6 +29,7 @@ from repld import (
     peer_host,
     peer_stub,
     render,
+    runtime,
     tasks,
     tool,
 )
@@ -1877,6 +1878,23 @@ def _stop_flushes_inflight_reply() -> None:
     print("  ✓ ipc: stop() lets an in-flight reply out before the goodbye and close")
 
 
+def _no_display_delegates() -> None:
+    # A caller of a function that returns no_display(x) gets the wrapper, not
+    # x: only run_cell()/defer() unwrap it, so str/==/repr must answer as x does.
+    def psql() -> Any:
+        return runtime.no_display("count\n-----\n3")
+
+    got = psql()
+    assert_eq(str(got), "count\n-----\n3", "str() of a no_display() result")
+    assert_eq(f"{got}", "count\n-----\n3", "f-string of a no_display() result")
+    assert_true(got == "count\n-----\n3", "no_display() result == its value")
+    assert_true(not (got != "count\n-----\n3"), "no_display() result != is False")
+    assert_eq(repr(got), repr("count\n-----\n3"), "repr() of a no_display() result")
+    assert_true(runtime.no_display(3) == 3, "no_display(3) == 3")
+    assert_true(runtime.no_display(3) != 4, "no_display(3) != 4")
+    assert_eq(runtime.unwrap_display(got), ("count\n-----\n3", True), "unwrap_display still unwraps")
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
     _answer_split()
@@ -1912,3 +1930,4 @@ def phase_2_pure() -> None:
     _peer_responses()
     _peer_describe()
     _peer_stubs()
+    _no_display_delegates()
