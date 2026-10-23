@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A function that returns `no_display(x)` gives its caller something that prints, formats and compares as `x`: the wrapper delegates `str()`, `repr()`, `==` and `hash()` to the value. It was unwrapped only by the cell display and `defer()`, so a caller of such a function (a gist's `psql()`) got a bare `<_NoDisplay object>` back.
+
 ### Removed
 
 ## [0.17.2] - 2026-10-22
