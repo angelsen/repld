@@ -1054,8 +1054,10 @@ Channel push: apps that wire setObservationSink to console.debug('__controls__',
 Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
   from watched tabs push as [console:error] channel messages immediately.
   No polling needed — the agent sees errors the moment they happen. Routed to
-  whichever session last drove the tab (a tool call or exec cell); falls back
-  to a broadcast if that session was never set or has since disconnected.
+  the tab's live claim: its owner (open/take/watch), else the cell or defer()
+  task driving it while that runs, else the action in flight (plus a short
+  grace tail). A tab nobody claims pushes nobody — a human's own browsing is
+  silent; watch() or take() a tab to hear it between your actions.
 
     [console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
 
@@ -1195,20 +1197,21 @@ The pre-arm is one-shot: it applies to the next dialog only, then reverts to
 the defaults above. alert()/beforeunload never error — accepting either
 isn't a guess (alert has no other option; beforeunload already reflects the
 pin's own guard_unload). Their outcome shows up as a `dialog:` line in the
-observation; only a confirm()/prompt() (or one with no in-flight action
-behind it) also pushes to channel, to the session that last drove the tab:
+observation; a dialog that opens outside your action (a page timer, a
+`tab.js()` call) pushes to channel instead, to the tab's live claim:
 `[dialog:confirm] 9222:a1b2c3: 'Delete?' → rejected (auto)`.
 
-On a `shared` tab the dialog is the human's. With no pre-arm, and a native
-dialog UI to show it, repld does not answer: the human does, in their
-browser. The agent gets `[dialog:confirm] ...: 'Delete?' → waiting for the
-human`, then `→ accepted by human` (or `by agent`). A click or other
-renderer-bound call blocked behind it fails at once with "waiting for the
-human" rather than riding out the watchdog - answer it yourself with
-`tab.dismiss_dialog(accept=...)` (it answers the open dialog), or
-`tab.take()` the tab. A pre-armed dialog is still answered, one-shot, and
-leaves the tab shared. A browser with no dialog UI of its own (hasBrowserHandler
-false) gets the `agent` behavior, since nothing else could answer.
+A dialog outside any agent action is the human's, on an `open()` tab too.
+With no pre-arm, and a native dialog UI to show it, repld does not answer:
+the human does, in their browser. The agent gets `[dialog:confirm] ...:
+'Delete?' → waiting for the human`, then `→ accepted by human` (or `by
+agent`). A click or other renderer-bound call blocked behind it fails at
+once with "waiting for the human" rather than riding out the watchdog -
+answer it yourself with `tab.dismiss_dialog(accept=...)` (it answers the
+open dialog), or `tab.take()` the tab, which answers every dialog on it
+until `release()`. A pre-armed dialog is still answered, one-shot. A browser
+with no dialog UI of its own (hasBrowserHandler false) gets the auto policy,
+since nothing else could answer.
 
 Auto-wait: selectors auto-wait up to 2s (click/type_text) or the specified
   timeout (wait_for), polling every 100ms, then actionability waits for

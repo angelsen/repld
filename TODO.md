@@ -282,6 +282,74 @@ infinite scroll.
   `awaiting_human` channel push otherwise (and always for ambient gates with no origin
   session). First-wins with the pane/pill/CLI routes via the existing `resolve_gate` race.
   Deliberately split out of the 2025-06-18 upgrade (0.3.0) to keep the bridge diff isolated.
+- [ ] Elicitation nesting, undecided pending a live probe in Claude Code: a gate usually opens in
+  a cell that has already deferred, so no `tools/call` is pending to nest in. Candidates:
+  (1) pause `exec`'s 2 s clock while a gate is open (amends "returns fast or defers, decided
+  once"), (2) send `elicitation/create` un-nested from the deferred cell, (3) keep the
+  `awaiting_human` push for deferred/ambient gates and elicit only under a live request. The
+  probe also checks `notifications/cancelled` dismissing the modal when another surface wins
+  the `resolve_gate` race, and `--bg`/`-p` behavior. 2026-07-28 drops server-initiated
+  requests (`InputRequiredResult` + retry), so this feature expires with the 2025-06-18 ceiling.
+  Pinned-tab gates: elicit AND keep the pill (first answer wins via `resolve_gate`); the message
+  leads with the tab's URL/title, and `tab.auto_front` brings it forward. Elicitation also gives
+  `ask` on a pinned tab its first surface (the pill has no text input).
+  Also: `ask(secret=True)` via URL mode to the token-gated dashboard (form mode forbids secrets).
+
+## Native-prompt pushes: attribute to agent actions
+
+- [x] `[dialog]`/`[filechooser]` pushes (`cdp.py` `_handle_dialog`, `_on_file_chooser`) go to
+  `route_to` with `fallback_broadcast=True`, so a picker or dialog the human opens on a `shared`
+  tab wakes `last_caller` or, with none, every connected agent. Attribute by cause: an
+  in-flight marker on `CDPSession`, set from the start of a `Tab` input method through its
+  settle plus a short grace (`Page.fileChooserOpened` is non-blocking and can land after the
+  click returns). Inside it, the receipt (`observe.py` `_dialog_log`/`_filechooser_log`, and
+  `tab.py` `unresolved_dialog_error`) reports the event and the push is dropped where the receipt
+  carries it; a deferred or ambient cell (`defer()`, `@every`) that clicks later is covered
+  because it goes through `Tab` too. Outside it on a `shared` tab: log only, no push; the next
+  agent action fails with `DialogPendingError`. Undecided: whether the owner, when one exists,
+  still gets one push for a human-originated event (a pinned tab waiting on a login).
+  Crash/disconnect/close pushes are not about who acted and stay. `console_error` and `controls`
+  share the best-guess `last_caller` broadcast and need the same review.
+- [x] Routing matrix (2026-10-31): every per-tab push except `tab_closed` falls back to
+  broadcast (`console_error`, `controls`, `dialog` opened/closed/auto, `filechooser`, `auth`,
+  `tab_crashed`); `tab_closed` is targeted-only ("a tab nobody claimed or drove has no one to
+  tell"); `download_*` goes to the owning tab's `route_to` with `fallback_broadcast=True`, and
+  `Browser.downloadWillBegin` is browser-level, so a human saving a file from an *unattached*
+  tab (`cdp` None) broadcasts `download_started` + `download_done` to every session. A human
+  upload on a shared tab is the `filechooser` row (broadcast with no `last_caller`); on an
+  agent tab the picker is suppressed outright, so the human cannot upload there at all. `last_caller`
+  never expires, so one `tab.tree()` earns a session every later push on that tab, including
+  the human's own browsing. Candidate rules: R1 generalize `tab_closed` (no broadcast fallback
+  for per-tab events; broadcast only `browser_disconnected`/`reconnected`); R2 agent-caused
+  events ride the receipt inside the action window, no push; R3 `owner` (open/take/watch) is the
+  subscription and `last_caller` (get) is not, so ambient events push only to an owner;
+  R4 human-caused on a shared tab is log-only unless an owner exists. Undecided: whether `get()`
+  keeps a short-lived subscription (expiring `last_caller`) and whether `console_error` on an
+  agent's own `open()` tab stays a push or becomes receipt-only.
+  `tab_closed` is the first instance of R3: it pushes to `route_to`, so a human closing a tab
+  any agent once touched (`last_caller`) nudges that agent; only `tab.close()` itself is silent
+  (`cdp.closing`, `tab.py:2165`). Push it to `owner` only; a `get()` tab's close is a receipt
+  on the next call (the tab is gone), not news.
+- [x] An `agent` tab the human visibly uses should become `shared`: today `open()` tabs answer
+  dialogs within milliseconds and suppress the picker outright, so a human on one sees no
+  dialogs and cannot upload. Candidate signals: a human input event on the tab (trusted
+  `Input` not from repld), or the window gaining focus while no agent action is in flight (the
+  R2 marker). `release()` is the explicit form; this is the implicit one, and it must not flip
+  during an agent's own action.
+  All three done as the claim model (owner > live task claim > action window + grace tail,
+  no broadcast fallback; an `open()` tab answers prompts and intercepts the picker inside an
+  action only, `take()` holds both): `cdp.py` `route_to`/`action()`/`intercepting`,
+  `phase_6_claim_routing`, CLAUDE-ARCHIVE "Browser pushes go to the tab's live claim".
+- [ ] `phase_6_session_gone` timed out once on `download_done` in a full `--phase 6` run after
+  the claim-model change (2026-10-31), then passed 3/3 alone and once more in full; the
+  confirmation rerun was killed for low memory. Unexplained: the cell's `current_origin()`
+  printed the right session in the passing run. Watch the next full runs; if it recurs, dump
+  `h.exec`'s output and the kernel stderr at that point.
+- [ ] `handleAuthRequests: True` (`capture.py` `enable`) is bundled with body capture, so every
+  `get()`/`open()` tab takes the human's HTTP credentials prompt and cancels it unless
+  `expect_auth` was armed. Claim-scope it like the picker intercept, or enable it only while an
+  `expect_auth` is armed (a re-`Fetch.enable` on arm/consume), since an unarmed challenge is
+  cancelled anyway and the human would have been better served by Chrome's own prompt.
 
 ## Features (from session 002 backlog)
 

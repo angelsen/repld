@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -111,6 +112,10 @@ _suppress_patterns: set[str] = set()
 _no_capture_patterns: set[str] = set()
 
 _DEDUP_WINDOW = 2.0  # seconds — collapse rapid bursts
+# How long after a Tab input method returns its tab still counts as acted on:
+# Page.fileChooserOpened and Browser.downloadWillBegin land after the click's
+# CDP ack, and a click handler's first console.error later still.
+ACTION_GRACE_S = float(os.environ.get("REPLD_BROWSER_ACTION_GRACE_S", "1.5"))
 _HINT_WINDOW = 30.0  # seconds — track recurring errors for suppress hint
 _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
@@ -164,7 +169,7 @@ def _flush_dedup(key: str) -> None:
         msg = f"{entry.text} (×{total} tabs)"
         if _hint_counts.get(key, 0) >= _HINT_THRESHOLD:
             msg += _SUPPRESS_HINT
-        push_channel(msg, entry.meta, session=entry.session, fallback_broadcast=True)
+        push_channel(msg, entry.meta, session=entry.session)
     except Exception:
         pass
 
@@ -189,7 +194,7 @@ def _dedup_push(
         # loop), which is exactly why it is spelled out rather than left as a
         # falsy check that reads like it was considered.
         try:
-            push_channel(text, meta, session=session, fallback_broadcast=True)
+            push_channel(text, meta, session=session)
         except Exception:
             pass
         return
@@ -202,7 +207,7 @@ def _dedup_push(
     try:
         show_hint = _track_hint(dedup_key, loop)
         msg = text + _SUPPRESS_HINT if show_hint else text
-        push_channel(msg, meta, session=session, fallback_broadcast=True)
+        push_channel(msg, meta, session=session)
     except Exception:
         return
 
@@ -250,12 +255,11 @@ def _check_controls_observation(
 ) -> None:
     """Detect __controls__ console.debug messages and push as channel notifications.
 
-    `session` is `CDPSession.last_caller` — best-guess affinity, not a firm
-    request — so the push falls back to broadcast rather than dropping when
-    it's unset or gone. See `push_channel`'s `fallback_broadcast`.
+    `session` is `CDPSession.route_to`: the tab's live claim, or None, in
+    which case the observation is dropped (nobody asked).
     """
     args = params.get("args", [])
-    if not args or params.get("type") != "debug":
+    if session is None or not args or params.get("type") != "debug":
         return
     first = args[0].get("value", "")
     if first != _CONTROLS_PREFIX or len(args) < 2:
@@ -295,7 +299,7 @@ def _check_controls_observation(
             meta["stateBefore"] = before
         if after:
             meta["stateAfter"] = after
-        push_channel(line, meta, session=session, fallback_broadcast=True)
+        push_channel(line, meta, session=session)
     except Exception:
         pass
 
@@ -309,7 +313,9 @@ def _push_error_text(
 ) -> None:
     """Suppression-check, truncate, and dedup-push a console error line."""
     text = text[:300]
-    if not text or _is_suppressed(text):
+    # A tab with no live claim (`route_to` None) tells nobody; session=None
+    # would broadcast.
+    if not text or session is None or _is_suppressed(text):
         return
     short_id = f"{port}:{target_id[:6].lower()}"
     _dedup_push(
@@ -339,6 +345,23 @@ def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
     )
 
 
+def _push_tab(
+    cdp: "CDPSession", text: str, meta: dict, *, in_receipt: bool = False
+) -> None:
+    """Push a tab event to its live claim (`route_to`); no claim, no push.
+
+    `in_receipt` marks a push the acting call's receipt already carries
+    (`_dialog_log`/`_filechooser_log` → observation, or the raised
+    unresolved error): inside its action window it is log-only.
+    """
+    if in_receipt and cdp.in_action:
+        logger.debug("folded into receipt: %s", text)
+        return
+    # push_channel(session=None) is a broadcast; no claim is a drop.
+    if (session := cdp.route_to) is not None:
+        push_channel(text, meta, session=session)
+
+
 async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     """Answer a native JS dialog (alert/confirm/prompt/beforeunload), or leave it.
 
@@ -350,9 +373,10 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     honoring the pin's "don't navigate away" intent. A pre-armed
     `_dialog_policy` overrides all of this once, then is consumed.
 
-    A `shared` tab's dialog belongs to the human: with no pre-arm and a native
-    dialog UI to show it (`hasBrowserHandler`), it is left open and reported
-    by `_record_dialog_closed`. Without a browser handler (headless) nothing
+    A dialog outside any agent claim (`taken` or `in_action`) belongs to the
+    human: with no pre-arm and a native dialog UI to show it
+    (`hasBrowserHandler`), it is left open and reported by
+    `_record_dialog_closed`. Without a browser handler (headless) nothing
     could answer it but CDP, so the auto policy applies.
     """
     dialog_type = params.get("type", "")
@@ -366,7 +390,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
         cdp._dialog_policy = None
     elif dialog_type == "beforeunload" and cdp._pinned and cdp._pin_guard_unload:
         accept, prompt_text, source = False, None, "auto"
-    elif cdp.mode == "shared" and params.get("hasBrowserHandler"):
+    elif params.get("hasBrowserHandler") and not (cdp.taken or cdp.in_action):
         _leave_dialog_to_human(cdp, dialog_type, message)
         return
     else:
@@ -395,7 +419,8 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
         return  # routine: the observation's `dialog:` line carries it
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     action = "accepted" if accept else "rejected"
-    push_channel(
+    _push_tab(
+        cdp,
         f"[dialog:{dialog_type}] {short_id}: {message!r} → {action} ({source})",
         {
             "kind": "dialog",
@@ -403,8 +428,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
             "dialog_type": dialog_type,
             "action": action,
         },
-        session=cdp.route_to,
-        fallback_broadcast=True,
+        in_receipt=True,
     )
 
 
@@ -430,7 +454,8 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
         if not waiter.done():
             waiter.set_result(None)
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
-    push_channel(
+    _push_tab(
+        cdp,
         f"[dialog:{dialog_type}] {short_id}: {message!r} → waiting for the human",
         {
             "kind": "dialog",
@@ -438,18 +463,16 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
             "dialog_type": dialog_type,
             "action": "waiting",
         },
-        session=cdp.route_to,
-        fallback_broadcast=True,
+        in_receipt=True,
     )
 
 
 def _push_tab_crashed(cdp: "CDPSession") -> None:
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
-    push_channel(
+    _push_tab(
+        cdp,
         f"[tab_crashed] {short_id}: {cdp.target_info.get('url', '')}",
         {"kind": "tab_crashed", "target": short_id},
-        session=cdp.route_to,
-        fallback_broadcast=True,
     )
 
 
@@ -466,6 +489,8 @@ def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
     entry["source"] = by
     action = "accepted" if accepted else "rejected"
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
+    if opened.get("session") is None:
+        return  # nobody heard it open; session=None would broadcast
     push_channel(
         f"[dialog:{opened['type']}] {short_id}: {opened['message']!r} "
         f"→ {action} by {by}",
@@ -477,7 +502,6 @@ def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
             "answered_by": by,
         },
         session=opened.get("session"),
-        fallback_broadcast=True,
     )
 
 
@@ -503,12 +527,13 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     if backend_node_id is None:
         # showOpenFilePicker and friends carry no node: nothing set_files can answer.
-        push_channel(
+        _push_tab(
+            cdp,
             f"[filechooser] {short_id}: picker API opened (mode={mode}) — "
             "no input node, human-only"
             + (
                 " (blocked: this tab suppresses native pickers)"
-                if cdp.mode == "agent"
+                if cdp.intercepting
                 else ""
             ),
             {
@@ -517,30 +542,27 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
                 "mode": mode,
                 "human_only": True,
             },
-            session=cdp.route_to,
-            fallback_broadcast=True,
         )
         return
     cdp._filechooser_pending = {"backend_node_id": backend_node_id, "mode": mode}
-    if cdp.mode == "shared":
+    if not cdp.intercepting:
         # The human's picker is open; an agent click here isn't left unresolved.
-        push_channel(
+        _push_tab(
+            cdp,
             f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab — "
             "the native picker is showing; tab.set_files(paths) still works",
             {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
-            session=cdp.route_to,
-            fallback_broadcast=True,
         )
         return
     cdp._filechooser_log.append(
         {"mode": mode, "resolved": False, "paths": None, "source": "auto"}
     )
-    push_channel(
+    _push_tab(
+        cdp,
         f"[filechooser] {short_id}: opened (mode={mode}) — "
         "call tab.set_files(paths) or it stays open",
         {"kind": "filechooser", "target": short_id, "mode": mode},
-        session=cdp.route_to,
-        fallback_broadcast=True,
+        in_receipt=True,
     )
 
 
@@ -561,7 +583,7 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
         return  # only reached from _handle_event when a policy is armed
     paths = policy.get("paths", [])
     cdp._filechooser_policy = None
-    if cdp.mode == "shared":
+    if not cdp.intercepting:
         # expect_file_chooser() intercepted this one picker only.
         await cdp.intercept_file_chooser(False)
     try:
@@ -575,12 +597,12 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
     cdp._filechooser_log.append(
         {"mode": mode, "resolved": True, "paths": paths, "source": "pre-armed"}
     )
-    push_channel(
+    _push_tab(
+        cdp,
         f"[filechooser] {short_id}: opened (mode={mode}) → "
         f"{len(paths)} file(s) set (pre-armed)",
         {"kind": "filechooser", "target": short_id, "action": "set"},
-        session=cdp.route_to,
-        fallback_broadcast=True,
+        in_receipt=True,
     )
 
 
@@ -653,13 +675,12 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
         }
     )
     if source == "auto":
-        push_channel(
+        _push_tab(
+            cdp,
             f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) — "
             "call tab.expect_auth(username, password) before retrying, or it "
             "stays a failed request",
             {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
-            session=cdp.route_to,
-            fallback_broadcast=True,
         )
 
 
@@ -751,11 +772,17 @@ class CDPSession:
         self.port = port
         self.chrome_target_id = target_info.get("targetId", "")
 
-        # ipc.Session that last drove this tab: set by `execute` for a cell or
-        # defer() task, by browser_dispatch for a tool call. Best-guess affinity
-        # for routing console errors and controls observations, not a firm
-        # request like tasks.origin.
+        # The cell or defer() task that last drove this tab and its session:
+        # written by `execute` only inside a task, honoured by `route_to` until
+        # that task's done_event. A tool call has no task and claims only
+        # through the action window below.
         self.last_caller: Session | None = None
+        self.last_caller_task: str | None = None
+        # Action window: depth of Tab input methods in flight (`action()`),
+        # the session that opened it, and the monotonic end of its grace tail.
+        self._action_depth: int = 0
+        self._action_origin: Session | None = None
+        self._action_until: float = 0.0
         # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
         # (inherited by tabs it auto-attaches), cleared by `release()`.
         self.owner: Session | None = None
@@ -852,10 +879,13 @@ class CDPSession:
         # Tab.set_files() — unlike a dialog there is no default to guess, so
         # this is never auto-resolved, only tracked until answered.
         self._filechooser_pending: dict | None = None
-        # "agent": repld answers native prompts here. "shared": the human may be
-        # using the tab, so their dialogs and file picker stay native. Set at
-        # attach (open() → agent), changed only by Tab.take()/release().
+        # "agent": repld answers native prompts here, but only inside an action
+        # window unless `taken`. "shared": the human may be using the tab, so
+        # their dialogs and file picker stay native. Set at attach (open() →
+        # agent), changed only by Tab.take()/release(); `taken` is the explicit
+        # take(), the one claim that holds the picker intercept between actions.
         self.mode: str = "shared"
+        self.taken: bool = False
         # `Tab.auto_front`: False keeps `_ensure_front` from raising this tab's window, for a tab whose window belongs
         # to someone else (a lent tab); input to it while hidden may then be dropped.
         self.auto_front: bool = True
@@ -933,23 +963,72 @@ class CDPSession:
 
     @property
     def route_to(self) -> "Session | None":
-        """Where this tab's pushes go: its live owner, else `last_caller`."""
+        """Where this tab's pushes go: its live owner, else the task that
+        drove it while that task runs, else the action in flight (plus its
+        grace tail), else nobody."""
         o = self.owner
-        return o if o is not None and not o.closed else self.last_caller
+        if o is not None and not o.closed:
+            return o
+        if (s := self._task_claim()) is not None:
+            return s
+        a = self._action_origin
+        if self.in_action and a is not None and not a.closed:
+            return a
+        return None
 
-    async def set_mode(self, mode: str) -> None:
+    def _task_claim(self) -> "Session | None":
+        tid = self.last_caller_task
+        if tid is None:
+            return None
+        task = tasks.get(tid)  # evicted reads as done
+        if task is None or task["done_event"].is_set():
+            return None
+        s = self.last_caller
+        return s if s is not None and not s.closed else None
+
+    @property
+    def in_action(self) -> bool:
+        return self._action_depth > 0 or time.monotonic() < self._action_until
+
+    @property
+    def intercepting(self) -> bool:
+        """Whether Page.setInterceptFileChooserDialog is on: a chooser opening
+        now is answered by `set_files`, not the native picker."""
+        return self.taken or (self.mode == "agent" and self._action_depth > 0)
+
+    @contextlib.asynccontextmanager
+    async def action(self):
+        """An agent action on this tab: routes its events to the caller and,
+        on an `open()` tab, holds the picker intercept for its span only, so
+        the human gets native prompts between actions."""
+        toggle = self.mode == "agent" and not self.taken and self._action_depth == 0
+        self._action_depth += 1
+        self._action_origin = tasks.current_origin()
+        try:
+            if toggle:
+                await self.intercept_file_chooser(True)
+            yield
+        finally:
+            self._action_depth -= 1
+            self._action_until = time.monotonic() + ACTION_GRACE_S
+            if toggle and self._action_depth == 0:
+                await self.intercept_file_chooser(False)
+
+    async def set_mode(self, mode: str, *, explicit: bool = False) -> None:
         """Switch this tab between `agent` and `shared`.
 
-        `agent` suppresses the native file picker (`set_files` answers it
-        instead); `shared` leaves it to the human, who may be using the tab.
+        `agent` answers native prompts inside an action window; `explicit`
+        (`Tab.take()`) holds that between actions too. `shared` leaves them
+        to the human, who may be using the tab.
         """
         self.mode = mode
+        self.taken = explicit and mode == "agent"
         self.owner_from_opener = False
         if mode != "agent":
             self.owner = None
         elif (origin := tasks.current_origin()) is not None:
             self.owner = origin
-        await self.intercept_file_chooser(mode == "agent")
+        await self.intercept_file_chooser(self.intercepting)
 
     async def intercept_file_chooser(self, enabled: bool) -> None:
         try:
@@ -967,18 +1046,18 @@ class CDPSession:
         even with many concurrent tabs.  Fetch interception is separate
         (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
 
-        `Page.setInterceptFileChooserDialog` is replayed here for `agent` tabs
-        only: it stops a native OS-level file picker from ever opening, and
-        that window is invisible to Page.captureScreenshot and the AX tree alike
-        — there is no "observe it, then decide" for something CDP can't see.
-        Downloads are observed, never redirected: see `BrowserSession`.
+        `Page.setInterceptFileChooserDialog` is replayed here iff
+        `intercepting`: it stops a native OS-level file picker from ever
+        opening, and that window is invisible to Page.captureScreenshot and the
+        AX tree alike — there is no "observe it, then decide" for something CDP
+        can't see. Downloads are observed, never redirected: see `BrowserSession`.
         """
         # A reattach may have missed the Closed event; a stale flag would fail
         # every renderer-bound command on this tab from here on.
         self._open_dialog = None
         self.crashed = False
-        if self.mode == "agent":
-            # Session-scoped: replayed here so a reattach keeps agent tabs armed.
+        if self.intercepting:
+            # Session-scoped: replayed here so a reattach mid-action or on a taken tab stays armed.
             await self.intercept_file_chooser(True)
         for method, params in (
             ("Inspector.enable", None),
@@ -1058,11 +1137,11 @@ class CDPSession:
         timeout: float = 30,
     ) -> dict:
         """Execute a CDP command on this session."""
-        # Ambient code (tickers, the dashboard, tool calls) has no origin and
-        # leaves the affinity alone; tool calls record theirs in browser_dispatch.
-        origin = tasks.current_origin()
-        if origin is not None:
-            self.last_caller = origin
+        # Only a task claims here: a tool call (origin, no task) must not erase
+        # a live cell's claim, and ambient code (tickers, peers) has no origin.
+        tid = tasks.current_task_id()
+        if tid is not None and (origin := tasks.current_origin()) is not None:
+            self.last_caller, self.last_caller_task = origin, tid
         if self.crashed:
             if method in _CRASH_RECOVERY:
                 result = await self._send(method, params, self._session_id, timeout)

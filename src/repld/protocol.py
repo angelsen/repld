@@ -665,8 +665,9 @@ TOOLS = [
     {
         "name": "browser_release",
         "description": (
-            "Make a tab shared: JS dialogs and the file picker are left to the "
-            "human, and you are notified instead. Undoes browser_take."
+            "Make a tab shared: JS dialogs and the file picker outside your own "
+            "actions are left to the human; you hear about them only while you "
+            "drive the tab. Undoes browser_take."
         ),
         "inputSchema": {
             "type": "object",

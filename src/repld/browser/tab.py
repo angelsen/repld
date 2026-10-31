@@ -778,21 +778,25 @@ class Tab(TabQueryMixin):
             # log from an earlier action nobody read. Only raised on a clean
             # yield — a body that already raised (e.g. element not found)
             # propagates through yield itself and skips straight to finally.
-            dialog_start = len(self._session._dialog_log)
-            filechooser_start = len(self._session._filechooser_log)
-            yield
-            exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
-            if exc is not None:
-                raise exc
-            for _ in range(_FILECHOOSER_POLL_ITERS):
-                if len(self._session._filechooser_log) > filechooser_start:
-                    break
-                await asyncio.sleep(_FILECHOOSER_POLL_INTERVAL_S)
-            exc = unresolved_filechooser_error(
-                self._session._filechooser_log, filechooser_start
-            )
-            if exc is not None:
-                raise exc
+            # The window opens after the flock: a span waiting on the lock
+            # must not attribute another caller's events to itself. The
+            # chooser poll runs inside it so a late fileChooserOpened is ours.
+            async with self._session.action():
+                dialog_start = len(self._session._dialog_log)
+                filechooser_start = len(self._session._filechooser_log)
+                yield
+                exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+                if exc is not None:
+                    raise exc
+                for _ in range(_FILECHOOSER_POLL_ITERS):
+                    if len(self._session._filechooser_log) > filechooser_start:
+                        break
+                    await asyncio.sleep(_FILECHOOSER_POLL_INTERVAL_S)
+                exc = unresolved_filechooser_error(
+                    self._session._filechooser_log, filechooser_start
+                )
+                if exc is not None:
+                    raise exc
         finally:
             import os
 
@@ -1979,12 +1983,14 @@ class Tab(TabQueryMixin):
         return f"Next dialog on {self.target_id} will be {'accept' if accept else 'reject'}ed"
 
     async def take(self) -> str:
-        """Make this tab `agent`: repld answers its dialogs and file pickers.
+        """Make this tab `agent` and hold it: repld answers its dialogs and file
+        pickers between actions too, not only inside its own.
 
-        Use on a tab the agent owns. A `get()`/`watch()` tab starts `shared`
-        so a human's own dialog and picker stay native.
+        A `get()`/`watch()` tab starts `shared` and an `open()` tab answers
+        prompts only while an agent action is in flight, so a human's own
+        dialog and picker stay native.
         """
-        await self._session.set_mode("agent")
+        await self._session.set_mode("agent", explicit=True)
         return f"{self.target_id} is now agent: repld answers native prompts here"
 
     async def release(self) -> str:
@@ -2139,25 +2145,27 @@ class Tab(TabQueryMixin):
 
     async def reload(self) -> None:
         """Reload the page, then wait for the ready signal."""
-        await self._exec("Page.reload")
-        await self._wait_ready()
-        await self._refresh_target_info()
+        async with self._session.action():
+            await self._exec("Page.reload")
+            await self._wait_ready()
+            await self._refresh_target_info()
 
     async def navigate(self, url: str) -> None:
         """Navigate to URL, then wait for the ready signal."""
-        dialog_start = len(self._session._dialog_log)
-        filechooser_start = len(self._session._filechooser_log)
-        await self._exec("Page.navigate", {"url": url})
-        await self._wait_ready()
-        await self._refresh_target_info()
-        exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
-        if exc is not None:
-            raise exc
-        exc = unresolved_filechooser_error(
-            self._session._filechooser_log, filechooser_start
-        )
-        if exc is not None:
-            raise exc
+        async with self._session.action():
+            dialog_start = len(self._session._dialog_log)
+            filechooser_start = len(self._session._filechooser_log)
+            await self._exec("Page.navigate", {"url": url})
+            await self._wait_ready()
+            await self._refresh_target_info()
+            exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+            if exc is not None:
+                raise exc
+            exc = unresolved_filechooser_error(
+                self._session._filechooser_log, filechooser_start
+            )
+            if exc is not None:
+                raise exc
 
     async def close(self) -> None:
         """Close this tab (Target.closeTarget). Session cleanup follows from
@@ -2240,22 +2248,23 @@ class Tab(TabQueryMixin):
 
     async def invoke(self, control: str, action: str, args: dict | None = None) -> dict:
         """Invoke a control action via window.controls.invoke(). Returns InvokeResult."""
-        dialog_start = len(self._session._dialog_log)
-        filechooser_start = len(self._session._filechooser_log)
-        args_js = json.dumps(args) if args else "{}"
-        code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"
-        result = await self._exec(
-            "Runtime.evaluate",
-            {"expression": code, "returnByValue": True, "awaitPromise": True},
-        )
-        exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
-        if exc is not None:
-            raise exc
-        exc = unresolved_filechooser_error(
-            self._session._filechooser_log, filechooser_start
-        )
-        if exc is not None:
-            raise exc
+        async with self._session.action():
+            dialog_start = len(self._session._dialog_log)
+            filechooser_start = len(self._session._filechooser_log)
+            args_js = json.dumps(args) if args else "{}"
+            code = f"window.controls.invoke({json.dumps(control)}, {json.dumps(action)}, {args_js})"
+            result = await self._exec(
+                "Runtime.evaluate",
+                {"expression": code, "returnByValue": True, "awaitPromise": True},
+            )
+            exc = unresolved_dialog_error(self._session._dialog_log, dialog_start)
+            if exc is not None:
+                raise exc
+            exc = unresolved_filechooser_error(
+                self._session._filechooser_log, filechooser_start
+            )
+            if exc is not None:
+                raise exc
         value = result.get("result", {}).get("value")
         if value is None:
             desc = result.get("result", {}).get("description", "")

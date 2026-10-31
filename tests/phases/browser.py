@@ -11,6 +11,7 @@ run can't leave tabs behind for the next one to trip over.
 """
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -391,6 +392,8 @@ def phase_6_lease_open_skip(_kernel: Kernel) -> None:
     assert_eq(getattr(exc, "code", None), -32601, "and keeps its JSON-RPC code")
 
     class _Session:
+        action = staticmethod(_noop_action)
+
         def __init__(self, code: int) -> None:
             self.code = code
 
@@ -728,6 +731,12 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
         b.close()
 
 
+@contextlib.asynccontextmanager
+async def _noop_action():
+    """`CDPSession.action()` for a fake: `_ensure_front` opens one per call."""
+    yield
+
+
 class _EngineFakeSession:
     """CDPSession stand-in that answers the injected-engine protocol.
 
@@ -751,6 +760,8 @@ class _EngineFakeSession:
         self._dialog_log: list[dict] = []
         self._filechooser_log: list[dict] = []
         self.auto_front = True
+
+    action = staticmethod(_noop_action)
 
     async def execute(
         self, method: str, params: dict | None = None, timeout: float = 30
@@ -971,6 +982,8 @@ class _NestedFrameFakeSession:
     without Chrome. `match_frames` says which real frameId(s) the resolve
     function reports a hit in.
     """
+
+    action = staticmethod(_noop_action)
 
     def __init__(self, match_frames: frozenset[str]) -> None:
         self.match_frames = match_frames
@@ -1995,11 +2008,9 @@ def phase_6_open_new_window(kernel: Kernel) -> None:
 
 
 def phase_6_tab_affinity(kernel: Kernel) -> None:
-    """A tab records the session that drove it, on every path, so its console
-    errors go to that session instead of broadcasting to the whole kernel.
-
-    Only a `target`-taking tool and `tab.invoke()` used to record it: a tab from
-    `browser_open`, or opened and driven from exec cells, had none.
+    """A tab records the task that drove it and honours that claim only while
+    the task runs; a tool call claims nothing this way (it has no task), so it
+    cannot erase a live cell's claim.
     """
     if not _chrome_ready("phase 6 tab affinity"):
         return
@@ -2012,11 +2023,26 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
             f"_ta = await browser.open('data:text/html,<p>{_MARKER}-affinity-cell</p>')\n"
             "from repld import tasks as _tasks\n"
             "print('CELL_AFFINITY=', _ta._session.last_caller is not None and "
-            "_ta._session.last_caller is _tasks.current_origin())\n",
+            "_ta._session.last_caller is _tasks.current_origin(), "
+            "_ta._session.last_caller_task == _tasks.current_task_id())\n",
         )
         assert_true(
-            "CELL_AFFINITY= True" in out,
-            f"a tab driven from a cell records that cell's session (got {out!r})",
+            "CELL_AFFINITY= True True" in out,
+            f"a tab driven from a cell records that cell's task (got {out!r})",
+        )
+        # Released (no owner), the claim is the cell driving it (release()
+        # itself sends nothing through `execute`; js() does); once that cell
+        # is done, nobody.
+        out = _exec(
+            b,
+            "await _ta.release()\n"
+            "await _ta.js('1')\n"
+            "print('CLAIM_LIVE=', _ta._session.route_to is _tasks.current_origin())\n",
+        )
+        assert_true("CLAIM_LIVE= True" in out, f"a live cell's claim routes ({out!r})")
+        out = _exec(b, "print('CLAIM_DONE=', _ta._session.route_to is None)\n")
+        assert_true(
+            "CLAIM_DONE= True" in out, f"a finished cell's claim is gone ({out!r})"
         )
 
         b.call(
@@ -2027,21 +2053,21 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
             },
             timeout=20.0,
         )
-        # A sync cell issues no CDP command, so it reads the affinity the tool
-        # left rather than recording its own.
+        # A sync cell issues no CDP command, so it reads what the tool left:
+        # an owner, and no task claim.
         out = _exec(
             b,
             "_hits = [c for _b in browser.peek()._browsers.values() "
             "for c in _b._session._sessions.values() "
             f"if '{_MARKER}-affinity-tool' in c.target_info.get('url', '')]\n"
             "print('TOOL_AFFINITY=', len(_hits), "
-            "all(c.last_caller is not None for c in _hits))\n",
+            "all(c.owner is not None and c.last_caller_task is None for c in _hits))\n",
         )
         assert_true(
             "TOOL_AFFINITY= 1 True" in out,
-            f"a tab from browser_open records the calling session (got {out!r})",
+            f"a tab from browser_open is owned, with no task claim (got {out!r})",
         )
-        print("  ✓ tab affinity recorded for cell-driven and browser_open tabs")
+        print("  ✓ tab affinity: a cell's claim lives with the cell, a tool call owns")
     finally:
         _close_marked_tabs()
         b.close()
@@ -2091,6 +2117,139 @@ def phase_6_tab_owner(kernel: Kernel) -> None:
             not _got(a, f"{_MARKER}-owner-2", 2), "the previous owner is not woken"
         )
         print("  ✓ tab owner: browser_take moves the push target to the taker")
+    finally:
+        a.close()
+        b.b.close()
+
+
+def phase_6_claim_routing(kernel: Kernel) -> None:
+    """A tab's pushes go to its live claim: the owner, else the task that drove
+    it while that task runs, else the action in flight plus `ACTION_GRACE_S`;
+    a tab nobody claims pushes nobody, so a human's own dialog or download
+    wakes no session. On an open() tab the picker intercept holds for an
+    agent action's span only; browser_take holds it between actions too.
+    """
+    if not _chrome_ready("phase 6 claim routing"):
+        return
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        tid = a.open_tab(
+            '<a id=d download=repld-claim.txt href="data:text/plain,x">dl</a>'
+            "<button id=late onclick=\"setTimeout(()=>console.error('MARK-tail'),300)\">late</button>"
+            "<button id=later onclick=\"setTimeout(()=>console.error('MARK-late'),2500)\">later</button>"
+        )
+        a.tool("browser_release", {"target": tid})  # no owner from here on
+
+        def _got(h: _BridgeHarness, kind: str, text: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel",
+                    kind=kind,
+                    where=lambda m: text in m["params"]["content"],
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        # The human's dialog: a page timer fires once b's cell is done and
+        # the grace tail has passed, so nothing claims the tab.
+        b.exec(
+            f"_ct = await browser.get('{tid}')\n"
+            "await _ct.js(\"setTimeout(()=>confirm('MARK-h'), 2500)\")\n"
+        )
+        assert_true(
+            not _got(a, "dialog", "MARK-h", 5) and not _got(b, "dialog", "MARK-h", 1),
+            "a dialog on a tab nobody claims pushes nobody",
+        )
+        # A Chrome with a dialog UI left it open for the human; answer it so
+        # the tab is usable again (the close push has no session either).
+        b.exec(
+            "if _ct._session._open_dialog is not None:\n"
+            "    await _ct.dismiss_dialog(accept=True)\n"
+        )
+        # The human's download: a tab repld never attached.
+        b.exec(
+            "_bs = next(iter(browser.peek()._browsers.values()))._session\n"
+            "_ut = (await _bs.execute('Target.createTarget', {'url': "
+            "\"data:text/html,<a id=d download=repld-unclaimed.txt href='data:text/plain,y'>y</a>"
+            "<script>setTimeout(()=>document.getElementById('d').click(),300)</script>\"}))['targetId']\n"
+        )
+        try:
+            assert_true(
+                not _got(a, "download_started", "repld-unclaimed", 5)
+                and not _got(b, "download_started", "repld-unclaimed", 1),
+                "a download from an unattached tab pushes nobody",
+            )
+        finally:
+            b.exec("await _bs.execute('Target.closeTarget', {'targetId': _ut})")
+        print("  ✓ claim routing: the human's dialog and download wake no session")
+
+        # A defer()'d cell's click: the download starts inside its action
+        # window and finishes after it; both pushes reach b, none reach a.
+        b.exec("defer(_ct.click('#d'), 'claim-dl')")
+        assert_true(
+            _got(b, "download_started", "repld-claim.txt", 10)
+            and _got(b, "download_done", "repld-claim.txt", 10),
+            "a deferred cell's download reaches its session",
+        )
+        assert_true(
+            not _got(a, "download_started", "repld-claim.txt", 2),
+            "and not the session that released the tab",
+        )
+        print("  ✓ claim routing: a deferred cell's download reaches its session")
+
+        # Grace tail: an error 300 ms after the click is the action's; one
+        # 2.5 s after it, past the tail, is nobody's.
+        b.exec("await _ct.click('#late')")
+        assert_true(_got(b, "console_error", "MARK-tail", 5), "tail error reaches b")
+        assert_true(not _got(a, "console_error", "MARK-tail", 1), "and not a")
+        b.exec("await _ct.click('#later')")
+        assert_true(
+            not _got(b, "console_error", "MARK-late", 5)
+            and not _got(a, "console_error", "MARK-late", 1),
+            "an error past the grace tail pushes nobody",
+        )
+        print("  ✓ claim routing: the grace tail ends")
+
+        # Stage B: an open() tab intercepts the picker inside an action only.
+        tid2 = a.open_tab(
+            "<input type=file id=f>"
+            "<button id=go onclick=\"document.getElementById('f').click()\">go</button>"
+        )
+        out = b.exec(
+            f"_c2 = await browser.get('{tid2}')\n"
+            "try:\n    await _c2.click('#go')\n"
+            "except Exception as _e:\n    print('ERR', _e)\n"
+        )
+        assert_true(
+            "tab.set_files" in out,
+            f"inside an action the picker is intercepted ({out!r})",
+        )
+        b.exec("await _c2.set_files([])")
+        # Between actions a user-gesture evaluate (not an action window) opens
+        # the native picker: pending for set_files, never logged unresolved.
+        out = b.exec(
+            "import asyncio\n_s2 = _c2._session\n_n = len(_s2._filechooser_log)\n"
+            "await _c2.js(\"document.getElementById('f').click()\")\n"
+            "await asyncio.sleep(0.5)\n"
+            "print('IDLE', _s2._filechooser_pending is not None, len(_s2._filechooser_log) - _n)\n"
+        )
+        assert_true("IDLE True 0" in out, f"idle open() tab: native picker ({out!r})")
+        b.exec("await _c2.set_files([])")
+        a.tool("browser_take", {"target": tid2})
+        out = b.exec(
+            "_n = len(_s2._filechooser_log)\n"
+            "await _c2.js(\"document.getElementById('f').click()\")\n"
+            "await asyncio.sleep(0.5)\n"
+            "print('TAKEN', len(_s2._filechooser_log) - _n)\n"
+        )
+        assert_true(
+            "TAKEN 1" in out, f"taken tab: intercepted between actions ({out!r})"
+        )
+        b.exec("await _c2.set_files([])")
+        print("  ✓ claim routing: an open() tab's picker intercept follows the action")
     finally:
         a.close()
         b.b.close()
@@ -3433,10 +3592,14 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             pinned: bool = False,
             guard_unload: bool = True,
             mode: str = "agent",
+            taken: bool = False,
+            in_action: bool = False,
         ) -> None:
             self.port = 9222
             self.chrome_target_id = "abcdef123456"
             self.mode = mode
+            self.taken = taken
+            self.in_action = in_action
             self.last_caller = None
             self.route_to = None
             self._pinned = pinned
@@ -3544,13 +3707,45 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
         assert_eq(cdp.sent[-1], {"accept": True}, "shared + pre-arm: answered")
         assert_eq(cdp._open_dialog, None, "shared + pre-arm: nothing left open")
 
-        # Agent tab ignores hasBrowserHandler: repld always answers.
+        # An open() tab with no agent action in flight is the human's too:
+        # only a take()n tab, or the action window, answers for them.
         cdp = _Cdp(mode="agent")
         await _handle_dialog(
             cdp,  # type: ignore[arg-type]
             {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
         )
-        assert_eq(cdp.sent[-1], {"accept": False}, "agent tab: auto policy")
+        assert_eq(cdp.sent, [], "idle open() tab: dialog left to the human")
+        cdp = _Cdp(mode="agent", taken=True)
+        await _handle_dialog(
+            cdp,  # type: ignore[arg-type]
+            {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
+        )
+        assert_eq(cdp.sent[-1], {"accept": False}, "taken tab: auto policy")
+        # Inside the window the receipt carries the outcome, so no push is made.
+        import repld.browser.cdp as _cdp_mod
+
+        collected: list[str] = []
+        real_push = _cdp_mod.push_channel
+        _cdp_mod.push_channel = lambda text, *a, **k: collected.append(text)  # type: ignore[assignment]
+        try:
+            cdp = _Cdp(mode="shared", in_action=True)
+            await _handle_dialog(
+                cdp,  # type: ignore[arg-type]
+                {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
+            )
+            assert_eq(cdp.sent[-1], {"accept": False}, "in action: auto policy")
+            assert_eq(collected, [], "in action: the receipt carries it, no push")
+            cdp = _Cdp(mode="shared")
+            await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
+            assert_eq(collected, [], "no claim: the reject is dropped, not broadcast")
+            cdp = _Cdp(mode="shared")
+            cdp.route_to = object()                                             # a live claim
+            await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
+            assert_eq(
+                len(collected), 1, "outside a window the reject pushes to the claim"
+            )
+        finally:
+            _cdp_mod.push_channel = real_push
 
         # A renderer-bound command in flight when a human dialog opens is
         # abandoned (not left to the 30s timeout), and the wait leaves no trace.
@@ -3701,10 +3896,17 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
             self._filechooser_pending: dict | None = None
             self._filechooser_log: list[dict] = []
             self.mode = "agent"
+            self.taken = False
+            self._action_depth = 1  # inside the click's window, the usual case
+            self.in_action = True
             self.last_caller = None
             self.route_to = None
             self.intercepts: list[bool] = []
             self.sent: list[dict] = []
+
+        @property
+        def intercepting(self) -> bool:
+            return self.taken or (self.mode == "agent" and self._action_depth > 0)
 
         async def execute(self, method: str, params: dict | None = None) -> dict:
             self.sent.append(params or {})
@@ -3737,6 +3939,18 @@ def phase_6_filechooser_policy(_kernel: Kernel) -> None:
         assert_eq(
             cdp._filechooser_pending is not None, True, "shared tab: still pending"
         )
+
+        # An open() tab between actions is not intercepting: the human's
+        # picker opened, same as a shared tab; take() holds the intercept.
+        cdp = _Cdp()
+        cdp._action_depth = 0
+        _record_filechooser_opened(cdp, {"backendNodeId": 5, "mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(
+            cdp._filechooser_log, [], "idle open() tab: native picker, not logged"
+        )
+        cdp.taken = True
+        _record_filechooser_opened(cdp, {"backendNodeId": 5, "mode": "selectSingle"})  # type: ignore[arg-type]
+        assert_eq(cdp._filechooser_log[-1]["resolved"], False, "taken: intercepted")
 
         # Picker API (no backendNodeId): nothing set_files could answer.
         cdp = _Cdp()
@@ -4295,7 +4509,7 @@ def phase_6_session_gone(kernel: Kernel) -> None:
     h = _BridgeHarness(kernel)
     try:
         out = h.exec(
-            "import json as _j, websockets as _w\n"
+            "import asyncio, json as _j, websockets as _w\n"
             "_kill = asyncio.Event()\n"
             "async def _fake(ws):\n"
             "    async def _rd():\n"
@@ -4314,8 +4528,11 @@ def phase_6_session_gone(kernel: Kernel) -> None:
         )
         assert_true("GONE up True" in out, f"the fake provider attaches ({out!r})")
         h.exec(
+            "from repld import tasks as _tasks\n"
+            "_f = asyncio.get_running_loop().create_future()\n"
+            "_f.set_result((None, _tasks.current_origin()))\n"
             "await _b._session._push_download("
-            "'download_done', 'a.txt', None, {'filePath': '/remote/a.txt'})"
+            "'download_done', 'a.txt', _f, {'filePath': '/remote/a.txt'})"
         )
         n = h.b.wait_notification(
             "notifications/claude/channel", kind="download_done", timeout=10
@@ -4625,32 +4842,17 @@ def phase_6_tab_mode(kernel: Kernel) -> None:
         h.tool("browser_set_files", {"target": tid, "paths": []})
         print("  ✓ tab mode: take/release switch who owns the picker")
 
-        # Shared dialog: with a native dialog UI it is left to the human and
-        # the blocked click fails fast; without one (headless) it is rejected
-        # as on an agent tab. Which one this Chrome does is not ours to pick.
+        # A dialog the agent's own click opens is the agent's, shared tab or
+        # not: rejected by policy and reported in the receipt. Only a dialog
+        # outside any agent action is left to the human (phase_6_dialog_policy).
         h.tool("browser_release", {"target": tid})
         resp = h.tool("browser_click", {"target": tid, "selector": "#ask"})
         msg = _tool_error_text(resp)
-        if "waiting for the human" in msg:
-            h.tool("browser_dismiss_dialog", {"target": tid, "accept": True})
-            n = h.b.wait_notification(
-                "notifications/claude/channel",
-                kind="dialog",
-                where=lambda m: m["params"]["meta"].get("action") == "accepted",
-                timeout=10,
-            )
-            assert_true("by agent" in n["params"]["content"], f"push names who ({n!r})")
-            print(
-                "  ✓ tab mode: shared dialog left open, click fails fast, then answered"
-            )
-        else:
-            assert_true(
-                "auto-rejected" in msg,
-                f"no browser handler: shared dialog is auto-rejected (got {msg!r})",
-            )
-            print(
-                "  ✓ tab mode: shared dialog without a browser handler is auto-rejected"
-            )
+        assert_true(
+            "auto-rejected" in msg,
+            f"shared tab: the agent's own dialog is auto-rejected (got {msg!r})",
+        )
+        print("  ✓ tab mode: the agent's own dialog on a shared tab is its own")
     finally:
         h.close()
 

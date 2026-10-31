@@ -900,21 +900,72 @@ def _tab_owner_routing() -> None:
 
     NS = cast(Any, SimpleNamespace)
 
+    from repld import tasks
     from repld.browser.cdp import CDPSession
     from repld.browser.session import BrowserSession
 
     route = cast(Any, CDPSession.route_to).fget
+    claim = CDPSession._task_claim
+    in_action = cast(Any, CDPSession.in_action).fget
     owner, caller = NS(closed=False, who="owner"), NS(closed=False, who="caller")
+
+    class _Fake:
+        in_action = property(lambda self: in_action(self))
+        _task_claim = lambda self: claim(self)
+
+        def __init__(self, **kw: Any) -> None:
+            self.owner = None
+            self.last_caller = None
+            self.last_caller_task = None
+            self._action_depth = 0
+            self._action_origin = None
+            self._action_until = 0.0
+            self.__dict__.update(kw)
+
+    cdp = cast(Any, _Fake)
+
+    tid, task = tasks.new_task(origin=caller)
+    try:
+        assert_eq(
+            route(cdp(owner=owner, last_caller=caller, last_caller_task=tid)),
+            owner,
+            "owner beats a live task claim",
+        )
+        owner.closed = True
+        assert_eq(
+            route(cdp(owner=owner, last_caller=caller, last_caller_task=tid)),
+            caller,
+            "a closed owner falls back to the live task claim",
+        )
+        task["done_event"].set()
+        assert_eq(
+            route(cdp(last_caller=caller, last_caller_task=tid)),
+            None,
+            "a finished task claims nothing",
+        )
+    finally:
+        tasks.finalize(tid)
     assert_eq(
-        route(NS(owner=owner, last_caller=caller)), owner, "owner beats last_caller"
+        route(cdp(last_caller=caller, last_caller_task="nope")),
+        None,
+        "an evicted task reads as done",
     )
-    owner.closed = True
     assert_eq(
-        route(NS(owner=owner, last_caller=caller)),
+        route(cdp(_action_depth=1, _action_origin=caller)),
         caller,
-        "a closed owner falls back to last_caller",
+        "an action in flight routes to its origin",
     )
-    assert_eq(route(NS(owner=None, last_caller=None)), None, "unclaimed tab broadcasts")
+    assert_eq(
+        route(cdp(_action_origin=caller, _action_until=time.monotonic() + 5)),
+        caller,
+        "the grace tail still routes to the action's origin",
+    )
+    assert_eq(
+        route(cdp(_action_origin=caller, _action_until=time.monotonic() - 1)),
+        None,
+        "past the tail the action claims nothing",
+    )
+    assert_eq(route(cdp()), None, "an unclaimed tab pushes nobody")
 
     watcher, opener_owner = NS(who="watcher"), NS(who="opener")
     parent = NS(owner=opener_owner)
@@ -970,6 +1021,7 @@ def _tab_lifecycle_pushes() -> None:
         chrome_target_id="ABCDEF123",
         target_info={"url": "https://x.test/"},
         route_to=owner,
+        in_action=False,
         closing=False,
     )
     real_cdp, real_session = cdp_mod.push_channel, session_mod.push_channel
@@ -978,8 +1030,8 @@ def _tab_lifecycle_pushes() -> None:
         cdp_mod._push_tab_crashed(tab)
         assert_eq(
             sent[-1],
-            ("tab_crashed", {"session": owner, "fallback_broadcast": True}),
-            "a crash goes to the tab's route_to, broadcasting on a miss",
+            ("tab_crashed", {"session": owner}),
+            "a crash goes to the tab's route_to, never broadcast",
         )
 
         announce = cast(Any, BrowserSession._announce_tab_closed)
@@ -1892,7 +1944,11 @@ def _no_display_delegates() -> None:
     assert_eq(repr(got), repr("count\n-----\n3"), "repr() of a no_display() result")
     assert_true(runtime.no_display(3) == 3, "no_display(3) == 3")
     assert_true(runtime.no_display(3) != 4, "no_display(3) != 4")
-    assert_eq(runtime.unwrap_display(got), ("count\n-----\n3", True), "unwrap_display still unwraps")
+    assert_eq(
+        runtime.unwrap_display(got),
+        ("count\n-----\n3", True),
+        "unwrap_display still unwraps",
+    )
 
 
 def phase_2_pure() -> None:

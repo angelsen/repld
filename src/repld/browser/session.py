@@ -144,8 +144,11 @@ class BrowserSession:
         # can fail the ones its renderer will never answer.
         self._pending_tabs: dict[int, tuple[str, str]] = {}
 
-        # guid → suggestedFilename for downloads in flight, so the done push can name them
-        self._downloads: dict[str, tuple[str, asyncio.Future[CDPSession | None]]] = {}
+        # guid → (suggestedFilename, future of (owning tab, its route_to at WillBegin)):
+        # the done push names the file and goes where the start went.
+        self._downloads: dict[
+            str, tuple[str, asyncio.Future[tuple[CDPSession | None, Session | None]]]
+        ] = {}
         # sessionId → CDPSession
         self._sessions: LoopOwned[str, CDPSession] = LoopOwned(
             "BrowserSession._sessions"
@@ -937,7 +940,7 @@ class BrowserSession:
                 )
 
     def _announce_tab_closed(self, cdp: CDPSession) -> None:
-        # Targeted only: a tab nobody claimed or drove has no one to tell.
+        # Owner or live claim only: a tab nobody is driving has no one to tell.
         session = cdp.route_to
         if cdp.closing or session is None:
             return
@@ -950,7 +953,7 @@ class BrowserSession:
 
     def _announce_download(self, method: str, params: dict) -> None:
         guid = params.get("guid", "")
-        owner: asyncio.Future[CDPSession | None] | None
+        owner: asyncio.Future[tuple[CDPSession | None, Session | None]] | None
         if method == "Browser.downloadWillBegin":
             if len(self._downloads) >= 256:
                 self._downloads.pop(next(iter(self._downloads)))
@@ -975,9 +978,13 @@ class BrowserSession:
         )
 
     async def _resolve_download_owner(
-        self, owner: "asyncio.Future[CDPSession | None]", frame_id: str
+        self,
+        owner: "asyncio.Future[tuple[CDPSession | None, Session | None]]",
+        frame_id: str,
     ) -> None:
-        """Settle `owner` with the tab a download's frame belongs to, else None."""
+        """Settle `owner` with the tab a download's frame belongs to (else None)
+        and that tab's `route_to` now: downloadProgress lands after the action
+        window that started it has closed, so the done push reuses this."""
         found: CDPSession | None = None
         try:
             found = self.find_by_target_id(frame_id)
@@ -987,19 +994,20 @@ class BrowserSession:
         except Exception as exc:
             logger.debug("download owner lookup failed: %s", exc)
         finally:
-            owner.set_result(found)
+            owner.set_result((found, found.route_to if found else None))
 
     async def _push_download(
         self,
         kind: str,
         name: str,
-        owner: "asyncio.Future[CDPSession | None] | None",
+        owner: "asyncio.Future[tuple[CDPSession | None, Session | None]] | None",
         params: dict,
     ) -> None:
         cdp: CDPSession | None = None
+        session: Session | None = None
         if owner is not None:
             try:
-                cdp = await asyncio.wait_for(asyncio.shield(owner), 3)
+                cdp, session = await asyncio.wait_for(asyncio.shield(owner), 3)
             except TimeoutError:
                 pass
         short_id = (
@@ -1014,11 +1022,12 @@ class BrowserSession:
         detail = meta.get("path") or meta.get("url") or ""
         if remote := meta.get("remote_path"):
             detail = f"{remote} (on the remote browser's host, not readable here)"
+        if session is None:
+            return  # no claim at WillBegin: nobody's; session=None would broadcast
         push_channel(
             f"[{kind}] {short_id}: {name} {detail}".rstrip(),
             meta,
-            session=cdp.route_to if cdp else None,
-            fallback_broadcast=True,
+            session=session,
         )
 
     def _pattern_owner(self, url: str) -> "Session | None":
