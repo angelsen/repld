@@ -342,9 +342,29 @@ infinite scroll.
   `phase_6_claim_routing`, CLAUDE-ARCHIVE "Browser pushes go to the tab's live claim".
 - [ ] `phase_6_session_gone` timed out once on `download_done` in a full `--phase 6` run after
   the claim-model change (2026-10-31), then passed 3/3 alone and once more in full; the
-  confirmation rerun was killed for low memory. Unexplained: the cell's `current_origin()`
-  printed the right session in the passing run. Watch the next full runs; if it recurs, dump
-  `h.exec`'s output and the kernel stderr at that point.
+  confirmation rerun was killed for low memory. Recurred in the next full run (2026-10-31,
+  one of two full runs that day failed), 5/5 alone. The test now prints the push cell's
+  output (origin present, `initialized`/`closed`/`parked`) and carries it in the timeout's
+  message; the next failure says whether the cell pushed at all.
+- [ ] **Claim-routing review (2026-10-31), four decisions still open.** (3) A `taken` tab outlives
+  its session: when the owner's connection closes, `route_to` falls through but `taken` stays
+  set, so the tab keeps auto-answering dialogs and suppressing the picker with nobody to hear
+  the pushes (not a regression; every `open()` tab was like that before). Release tabs whose
+  owner is the closing session from the ipc close path, or have `intercepting` and the dialog
+  policy require a live owner. (4) `route_to` puts a task claim above an action in flight: a
+  tool-call click from session C on a tab session B's deferred task reads periodically routes
+  C's non-receipt pushes (its download, a tail console error) to B. Proposed order: owner,
+  action with depth > 0, task, grace tail; one more phase 2 assertion. (5) `_handle_dialog`
+  keys on `in_action`, grace tail included, so for 1.5 s after an agent touched a `get()` tab
+  the human's own confirm is auto-rejected silently; a dialog the agent's click opens blocks
+  the click's CDP ack and always lands inside the span, so only a timer-deferred dialog needs
+  the tail. Proposed: answer on `taken` or depth > 0, route by the tail (amends Stage B).
+  (8) The task claim is written by every `execute`, so a long `defer()` loop that only reads a
+  tab holds the claim for its lifetime and the human's dialogs/downloads/tab close push to
+  that session for hours. Alternative: write the task claim inside `action()` only, so
+  claiming means acting (changes CLAUDE.md and the help topic wording). Fixes 1, 2, 6, 7 of
+  the same review are applied (`action()` origin restore + intercept exit, `pin_lost`/drag
+  warning drop-on-None, `_start_ticker` clearing `_tool_caller`).
 - [ ] `handleAuthRequests: True` (`capture.py` `enable`) is bundled with body capture, so every
   `get()`/`open()` tab takes the human's HTTP credentials prompt and cancels it unless
   `expect_auth` was armed. Claim-scope it like the picker intercept, or enable it only while an

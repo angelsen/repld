@@ -967,6 +967,46 @@ def _tab_owner_routing() -> None:
     )
     assert_eq(route(cdp()), None, "an unclaimed tab pushes nobody")
 
+    # action(): a nested span (navigate/reload/invoke take no front flock)
+    # restores the outer origin on exit, and the exit of an open() tab's
+    # span re-reads `intercepting` so a take() during it holds the picker.
+    class _Acting(_Fake):
+        action = CDPSession.action
+        intercepting = CDPSession.intercepting
+
+        def __init__(self, **kw: Any) -> None:
+            self.sent: list[bool] = []
+            super().__init__(**{"mode": "shared", "taken": False, **kw})
+
+        async def intercept_file_chooser(self, enabled: bool) -> None:
+            self.sent.append(enabled)
+
+    acting = cast(Any, _Acting)
+    inner, outer_s = NS(closed=False, who="inner"), NS(closed=False, who="outer")
+
+    async def _overlap() -> None:
+        tab = acting()
+        tasks._tool_caller.set(outer_s)
+        async with tab.action():
+            tasks._tool_caller.set(inner)
+            async with tab.action():
+                assert_eq(route(tab), inner, "a nested span routes to its own origin")
+            assert_eq(
+                route(tab), outer_s, "the outer span's origin is restored on exit"
+            )
+        assert_eq(route(tab), outer_s, "the grace tail keeps the last span out")
+        assert_eq(tab.sent, [], "a shared tab never toggles the intercept")
+        taken = acting(mode="agent")
+        async with taken.action():
+            taken.taken = True
+        assert_eq(taken.sent, [True, True], "a take() mid-span holds the intercept")
+        plain = acting(mode="agent")
+        async with plain.action():
+            pass
+        assert_eq(plain.sent, [True, False], "an open() tab's span toggles it off")
+
+    asyncio.run(_overlap())
+
     watcher, opener_owner = NS(who="watcher"), NS(who="opener")
     parent = NS(owner=opener_owner)
     fake = NS(

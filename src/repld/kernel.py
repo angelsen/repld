@@ -984,6 +984,9 @@ async def _start_ticker(
     *drop* rather than broadcast once that session disconnects.
     """
     tasks.set_current_task(None)
+    # Same inheritance for a ticker registered from an async gist tool call:
+    # `_tool_caller` would make every action window in its ticks that session's.
+    tasks._tool_caller.set(None)
     task = asyncio.current_task()
     assert task is not None
     handle = EveryHandle(label, seconds, task, tab=tab)

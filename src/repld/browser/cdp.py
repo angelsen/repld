@@ -1002,6 +1002,9 @@ class CDPSession:
         on an `open()` tab, holds the picker intercept for its span only, so
         the human gets native prompts between actions."""
         toggle = self.mode == "agent" and not self.taken and self._action_depth == 0
+        # navigate/reload/invoke take no front flock, so another session's span
+        # can nest inside this one: its origin is restored when the inner exits.
+        outer = self._action_origin
         self._action_depth += 1
         self._action_origin = tasks.current_origin()
         try:
@@ -1011,8 +1014,11 @@ class CDPSession:
         finally:
             self._action_depth -= 1
             self._action_until = time.monotonic() + ACTION_GRACE_S
-            if toggle and self._action_depth == 0:
-                await self.intercept_file_chooser(False)
+            if self._action_depth > 0:
+                self._action_origin = outer
+            elif toggle:
+                # `intercepting`, not False: a take() during the span holds it.
+                await self.intercept_file_chooser(self.intercepting)
 
     async def set_mode(self, mode: str, *, explicit: bool = False) -> None:
         """Switch this tab between `agent` and `shared`.

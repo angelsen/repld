@@ -16,6 +16,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - A human's dialog, file picker, download or tab close on a tab an agent once read, or on a tab no agent attached, no longer wakes that agent or every agent.
+- `pin_lost` and the drag occlusion warning follow the same rule: targeted at the tab's claim, dropped with none, never broadcast.
+- A `tab.take()` during another session's action on an `open()` tab keeps the picker intercept it asked for; the span's exit no longer switches it off.
+- Two sessions' actions overlapping on one tab (`navigate` takes no front lock) no longer route the outer span's events to whichever entered last.
+- A `@every` ticker registered from a gist tool call no longer claims its browser actions for that call's session.
 
 ### Removed
 

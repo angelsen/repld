@@ -18,12 +18,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import bg
-from ..channel import push_kind
 from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
 from . import inject, screencast
 from . import selector as selector_mod
-from .cdp import CDPSession, unresolved_dialog_error, unresolved_filechooser_error
+from .cdp import (
+    CDPSession,
+    _push_tab,
+    unresolved_dialog_error,
+    unresolved_filechooser_error,
+)
 from .pin import (
     _PIN_JS,
     BINDING_NAME,
@@ -486,11 +490,10 @@ class Tab(TabQueryMixin):
                         break
                 continue
             # Cross-origin — pin contract broken.
-            push_kind(
+            _push_tab(
+                session,
                 f"pinned tab navigated away from {origin}",
-                "pin_lost",
-                session=session.route_to,
-                target=self.target_id,
+                {"kind": "pin_lost", "target": self.target_id},
             )
             break
         session._pinned = False
@@ -1314,11 +1317,10 @@ class Tab(TabQueryMixin):
                 if data.get("hit") is not None and not data.get("related", True):
                     h = data["hit"]
                     hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
-                    push_kind(
+                    _push_tab(
+                        self._session,
                         f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
-                        "browser_warning",
-                        session=self._session.route_to,
-                        target=self.target_id,
+                        {"kind": "browser_warning", "target": self.target_id},
                     )
 
             # Resolve the drop point before pressing when it already exists —

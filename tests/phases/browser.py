@@ -4527,16 +4527,23 @@ def phase_6_session_gone(kernel: Kernel) -> None:
             "print('GONE up', _b._connected)"
         )
         assert_true("GONE up True" in out, f"the fake provider attaches ({out!r})")
-        h.exec(
+        out = h.exec(
             "from repld import tasks as _tasks\n"
+            "_o = _tasks.current_origin()\n"
             "_f = asyncio.get_running_loop().create_future()\n"
-            "_f.set_result((None, _tasks.current_origin()))\n"
+            "_f.set_result((None, _o))\n"
             "await _b._session._push_download("
-            "'download_done', 'a.txt', _f, {'filePath': '/remote/a.txt'})"
+            "'download_done', 'a.txt', _f, {'filePath': '/remote/a.txt'})\n"
+            "print('PUSHED', _o is not None, getattr(_o, 'initialized', None), "
+            "getattr(_o, 'closed', None), getattr(_o, 'parked', None))"
         )
-        n = h.b.wait_notification(
-            "notifications/claude/channel", kind="download_done", timeout=10
-        )
+        try:
+            n = h.b.wait_notification(
+                "notifications/claude/channel", kind="download_done", timeout=10
+            )
+        except TimeoutError as exc:
+            # The push cell's own output is the only trace of why nothing arrived.
+            raise AssertionError(f"{exc}; the push cell printed {out!r}") from None
         meta = n["params"]["meta"]
         assert_true(
             meta.get("remote_path") == "/remote/a.txt" and "path" not in meta,
