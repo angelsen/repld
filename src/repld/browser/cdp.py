@@ -373,8 +373,8 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     honoring the pin's "don't navigate away" intent. A pre-armed
     `_dialog_policy` overrides all of this once, then is consumed.
 
-    A dialog outside any agent claim (`taken` or `in_action`) belongs to the
-    human: with no pre-arm and a native dialog UI to show it
+    A dialog outside any agent claim (`taken`, or an action in flight)
+    belongs to the human: with no pre-arm and a native dialog UI to show it
     (`hasBrowserHandler`), it is left open and reported by
     `_record_dialog_closed`. Without a browser handler (headless) nothing
     could answer it but CDP, so the auto policy applies.
@@ -390,7 +390,11 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
         cdp._dialog_policy = None
     elif dialog_type == "beforeunload" and cdp._pinned and cdp._pin_guard_unload:
         accept, prompt_text, source = False, None, "auto"
-    elif params.get("hasBrowserHandler") and not (cdp.taken or cdp.in_action):
+    # Depth, not `in_action`: a dialog the agent's own click opens blocks the
+    # click's CDP ack, so it always lands inside the span. Only a timer-fired
+    # one reaches the grace tail, and that one is the human's: left open, the
+    # push to the tail's origin (`route_to`) says so.
+    elif params.get("hasBrowserHandler") and not (cdp.taken or cdp._action_depth > 0):
         _leave_dialog_to_human(cdp, dialog_type, message)
         return
     else:
@@ -463,7 +467,8 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
             "dialog_type": dialog_type,
             "action": "waiting",
         },
-        in_receipt=True,
+        # Never receipt-carried: inside a span every tab answers its own
+        # dialog, so this only runs at depth 0, where there is no receipt.
     )
 
 

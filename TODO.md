@@ -346,7 +346,7 @@ infinite scroll.
   one of two full runs that day failed), 5/5 alone. The test now prints the push cell's
   output (origin present, `initialized`/`closed`/`parked`) and carries it in the timeout's
   message; the next failure says whether the cell pushed at all.
-- [ ] **Claim-routing review (2026-10-31), two decisions still open (8 and 4 done: the task claim is written in `action()` only, an action in flight sits above it, the tail below; phase 2 + `phase_6_tab_affinity`).** (3) A `taken` tab outlives
+- [x] **Claim-routing review (2026-10-31), all four done.** 8 and 4: the task claim is written in `action()` only, an action in flight sits above it, the tail below (phase 2 + `phase_6_tab_affinity`). 5: `_handle_dialog` keys on `_action_depth > 0`, the tail only routes (`phase_6_dialog_policy`). 3: `ipc.on_session_closed` → `BrowserPool.release_owned_by` (`phase_6_claim_routing`). Original notes: (3) A `taken` tab outlives
   its session: when the owner's connection closes, `route_to` falls through but `taken` stays
   set, so the tab keeps auto-answering dialogs and suppressing the picker with nobody to hear
   the pushes (not a regression; every `open()` tab was like that before). Release tabs whose
@@ -365,10 +365,6 @@ infinite scroll.
   claiming means acting (changes CLAUDE.md and the help topic wording). Fixes 1, 2, 6, 7 of
   the same review are applied (`action()` origin restore + intercept exit, `pin_lost`/drag
   warning drop-on-None, `_start_ticker` clearing `_tool_caller`).
-  Lean (repld-eca0): 5 next (an agent's own click dialog blocks the CDP ack so it never lands
-  in the tail; leaving a timer-deferred one open with a push is the recoverable direction),
-  then 3 as an event on ipc close beside `_settle_parked`, never a lazy predicate, since
-  Chrome's intercept flag stays on until someone sends False.
 - [ ] `handleAuthRequests: True` (`capture.py` `enable`) is bundled with body capture, so every
   `get()`/`open()` tab takes the human's HTTP credentials prompt and cancels it unless
   `expect_auth` was armed. Claim-scope it like the picker intercept, or enable it only while an

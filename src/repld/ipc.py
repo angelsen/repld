@@ -491,6 +491,11 @@ class Server:
                     del self._claude_sessions[session.claude_session_id]
             session.close()
             self._settle_parked(session)
+            for hook in _close_hooks:
+                try:
+                    hook(session)
+                except Exception:
+                    pass
 
     def broadcast_channel(self, msg: dict, *, exclude: "Session | None" = None) -> None:
         """Post a server-initiated notification to every connected session.
@@ -761,6 +766,13 @@ class Server:
 
 
 _server: Server | None = None
+# Called on the reader thread once a connection is closed and its parked
+# pushes settled; a hook that must touch the loop hops there itself.
+_close_hooks: list[Callable[[Session], None]] = []
+
+
+def on_session_closed(hook: Callable[[Session], None]) -> None:
+    _close_hooks.append(hook)
 
 
 def start_server(socket_path: Path, handler: Handler) -> Server:

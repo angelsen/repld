@@ -22,6 +22,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A `@every` ticker registered from a gist tool call no longer claims its browser actions for that call's session.
 - A long-running `defer()` loop that only reads a tab (`js()`, `tree()`, `network()`) no longer claims it: the human's dialogs, downloads and tab close on that tab stop reaching that session. Acting on the tab (an input, navigation or screenshot) claims it for the task's lifetime as before.
 - A tool call acting on a tab that another session's running cell acted on earlier gets its own download and console pushes; they were routed to the cell's session.
+- A dialog that opens in the 1.5 s grace tail after an agent action on a shared tab (a page timer, not the agent's click) is left to the human and reported as waiting, instead of auto-rejected in silence.
+- A tab held by `browser_take` is released when the session that took it disconnects: it stopped routing pushes already, but kept answering the human's dialogs and suppressing their file picker.
 
 ### Removed
 

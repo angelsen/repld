@@ -31,7 +31,7 @@ from pathlib import Path
 
 import __main__
 
-from . import eventlog, events, gates, ipc, paths, render, sessions, state, tasks
+from . import bg, eventlog, events, gates, ipc, paths, render, sessions, state, tasks
 from .channel import push_channel, push_owed
 from .channel import push_kind as _push
 from .events import CellDone, CellStart
@@ -1508,6 +1508,7 @@ def _start_services(
     ctx = _Context(loop)
     dispatcher = Dispatcher(ctx)
     ipc.start_server(sock_path, dispatcher.handle)
+    ipc.on_session_closed(lambda session: _release_taken_tabs(session, loop))
 
     # 4b. Dashboard HTTP server — reuse previous state from persistent hint file.
     from . import dashboard
@@ -1549,6 +1550,17 @@ def _start_services(
     sessions.register(os.getcwd(), str(sock_path), dashboard_port)
     atexit.register(sessions.unregister)
     return dashboard_port
+
+
+def _release_taken_tabs(
+    session: "ipc.Session", loop: asyncio.AbstractEventLoop
+) -> None:
+    """ipc close hook: a `taken` tab must not outlive the session holding it."""
+    browser = getattr(__main__, "browser", None)
+    pool = browser.peek() if browser is not None else None
+    if pool is None:
+        return
+    bg.spawn(pool.release_owned_by(session), name="repld-release-taken", loop=loop)
 
 
 def _kill_threshold(raw: str) -> float | None:

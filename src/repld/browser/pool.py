@@ -209,6 +209,21 @@ class BrowserPool:
             {"kind": "browser_disconnected", "port": str(port), "url": where},
         )
 
+    async def release_owned_by(self, session: Any) -> int:
+        """Release every `taken` tab whose owner is *session*, whose connection
+        has closed: Chrome keeps the picker intercept until someone sends
+        False, and `route_to` already falls through a closed owner."""
+        released = 0
+        for b in self._browsers.values():  # LoopOwned: a snapshot per walk
+            for cdp in b._session._sessions.values():
+                if cdp.taken and cdp.owner is session:
+                    try:
+                        await cdp.set_mode("shared")
+                    except Exception as exc:
+                        logger.debug("release on close failed: %s", exc)
+                    released += 1
+        return released
+
     async def disconnect(self, port: int | None = None) -> str:
         """Disconnect one or all browsers. Returns a summary string."""
         if port is not None:

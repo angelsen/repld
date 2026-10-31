@@ -2263,6 +2263,28 @@ def phase_6_claim_routing(kernel: Kernel) -> None:
         )
         b.exec("await _c2.set_files([])")
         print("  ✓ claim routing: an open() tab's picker intercept follows the action")
+
+        # The taker's connection closes: the tab is released (Chrome keeps the
+        # intercept until told otherwise), so the human's picker is native again.
+        a.b.close()
+        out = b.exec(
+            "import asyncio\n"
+            "for _ in range(50):\n"
+            "    if not _s2.taken and _s2.mode == 'shared' and _s2.owner is None:\n"
+            "        break\n"
+            "    await asyncio.sleep(0.1)\n"
+            "_n = len(_s2._filechooser_log)\n"
+            "await _c2.js(\"document.getElementById('f').click()\")\n"
+            "await asyncio.sleep(0.5)\n"
+            "print('GONE', _s2.taken, _s2.mode, _s2.owner is None, "
+            "_s2._filechooser_pending is not None, len(_s2._filechooser_log) - _n)\n"
+        )
+        assert_true(
+            "GONE False shared True True 0" in out,
+            f"the taker's close releases the tab ({out!r})",
+        )
+        b.exec("await _c2.set_files([])")
+        print("  ✓ claim routing: a taken tab is released when its session closes")
     finally:
         a.close()
         b.b.close()
@@ -3607,12 +3629,14 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             mode: str = "agent",
             taken: bool = False,
             in_action: bool = False,
+            depth: int = 0,
         ) -> None:
             self.port = 9222
             self.chrome_target_id = "abcdef123456"
             self.mode = mode
             self.taken = taken
-            self.in_action = in_action
+            self.in_action = in_action or depth > 0
+            self._action_depth = depth
             self.last_caller = None
             self.route_to = None
             self._pinned = pinned
@@ -3741,13 +3765,27 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
         real_push = _cdp_mod.push_channel
         _cdp_mod.push_channel = lambda text, *a, **k: collected.append(text)  # type: ignore[assignment]
         try:
-            cdp = _Cdp(mode="shared", in_action=True)
+            cdp = _Cdp(mode="shared", depth=1)
             await _handle_dialog(
                 cdp,  # type: ignore[arg-type]
                 {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
             )
             assert_eq(cdp.sent[-1], {"accept": False}, "in action: auto policy")
             assert_eq(collected, [], "in action: the receipt carries it, no push")
+            # The grace tail only routes: a timer-fired dialog after the
+            # span is the human's, and the tail's origin hears it is waiting.
+            cdp = _Cdp(mode="shared", in_action=True)
+            cdp.route_to = object()
+            await _handle_dialog(
+                cdp,  # type: ignore[arg-type]
+                {"type": "confirm", "message": "Sure?", "hasBrowserHandler": True},
+            )
+            assert_eq(cdp.sent, [], "grace tail: dialog left to the human")
+            assert_eq(
+                len(collected), 1, "grace tail: the waiting push reaches the tail"
+            )
+            assert_true("waiting for the human" in collected[-1], "named as waiting")
+            collected.clear()
             cdp = _Cdp(mode="shared")
             await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
             assert_eq(collected, [], "no claim: the reject is dropped, not broadcast")
