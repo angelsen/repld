@@ -925,6 +925,7 @@ def _tab_owner_routing() -> None:
     cdp = cast(Any, _Fake)
 
     tid, task = tasks.new_task(origin=caller)
+    acting_s = NS(closed=False, who="acting")
     try:
         assert_eq(
             route(cdp(owner=owner, last_caller=caller, last_caller_task=tid)),
@@ -936,6 +937,27 @@ def _tab_owner_routing() -> None:
             route(cdp(owner=owner, last_caller=caller, last_caller_task=tid)),
             caller,
             "a closed owner falls back to the live task claim",
+        )
+        live = {
+            "last_caller": caller,
+            "last_caller_task": tid,
+            "_action_origin": acting_s,
+        }
+        assert_eq(
+            route(cdp(_action_depth=1, **live)),
+            acting_s,
+            "an action in flight beats a running task that acted earlier",
+        )
+        assert_eq(
+            route(cdp(_action_until=time.monotonic() + 5, **live)),
+            caller,
+            "its grace tail does not: the running task keeps the tab",
+        )
+        acting_s.closed = True
+        assert_eq(
+            route(cdp(_action_depth=1, **live)),
+            caller,
+            "an action whose session closed falls through to the task",
         )
         task["done_event"].set()
         assert_eq(
@@ -996,6 +1018,23 @@ def _tab_owner_routing() -> None:
             )
         assert_eq(route(tab), outer_s, "the grace tail keeps the last span out")
         assert_eq(tab.sent, [], "a shared tab never toggles the intercept")
+        assert_eq(tab.last_caller_task, None, "a tool call's span writes no task claim")
+        # Inside a task, the span writes the claim the task keeps after exit.
+        ctid, _ = tasks.new_task(origin=inner)
+        tasks._current_task.set(ctid)
+        try:
+            async with tab.action():
+                pass
+            assert_eq(
+                (tab.last_caller, tab.last_caller_task),
+                (inner, ctid),
+                "a task's span writes the task claim",
+            )
+            tab._action_until = 0.0
+            assert_eq(route(tab), inner, "and the task keeps the tab past the tail")
+        finally:
+            tasks._current_task.set(None)
+            tasks.finalize(ctid)
         taken = acting(mode="agent")
         async with taken.action():
             taken.taken = True

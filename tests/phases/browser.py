@@ -2008,9 +2008,9 @@ def phase_6_open_new_window(kernel: Kernel) -> None:
 
 
 def phase_6_tab_affinity(kernel: Kernel) -> None:
-    """A tab records the task that drove it and honours that claim only while
-    the task runs; a tool call claims nothing this way (it has no task), so it
-    cannot erase a live cell's claim.
+    """A tab records the task that acted on it and honours that claim only
+    while the task runs; a read claims nothing, and neither does a tool call
+    (it has no task), so it cannot erase a live cell's claim.
     """
     if not _chrome_ready("phase 6 tab affinity"):
         return
@@ -2022,25 +2022,36 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
             b,
             f"_ta = await browser.open('data:text/html,<p>{_MARKER}-affinity-cell</p>')\n"
             "from repld import tasks as _tasks\n"
+            "await _ta.js('1')\n"
+            "print('READ_CLAIMS=', _ta._session.last_caller_task is None)\n"
+            "await _ta.reload()\n"
             "print('CELL_AFFINITY=', _ta._session.last_caller is not None and "
             "_ta._session.last_caller is _tasks.current_origin(), "
             "_ta._session.last_caller_task == _tasks.current_task_id())\n",
         )
         assert_true(
-            "CELL_AFFINITY= True True" in out,
-            f"a tab driven from a cell records that cell's task (got {out!r})",
+            "READ_CLAIMS= True" in out,
+            f"a read (js) from a cell writes no task claim (got {out!r})",
         )
-        # Released (no owner), the claim is the cell driving it (release()
-        # itself sends nothing through `execute`; js() does); once that cell
-        # is done, nobody.
+        assert_true(
+            "CELL_AFFINITY= True True" in out,
+            f"an action from a cell records that cell's task (got {out!r})",
+        )
+        # Released (no owner), the claim is the cell that last acted on it
+        # (release() is no action; reload() is); once that cell is done, nobody.
         out = _exec(
             b,
             "await _ta.release()\n"
-            "await _ta.js('1')\n"
+            "await _ta.reload()\n"
             "print('CLAIM_LIVE=', _ta._session.route_to is _tasks.current_origin())\n",
         )
         assert_true("CLAIM_LIVE= True" in out, f"a live cell's claim routes ({out!r})")
-        out = _exec(b, "print('CLAIM_DONE=', _ta._session.route_to is None)\n")
+        # The tail is the action's own claim (phase 2); cut it to read the task's.
+        out = _exec(
+            b,
+            "_ta._session._action_until = 0.0\n"
+            "print('CLAIM_DONE=', _ta._session.route_to is None)\n",
+        )
         assert_true(
             "CLAIM_DONE= True" in out, f"a finished cell's claim is gone ({out!r})"
         )
@@ -2067,7 +2078,9 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
             "TOOL_AFFINITY= 1 True" in out,
             f"a tab from browser_open is owned, with no task claim (got {out!r})",
         )
-        print("  ✓ tab affinity: a cell's claim lives with the cell, a tool call owns")
+        print(
+            "  ✓ tab affinity: a cell's action claims while the cell runs, a tool call owns"
+        )
     finally:
         _close_marked_tabs()
         b.close()

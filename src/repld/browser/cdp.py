@@ -772,10 +772,10 @@ class CDPSession:
         self.port = port
         self.chrome_target_id = target_info.get("targetId", "")
 
-        # The cell or defer() task that last drove this tab and its session:
-        # written by `execute` only inside a task, honoured by `route_to` until
-        # that task's done_event. A tool call has no task and claims only
-        # through the action window below.
+        # The cell or defer() task that last acted on this tab and its
+        # session: written by `action()` only inside a task, honoured by
+        # `route_to` until that task's done_event. A read (`js`, `tree`) never
+        # claims; a tool call has no task and claims only through the window.
         self.last_caller: Session | None = None
         self.last_caller_task: str | None = None
         # Action window: depth of Tab input methods in flight (`action()`),
@@ -963,16 +963,22 @@ class CDPSession:
 
     @property
     def route_to(self) -> "Session | None":
-        """Where this tab's pushes go: its live owner, else the task that
-        drove it while that task runs, else the action in flight (plus its
-        grace tail), else nobody."""
+        """Where this tab's pushes go: its live owner, else the action in
+        flight, else the task that last acted on it while that task runs,
+        else the last action's grace tail, else nobody."""
         o = self.owner
         if o is not None and not o.closed:
             return o
+        # An action in flight outranks a running task that acted earlier: the
+        # events are the current caller's. Its tail does not, so a cell still
+        # running after a tool call's click keeps the tab.
+        a = self._action_origin
+        live_action = a is not None and not a.closed
+        if self._action_depth > 0 and live_action:
+            return a
         if (s := self._task_claim()) is not None:
             return s
-        a = self._action_origin
-        if self.in_action and a is not None and not a.closed:
+        if live_action and self.in_action:
             return a
         return None
 
@@ -1006,7 +1012,11 @@ class CDPSession:
         # can nest inside this one: its origin is restored when the inner exits.
         outer = self._action_origin
         self._action_depth += 1
-        self._action_origin = tasks.current_origin()
+        self._action_origin = origin = tasks.current_origin()
+        # Only a task claims past its span: a tool call has no task, and
+        # ambient code (tickers, peers) has no origin.
+        if origin is not None and (tid := tasks.current_task_id()) is not None:
+            self.last_caller, self.last_caller_task = origin, tid
         try:
             if toggle:
                 await self.intercept_file_chooser(True)
@@ -1143,11 +1153,6 @@ class CDPSession:
         timeout: float = 30,
     ) -> dict:
         """Execute a CDP command on this session."""
-        # Only a task claims here: a tool call (origin, no task) must not erase
-        # a live cell's claim, and ambient code (tickers, peers) has no origin.
-        tid = tasks.current_task_id()
-        if tid is not None and (origin := tasks.current_origin()) is not None:
-            self.last_caller, self.last_caller_task = origin, tid
         if self.crashed:
             if method in _CRASH_RECOVERY:
                 result = await self._send(method, params, self._session_id, timeout)

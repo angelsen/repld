@@ -1054,10 +1054,12 @@ Channel push: apps that wire setObservationSink to console.debug('__controls__',
 Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
   from watched tabs push as [console:error] channel messages immediately.
   No polling needed — the agent sees errors the moment they happen. Routed to
-  the tab's live claim: its owner (open/take/watch), else the cell or defer()
-  task driving it while that runs, else the action in flight (plus a short
-  grace tail). A tab nobody claims pushes nobody — a human's own browsing is
-  silent; watch() or take() a tab to hear it between your actions.
+  the tab's live claim: its owner (open/take/watch), else the action in
+  flight, else the cell or defer() task that last acted on it (click, type,
+  navigate, screenshot; reads like js/tree claim nothing) while that task
+  runs, else a short grace tail after the last action. A tab nobody claims
+  pushes nobody — a human's own browsing is silent; watch() or take() a tab
+  to hear it between your actions.
 
     [console:error] 9222:af5ae1: TypeError: Cannot read property 'x' of null
 
