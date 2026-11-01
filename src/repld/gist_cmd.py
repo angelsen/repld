@@ -237,10 +237,80 @@ def _fetch_gist(gist_id: str, timeout: float = 20.0) -> tuple[str, dict[str, str
     return meta.get("description") or "", files
 
 
-def _gist_fetch(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915
+def _fetch_collision(
+    files: dict[str, str],
+    *,
+    dest_dir: Path,
+    to_global: bool,
+    force: bool,
+    local_dir: Path,
+    global_dir: Path,
+    links: dict[str, str],
+) -> str | None:
+    """Error text if any fetched file cannot land in *dest_dir*, else None."""
+    for fname in sorted(files):
+        stem = fname[: -len(".py")]
+        if not stem.isidentifier():
+            return f"'{fname}' is not importable as a module name"
+        target = dest_dir / fname
+        if target.exists() and not force:
+            return f"{target} already exists (use --force to overwrite)"
+        conflict = _shadow_conflict(
+            stem,
+            to_global=to_global,
+            local_dir=local_dir,
+            global_dir=global_dir,
+            links=links,
+        )
+        if conflict:
+            return conflict
+    return None
+
+
+def _write_fetched(files: dict[str, str], dest_dir: Path, gist_id: str) -> list[Path]:
+    """Write each file under *dest_dir* with the provenance header; the paths written."""
     import datetime
 
-    from . import gist_deps, gist_links
+    url = f"https://gist.github.com/{gist_id}"
+    # Local date on purpose: a human-facing provenance stamp, not a timestamp.
+    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for fname, content in sorted(files.items()):
+        target = dest_dir / fname
+        target.write_text(header + content, encoding="utf-8")
+        written.append(target)
+    return written
+
+
+def _report_fetched(description: str, written: list[Path]) -> None:
+    """Print what landed, the deps it declares but does not get, and next steps."""
+    from . import gist_deps
+
+    if description:
+        print(f"{description}\n")
+    for target in written:
+        print(f"fetched: {target}  ({target.stat().st_size:,} bytes)")
+
+    # Deliberately *not* installed here, unlike `gist add`. That links code you
+    # wrote in another project; this is code from a URL, and its dependency
+    # list should not drive an install before you have read the file. The next
+    # kernel boot prompts for them anyway, wherever there is a terminal.
+    declared = gist_deps.scan_deps(paths=written)
+    if declared:
+        names = sorted({d.requirement for d in declared})
+        print(f"\ndeclares dependencies not installed here: {', '.join(names)}")
+
+    print()
+    print("Next steps:")
+    print(f"  1. Read {written[0]} — it runs in your kernel on the next boot")
+    print(f"  2. repld gist lint {written[0].stem} — check it over")
+    deps_note = " (and to be prompted for its deps)" if declared else ""
+    print(f"  3. Restart the kernel to load it{deps_note}")
+
+
+def _gist_fetch(argv: list[str]) -> int:
+    from . import gist_links
 
     usage = _usage("fetch")
     if cli_args.wants_help(argv):
@@ -296,56 +366,21 @@ def _gist_fetch(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915
         # `rm` and `list` all treat it that way.
         print(f"error: {e}")
         return 1
-    for fname in sorted(files):
-        stem = fname[: -len(".py")]
-        if not stem.isidentifier():
-            print(f"error: '{fname}' is not importable as a module name")
-            return 1
-        target = dest_dir / fname
-        if target.exists() and not force:
-            print(f"error: {target} already exists (use --force to overwrite)")
-            return 1
-        conflict = _shadow_conflict(
-            stem,
-            to_global=to_global,
-            local_dir=local_dir,
-            global_dir=global_dir,
-            links=links,
-        )
-        if conflict:
-            print(f"error: {conflict}")
-            return 1
+    collision = _fetch_collision(
+        files,
+        dest_dir=dest_dir,
+        to_global=to_global,
+        force=force,
+        local_dir=local_dir,
+        global_dir=global_dir,
+        links=links,
+    )
+    if collision:
+        print(f"error: {collision}")
+        return 1
 
-    url = f"https://gist.github.com/{gist_id}"
-    # Local date on purpose: a human-facing provenance stamp, not a timestamp.
-    header = _FETCH_HEADER.format(url=url, date=datetime.date.today().isoformat())
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for fname, content in sorted(files.items()):
-        target = dest_dir / fname
-        target.write_text(header + content, encoding="utf-8")
-        written.append(target)
-
-    if description:
-        print(f"{description}\n")
-    for target in written:
-        print(f"fetched: {target}  ({target.stat().st_size:,} bytes)")
-
-    # Deliberately *not* installed here, unlike `gist add`. That links code you
-    # wrote in another project; this is code from a URL, and its dependency
-    # list should not drive an install before you have read the file. The next
-    # kernel boot prompts for them anyway, wherever there is a terminal.
-    declared = gist_deps.scan_deps(paths=written)
-    if declared:
-        names = sorted({d.requirement for d in declared})
-        print(f"\ndeclares dependencies not installed here: {', '.join(names)}")
-
-    print()
-    print("Next steps:")
-    print(f"  1. Read {written[0]} — it runs in your kernel on the next boot")
-    print(f"  2. repld gist lint {written[0].stem} — check it over")
-    deps_note = " (and to be prompted for its deps)" if declared else ""
-    print(f"  3. Restart the kernel to load it{deps_note}")
+    written = _write_fetched(files, dest_dir, gist_id)
+    _report_fetched(description, written)
     return 0
 
 
@@ -655,65 +690,50 @@ def _gist_lint(argv: list[str]) -> int:
     return 0
 
 
-def _gist_list(argv: list[str]) -> int:  # noqa: C901, PLR0912
-    from . import gist_links, peer_stub
+def _print_local_section(gists_dir: Path) -> list[str]:
     from . import gists as _gists
-
-    usage = _usage("list")
-    if cli_args.wants_help(argv):
-        print(usage)
-        return 0
-    bad = cli_args.check_args("repld gist list", argv, usage, positionals=0)
-    if bad is not None:
-        return bad
-
-    gists_dir = paths.local_gists_dir()
+    from . import peer_stub
 
     # Local gists (./gists), excluding privates.
     local = sorted(
         p.stem for p in gists_dir.glob("*.py") if _gists.is_public_gist_file(p)
     )
-    if local:
-        print("local (./gists):")
-        for name in local:
-            gist_path = gists_dir / f"{name}.py"
-            stub = peer_stub.read_stub(gist_path)
-            if stub is not None:
-                peer_name = Path(stub["peer"]).name
-                fns = ", ".join(stub["functions"])
-                print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
-                continue
-            sig = _gists.signature_for_path(gist_path)
-            print(f"  {name:<20} {sig}")
+    if not local:
+        return local
+    print("local (./gists):")
+    for name in local:
+        gist_path = gists_dir / f"{name}.py"
+        stub = peer_stub.read_stub(gist_path)
+        if stub is not None:
+            peer_name = Path(stub["peer"]).name
+            fns = ", ".join(stub["functions"])
+            print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
+            continue
+        sig = _gists.signature_for_path(gist_path)
+        print(f"  {name:<20} {sig}")
+    return local
 
-    # Linked gists, flagging stale entries. A corrupt manifest is an error,
-    # not an empty section: continuing would print a listing that silently
-    # omits every linked gist and still exit 0, so a script gating on this
-    # reads a truncated answer as a complete one. `add`, `rm` and `fetch`
-    # all return 1 here.
-    try:
-        links = gist_links.read_links(gists_dir)
-    except ValueError as e:
-        print(f"error: {e}")
-        return 1
-    if links:
-        print("linked:")
-        stale = 0
-        for name in sorted(links):
-            path = Path(links[name])
-            if path.is_file():
-                print(f"  {name:<20} {path}")
-            else:
-                stale += 1
-                print(f"  {name:<20} {path}  (stale)")
-        if stale:
-            print()
-            print(f"{stale} stale link(s) — repld gist rm --stale to drop")
 
-    # Linkable: registered in other projects, not already here. Makes the valid
-    # `gist add <name>` targets discoverable from the terminal (the _registry
-    # MCP resource is agent-only).
-    here = set(local) | set(links)
+def _print_linked_section(links: dict[str, str]) -> None:
+    if not links:
+        return
+    print("linked:")
+    stale = 0
+    for name in sorted(links):
+        path = Path(links[name])
+        if path.is_file():
+            print(f"  {name:<20} {path}")
+        else:
+            stale += 1
+            print(f"  {name:<20} {path}  (stale)")
+    if stale:
+        print()
+        print(f"{stale} stale link(s) — repld gist rm --stale to drop")
+
+
+def _linkable_by_project(here: set[str]) -> dict[str, list[tuple[str, str]]]:
+    from . import gists as _gists
+
     cwd = Path.cwd().resolve()
     linkable: dict[str, list[tuple[str, str]]] = {}
     for name, entry in _gists.registry().items():
@@ -725,6 +745,39 @@ def _gist_list(argv: list[str]) -> int:  # noqa: C901, PLR0912
         linkable.setdefault(entry.get("project", "?"), []).append(
             (name, entry.get("description", "") or "")
         )
+    return linkable
+
+
+def _gist_list(argv: list[str]) -> int:
+    from . import gist_links
+
+    usage = _usage("list")
+    if cli_args.wants_help(argv):
+        print(usage)
+        return 0
+    bad = cli_args.check_args("repld gist list", argv, usage, positionals=0)
+    if bad is not None:
+        return bad
+
+    gists_dir = paths.local_gists_dir()
+    local = _print_local_section(gists_dir)
+
+    # Linked gists, flagging stale entries. A corrupt manifest is an error,
+    # not an empty section: continuing would print a listing that silently
+    # omits every linked gist and still exit 0, so a script gating on this
+    # reads a truncated answer as a complete one. `add`, `rm` and `fetch`
+    # all return 1 here.
+    try:
+        links = gist_links.read_links(gists_dir)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
+    _print_linked_section(links)
+
+    # Linkable: registered in other projects, not already here. Makes the valid
+    # `gist add <name>` targets discoverable from the terminal (the _registry
+    # MCP resource is agent-only).
+    linkable = _linkable_by_project(set(local) | set(links))
     if linkable:
         print("linkable (other projects — repld gist add <name>):")
         for project in sorted(linkable):

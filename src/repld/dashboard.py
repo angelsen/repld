@@ -521,118 +521,151 @@ async def _handle_api(body: bytes) -> bytes:
         return json.dumps(_error(req_id, -32000, str(exc))).encode()
 
 
-async def _handle_connection(  # noqa: C901, PLR0912
+async def _read_headers(reader: asyncio.StreamReader, headers: dict[str, str]) -> bool:
+    """Fill `headers` from the request's header block; False if it never ended."""
+    for _ in range(_MAX_HEADER_LINES):
+        line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+        if line in (b"\r\n", b"\n", b""):
+            return True
+        decoded = line.decode("utf-8", errors="replace").strip()
+        key, sep, value = decoded.partition(":")
+        if sep:
+            headers[key.strip().lower()] = value.strip()
+    return False
+
+
+async def _send_preflight(writer: asyncio.StreamWriter, origin: str | None) -> None:
+    cors = (
+        "HTTP/1.1 204 No Content\r\n"
+        f"{_cors_header(origin)}"
+        "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    )
+    writer.write(cors.encode())
+    await writer.drain()
+
+
+async def _serve_page(
+    writer: asyncio.StreamWriter,
+    query: str,
+    headers: dict[str, str],
+    origin: str | None,
+) -> None:
+    authorized, from_query = _page_auth(query, headers)
+    if not authorized:
+        await _send_response(
+            writer,
+            401,
+            UNAUTHORIZED_PAGE.encode("utf-8"),
+            "text/html; charset=utf-8",
+            origin=origin,
+        )
+        return
+    html = PAGE.replace("__DASHBOARD_TOKEN__", _token)
+    extra = ""
+    if from_query:
+        # So a refresh works after the page drops ?token= from the
+        # address bar. HttpOnly because the page is handed the token
+        # inline and has no reason to read it back out of here;
+        # SameSite=Strict so it never rides along on a request some
+        # other site initiated.
+        extra = (
+            f"Set-Cookie: {_cookie_name()}={_token}; Path=/; "
+            "HttpOnly; SameSite=Strict\r\n"
+        )
+    await _send_response(
+        writer,
+        200,
+        html.encode("utf-8"),
+        "text/html; charset=utf-8",
+        origin=origin,
+        extra_headers=extra,
+    )
+
+
+async def _serve_api(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    headers: dict[str, str],
+    content_length: int,
+    origin: str | None,
+) -> None:
+    auth = headers.get("authorization", "")
+    if not secrets.compare_digest(auth, f"Bearer {_token}"):
+        await _send_response(writer, 401, b'{"error":"unauthorized"}', origin=origin)
+        return
+    # Checked after the Bearer compare, so an unauthenticated caller
+    # learns nothing about the limit — and before the read, which is
+    # the whole point: `readexactly` allocates toward whatever the
+    # header claimed.
+    if content_length > _MAX_BODY_BYTES:
+        await _send_response(
+            writer,
+            413,
+            b'{"error":"request body too large"}',
+            origin=origin,
+        )
+        return
+    body = (
+        await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
+        if content_length
+        else b"{}"
+    )
+    result = await _handle_api(body)
+    await _send_response(writer, 200, result, origin=origin)
+
+
+async def _serve_request(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    headers: dict[str, str],
+) -> None:
+    request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+    if not request_line:
+        return
+
+    parts = request_line.decode("utf-8", errors="replace").strip().split()
+    if len(parts) < 2:
+        return
+    method_http, target = parts[0], parts[1]
+    path, _, query = target.partition("?")
+
+    if not await _read_headers(reader, headers):
+        # Ran the bound without reaching the blank line. Answered rather
+        # than parsed: whatever is on the other end is not a browser.
+        await _send_response(writer, 431, b'{"error":"too many headers"}')
+        return
+
+    content_length = int(headers.get("content-length", "0") or "0")
+    origin = headers.get("origin")
+
+    if not _host_allowed(headers.get("host")):
+        await _send_response(writer, 403, b'{"error":"forbidden host"}')
+        return
+
+    if method_http == "OPTIONS":
+        await _send_preflight(writer, origin)
+        return
+
+    if method_http == "GET" and path == "/":
+        await _serve_page(writer, query, headers, origin)
+        return
+
+    if method_http == "POST" and path == "/api":
+        await _serve_api(reader, writer, headers, content_length, origin)
+        return
+
+    await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)
+
+
+async def _handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     headers: dict[str, str] = {}
     try:
-        request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
-        if not request_line:
-            return
-
-        parts = request_line.decode("utf-8", errors="replace").strip().split()
-        if len(parts) < 2:
-            return
-        method_http, target = parts[0], parts[1]
-        path, _, query = target.partition("?")
-
-        for _ in range(_MAX_HEADER_LINES):
-            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
-            if line in (b"\r\n", b"\n", b""):
-                break
-            decoded = line.decode("utf-8", errors="replace").strip()
-            key, sep, value = decoded.partition(":")
-            if sep:
-                headers[key.strip().lower()] = value.strip()
-        else:
-            # Ran the bound without reaching the blank line. Answered rather
-            # than parsed: whatever is on the other end is not a browser.
-            await _send_response(writer, 431, b'{"error":"too many headers"}')
-            return
-
-        content_length = int(headers.get("content-length", "0") or "0")
-        origin = headers.get("origin")
-
-        if not _host_allowed(headers.get("host")):
-            await _send_response(writer, 403, b'{"error":"forbidden host"}')
-            return
-
-        if method_http == "OPTIONS":
-            cors = (
-                "HTTP/1.1 204 No Content\r\n"
-                f"{_cors_header(origin)}"
-                "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-                "Connection: close\r\n"
-                "\r\n"
-            )
-            writer.write(cors.encode())
-            await writer.drain()
-            return
-
-        if method_http == "GET" and path == "/":
-            authorized, from_query = _page_auth(query, headers)
-            if not authorized:
-                await _send_response(
-                    writer,
-                    401,
-                    UNAUTHORIZED_PAGE.encode("utf-8"),
-                    "text/html; charset=utf-8",
-                    origin=origin,
-                )
-                return
-            html = PAGE.replace("__DASHBOARD_TOKEN__", _token)
-            extra = ""
-            if from_query:
-                # So a refresh works after the page drops ?token= from the
-                # address bar. HttpOnly because the page is handed the token
-                # inline and has no reason to read it back out of here;
-                # SameSite=Strict so it never rides along on a request some
-                # other site initiated.
-                extra = (
-                    f"Set-Cookie: {_cookie_name()}={_token}; Path=/; "
-                    "HttpOnly; SameSite=Strict\r\n"
-                )
-            await _send_response(
-                writer,
-                200,
-                html.encode("utf-8"),
-                "text/html; charset=utf-8",
-                origin=origin,
-                extra_headers=extra,
-            )
-            return
-
-        if method_http == "POST" and path == "/api":
-            auth = headers.get("authorization", "")
-            if not secrets.compare_digest(auth, f"Bearer {_token}"):
-                await _send_response(
-                    writer, 401, b'{"error":"unauthorized"}', origin=origin
-                )
-                return
-            # Checked after the Bearer compare, so an unauthenticated caller
-            # learns nothing about the limit — and before the read, which is
-            # the whole point: `readexactly` allocates toward whatever the
-            # header claimed.
-            if content_length > _MAX_BODY_BYTES:
-                await _send_response(
-                    writer,
-                    413,
-                    b'{"error":"request body too large"}',
-                    origin=origin,
-                )
-                return
-            body = (
-                await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
-                if content_length
-                else b"{}"
-            )
-            result = await _handle_api(body)
-            await _send_response(writer, 200, result, origin=origin)
-            return
-
-        await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)
-
+        await _serve_request(reader, writer, headers)
     except (
         TimeoutError,
         asyncio.IncompleteReadError,

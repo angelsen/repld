@@ -888,70 +888,38 @@ class Bridge:
                 self._inflight.discard(rid)
             self._to_client(_error(rid, -32603, f"repld bridge internal error: {exc}"))
 
-    def _dispatch_client_line(self, line: str) -> None:  # noqa: C901, PLR0912
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            msg = None
+    def _try_bridge_tool(self, msg: dict, rid) -> bool:
+        """Whether `msg` was a call of a bridge-served tool, answered here."""
+        if msg.get("method") != "tools/call":
+            return False
+        params = msg.get("params") or {}
+        if params.get("name") not in bridge_tools.BRIDGE_TOOLS:
+            return False
+        self._handle_bridge_tool(rid, params["name"], params.get("arguments") or {})
+        return True
 
-        if not isinstance(msg, dict):
-            # Dropped rather than forwarded. There is no id to answer, the
-            # kernel can't act on it either, and the old fall-through reached
-            # _ensure_kernel — so one truncated stdin line used to spawn a
-            # kernel and then ship it the garbage.
-            _err("ignoring unparseable line from client")
-            return
-
-        rid = msg.get("id")
-
-        # Bridge-served tools are answered *before* the liveness ladder. They
-        # exist for the cases where the kernel is dead or is about to be
-        # replaced, so insisting on a live one first would be backwards — and
-        # for a restart it would spawn a kernel only to kill it.
+    def _answer_without_kernel(self, msg: dict, rid) -> bool:
+        """Whether a message that found no kernel attached was answered
+        here (from the discovery cache, or with -32601) rather than left
+        to reach `_ensure_kernel` and trigger the lazy spawn."""
+        if self._try_bridge_intercept(msg, rid):
+            return True
         method = msg.get("method")
-        if method == "tools/call":
-            params = msg.get("params") or {}
-            if params.get("name") in bridge_tools.BRIDGE_TOOLS:
-                self._handle_bridge_tool(
-                    rid, params["name"], params.get("arguments") or {}
-                )
-                return
+        if method in _NEEDS_KERNEL:
+            return False
+        # Everything the intercept declined that isn't one of those two
+        # is a method no kernel of ours implements — a client-side
+        # `ping`, a `prompts/list` probe. Spawning one to have it say
+        # "method not found" is the whole cost of the lazy-spawn
+        # design paid for an answer we already know.
+        if rid is not None:
+            self._to_client(_error(rid, -32601, f"method not found: {method}"))
+        return True
 
-        # No kernel attached yet: attach for free if one is already running
-        # (the common case), so discovery gets live data below exactly as it
-        # always has. Only when that fails — no kernel at all for this
-        # project — does discovery fall back to the last kernel's cache
-        # instead of spawning one just to ask it. A gist tool call, a
-        # gist/browser resource read, or anything else that actually needs
-        # live state falls through and reaches _ensure_kernel below — that's
-        # what triggers the lazy spawn.
-        if self._sock is None:
-            self._try_attach_existing()
-        if self._sock is None:
-            if self._try_bridge_intercept(msg, rid):
-                return
-            if method not in _NEEDS_KERNEL:
-                # Everything the intercept declined that isn't one of those two
-                # is a method no kernel of ours implements — a client-side
-                # `ping`, a `prompts/list` probe. Spawning one to have it say
-                # "method not found" is the whole cost of the lazy-spawn
-                # design paid for an answer we already know.
-                if rid is not None:
-                    self._to_client(_error(rid, -32601, f"method not found: {method}"))
-                return
-
-        if not self._ensure_kernel():
-            if rid is not None:
-                self._to_client(
-                    _error(
-                        rid,
-                        KERNEL_GONE,
-                        "repld kernel is not running and could not be started; "
-                        "see stderr",
-                    )
-                )
-            return
-
+    def _forward_to_kernel(self, msg: dict, rid, line: str) -> None:
+        """Plain forward of a client message to the attached kernel, with the
+        handshake bookkeeping a later reconnect's `_replay_handshake` needs."""
+        method = msg.get("method")
         # Cached *after* _ensure_kernel, never before: this same message is
         # about to be forwarded, and a kernel attached while it is already in
         # _client_init would have the handshake replayed onto it — firing
@@ -984,6 +952,56 @@ class Bridge:
             sock.sendall(line.encode("utf-8"))
         except OSError:
             self._on_kernel_gone()
+
+    def _dispatch_client_line(self, line: str) -> None:
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            msg = None
+
+        if not isinstance(msg, dict):
+            # Dropped rather than forwarded. There is no id to answer, the
+            # kernel can't act on it either, and the old fall-through reached
+            # _ensure_kernel — so one truncated stdin line used to spawn a
+            # kernel and then ship it the garbage.
+            _err("ignoring unparseable line from client")
+            return
+
+        rid = msg.get("id")
+
+        # Bridge-served tools are answered *before* the liveness ladder. They
+        # exist for the cases where the kernel is dead or is about to be
+        # replaced, so insisting on a live one first would be backwards — and
+        # for a restart it would spawn a kernel only to kill it.
+        if self._try_bridge_tool(msg, rid):
+            return
+
+        # No kernel attached yet: attach for free if one is already running
+        # (the common case), so discovery gets live data below exactly as it
+        # always has. Only when that fails — no kernel at all for this
+        # project — does discovery fall back to the last kernel's cache
+        # instead of spawning one just to ask it. A gist tool call, a
+        # gist/browser resource read, or anything else that actually needs
+        # live state falls through and reaches _ensure_kernel below — that's
+        # what triggers the lazy spawn.
+        if self._sock is None:
+            self._try_attach_existing()
+        if self._sock is None and self._answer_without_kernel(msg, rid):
+            return
+
+        if not self._ensure_kernel():
+            if rid is not None:
+                self._to_client(
+                    _error(
+                        rid,
+                        KERNEL_GONE,
+                        "repld kernel is not running and could not be started; "
+                        "see stderr",
+                    )
+                )
+            return
+
+        self._forward_to_kernel(msg, rid, line)
 
     def _drain_inflight(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
