@@ -1159,6 +1159,10 @@ def _crashed_tab_guard() -> None:
     )
     tab._crashed_error = lambda: cast(Any, CDPSession._crashed_error)(tab)
     tab.reload_hint = lambda: cast(Any, CDPSession.reload_hint)(tab)
+    tab._send_classified = lambda m, p, t: cast(Any, CDPSession._send_classified)(
+        tab, m, p, t
+    )
+    tab._browser_answers = lambda: cast(Any, CDPSession._browser_answers)(tab)
     execute = cast(Any, CDPSession.execute)
 
     assert_true(
@@ -1227,6 +1231,89 @@ def _crashed_tab_guard() -> None:
     )
     print(
         "  ✓ crashed tab fails fast and revives on navigate; failed close resets closing"
+    )
+
+
+def _renderer_busy_classification() -> None:
+    """A timed-out page-served command is `RendererBusyError` iff the browser
+    process still answers; browser-served commands are never reclassified."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from repld.browser.cdp import CDPSession, RendererBusyError
+
+    NS = cast(Any, SimpleNamespace)
+    sent: list[tuple[str, str | None]] = []
+    browser_alive = True
+
+    async def _send(method, params, session_id, timeout):
+        sent.append((method, session_id))
+        if method == "Target.getTargetInfo":
+            if browser_alive:
+                return {"targetInfo": {}}
+            raise TimeoutError("CDP command Target.getTargetInfo timed out after 5s")
+        raise TimeoutError(f"CDP command {method} timed out after {timeout}s")
+
+    tab = NS(
+        crashed=False,
+        _send=_send,
+        _session_id="s",
+        _open_dialog=None,
+        mode="agent",
+        port=9222,
+        chrome_target_id="ABCDEF123",
+    )
+    tab._send_classified = lambda m, p, t: cast(Any, CDPSession._send_classified)(
+        tab, m, p, t
+    )
+    tab._browser_answers = lambda: cast(Any, CDPSession._browser_answers)(tab)
+    execute = cast(Any, CDPSession.execute)
+
+    async def _run() -> None:
+        nonlocal browser_alive
+        for method in ("Runtime.evaluate", "Page.captureScreenshot"):
+            sent.clear()
+            try:
+                await execute(tab, method, {}, 1)
+            except RendererBusyError as exc:
+                assert_true(
+                    "9222:abcdef" in str(exc) and "not the connection" in str(exc),
+                    f"the error names the tab and blames its page ({exc})",
+                )
+            else:
+                raise AssertionError(
+                    f"{method} timing out with a live browser must reclassify"
+                )
+            assert_eq(
+                sent[1],
+                ("Target.getTargetInfo", None),
+                "the probe is browser-level (no sessionId), sent once",
+            )
+        sent.clear()
+        try:
+            await execute(tab, "Target.getTargetInfo", {}, 1)
+        except RendererBusyError:
+            raise AssertionError("a browser-served command is never reclassified")
+        except TimeoutError:
+            pass
+        assert_eq(len(sent), 1, "no probe for a browser-served command")
+        browser_alive = False
+        sent.clear()
+        try:
+            await execute(tab, "Runtime.evaluate", {}, 1)
+        except RendererBusyError:
+            raise AssertionError(
+                "a browser that does not answer keeps the plain timeout"
+            )
+        except TimeoutError as exc:
+            assert_true(
+                "Runtime.evaluate" in str(exc),
+                f"the original timeout is re-raised ({exc})",
+            )
+
+    asyncio.run(_run())
+    print(
+        "  ✓ renderer busy: page timeout + live browser reclassified, browser-served never"
     )
 
 
@@ -2053,6 +2140,7 @@ def phase_2_pure() -> None:
     _tab_owner_routing()
     _tab_lifecycle_pushes()
     _crashed_tab_guard()
+    _renderer_busy_classification()
     _download_cap()
     _inflight_crash_failure()
     _files_probe_timeout()

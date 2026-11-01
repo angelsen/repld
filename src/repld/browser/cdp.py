@@ -40,6 +40,9 @@ PRUNE_CHECK_INTERVAL = 1_000
 # could legitimately have been waiting on it. Raise it if that ceiling rises.
 _INFLIGHT_MAX_AGE = 60.0
 
+# How long the browser process gets to answer once a page-served command has timed out.
+_BUSY_PROBE_S = 5.0
+
 # CDP methods that need the renderer, which an open JS dialog blocks.
 _RENDERER_BOUND = (
     "Input.",
@@ -333,6 +336,10 @@ class DialogPendingError(RuntimeError):
 
 class TabCrashedError(RuntimeError):
     """A renderer-bound command hit a tab whose renderer has crashed."""
+
+
+class RendererBusyError(TimeoutError):
+    """A page-served command timed out while the browser process still answered."""
 
 
 def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
@@ -1188,14 +1195,44 @@ class CDPSession:
             if crash_blocks(method):
                 raise self._crashed_error()
         if not method.startswith(_RENDERER_BOUND):
-            return await self._send(method, params, self._session_id, timeout)
+            return await self._send_classified(method, params, timeout)
         if self._open_dialog is not None:
             raise _dialog_pending_error(self)
+        call = self._send_classified(method, params, timeout)
         if self.mode != "shared":
+            return await call
+        return await self._race_dialog(call)
+
+    async def _send_classified(
+        self, method: str, params: dict | None, timeout: float
+    ) -> dict:
+        """`_send`, with a timeout on a page-served command told apart from a
+        dead connection: the browser process is asked once, and its answer
+        means the page's main thread is what is not responding."""
+        try:
             return await self._send(method, params, self._session_id, timeout)
-        return await self._race_dialog(
-            self._send(method, params, self._session_id, timeout)
-        )
+        except TimeoutError as exc:
+            if method.startswith(_CRASH_SAFE) or not await self._browser_answers():
+                raise
+            short_id = f"{self.port}:{self.chrome_target_id[:6].lower()}"
+            raise RendererBusyError(
+                f"{exc}, but the browser still answers: tab {short_id}'s page is not "
+                "responding (a busy or frozen main thread, not the connection); wait "
+                "and retry with a shorter timeout=, or navigate/reload it"
+            ) from None
+
+    async def _browser_answers(self) -> bool:
+        """Whether the browser process answers for this target (no sessionId)."""
+        try:
+            await self._send(
+                "Target.getTargetInfo",
+                {"targetId": self.chrome_target_id},
+                None,
+                _BUSY_PROBE_S,
+            )
+        except Exception:
+            return False
+        return True
 
     def _crashed_error(self) -> TabCrashedError:
         short_id = f"{self.port}:{self.chrome_target_id[:6].lower()}"

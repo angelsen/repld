@@ -206,9 +206,13 @@ async def call_engine(
     await_promise: bool = False,
     return_by_value: bool = True,
     timeout: float = 30,
+    user_gesture: bool = False,
 ) -> dict:
     """Runtime.callFunctionOn against `frame_id`'s engine handle (top frame
     if None), re-ensuring once on staleness.
+
+    `user_gesture` runs the call with transient user activation, as a trusted
+    click would grant: what Chrome's popup blocker and autoplay policy check.
 
     `frame_id` must match the frame any `{"objectId": ...}` argument (e.g. a
     ResolvedElement) was resolved in — the receiver and every objectId
@@ -225,6 +229,8 @@ async def call_engine(
         "returnByValue": return_by_value,
         "awaitPromise": await_promise,
     }
+    if user_gesture:
+        params["userGesture"] = True
     try:
         return await tab._exec("Runtime.callFunctionOn", params, timeout=timeout)
     except RuntimeError as exc:
@@ -379,15 +385,30 @@ async def resolve_engine_selectors(
     while True:
         # aria-ref=eN only ever lived in the top frame's engine instance —
         # aria_snapshot() doesn't cross frames either (see its docstring).
-        frame_ids: list[str | None] = (
-            [None] if is_ref else [None, *await _child_frame_ids(tab)]
-        )
-        for sel in selectors:
+        if is_ref:
+            child_ids: list[str] = []
+            first_top = await _match_in_frame(
+                tab, selectors[0], None, selector, defer_note=defer_note
+            )
+        else:
+            # One round trip for both: the frame tree is only needed once the
+            # top frame has been asked, and Chrome answers a session in order.
+            child_ids, first_top = await asyncio.gather(
+                _child_frame_ids(tab),
+                _match_in_frame(
+                    tab, selectors[0], None, selector, defer_note=defer_note
+                ),
+            )
+        frame_ids: list[str | None] = [None, *child_ids]
+        for i, sel in enumerate(selectors):
             matches: list[ResolvedElement] = []
             for frame_id in frame_ids:
-                outcome = await _match_in_frame(
-                    tab, sel, frame_id, selector, defer_note=defer_note
-                )
+                if i == 0 and frame_id is None:
+                    outcome = first_top
+                else:
+                    outcome = await _match_in_frame(
+                        tab, sel, frame_id, selector, defer_note=defer_note
+                    )
                 if outcome is not None:
                     matches.append(outcome)
             if len(matches) > 1:
@@ -478,12 +499,13 @@ async def check_actionable(
 
     checkElementStates resolves promptly per call ('stable' resolves after
     stableRafCount same-position frames or false on movement — never
-    open-ended), so the wait bound lives here. Must run after _ensure_front():
-    the stable check counts requestAnimationFrame, which Chrome throttles on
-    hidden tabs.
+    open-ended), so the wait bound lives here. Runs inside _ensure_front() and
+    collects its pending front probe first: the stable check counts
+    requestAnimationFrame, which Chrome throttles on hidden tabs.
 
     Returns `el` with its `note` filled from a `defer_note` resolve.
     """
+    await tab._settle_front()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     n = 0

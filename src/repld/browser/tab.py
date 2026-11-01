@@ -219,6 +219,17 @@ class BrowserJSError(Exception):
         super().__init__(text)
 
 
+@dataclass
+class _FrontProbe:
+    """`_ensure_front`'s visibility read in flight, and the one settle task
+    every gated command in the span awaits (press and release are sent
+    together; the second must not overtake the first while it waits)."""
+
+    probe: asyncio.Task
+    target: "Tab"
+    settle: asyncio.Task | None = None
+
+
 class Tab(TabQueryMixin):
     """User-facing facade over a CDPSession.
 
@@ -237,6 +248,9 @@ class Tab(TabQueryMixin):
         self._chrome_target_id = chrome_target_id
         self._port = port
         self._ready = ready
+        # `_ensure_front`'s visibility probe until `_settle_front` collects it.
+        # The reference keeps the task.
+        self._front_pending: _FrontProbe | None = None
 
     @property
     def _pinned(self) -> bool:
@@ -644,7 +658,14 @@ class Tab(TabQueryMixin):
         CDP error, e.g. "No target with given id found" — not obviously
         actionable on its own. Re-raised here as a clear, distinct error
         pointing at browser_tabs, since this Tab handle can't recover itself.
+
+        Input and screenshot commands collect `_ensure_front`'s pending probe
+        first: a hidden tab drops the former and hangs the latter.
         """
+        if self._front_pending is not None and (
+            method.startswith("Input.") or method == "Page.captureScreenshot"
+        ):
+            await self._settle_front()
         try:
             return await self._session.execute(method, params, timeout)
         except RuntimeError as exc:
@@ -727,10 +748,11 @@ class Tab(TabQueryMixin):
         fires. Resolving a selector doesn't hit this — `DOM.getContentQuads`
         and `Runtime.evaluate` both work fine on a hidden tab, which is why
         the failure looks like nothing happened rather than an error. Costs
-        one `Runtime.evaluate` round trip on every call and `Page.bringToFront`
-        only on the degraded path — the multi-window watch workflow this
-        kernel exists for means N-1 tabs are hidden at any given time, so
-        this can't be opt-in.
+        one `Runtime.evaluate` per call, sent without awaiting so the body's
+        own resolve shares its round trip, and `Page.bringToFront` only on
+        the degraded path — the multi-window watch workflow this kernel
+        exists for means N-1 tabs are hidden at any given time, so this
+        can't be opt-in.
 
         Checks and fronts via `_front_target()`, not `self` directly — an
         iframe target has no window of its own to raise; its enclosing page
@@ -755,27 +777,17 @@ class Tab(TabQueryMixin):
         fd = await asyncio.to_thread(acquire_lock_blocking, front_lock_for(self._port))
         try:
             front_target = await self._front_target()
-            result = {}
             if front_target._session.auto_front:
-                try:
-                    result = await front_target._exec(
-                        "Runtime.evaluate",
-                        {
-                            "expression": "document.visibilityState",
-                            "returnByValue": True,
-                        },
-                    )
-                except RuntimeError as exc:
-                    # A `view` lease forbids Runtime and bringToFront alike, so visibility
-                    # cannot be probed or fixed: carry on without fronting. A hidden tab
-                    # then hangs its capture to the command timeout, as it would unfronted.
-                    if not is_scope_refusal(exc):
-                        raise
-            if (
-                result.get("result", {}).get("value") == "hidden"
-                and front_target.type != "iframe"
-            ):
-                await front_target._exec("Page.bringToFront")
+                # Sent, not awaited: Chrome answers a session's commands in order, so
+                # the body's first reads ride the same round trip. `_settle_front`
+                # collects it before anything a hidden tab drops or throttles
+                # (`_exec` for Input/captureScreenshot, `inject.check_actionable`).
+                self._front_pending = _FrontProbe(
+                    asyncio.get_running_loop().create_task(
+                        self._probe_hidden(front_target)
+                    ),
+                    front_target,
+                )
             # Recorded before yield so the check below only sees dialogs/
             # choosers this call triggered, not ones already sitting in the
             # log from an earlier action nobody read. Only raised on a clean
@@ -801,9 +813,64 @@ class Tab(TabQueryMixin):
                 if exc is not None:
                     raise exc
         finally:
+            self._drop_front()
             import os
 
             os.close(fd)
+
+    async def _probe_hidden(self, front_target: "Tab") -> bool:
+        """Whether `front_target`'s window must be raised before input lands."""
+        try:
+            result = await front_target._exec(
+                "Runtime.evaluate",
+                {"expression": "document.visibilityState", "returnByValue": True},
+            )
+        except RuntimeError as exc:
+            # A `view` lease forbids Runtime and bringToFront alike, so visibility
+            # cannot be probed or fixed: carry on without fronting. A hidden tab
+            # then hangs its capture to the command timeout, as it would unfronted.
+            if not is_scope_refusal(exc):
+                raise
+            return False
+        return (
+            result.get("result", {}).get("value") == "hidden"
+            and front_target.type != "iframe"
+        )
+
+    async def _settle_front(self) -> None:
+        """Collect `_ensure_front`'s probe and raise the window if it read
+        hidden. A no-op outside a span, or once collected. Concurrent callers
+        share one settle and all wait for it; shielded, so one caller's
+        cancellation does not fail the others."""
+        pending = self._front_pending
+        if pending is None:
+            return
+        if pending.settle is None:
+            pending.settle = asyncio.get_running_loop().create_task(
+                self._front_settle(pending)
+            )
+        await asyncio.shield(pending.settle)
+        if self._front_pending is pending:
+            self._front_pending = None
+
+    @staticmethod
+    async def _front_settle(pending: "_FrontProbe") -> None:
+        if await pending.probe:
+            await pending.target._exec("Page.bringToFront")
+
+    def _drop_front(self) -> None:
+        """Forget an uncollected probe (the body raised before any input):
+        cancelled in flight, else its outcome retrieved so asyncio stays quiet."""
+        pending, self._front_pending = self._front_pending, None
+        if pending is None:
+            return
+        for task in (pending.probe, pending.settle):
+            if task is None:
+                continue
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                task.exception()
 
     async def set_viewport(self, width: int, height: int) -> None:
         """Emulate a fixed viewport (Emulation.setDeviceMetricsOverride).
@@ -850,6 +917,7 @@ class Tab(TabQueryMixin):
         *,
         await_promise: bool = True,
         user_gesture: bool = True,
+        timeout: float = 30,
     ) -> Any:
         """Evaluate JavaScript expression in the page context.
 
@@ -858,6 +926,9 @@ class Tab(TabQueryMixin):
             await_promise: Await a Promise result. Default awaits (like the
                 DevTools console); pass False to return without awaiting.
             user_gesture: Simulate a user gesture (makes isTrusted=true).
+            timeout: Seconds to wait for the page. A page whose main thread
+                is busy or frozen raises RendererBusyError (a TimeoutError)
+                saying so, once the browser has answered a probe.
 
         Returns:
             The evaluated result as a Python value.
@@ -879,6 +950,7 @@ class Tab(TabQueryMixin):
                 "replMode": True,
                 "awaitPromise": True,
             },
+            timeout=timeout,
         )
         rv = self._js_result(result)
 
@@ -887,6 +959,7 @@ class Tab(TabQueryMixin):
                 result = await self._exec(
                     "Runtime.awaitPromise",
                     {"promiseObjectId": rv["objectId"], "returnByValue": True},
+                    timeout=timeout,
                 )
             else:
                 # Serialize object results by value (returnByValue on the
@@ -898,6 +971,7 @@ class Tab(TabQueryMixin):
                         "functionDeclaration": "function () { return this; }",
                         "returnByValue": True,
                     },
+                    timeout=timeout,
                 )
             rv = self._js_result(result)
 
@@ -1025,7 +1099,10 @@ class Tab(TabQueryMixin):
         `element.click()`: dispatching at the coordinates can start a drag
         on a pan layer, while a DOM click reaches the resolved element the
         way assistive tech does. It is isTrusted=false, so the receipt names
-        the path taken. Modified clicks (right/double) have no
+        the path taken; it runs under a CDP user gesture, so a `window.open`
+        in the handler is not popup-blocked the way an untrusted click's is
+        (seen live: a Connect button under a reopened dropdown opened its
+        session as a blocked popup). Modified clicks (right/double) have no
         element.click() equivalent and keep the coordinate dispatch plus the
         warning.
         """
@@ -1054,6 +1131,7 @@ class Tab(TabQueryMixin):
                         "function(el) { el.click(); }",
                         [{"objectId": el.object_id}],
                         frame_id=el.frame_id,
+                        user_gesture=True,
                     )
                     return receipt
 

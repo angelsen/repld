@@ -604,10 +604,12 @@ on an already-attached tab still reports the original attach's value.
 
 == Tab API (async) ==
 
-  tab.js(expr, *, await_promise=True, user_gesture=True)     → Any
+  tab.js(expr, *, await_promise=True, user_gesture=True, timeout=30) → Any
       Evaluate JS in page context.  Results returned by value (deep-serialized).
       await_promise=True (default) awaits Promise results like the DevTools console.
       user_gesture=True makes isTrusted=true on events.
+      timeout= bounds the wait; a page whose main thread is busy or frozen raises
+      RendererBusyError (a TimeoutError) saying so, since the browser still answers.
       Raises BrowserJSError on JS exceptions (with preserved stack trace).
 
   tab.click(selector, *, button='left', click_count=1)       → Receipt
@@ -1947,7 +1949,7 @@ Channel kinds:
 """,
     "browser": """\
 Tab (async unless noted):
-  tab.js(expr, await_promise=, user_gesture=)   → any
+  tab.js(expr, await_promise=, user_gesture=, timeout=) → any (RendererBusyError, a TimeoutError, when the page's main thread is stuck and the browser still answers)
   tab.tree(mode="aria", at=None, in_crop=None)  → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
   tab.click(selector_or_x_y, button=, click_count=) → Receipt (strict resolve + actionability wait; names what was hit; 'x,y' clicks a viewport point with no DOM to resolve)
   tab.plan_click(selector_or_x_y, button=, click_count=) → Action (resolves and hit-tests, presses nothing; action.run() clicks at the planned point, action.gate() holds it behind a confirm gate and raises ActionDeclined on no)

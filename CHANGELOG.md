@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tab.js(timeout=)` bounds the wait for the page. A page-served command (`Runtime.*`, `Input.*`, `Page.navigate`, a screenshot, a DOM read) that times out while the browser process still answers raises `RendererBusyError`, a `TimeoutError` that names the page's main thread as the cause rather than the connection, with the tab id.
+
 ### Changed
 
 - Browser event pushes (`dialog`, `filechooser`, `download_*`, `auth`, `console_error`, `controls`, `tab_crashed`, `tab_closed`) go to the tab's owner, else the agent action in flight, else the cell or `defer()` task that last acted on it (an input, navigation or screenshot; a read such as `js()` or `tree()` claims nothing) while that task runs, else the last action's grace tail (`REPLD_BROWSER_ACTION_GRACE_S`, default 1.5 s). A tab nobody claims pushes nobody; no per-tab push broadcasts any more (only `browser_disconnected`/`browser_reconnected` do). An action's own dialog or intercepted file chooser is reported in its receipt, not pushed as well; a raw `tab.click()` from a cell with a pre-armed dialog therefore leaves its record in the receipt's dialog log only.
@@ -15,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The `element.click()` fallback an occluded click takes runs under a CDP user gesture, so a `window.open` in the handler opens instead of being popup-blocked as an untrusted click's is. The receipt still names the path.
+- A warm `tab.click(selector)` is six awaited round trips instead of eight: the front probe and the child-frame tree ride the same hop as the top frame's resolve. Every input method and `screenshot()` collects the probe before the first command a hidden tab would drop or throttle.
 - A human's dialog, file picker, download or tab close on a tab an agent once read, or on a tab no agent attached, no longer wakes that agent or every agent.
 - `pin_lost` and the drag occlusion warning follow the same rule: targeted at the tab's claim, dropped with none, never broadcast.
 - A `tab.take()` during another session's action on an `open()` tab keeps the picker intercept it asked for; the span's exit no longer switches it off.

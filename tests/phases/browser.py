@@ -10,6 +10,7 @@ to touch only tabs they created themselves either way. Every one carries
 run can't leave tabs behind for the next one to trip over.
 """
 
+import ast
 import asyncio
 import contextlib
 import io
@@ -753,6 +754,7 @@ class _EngineFakeSession:
         self.fail_call_fn_once: str | None = None  # error text to raise once
         self.fail_bootstrap = False
         self.sent: list[str] = []
+        self.sent_params: list[dict] = []
         self.target_info = {"url": "fake://page", "targetId": "abcdef0123456789"}
         self._injected = {}
         self._injected_lock = asyncio.Lock()
@@ -768,6 +770,7 @@ class _EngineFakeSession:
     ) -> dict:
         self.sent.append(method)
         params = params or {}
+        self.sent_params.append(params)
         if method == "Page.getFrameTree":
             return {"frameTree": {"frame": {"id": "frame-1"}}}
         if method == "Page.createIsolatedWorld":
@@ -1333,6 +1336,32 @@ def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
         f"a visible tab is never raised (sent {visible_sent!r})",
     )
     print("  ✓ a visible tab isn't raised — the guard checks, doesn't always act")
+
+    # plan_click + run(): the run span's first gated commands are the press
+    # and release, sent together. Found live (phase_6_plan_click delivered 0
+    # clicks): the second overtook the first while it waited on the probe.
+    async def _plan_run():
+        tab, session = _make_tab("hidden")
+        action = await tab.plan_click("#x")
+        start = len(session.sent)
+        await action.run()
+        return session, start
+
+    session, start = asyncio.run(_plan_run())
+    span = session.sent[start:]
+    kinds = [
+        p.get("type")
+        for m, p in zip(session.sent[start:], session.sent_params[start:], strict=True)
+        if m == "Input.dispatchMouseEvent"
+    ]
+    assert_true(
+        "Page.bringToFront" in span
+        and span.index("Page.bringToFront")
+        < next(i for i, m in enumerate(span) if m.startswith("Input.")),
+        f"run() raises the hidden tab before its press (sent {span!r})",
+    )
+    assert_eq(kinds, ["mousePressed", "mouseReleased"], "press still precedes release")
+    print("  ✓ plan_click().run(): raised before the press, press before release")
 
     async def _never_fronted(name: str):
         tab, session = _make_tab("hidden")
@@ -3555,8 +3584,12 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
         return
     h = _BridgeHarness(kernel)
     try:
+        # The handler opens a popup: a trusted click may, and the occluded
+        # fallback below must too (it runs under a CDP user gesture).
         tid = h.open_tab(
-            '<button id=tgt onclick="window.hit=(window.hit||0)+1">Buy</button>'
+            '<button id=tgt onclick="window.hit=(window.hit||0)+1;'
+            " const w = window.open('about:blank', '_blank');"
+            ' window.popped = (w !== null); if (w) w.close();">Buy</button>'
         )
         resp = h.tool("browser_click", {"target": tid, "selector": "#tgt"})
         first = content_text(resp).splitlines()[0]
@@ -3565,9 +3598,13 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
             f"receipt names the element hit (got {first!r})",
         )
         out = h.exec(
-            f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
+            f"_t = await browser.get({tid!r})\n"
+            "print('HIT', await _t.js('window.hit'), 'POPPED', await _t.js('window.popped'))"
         )
         assert_true("HIT 1" in out, f"and the click actually landed (got {out!r})")
+        assert_true(
+            "POPPED True" in out, f"a trusted click opens a popup (got {out!r})"
+        )
 
         h.exec(
             f"_t = await browser.get({tid!r})\n"
@@ -3590,9 +3627,17 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
             f"an occluded click falls back to element.click() (got {first!r})",
         )
         out = h.exec(
-            f"_t = await browser.get({tid!r})\nprint('HIT', await _t.js('window.hit'))"
+            f"_t = await browser.get({tid!r})\n"
+            "print('HIT', await _t.js('window.hit'), 'POPPED', await _t.js('window.popped'))"
         )
         assert_true("HIT 2" in out, f"and the fallback click landed (got {out!r})")
+        # Seen live: a Connect button under a reopened dropdown fell back to
+        # element.click(), and the session tab it opens came up as a blocked
+        # popup. The fallback now carries a user gesture, so it opens.
+        assert_true(
+            "POPPED True" in out,
+            f"the element.click() fallback's window.open is not popup-blocked (got {out!r})",
+        )
         # Modified clicks have no element.click() equivalent — they keep the
         # coordinate dispatch and the warning.
         out = h.exec(
@@ -3606,6 +3651,121 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
         )
         print(
             "  ✓ click receipts: named target; occlusion falls back to element.click()"
+        )
+    finally:
+        h.close()
+
+
+def phase_6_click_round_trips(kernel: Kernel) -> None:
+    """A warm `tab.click(selector)` is six awaited round trips, not eight.
+
+    Over a WAN every awaited hop is a full RTT, so the count is the latency.
+    The front probe (`document.visibilityState`) and the child-frame tree are
+    sent alongside the top frame's own resolve and answered in order by
+    Chrome, so the three share one hop. A batch here is a send issued while
+    nothing is pending; the 20 ms hold on the socket keeps an early answer
+    from splitting a pipelined pair, which would miscount on a fast local
+    Chrome without saying why.
+    """
+    if not _chrome_ready("phase 6 click round trips"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab(
+            '<button id=tgt onclick="window.hit=(window.hit||0)+1">Go</button>'
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "_bs = _t._session.browser_session\n"
+            "await _t.click('#tgt')  # cold: engine injection\n"
+            "_batches = []\n"
+            "_orig_once = _bs._execute_once\n"
+            "async def _counting(method, params=None, session_id=None, timeout=30):\n"
+            "    if not _bs._pending: _batches.append([])\n"
+            "    _batches[-1].append(method)\n"
+            "    return await _orig_once(method, params, session_id, timeout)\n"
+            "_orig_send = _bs._ws.send\n"
+            "async def _slow_send(payload):\n"
+            "    await asyncio.sleep(0.02); await _orig_send(payload)\n"
+            "_bs._execute_once = _counting\n"
+            "_bs._ws.send = _slow_send\n"
+            "try:\n"
+            "    await _t.click('#tgt')\n"
+            "finally:\n"
+            "    _bs._execute_once = _orig_once\n"
+            "    del _bs._ws.send\n"
+            "print('HIT', await _t.js('window.hit'))\n"
+            "print('BATCHES', len(_batches), _batches)\n"
+        )
+        assert_true("HIT 2" in out, f"both clicks landed (got {out!r})")
+        m = re.search(r"BATCHES (\d+) (\[.*\])", out)
+        assert_true(m is not None, f"the exec reported its batches (got {out!r})")
+        assert m is not None
+        n, batches = int(m.group(1)), ast.literal_eval(m.group(2))
+        assert_true(
+            n <= 6,
+            f"a warm click is at most 6 awaited round trips (got {n}: {batches})",
+        )
+        first = batches[0]
+        assert_true(
+            "Runtime.evaluate" in first
+            and "Page.getFrameTree" in first
+            and "Runtime.callFunctionOn" in first,
+            f"the front probe, frame tree and top-frame resolve share the first hop (got {first})",
+        )
+        print(
+            f"  ✓ warm click: {n} awaited round trips; probe + frame tree + resolve pipelined"
+        )
+    finally:
+        h.close()
+
+
+def phase_6_renderer_busy(kernel: Kernel) -> None:
+    """A page-served command that times out while the browser answers names
+    the page as the cause, and `tab.js(timeout=)` bounds the wait.
+
+    Seen live on web.teamviewer.com: its WebAssembly client froze the main
+    thread for 12-20 s after every load, and `tab.js()` had no shorter bound
+    and no way to say the page, not the connection, was stuck. Here a 3 s
+    spin stands in for the freeze.
+    """
+    if not _chrome_ready("phase 6 renderer busy"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab("<p>busy</p>")
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "await _t.js('setTimeout(() => { const e = performance.now();"
+            " while (performance.now() - e < 3000) {} }, 0)', await_promise=False)\n"
+            "await asyncio.sleep(0.1)\n"
+            "import time; _t0 = time.monotonic()\n"
+            "try:\n"
+            "    await _t.js('1', timeout=1)\n"
+            "    print('NO ERROR')\n"
+            "except TimeoutError as exc:\n"
+            "    print('ERR', type(exc).__name__, f'{time.monotonic() - _t0:.1f}', exc)\n"
+            "await asyncio.sleep(3)\n"
+            "print('AFTER', await _t.js('1 + 1'))\n"
+        )
+        assert_true(
+            "ERR RendererBusyError" in out,
+            f"a busy page raises RendererBusyError (got {out!r})",
+        )
+        assert_true(
+            "not responding" in out and "not the connection" in out,
+            f"the error blames the page's main thread (got {out!r})",
+        )
+        m = re.search(r"ERR RendererBusyError (\d+\.\d)", out)
+        assert_true(
+            m is not None and float(m.group(1)) < 2.5,
+            f"timeout=1 bounds the wait (got {out!r})",
+        )
+        assert_true(
+            "AFTER 2" in out, f"the page answers again once its spin ends (got {out!r})"
+        )
+        print(
+            "  ✓ busy renderer: timeout= bounds js(), RendererBusyError names the page"
         )
     finally:
         h.close()
