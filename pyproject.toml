@@ -61,3 +61,19 @@ extend-exclude = ["*.md"]
 # BLE001/S110/S112: housekeeping paths must never raise (see CLAUDE.md) —
 # broad excepts around channel pushes, sweeps, and teardown are the design.
 ignore = ["BLE001", "S110", "S112"]
+# Complexity ratchet: the sites flagged when it was enabled carry a `noqa`
+# each and are the burn-down list; a new one is refused at lint time.
+extend-select = ["C901", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.per-file-ignores]
+# A phase function is one subject's assertions in order; its length is the
+# subject's, and the ratchet is for the package.
+"tests/**" = ["C901", "PLR0912", "PLR0915"]
+"scripts/**" = ["C901", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-branches = 15
+max-statements = 60

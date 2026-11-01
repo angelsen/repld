@@ -885,7 +885,7 @@ class Bridge:
                 self._inflight.discard(rid)
             self._to_client(_error(rid, -32603, f"repld bridge internal error: {exc}"))
 
-    def _dispatch_client_line(self, line: str) -> None:
+    def _dispatch_client_line(self, line: str) -> None:  # noqa: C901, PLR0912
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:

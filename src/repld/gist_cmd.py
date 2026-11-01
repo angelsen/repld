@@ -237,7 +237,7 @@ def _fetch_gist(gist_id: str, timeout: float = 20.0) -> tuple[str, dict[str, str
     return meta.get("description") or "", files
 
 
-def _gist_fetch(argv: list[str]) -> int:
+def _gist_fetch(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915
     import datetime
 
     from . import gist_deps, gist_links
@@ -655,7 +655,7 @@ def _gist_lint(argv: list[str]) -> int:
     return 0
 
 
-def _gist_list(argv: list[str]) -> int:
+def _gist_list(argv: list[str]) -> int:  # noqa: C901, PLR0912
     from . import gist_links, peer_stub
     from . import gists as _gists
 

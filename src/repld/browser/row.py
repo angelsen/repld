@@ -199,7 +199,7 @@ def _parse_json(val: Any) -> Any:
         return None
 
 
-def _dict_from_har_entry(c: dict) -> dict:
+def _dict_from_har_entry(c: dict) -> dict:  # noqa: C901, PLR0912
     """Build a structured dict from a har_entries query result row."""
     d: dict[str, Any] = {
         "request": {

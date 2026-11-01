@@ -521,7 +521,7 @@ async def _handle_api(body: bytes) -> bytes:
         return json.dumps(_error(req_id, -32000, str(exc))).encode()
 
 
-async def _handle_connection(
+async def _handle_connection(  # noqa: C901, PLR0912
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     headers: dict[str, str] = {}

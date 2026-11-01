@@ -1303,7 +1303,7 @@ class CDPSession:
         )
         self._event_count += 1
 
-    def _handle_event(self, data: dict) -> None:
+    def _handle_event(self, data: dict) -> None:  # noqa: C901, PLR0912
         """Store event in DuckDB and dispatch Fetch handler if needed."""
         try:
             method = data.get("method", "")

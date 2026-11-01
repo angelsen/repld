@@ -497,7 +497,7 @@ async def compose_tree(
 # ---------------------------------------------------------------------------
 
 
-async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
+async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:  # noqa: C901, PLR0912, PLR0915
     """Hit-test (x, y) and return the local structure at that point.
 
     Picks the anchor to render from build_tree_sig's node map (one
@@ -1243,7 +1243,7 @@ def _dom_delta_line(rec: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def format_observation(obs: Observation) -> str:
+def format_observation(obs: Observation) -> str:  # noqa: C901, PLR0912
     """Render observation as plain text."""
     parts: list[str] = []
 
