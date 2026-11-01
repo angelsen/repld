@@ -311,6 +311,15 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   (3) normalise the ~20 helpers the 2026-11-01 burn-down added (11 lack docstrings; emit-verbs
   vary: `_print_*`, `_serve_*`, `_report_*`, `_render_*`), by hand, an hour. The shape after the
   burn-down, for reference: 1,146 functions, 13 over 80 lines, 2 over 150, 12 nested five deep.
+  Fredrik's observation closing the session: LLM code reads "almost compiled" (every branch
+  inline, helpers cut to satisfy a number, no narrative order, mechanism names). A ratchet
+  alone rewards that. So the house style states narrative order (happy path first, exits as
+  early returns at the top, rare case last; the body is the docstring's expansion) and the
+  `/burndown-complexity` judge rubric gains a read-aloud criterion: reject if a reader cannot
+  state what the function does from its body without opening the helpers, and ask what was
+  deleted, not only what was preserved. One more ratchet is worth adding with it: nesting
+  depth 4 (`PLR1702`, preview rule), 14 sites today; not return count, argument count, or
+  complexity 10 (16, 8 and 26 sites, each punishing a shape this codebase uses on purpose).
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
