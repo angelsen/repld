@@ -335,6 +335,21 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   and shape rules go into the judge prompt as how a diff is checked against it. Over-defensive
   Python is a documented LLM tell (arXiv 2409.19182, language-dependent), so "delete, don't
   guard" stays in the rubric.
+  Workflow outline for the full-project run (agreed 2026-11-01, not started): prerequisite is
+  the ten-line house style by hand. Unit is the module (65 files; the five over 1,500 lines
+  split by class or section, ~75 items). Four pipelined stages per item: measure (density,
+  median function length, missing docstrings, nesting sites, verb inventory; becomes the
+  brief), rewrite (Opus, own worktree; may add/fix docstrings, reorder into narrative order,
+  rename private helpers to house verbs, delete type-impossible guards, flatten with early
+  returns; may not change behaviour, public names, other files, or add structure; runs ruff,
+  basedpyright, phases 1-5 and the file's `--only` phase 6 cases), judge (Opus, cold, with the
+  house style and the restraint rubric; rejects behaviour drift, a lost invariant comment, a
+  signature-restating docstring, density out of line, a body not narratable without its
+  helpers), integrate (Sonnet, whole-worktree diffs in order, phases 1-5 per landing). Three
+  slices with a read between: core, browser, CLI+gists; the first corrects the house-style
+  text. Full suite and commit by hand per slice. Then ratchets to hold it: missing-public-
+  docstring rule and nesting depth 4, grandfathered at zero. Cost ~10M tokens over the three
+  slices at 2026-11-01 rates.
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
