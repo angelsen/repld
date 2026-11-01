@@ -31,6 +31,8 @@ _FORMATS = ("jpeg", "png")
 
 @dataclass(frozen=True, slots=True)
 class Frame:
+    """One decoded screencast frame with its Chrome metadata."""
+
     data: bytes  # the encoded image, already base64-decoded
     meta: dict[
         str, Any
@@ -46,6 +48,7 @@ class Screencast:
     def __init__(
         self, cdp: "CDPSession", handler: Handler, params: dict[str, Any]
     ) -> None:
+        """Bind a handler to `cdp` with the given `Page.startScreencast` params."""
         self._cdp = cdp
         self._handler = handler
         self.params = params
@@ -57,6 +60,7 @@ class Screencast:
 
     @property
     def active(self) -> bool:
+        """True while this stream is the registered screencast on its tab."""
         return self._cdp._screencast is self
 
     async def stop(self) -> None:
@@ -70,9 +74,11 @@ class Screencast:
             logger.debug("Page.stopScreencast: %s", exc)
 
     async def __aenter__(self) -> Self:
+        """Enter the async context, returning the stream itself."""
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
+        """Stop the stream on context exit."""
         await self.stop()
 
 
@@ -126,17 +132,19 @@ def on_frame(cdp: "CDPSession", params: dict[str, Any]) -> None:
     except Exception as exc:
         logger.debug("malformed screencast frame: %s", exc)
         return
-    bg.spawn(_deliver(sc, frame, ack_id), name="repld-screencast-frame")
+    bg.spawn(_serialize_frame(sc, frame, ack_id), name="repld-screencast-frame")
 
 
-async def _deliver(sc: Screencast, frame: Frame, ack_id: int) -> None:
+async def _serialize_frame(sc: Screencast, frame: Frame, ack_id: int) -> None:
+    """Acquire the turn lock so handler calls never overlap, then dispatch."""
     async with sc._turn:
         if not sc.active:
             return  # queued behind a handler when stop() ran
-        await _call(sc, frame, ack_id)
+        await _invoke_and_ack(sc, frame, ack_id)
 
 
-async def _call(sc: Screencast, frame: Frame, ack_id: int) -> None:
+async def _invoke_and_ack(sc: Screencast, frame: Frame, ack_id: int) -> None:
+    """Run the handler and ack the frame regardless of whether the handler raised."""
     try:
         result = sc._handler(frame)
         if inspect.isawaitable(result):

@@ -1,16 +1,17 @@
-"""Injected-engine lifecycle — Playwright's InjectedScript, one instance per document.
+"""Injected-engine lifecycle: Playwright's InjectedScript, one instance per document.
 
-The engine (injected_source.SOURCE) is evaluated lazily on first selector use:
-an isolated utility world when the page grants one, the main world when it
-refuses (`EngineHandle.world` records which). The cached handle is per-document
-*and* per-session — `Runtime.executionContextsCleared` (navigation) and
-`_reattach_core` (reconnect/reattach: objectIds die with their sessionId) both
-call `invalidate`, and any call that hits a stale-context error re-ensures and
-retries once, the same shape as `Tab._exec`.
+The engine (`injected_source.SOURCE`) is evaluated lazily on first selector
+use: an isolated utility world when the page grants one, the main world when
+it refuses (`EngineHandle.world` records which).  The cached handle is
+per-document *and* per-session: `Runtime.executionContextsCleared`
+(navigation) and `_reattach_core` (reconnect/reattach, since objectIds die
+with their sessionId) both call `invalidate`, and any call that hits a
+stale-context error re-ensures and retries once, the same shape as
+`Tab._exec`.
 
 aria-refs (`aria-ref=eN` from a `browser_tree` snapshot) live inside the LIVE
-engine instance, so every invalidation kills them — the resolve error tells the
-caller to take a fresh snapshot rather than reporting a bare miss.
+engine instance, so every invalidation kills them.  The resolve error tells
+the caller to take a fresh snapshot rather than reporting a bare miss.
 """
 
 import asyncio
@@ -27,15 +28,15 @@ if TYPE_CHECKING:
     from .tab import Tab
 
 # Unique per kernel so two repld kernels (or repld + Playwright) driving the
-# same Chrome never share a world — mirrors Playwright's per-guid world name.
+# same Chrome never share a world.  Mirrors Playwright's per-guid world name.
 UTILITY_WORLD = f"__repld_utility_{os.getpid()}"
 
 _RESOLVE_TIMEOUT_S = 2.0
 _ACTIONABLE_TIMEOUT_S = 2.0
 _POLL_S = 0.1
 
-# CDP error texts that mean the cached handle's context or object is gone —
-# navigation raced the call, or executionContextsCleared hasn't landed yet.
+# CDP error texts that mean the cached handle's context or object is gone:
+# navigation raced the call, or `executionContextsCleared` hasn't landed yet.
 _STALE_MARKERS = (
     "cannot find context with specified id",
     "execution context was destroyed",
@@ -49,61 +50,34 @@ class AmbiguousSelectorError(RuntimeError):
 
 
 class EngineUnavailable(RuntimeError):
-    """Neither injection tier works on this page — no selector-based actions."""
+    """Neither injection tier works on this page, so no selector-based actions are possible."""
 
 
 @dataclass(frozen=True, slots=True)
 class EngineHandle:
+    """A live reference to the InjectedScript instance in one frame's JS world."""
+
     object_id: str
     world: str  # "utility" | "main"
-    # The world's Runtime execution context — None for "main" (the page's
-    # default context, which DOM.resolveNode targets when omitted too).
-    # Needed to resolve a DOM.getNodeForLocation hit into an objectId this
-    # handle can accept: Runtime.callFunctionOn refuses an argument whose
+    # The world's Runtime execution context.  None for "main" (the page's
+    # default context, which `DOM.resolveNode` targets when omitted too).
+    # Needed to resolve a `DOM.getNodeForLocation` hit into an objectId this
+    # handle can accept: `Runtime.callFunctionOn` refuses an argument whose
     # objectId belongs to a different JS world than the target object's.
     context_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedElement:
+    """An element handle plus the frame it lives in and a disambiguation note."""
+
     object_id: str
     note: str  # "" or "N matches, 1 visible"
-    # None for the top frame, else the child frameId it resolved in — every
-    # call_engine() acting on this element must pass it back: Runtime.callFunctionOn
-    # refuses a receiver/argument pair from different JS worlds.
+    # None for the top frame, else the child frameId it resolved in.  Every
+    # `call_engine()` acting on this element must pass it back:
+    # `Runtime.callFunctionOn` refuses a receiver/argument pair from different
+    # JS worlds.
     frame_id: str | None = None
-
-
-def _bootstrap(frame_seq: int) -> str:
-    options = json.dumps(
-        {
-            "isUnderTest": False,
-            "sdkLanguage": "javascript",
-            "frameSeq": frame_seq,
-            "testIdAttributeName": "data-testid",
-            "stableRafCount": 1,
-            "browserName": "chromium",
-            "isUtilityWorld": True,
-            "customEngines": [],
-        }
-    )
-    # dom.ts:injectedScript() shape. With the builtin-free __export prefix,
-    # module.exports.InjectedScript is a lazy getter — hence the double call.
-    return (
-        "(() => { const module = {};\n"
-        + SOURCE
-        + f"\nreturn new (module.exports.InjectedScript())(globalThis, {options}); }})()"
-    )
-
-
-def invalidate(cdp: Any) -> None:
-    """Drop every cached engine handle; the next selector call re-instantiates."""
-    cdp._injected = {}
-
-
-def _is_stale(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(marker in msg for marker in _STALE_MARKERS)
 
 
 async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle:
@@ -111,8 +85,8 @@ async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle
 
     A child frame only gets the isolated-world tier: main-world fallback
     needs that frame's own default Runtime execution context, which requires
-    tracking `Runtime.executionContextCreated`/`auxData.frameId` — not done
-    here (v1). `grantUniveralAccess` on `Page.createIsolatedWorld` already
+    tracking `Runtime.executionContextCreated`/`auxData.frameId` (not done
+    here, v1).  `grantUniveralAccess` on `Page.createIsolatedWorld` already
     bypasses the JS same-origin restriction a main-world eval would hit
     anyway, so this covers the case that actually motivated it (a
     cross-origin same-process child) without that extra bookkeeping.
@@ -143,8 +117,8 @@ async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle
                 raise EngineUnavailable(
                     f"cannot inject selector engine into child frame {frame_id}"
                 ) from exc
-            # Tier 2, top frame only: same engine, main world. Semantics
-            # identical — only tamper-isolation is lost.
+            # Tier 2, top frame only: same engine, main world.  Semantics
+            # identical; only tamper-isolation is lost.
             context_id = None
         params: dict[str, Any] = {
             "expression": _bootstrap(cdp._frame_seq),
@@ -157,13 +131,13 @@ async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle
         except Exception as exc:
             raise EngineUnavailable(
                 f"cannot inject selector engine into {tab.url or tab.target_id}: "
-                f"{exc} — use tab.js() or coordinate click(x, y) on this page"
+                f"{exc}; use tab.js() or coordinate click(x, y) on this page"
             ) from exc
         if "exceptionDetails" in result or "objectId" not in result.get("result", {}):
             detail = result.get("exceptionDetails", {}).get("text", "no objectId")
             raise EngineUnavailable(
                 f"selector engine failed to evaluate on {tab.url or tab.target_id}: "
-                f"{detail} — use tab.js() or coordinate click(x, y) on this page"
+                f"{detail}; use tab.js() or coordinate click(x, y) on this page"
             )
         handle = EngineHandle(
             object_id=result["result"]["objectId"],
@@ -174,27 +148,32 @@ async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle
         return handle
 
 
-async def _child_frame_ids(tab: "Tab") -> list[str]:
-    """Every non-top frameId in this target's own frame tree, top-down.
+def _bootstrap(frame_seq: int) -> str:
+    """Build the JS expression that instantiates a fresh InjectedScript."""
+    options = json.dumps(
+        {
+            "isUnderTest": False,
+            "sdkLanguage": "javascript",
+            "frameSeq": frame_seq,
+            "testIdAttributeName": "data-testid",
+            "stableRafCount": 1,
+            "browserName": "chromium",
+            "isUtilityWorld": True,
+            "customEngines": [],
+        }
+    )
+    # dom.ts:injectedScript() shape.  With the builtin-free __export prefix,
+    # `module.exports.InjectedScript` is a lazy getter, hence the double call.
+    return (
+        "(() => { const module = {};\n"
+        + SOURCE
+        + f"\nreturn new (module.exports.InjectedScript())(globalThis, {options}); }})()"
+    )
 
-    Includes an OOPIF's frameId too — `Page.getFrameTree` lists it, but
-    `Page.createIsolatedWorld` on it simply fails (wrong process) and
-    `ensure_engine` turns that into a skip, same as observe.py's own
-    handling of OOPIFs met this way.
-    """
-    try:
-        ft = await tab._exec("Page.getFrameTree")
-    except Exception:
-        return []
-    ids: list[str] = []
 
-    def walk(node: dict) -> None:
-        for child in node.get("childFrames") or []:
-            ids.append(child["frame"]["id"])
-            walk(child)
-
-    walk(ft.get("frameTree", {}))
-    return ids
+def invalidate(cdp: Any) -> None:
+    """Drop every cached engine handle; the next selector call re-instantiates."""
+    cdp._injected = {}
 
 
 async def call_engine(
@@ -208,17 +187,16 @@ async def call_engine(
     timeout: float = 30,
     user_gesture: bool = False,
 ) -> dict:
-    """Runtime.callFunctionOn against `frame_id`'s engine handle (top frame
-    if None), re-ensuring once on staleness.
+    """`Runtime.callFunctionOn` against a frame's engine handle, re-ensuring once on staleness.
 
     `user_gesture` runs the call with transient user activation, as a trusted
     click would grant: what Chrome's popup blocker and autoplay policy check.
 
     `frame_id` must match the frame any `{"objectId": ...}` argument (e.g. a
-    ResolvedElement) was resolved in — the receiver and every objectId
+    `ResolvedElement`) was resolved in.  The receiver and every objectId
     argument must share one JS world.
 
-    `args` entries are CDP CallArguments ({"value": ...} or {"objectId": ...}).
+    `args` entries are CDP CallArguments (`{"value": ...}` or `{"objectId": ...}`).
     Returns the raw CDP response (caller inspects result/exceptionDetails).
     """
     handle = await ensure_engine(tab, frame_id)
@@ -242,12 +220,18 @@ async def call_engine(
         return await tab._exec("Runtime.callFunctionOn", params, timeout=timeout)
 
 
+def _is_stale(exc: Exception) -> bool:
+    """True when `exc` indicates a dead execution context or object handle."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _STALE_MARKERS)
+
+
 # The selection rule, applied to whichever selector in the fallback list
-# matches first. Visibility *ranks* candidates, it does not filter them: a
-# match that is present but invisible is still a match — apps routinely keep
-# the real control off-screen behind a styled proxy — so a single match is
+# matches first.  Visibility *ranks* candidates, it does not filter them: a
+# match that is present but invisible is still a match (apps routinely keep
+# the real control off-screen behind a styled proxy), so a single match is
 # used whether or not it is visible, and only genuine ambiguity (multiple
-# matches with no single visible winner) errors. `__repld_note` is an expando
+# matches with no single visible winner) errors.  `__repld_note` is an expando
 # on this world's element wrapper, so page JS can't see it from the utility
 # world; in the main-world tier it is visible but harmless.
 _RESOLVE_FN = """
@@ -280,10 +264,10 @@ async def resolve_element(
     timeout: float = _RESOLVE_TIMEOUT_S,
     defer_note: bool = False,
 ) -> ResolvedElement:
-    """Strict-resolve a repld selector to an element handle. Auto-waits.
+    """Strict-resolve a repld selector to an element handle, auto-waiting.
 
-    Raises AmbiguousSelectorError immediately on a strict-mode violation (the
-    hundredth poll would still be ambiguous), RuntimeError on not-found after
+    Raises `AmbiguousSelectorError` immediately on a strict-mode violation (the
+    hundredth poll would still be ambiguous), `RuntimeError` on not-found after
     the deadline.
     """
     return await resolve_engine_selectors(
@@ -295,6 +279,103 @@ async def resolve_element(
     )
 
 
+async def resolve_engine_selectors(
+    tab: "Tab",
+    selectors: list[str],
+    describe: str,
+    *,
+    timeout: float = _RESOLVE_TIMEOUT_S,
+    defer_note: bool = False,
+) -> ResolvedElement:
+    """`resolve_element` over already-translated engine selectors.
+
+    `describe` is the caller-facing name used in errors (the repld form, not
+    the engine spelling).
+
+    Searches the top frame plus every child frame (nested same-process
+    iframes included, at any depth).  The selector-fallback list is walked in
+    priority order, and for each entry every frame is checked before falling
+    back to the next entry, so a frame doesn't get to win on a lower-priority
+    spelling just because the top frame hasn't been asked yet.
+    """
+    selector = describe
+    deadline = asyncio.get_running_loop().time() + timeout
+    is_ref = selector.startswith("aria-ref=")
+    while True:
+        # aria-ref=eN only ever lived in the top frame's engine instance;
+        # `aria_snapshot()` doesn't cross frames either (see its docstring).
+        if is_ref:
+            child_ids: list[str] = []
+            first_top = await _match_in_frame(
+                tab, selectors[0], None, selector, defer_note=defer_note
+            )
+        else:
+            # One round trip for both: the frame tree is only needed once the
+            # top frame has been asked, and Chrome answers a session in order.
+            child_ids, first_top = await asyncio.gather(
+                _child_frame_ids(tab),
+                _match_in_frame(
+                    tab, selectors[0], None, selector, defer_note=defer_note
+                ),
+            )
+        frame_ids: list[str | None] = [None, *child_ids]
+        for i, sel in enumerate(selectors):
+            matches: list[ResolvedElement] = []
+            for frame_id in frame_ids:
+                if i == 0 and frame_id is None:
+                    outcome = first_top
+                else:
+                    outcome = await _match_in_frame(
+                        tab, sel, frame_id, selector, defer_note=defer_note
+                    )
+                if outcome is not None:
+                    matches.append(outcome)
+            if len(matches) > 1:
+                frames_desc = ", ".join(
+                    "top" if m.frame_id is None else m.frame_id for m in matches
+                )
+                raise AmbiguousSelectorError(
+                    f"{selector!r} is ambiguous: matched in more than one frame "
+                    f"({frames_desc})"
+                )
+            if matches:
+                return matches[0]
+        if is_ref:
+            # No point polling: a ref only ever resolves against the engine's
+            # last-generated snapshot, and waiting can't bring one back.
+            raise RuntimeError(
+                f"{selector} not found: refs are from the last browser_tree "
+                "snapshot and die on navigation/reattach; take a fresh snapshot"
+            )
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RuntimeError(f"Element not found: {selector}")
+        await asyncio.sleep(_POLL_S)
+
+
+async def _child_frame_ids(tab: "Tab") -> list[str]:
+    """Every non-top frameId in this target's own frame tree, top-down.
+
+    Includes an OOPIF's frameId too.  `Page.getFrameTree` lists it, but
+    `Page.createIsolatedWorld` on it simply fails (wrong process) and
+    `ensure_engine` turns that into a skip, same as observe.py's own
+    handling of OOPIFs met this way.
+    """
+    try:
+        ft = await tab._exec("Page.getFrameTree")
+    except Exception:
+        return []
+    ids: list[str] = []
+
+    def walk(node: dict) -> None:
+        """Collect child frameIds recursively."""
+        for child in node.get("childFrames") or []:
+            ids.append(child["frame"]["id"])
+            walk(child)
+
+    walk(ft.get("frameTree", {}))
+    return ids
+
+
 async def _match_in_frame(
     tab: "Tab",
     sel: str,
@@ -303,18 +384,18 @@ async def _match_in_frame(
     *,
     defer_note: bool = False,
 ) -> ResolvedElement | None:
-    """One selector against one frame. Returns a match or None (no match /
-    frame not injectable — same disposition as no match).
+    """One selector against one frame. Returns a match or None (no match,
+    or the frame is not injectable, which has the same disposition).
 
     A within-frame strict-mode violation raises immediately with the JS
     engine's own candidate digest, same as single-frame resolution always
-    has — cross-frame ambiguity (one clean match in each of two frames) is a
+    has.  Cross-frame ambiguity (one clean match in each of two frames) is a
     separate case the caller detects itself, since neither frame's call
     alone can see the other.
 
     A child frame failing to inject (an OOPIF's frameId, a frame that
     navigated away mid-search) is expected and skipped like a bare miss; the
-    top frame failing to inject is the page-wide EngineUnavailable case and
+    top frame failing to inject is the page-wide `EngineUnavailable` case and
     must propagate, or a genuinely uninjectable page reads as a 2s-late
     "not found" instead of the real error.
     """
@@ -352,89 +433,14 @@ async def _match_in_frame(
         "text", ""
     )
     if "strict mode violation" in desc:
-        raise AmbiguousSelectorError(
-            f"{describe!r} is ambiguous — {_strip_stack(desc)}"
-        )
+        raise AmbiguousSelectorError(f"{describe!r} is ambiguous: {_strip_stack(desc)}")
     if "repld:none" not in desc:
         raise RuntimeError(f"selector {sel!r} failed: {_strip_stack(desc)}")
     return None
 
 
-async def resolve_engine_selectors(
-    tab: "Tab",
-    selectors: list[str],
-    describe: str,
-    *,
-    timeout: float = _RESOLVE_TIMEOUT_S,
-    defer_note: bool = False,
-) -> ResolvedElement:
-    """resolve_element over already-translated engine selectors.
-
-    `describe` is the caller-facing name used in errors — the repld form, not
-    the engine spelling.
-
-    Searches the top frame plus every child frame (nested same-process
-    iframes included, at any depth) — the selector-fallback list is walked in
-    priority order, and for each entry every frame is checked before falling
-    back to the next entry, so a frame doesn't get to win on a lower-priority
-    spelling just because the top frame hasn't been asked yet.
-    """
-    selector = describe
-    deadline = asyncio.get_running_loop().time() + timeout
-    is_ref = selector.startswith("aria-ref=")
-    while True:
-        # aria-ref=eN only ever lived in the top frame's engine instance —
-        # aria_snapshot() doesn't cross frames either (see its docstring).
-        if is_ref:
-            child_ids: list[str] = []
-            first_top = await _match_in_frame(
-                tab, selectors[0], None, selector, defer_note=defer_note
-            )
-        else:
-            # One round trip for both: the frame tree is only needed once the
-            # top frame has been asked, and Chrome answers a session in order.
-            child_ids, first_top = await asyncio.gather(
-                _child_frame_ids(tab),
-                _match_in_frame(
-                    tab, selectors[0], None, selector, defer_note=defer_note
-                ),
-            )
-        frame_ids: list[str | None] = [None, *child_ids]
-        for i, sel in enumerate(selectors):
-            matches: list[ResolvedElement] = []
-            for frame_id in frame_ids:
-                if i == 0 and frame_id is None:
-                    outcome = first_top
-                else:
-                    outcome = await _match_in_frame(
-                        tab, sel, frame_id, selector, defer_note=defer_note
-                    )
-                if outcome is not None:
-                    matches.append(outcome)
-            if len(matches) > 1:
-                frames_desc = ", ".join(
-                    "top" if m.frame_id is None else m.frame_id for m in matches
-                )
-                raise AmbiguousSelectorError(
-                    f"{selector!r} is ambiguous — matched in more than one frame "
-                    f"({frames_desc})"
-                )
-            if matches:
-                return matches[0]
-        if is_ref:
-            # No point polling: a ref only ever resolves against the engine's
-            # last-generated snapshot, and waiting can't bring one back.
-            raise RuntimeError(
-                f"{selector} not found — refs are from the last browser_tree "
-                "snapshot and die on navigation/reattach; take a fresh snapshot"
-            )
-        if asyncio.get_running_loop().time() >= deadline:
-            raise RuntimeError(f"Element not found: {selector}")
-        await asyncio.sleep(_POLL_S)
-
-
 def _strip_stack(desc: str) -> str:
-    """First lines of a JS error description, without the '    at …' stack tail."""
+    """First lines of a JS error description, without the `    at ...` stack tail."""
     lines = [ln for ln in desc.splitlines() if not ln.lstrip().startswith("at ")]
     return "\n".join(lines).strip()
 
@@ -451,11 +457,11 @@ function(sels) { const injected = this;
 
 
 async def selector_exists(tab: "Tab", selector: str) -> bool:
-    """One-shot existence check — no strictness, no visibility, no waiting.
+    """One-shot existence check, no strictness, no visibility, no waiting.
 
     What `ready=` and `wait_for` poll on: "has it appeared", never "is it
-    unambiguous" — a ready signal that matched three nodes has still fired.
-    Checks every frame like resolve_element, so a `wait_for` immediately
+    unambiguous".  A ready signal that matched three nodes has still fired.
+    Checks every frame like `resolve_element`, so a `wait_for` immediately
     followed by a `click` on the same target agree on "found".
     """
     selectors = selector_mod.translate_fallbacks(selector)
@@ -466,8 +472,8 @@ async def selector_exists(tab: "Tab", selector: str) -> bool:
             )
         except EngineUnavailable:
             # Top frame: a genuinely uninjectable page, must propagate (as it
-            # did before frame search existed). Child frame: expected — an
-            # OOPIF's frameId, or one that navigated away mid-poll — skip it.
+            # did before frame search existed).  Child frame: expected (an
+            # OOPIF's frameId, or one that navigated away mid-poll); skip it.
             if frame_id is None:
                 raise
             continue
@@ -497,11 +503,11 @@ async def check_actionable(
 ) -> ResolvedElement:
     """Wait until the element passes every state check, or raise naming the miss.
 
-    checkElementStates resolves promptly per call ('stable' resolves after
-    stableRafCount same-position frames or false on movement — never
-    open-ended), so the wait bound lives here. Runs inside _ensure_front() and
-    collects its pending front probe first: the stable check counts
-    requestAnimationFrame, which Chrome throttles on hidden tabs.
+    `checkElementStates` resolves promptly per call (`stable` resolves after
+    `stableRafCount` same-position frames or false on movement, never
+    open-ended), so the wait bound lives here.  Runs inside `_ensure_front()`
+    and collects its pending front probe first: the stable check counts
+    `requestAnimationFrame`, which Chrome throttles on hidden tabs.
 
     Returns `el` with its `note` filled from a `defer_note` resolve.
     """
@@ -548,7 +554,7 @@ async def resolve_actionable(
     return await check_actionable(tab, el, states, selector=selector, **kw)
 
 
-# Pre-dispatch hit test: "what will this click land on" is the honest receipt —
+# Pre-dispatch hit test: "what will this click land on" is the honest receipt;
 # the post-dispatch DOM may already be re-rendered by the click's own handlers.
 _RECEIPT_FN = """
 function(target, x, y) {
@@ -572,42 +578,13 @@ function(target, x, y) {
 """
 
 
-_INTERNAL_SEGMENT = re.compile(
-    r'^internal:(role)=(\w+)\[name="(.*)"[si]?\]$'
-    r'|^internal:(text)="(.*)"[si]?$'
-    r'|^internal:(label)="(.*)"[si]?$'
-    r"|^internal:(?:testid|attr)=(\[.+\])$"
-)
-
-
-def _to_repld_selector(sel: str) -> str:
-    """Best-effort rewrite of a generated engine selector into repld grammar,
-    so a receipt's selector can be pasted straight back into click/type_text.
-    Chain segments that don't map (nth=, xpath=) are left in engine spelling —
-    honest beats reusable."""
-    parts = []
-    for seg in sel.split(" >> "):
-        m = _INTERNAL_SEGMENT.match(seg)
-        if m:
-            if m.group(1):
-                seg = f'role={m.group(2)}[name="{m.group(3)}"]'
-            elif m.group(4):
-                seg = f"text={m.group(5)}"
-            elif m.group(6):
-                seg = f"label={m.group(7)}"
-            else:
-                seg = m.group(8)
-        parts.append(seg)
-    return " >> ".join(parts)
-
-
 async def hit_receipt(tab: "Tab", el: ResolvedElement, x: float, y: float) -> dict:
-    """{related, target: {preview, sel}, hit: {preview, sel}|None} for (x, y).
+    """`{related, target: {preview, sel}, hit: {preview, sel}|None}` for (x, y).
 
-    (x, y) come from DOM.getContentQuads and are top-frame-viewport-relative;
+    (x, y) come from `DOM.getContentQuads` and are top-frame-viewport-relative;
     `elementFromPoint` inside a child frame's own document wants coordinates
     relative to *that* frame instead, which would need each ancestor
-    iframe's own offset composed in — not done here, so a child-frame
+    iframe's own offset composed in.  Not done here, so a child-frame
     element skips the hit test and is trusted outright, same as the existing
     default below for a hit test that errors.
     """
@@ -631,8 +608,40 @@ async def hit_receipt(tab: "Tab", el: ResolvedElement, x: float, y: float) -> di
     return value
 
 
+_INTERNAL_SEGMENT = re.compile(
+    r'^internal:(role)=(\w+)\[name="(.*)"[si]?\]$'
+    r'|^internal:(text)="(.*)"[si]?$'
+    r'|^internal:(label)="(.*)"[si]?$'
+    r"|^internal:(?:testid|attr)=(\[.+\])$"
+)
+
+
+def _to_repld_selector(sel: str) -> str:
+    """Best-effort rewrite of a generated engine selector into repld grammar,
+    so a receipt's selector can be pasted straight back into `click`/`type_text`.
+    Chain segments that don't map (`nth=`, `xpath=`) are left in engine spelling;
+    honest beats reusable.
+    """
+    parts = []
+    for seg in sel.split(" >> "):
+        m = _INTERNAL_SEGMENT.match(seg)
+        if not m:
+            parts.append(seg)
+            continue
+        if m.group(1):
+            seg = f'role={m.group(2)}[name="{m.group(3)}"]'
+        elif m.group(4):
+            seg = f"text={m.group(5)}"
+        elif m.group(6):
+            seg = f"label={m.group(7)}"
+        else:
+            seg = m.group(8)
+        parts.append(seg)
+    return " >> ".join(parts)
+
+
 async def aria_snapshot(tab: "Tab") -> str:
-    """Playwright ariaSnapshot in 'ai' mode — YAML with [ref=…] handles."""
+    """Playwright `ariaSnapshot` in 'ai' mode: YAML with `[ref=...]` handles."""
     result = await call_engine(
         tab,
         "function() { return this.ariaSnapshot(this.document.documentElement,"
@@ -648,14 +657,14 @@ async def aria_snapshot(tab: "Tab") -> str:
 async def scoped_aria_snapshot(tab: "Tab", backend_node_id: int) -> str:
     """ariaSnapshot rooted at one DOM node instead of the whole document.
 
-    For turning a DOM.getNodeForLocation hit into a real, click-able [ref=…]
-    handle: resolves the backend node into the engine's own world first
-    (DOM.resolveNode's default target is the main-world context, which
-    Runtime.callFunctionOn rejects as an argument when the engine itself is
-    in the isolated utility world — confirmed live: "Argument should belong
-    to the same JavaScript world as target object") — the same ariaSnapshot
-    call aria_snapshot() makes, just scoped, so refs land in the same live
-    map and resolve via aria-ref=eN exactly like a full-page snapshot's.
+    For turning a `DOM.getNodeForLocation` hit into a real, click-able
+    `[ref=...]` handle: resolves the backend node into the engine's own world
+    first (`DOM.resolveNode`'s default target is the main-world context, which
+    `Runtime.callFunctionOn` rejects as an argument when the engine itself is
+    in the isolated utility world, confirmed live: "Argument should belong
+    to the same JavaScript world as target object").  The same `ariaSnapshot`
+    call `aria_snapshot()` makes, just scoped, so refs land in the same live
+    map and resolve via `aria-ref=eN` exactly like a full-page snapshot's.
     """
     handle = await ensure_engine(tab)
     params: dict[str, Any] = {"backendNodeId": backend_node_id}
@@ -677,6 +686,7 @@ async def scoped_aria_snapshot(tab: "Tab", backend_node_id: int) -> str:
 
 
 async def read_value(tab: "Tab", el: ResolvedElement) -> str:
+    """Read the current `value` (inputs) or `textContent` (everything else)."""
     result = await call_engine(
         tab,
         "function(el) { if ('value' in el) return String(el.value);"
@@ -687,7 +697,7 @@ async def read_value(tab: "Tab", el: ResolvedElement) -> str:
     return result.get("result", {}).get("value") or ""
 
 
-# The native-setter fallback for framework-controlled inputs. Works from the
+# The native-setter fallback for framework-controlled inputs.  Works from the
 # utility world *because* worlds don't share instance-level property
 # descriptors: React's _valueTracker patch lives on the main world's wrapper
 # and is invisible here, so this reaches the pristine prototype accessor; the
@@ -714,6 +724,7 @@ function(el, text) {
 
 
 async def set_value_native(tab: "Tab", el: ResolvedElement, text: str) -> None:
+    """Set the element's value through the pristine prototype setter, bypassing frameworks."""
     await call_engine(
         tab,
         _SET_VALUE_FN,
@@ -722,7 +733,7 @@ async def set_value_native(tab: "Tab", el: ResolvedElement, text: str) -> None:
     )
 
 
-# Same prototype-setter rationale as _SET_VALUE_FN, for <select>.
+# Same prototype-setter rationale as `_SET_VALUE_FN`, for `<select>`.
 _SELECT_NATIVE_FN = """
 function(el, option) {
   const win = el.ownerDocument.defaultView;
@@ -742,7 +753,7 @@ function(el, option) {
 
 
 async def select_native(tab: "Tab", el: ResolvedElement, option: str) -> dict:
-    """Set a native <select> by option label (else value). {ok} or {ok: False, options}."""
+    """Set a native `<select>` by option label (else value). `{ok}` or `{ok: False, options}`."""
     result = await call_engine(
         tab,
         _SELECT_NATIVE_FN,
@@ -755,10 +766,12 @@ async def select_native(tab: "Tab", el: ResolvedElement, option: str) -> dict:
 async def list_option_names(
     tab: "Tab", limit: int = 20, *, frame_id: str | None = None
 ) -> list[str]:
-    """Accessible names of the visible role=option elements — the digest that
-    makes a select_option miss actionable. `frame_id`: the frame the
-    dropdown's trigger element resolved in, since that's where its listbox
-    renders too."""
+    """Accessible names of the visible `role=option` elements.
+
+    The digest that makes a `select_option` miss actionable.  `frame_id`:
+    the frame the dropdown's trigger element resolved in, since that's where
+    its listbox renders too.
+    """
     result = await call_engine(
         tab,
         "function(limit) { const injected = this;"
@@ -773,12 +786,12 @@ async def list_option_names(
     return result.get("result", {}).get("value") or []
 
 
-# Observation DOM watch. The AX diff misses purely presentational reveals
-# (SVG ports mounting on hover render no AX nodes), so pre_observe arms a
-# MutationObserver and post_observe reads it back when the AX diff came up
-# empty. Lives on this world's globalThis: in the utility-world tier the page
-# can't see or tamper with it, and it dies with the document — a navigation
-# between arm and read simply reads back null.
+# Observation DOM watch.  The AX diff misses purely presentational reveals
+# (SVG ports mounting on hover render no AX nodes), so `pre_observe` arms a
+# `MutationObserver` and `post_observe` reads it back when the AX diff came up
+# empty.  Lives on this world's `globalThis`: in the utility-world tier the
+# page can't see or tamper with it, and it dies with the document.  A
+# navigation between arm and read simply reads back null.
 _DOM_WATCH_START = """
 function() {
   const w = globalThis;
@@ -818,7 +831,7 @@ function() {
 
 
 async def start_dom_watch(tab: "Tab") -> bool:
-    """Arm the observation DOM watch. False when the engine can't inject."""
+    """Arm the observation DOM watch.  False when the engine can't inject."""
     try:
         result = await call_engine(tab, _DOM_WATCH_START, [])
     except Exception:
@@ -827,7 +840,7 @@ async def start_dom_watch(tab: "Tab") -> bool:
 
 
 async def read_dom_watch(tab: "Tab") -> dict | None:
-    """{added, removed, samples} recorded since start_dom_watch, or None."""
+    """`{added, removed, samples}` recorded since `start_dom_watch`, or None."""
     try:
         result = await call_engine(tab, _DOM_WATCH_READ, [])
     except Exception:

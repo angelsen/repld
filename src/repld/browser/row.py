@@ -10,6 +10,7 @@ __all__ = ["Row", "Rows"]
 
 
 def size_str(size_bytes: int) -> str:
+    """Format a byte count as a compact `NB` or `N.NKB` string."""
     if size_bytes < 1024:
         return f"{size_bytes}B"
     return f"{size_bytes / 1024:.1f}KB"
@@ -19,8 +20,8 @@ def size_str(size_bytes: int) -> str:
 class Row:
     """A row from a HAR or console query."""
 
-    # Discriminator — one of "network", "console", "sse", "lifecycle", set by
-    # the corresponding _row_from_* factory.
+    # Discriminator: one of "network", "console", "sse", "lifecycle", set by
+    # the corresponding `_row_from_*` factory.
     kind: str = ""
 
     # HAR fields (network rows)
@@ -77,13 +78,14 @@ class Row:
         return self._session.fetch_body(self.request_id)
 
     def __repr__(self) -> str:
+        """One-line summary, format varies by `kind`."""
         if self.kind == "network":
             size_fmt = size_str(self.size) if self.size else "0B"
             time_str = f"{self.time_ms}ms" if self.time_ms is not None else "?"
             rid = f" rid={self.request_id}" if self.request_id else ""
             return f"<Request {self.method} {self.url} -> {self.status} ({time_str}, {size_fmt}){rid}>"
         if self.kind == "console":
-            text = self.text if len(self.text) <= 200 else self.text[:200] + "…"
+            text = self.text if len(self.text) <= 200 else self.text[:200] + "..."
             loc = ""
             if self.stack_url:
                 loc = f" @ {self.stack_url}"
@@ -93,7 +95,7 @@ class Row:
         if self.kind == "sse":
             data = self.data or ""
             if len(data) > 200:
-                data = data[:200] + "…"
+                data = data[:200] + "..."
             name = f" {self.event_name}" if self.event_name else ""
             return f"<SSE{name}: {data}>"
         if self.kind == "lifecycle":
@@ -105,13 +107,14 @@ class Rows(list):
     """List subclass with one-entry-per-line repr for grep-friendly spill files."""
 
     def __repr__(self) -> str:
+        """Newline-separated repr of each element, or `[]` when empty."""
         if not self:
             return "[]"
         return "\n".join(repr(r) for r in self)
 
 
 def _row_from_har(c: dict, session: CDPSession) -> Row:
-    """Build a Row from a har_summary query result row."""
+    """Build a `Row` from a `har_summary` query result row."""
     return Row(
         kind="network",
         id=c["id"] or 0,
@@ -142,7 +145,7 @@ def _row_from_har(c: dict, session: CDPSession) -> Row:
 
 
 def _row_from_console(c: dict, session: CDPSession) -> Row:
-    """Build a Row from a console_entries query result row."""
+    """Build a `Row` from a `console_entries` query result row."""
     return Row(
         kind="console",
         id=c["id"] or 0,
@@ -159,7 +162,7 @@ def _row_from_console(c: dict, session: CDPSession) -> Row:
 
 
 def _row_from_sse(c: dict, session: CDPSession) -> Row:
-    """Build a Row from an sse_entries query result row."""
+    """Build a `Row` from an `sse_entries` query result row."""
     return Row(
         kind="sse",
         id=c["id"] or 0,
@@ -174,7 +177,7 @@ def _row_from_sse(c: dict, session: CDPSession) -> Row:
 
 
 def _row_from_lifecycle(c: dict, session: CDPSession) -> Row:
-    """Build a Row from a lifecycle_entries query result row."""
+    """Build a `Row` from a `lifecycle_entries` query result row."""
     return Row(
         kind="lifecycle",
         id=c["id"] or 0,
@@ -187,47 +190,8 @@ def _row_from_lifecycle(c: dict, session: CDPSession) -> Row:
     )
 
 
-def _parse_json(val: Any) -> Any:
-    """Parse a JSON string into a dict/list, or return None."""
-    if val is None:
-        return None
-    if isinstance(val, (dict, list)):
-        return val
-    try:
-        return json.loads(val)
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-def _enrich_request(c: dict, req: dict[str, Any]) -> None:
-    """Add headers, postData and cookies from the raw entry to *req*."""
-    req_headers = _parse_json(c["request_headers"])
-    if req_headers:
-        req["headers"] = req_headers
-    if c["post_data"]:
-        req["postData"] = c["post_data"]
-    req_cookies = _parse_json(c["request_cookies"])
-    if req_cookies:
-        req["cookies"] = req_cookies
-
-
-def _build_initiator(c: dict) -> dict[str, Any] | None:
-    """Build the initiator sub-dict, or None when the entry has no initiator."""
-    init_type = c["initiator_type"]
-    if not init_type:
-        return None
-    initiator: dict[str, Any] = {"type": init_type}
-    if c["initiator_url"]:
-        initiator["url"] = c["initiator_url"]
-    if c["initiator_function"]:
-        initiator["function"] = c["initiator_function"]
-    if c["initiator_line"]:
-        initiator["line"] = c["initiator_line"]
-    return initiator
-
-
 def _dict_from_har_entry(c: dict) -> dict:
-    """Build a structured dict from a har_entries query result row."""
+    """Build a structured dict from a `har_entries` query result row."""
     d: dict[str, Any] = {
         "request": {
             "method": c["method"] or "",
@@ -271,7 +235,7 @@ def _dict_from_har_entry(c: dict) -> dict:
     if c["csrf_token_header"]:
         d["csrf_token_header"] = c["csrf_token_header"]
 
-    # Navigation correlation — "which requests belong to this navigation".
+    # Navigation correlation, identifying which requests belong to this navigation.
     if c["loader_id"]:
         d["loader_id"] = c["loader_id"]
     if c["frame_id"]:
@@ -289,3 +253,42 @@ def _dict_from_har_entry(c: dict) -> dict:
         d["initiator"] = initiator
 
     return d
+
+
+def _parse_json(val: Any) -> Any:
+    """Parse a JSON string into a dict/list, or return None on failure."""
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return val
+    try:
+        return json.loads(val)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _enrich_request(c: dict, req: dict[str, Any]) -> None:
+    """Add headers, `postData` and cookies from the raw entry to *req*."""
+    req_headers = _parse_json(c["request_headers"])
+    if req_headers:
+        req["headers"] = req_headers
+    if c["post_data"]:
+        req["postData"] = c["post_data"]
+    req_cookies = _parse_json(c["request_cookies"])
+    if req_cookies:
+        req["cookies"] = req_cookies
+
+
+def _build_initiator(c: dict) -> dict[str, Any] | None:
+    """Build the initiator sub-dict, or None when the entry has no initiator."""
+    init_type = c["initiator_type"]
+    if not init_type:
+        return None
+    initiator: dict[str, Any] = {"type": init_type}
+    if c["initiator_url"]:
+        initiator["url"] = c["initiator_url"]
+    if c["initiator_function"]:
+        initiator["function"] = c["initiator_function"]
+    if c["initiator_line"]:
+        initiator["line"] = c["initiator_line"]
+    return initiator
