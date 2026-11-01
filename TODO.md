@@ -284,20 +284,31 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   Shape measured 2026-11-01: 65 files, 32,620 lines, 1,123 functions, 18 over 80 lines, 3 over
   150, 13 nested five deep or more. The 8 carry a `noqa` each, new ones are refused, `tests/`
   and `scripts/` are exempt.
-- [ ] **Burn down the 8 `noqa`'d functions, one per change**, each run against the phase that
-  covers it, invariant comments preserved. Predictable shapes: early returns in the five-deep
-  handlers, a dispatch table for `cdp._handle_event` and `session._handle_browser_event`, the
-  190-line `CDPSession.__init__` grouped into state objects. A fan-out fits (one site per
-  worktree, independent judge, serial integration, the devstack dispatch recipe), but the
-  smoketest must not run in parallel across worktrees: phase 6 needs a Chrome and a few hundred
-  MB each, and a full run was killed for memory in session eca05ee1. `help.py` (2,878 lines,
-  mostly doc text) could move its constants to their own module; a `tab.py` (2,449) split is a
-  design decision, not a cleanup.
+- [x] **Burn down the 8 `noqa`'d functions.** Done in 9fb478b2 (gist_cmd x2, dashboard, bridge)
+  and 97321cae (row, observe x2, cdp) by the `burndown-complexity` workflow: one agent per
+  function in its own worktree, a cold judge per diff (behaviour identical, invariant comments
+  kept), one integrator applying accepted diffs serially with phases 1-5 per landing, no commits
+  from agents, phases 1-19 run by hand once per slice. Browser slice ran two workers at a time
+  with `--only` phase 6 cases (one Chrome each). `seeded_tree` had no test; its worker wrote
+  `phase_6_seeded_tree` against the original first. No `noqa: C901` remains in `src/repld`.
+  Lesson for the next run: the integrator brief must say "apply the worktree's whole diff", not
+  the one source file, or an authored test stays behind in the worktree. Script kept at the
+  session's workflows dir; worth saving as `/burndown` when the ratchet next catches something.
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
-- [ ] **py-spy on the kernel during `--phase 6`** before any speed work. Not Tachyon (venv is
-  3.12). Expect the profile to show waiting, not CPU.
+- [x] **py-spy on the kernel, done 2026-11-01, result: waiting, not CPU.** Recipe that works:
+  `uvx py-spy record --subprocesses --duration 180 --rate 100 --format raw -o X -- uv run
+  tests/smoketest.py --only phase_6_observation_diff --phase 6` (py-spy must be the harness's
+  ancestor: `ptrace_scope` is 1, so a live kernel's pid cannot be attached without sudo; the
+  harness spawns the kernel with Popen, so `--subprocesses` reaches it). A full `--phase 6`
+  under py-spy at 200 Hz blew a 15-minute budget inside phase 5, so profile one case. Result,
+  78 on-CPU samples, 72 in the kernel: `network_delta`'s DuckDB view query in its
+  `to_thread` worker (11, already off-loop by design), `_handle_event` -> `store_event` (6, the
+  per-event insert on the loop), `scan_deps` AST parse at boot (5), duckdb import (4), websocket
+  frame encode (3), `json.dumps` (2); no hot spot. The achieved sample rate under
+  `--subprocesses` is far below 100 Hz, so these are proportions, not CPU percentages. Nothing
+  here justifies a speed item; the round-trip count stays the only lever.
 
 ## Testing gaps
 
