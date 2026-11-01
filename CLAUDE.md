@@ -39,6 +39,21 @@ rebuilding, and re-running the phase-6 browser tests.
 
 No CI configured yet. If you add any, update this file.
 
+## House style
+
+The readability judge (`.claude/workflows/readability.js`) checks these; lint holds the two a tool can measure (`D101`/`D102`/`D103`, `PLR1702` at depth 4). `scripts/style-measure.py FILE` reports a module's densities, lengths, missing docstrings, nesting sites and helper verbs; `--bodies` hashes each function's code with its docstring stripped, so a diff of two runs names the functions whose behaviour could have changed.
+
+1. Signatures are fully typed, parameters and return. A docstring never restates them.
+2. Every module-level function, class and public method has a prose docstring whose first line states the contract (what the caller gets, or what must hold), not the name rephrased. No `Args:`/`Returns:` sections.
+3. Comments state invariants, workarounds and why the counter-intuitive is correct, nothing else. Never what the code does, never what changed.
+4. A body reads top down: refusals and trivial exits first as early returns, then the happy path, the rare case last. A reader states what the function does from its body without opening the helpers. Nesting stops at depth 4; flatten with an early return or `continue` before extracting.
+5. A module reads top down too: docstring, imports, constants, the public surface in the order the module docstring tells it, each private helper after its first caller.
+6. A helper exists for a unit a reader wants a name for, never to satisfy a number. Its name is verb-first and says what it decides or produces.
+7. House verbs, one meaning each: `resolve` (name to object), `ensure` (idempotent setup), `build` (compose a value), `parse` (text to value), `render` (to ANSI or markup), `format` (to plain text), `print` (stdout for a human), `push` (a channel message), `emit` (an event log entry), `handle`/`on_` (an incoming event), `is_`/`has_` (predicate), `check` (verify, raising or reporting), `sweep`/`prune` (cleanup), `spawn`/`start`/`stop` (a process or task).
+8. Delete, don't guard: no check for a state the annotations make impossible, no `try` around a path that cannot raise. Match the module's defensiveness; a guard the siblings lack is hedging.
+9. No structure for a use case that has not arrived: no base class, registry, hook or option with one user.
+10. ASCII only in code, strings, comments and docstrings. No em dashes.
+
 ## Releasing
 
 Published to PyPI as `repld-tool`. Manual, no CI. The local `uv` is a wrapper
@@ -65,7 +80,7 @@ README changed since `gh-pages`' last deploy, finish the release with
 
 ## Testing
 
-`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 19). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`), as a list of per-subject functions off one `phase_N_*` entry point sharing one `Bridge`. Use `harness.py`'s `Bridge.exec()`/`content_text()` for exec cells rather than another hand-built `tools/call exec` dict, and `wait_notification(..., where=...)` to narrow past the notification stash whenever more than one ticker/gate/task in the phase could push the same `kind=` — an unfiltered wait can silently return an earlier scenario's push instead of the one under test.
+`tests/smoketest.py` is the entire test suite — no pytest setup. It starts a real kernel + bridge subprocess and drives MCP JSON-RPC over stdio. `--phase N` runs phases 1..N (default 3, current ceiling 19); `--phases 1-5,17` runs an explicit set, for a change whose coverage sits in one late phase (a Chrome is started only when 6 is in the set). When you add a feature, extend a phase rather than introducing a separate harness. Each phase lives in its own file under `tests/phases/` (e.g. `core.py`, `channels.py`, `defer.py`), as a list of per-subject functions off one `phase_N_*` entry point sharing one `Bridge`. Use `harness.py`'s `Bridge.exec()`/`content_text()` for exec cells rather than another hand-built `tools/call exec` dict, and `wait_notification(..., where=...)` to narrow past the notification stash whenever more than one ticker/gate/task in the phase could push the same `kind=` — an unfiltered wait can silently return an earlier scenario's push instead of the one under test.
 
 Phases:
 - **2:** Pure logic called directly, no kernel (`tests/phases/pure.py`) — gate coercion, `_split_answer`, `_make_preview`, `render.py`, `_format_args`. New pure functions get their cases here, not an end-to-end route.

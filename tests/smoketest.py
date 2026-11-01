@@ -4,7 +4,7 @@ Starts a kernel in a tempdir, opens a bridge subprocess, drives MCP JSON-RPC
 over its stdio, verifies responses. Grows phase-by-phase alongside the
 implementation.
 
-Usage:  uv run tests/smoketest.py [--phase N]
+Usage:  uv run tests/smoketest.py [--phase N | --phases 1-5,17]
 """
 
 import argparse
@@ -269,20 +269,47 @@ PHASES = {
 }
 
 
+def parse_phases(spec: str) -> set[int]:
+    """The phase numbers a `--phases` spec names: comma-separated numbers and
+    `A-B` ranges, each a registered phase."""
+    chosen: set[int] = set()
+    for part in spec.split(","):
+        lo, _, hi = part.strip().partition("-")
+        chosen.update(range(int(lo), int(hi or lo) + 1))
+    # Phase 1 is the kernel boot every run performs; it has no entry.
+    chosen.discard(1)
+    unknown = chosen - set(PHASES)
+    if unknown:
+        raise SystemExit(f"--phases: unknown phase(s) {sorted(unknown)}")
+    return chosen
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--phase", type=int, default=3, help="highest phase to run (ceiling: 19)"
     )
     ap.add_argument(
+        "--phases",
+        metavar="SET",
+        help="explicit phase set, e.g. 1-5,17; overrides --phase. Later phases"
+        " run on a fresh kernel either way, but one that assumes an earlier"
+        " phase's state is a bug in the phase, not in this flag",
+    )
+    ap.add_argument(
         "--only",
         metavar="NAME",
-        help="run just this function from tests/phases/browser.py (needs --phase 6)",
+        help="run just this function from tests/phases/browser.py on its own Chrome",
     )
     ap.add_argument(
         "--repeat", type=int, default=1, help="with --only: run it N times (flake hunt)"
     )
     args = ap.parse_args()
+    selected = (
+        parse_phases(args.phases)
+        if args.phases
+        else {p for p in PHASES if p <= args.phase}
+    )
 
     tmp = Path(tempfile.mkdtemp(prefix="repld-smoketest-"))
     kernel = None
@@ -293,7 +320,7 @@ def main() -> int:
         # the kernel subprocess only reads REPLD_CHROME_PORT from the
         # environment it inherits at launch. Skipped below phase 6, which is
         # the only phase that touches a browser at all.
-        if args.phase >= 6:
+        if 6 in selected or args.only:
             chrome = ThrowawayChrome()
             if chrome.start():
                 os.environ["REPLD_CHROME_PORT"] = str(chrome.port)
@@ -316,9 +343,7 @@ def main() -> int:
                 getattr(browser_phases, args.only)(kernel)
                 print(f"== {args.only} run {i + 1}/{args.repeat} ok ==")
             return 0
-        for p in sorted(PHASES):
-            if p > args.phase:
-                break
+        for p in sorted(selected):
             print(f"== phase {p} ==")
             PHASES[p](kernel)
         print("== all phases passed ==")
