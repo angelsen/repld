@@ -320,6 +320,21 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   deleted, not only what was preserved. One more ratchet is worth adding with it: nesting
   depth 4 (`PLR1702`, preview rule), 14 sites today; not return count, argument count, or
   complexity 10 (16, 8 and 26 sites, each punishing a shape this codebase uses on purpose).
+  Researched 2026-11-01 ("dig it", notes under docduty memory "the 2026 answer to which code
+  style for AI-written code"): no new style guide exists; PEP 8 and Google's are unchanged. What
+  emerged is operational rubrics for AI-written diffs, the best being claude-clarity's
+  `code-restraint`: measure the host file first (comment density, median function length,
+  existing helpers), then match it; shape rules (3x the median means a helper is missing; match
+  the file's defensiveness, a guard the siblings lack is hedging; no structure for a use case
+  that has not arrived; match the naming register) and comment rules (above or below the code's
+  altitude, never at it; describe the code not the change; a comment arguing with a reviewer
+  belongs in the PR). Its baseline test says a Python file near 1.0 comment/code is
+  machine-written and must not be matched; `src/repld` measures 0.12 `#`/code, 0.22
+  docstring/code, 0.33 combined, so the house style is human idiom and matching it is right.
+  Adopt: the ten-line house style says what the style is; the restraint rubric's measurement
+  and shape rules go into the judge prompt as how a diff is checked against it. Over-defensive
+  Python is a documented LLM tell (arXiv 2409.19182, language-dependent), so "delete, don't
+  guard" stays in the rubric.
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
