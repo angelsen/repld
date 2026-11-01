@@ -294,6 +294,23 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   Lesson for the next run: the integrator brief must say "apply the worktree's whole diff", not
   the one source file, or an authored test stays behind in the worktree. Script kept at the
   session's workflows dir; worth saving as `/burndown` when the ratchet next catches something.
+- [ ] **House style, written down and ratcheted (brainstorm 2026-11-01, tail of session
+  fc824213; measured, not started).** No external guide: Google/NumPy docstring styles are built
+  on `Args:`/`Returns:` sections and the package has 1 of those in 743 docstrings; the rest are
+  prose stating the contract or the why. Measured adherence in `src/repld`: return annotations
+  98% public / 91% private; docstrings 75% public (about 127 missing) / 62% private; comments
+  reserved for invariants. A workflow could rewrite everything to an external style in an
+  afternoon and would make it worse: boilerplate restating the annotations, every real diff
+  buried in blame churn. Instead, in order: (1) ten lines in CLAUDE.md naming the house style
+  (fully typed signatures; a prose docstring on every module-level function whose first line
+  states the contract, not the name; comments for invariants only; early return over nesting;
+  one verb per idea with the house verbs listed), by hand; (2) a docstring ratchet like the
+  complexity one: ruff's missing-public-docstring rule, the ~127 current sites grandfathered,
+  burned down by `/burndown-complexity`'s shape with one agent per module and a judge that
+  rejects a docstring restating the signature, public functions first, private left alone;
+  (3) normalise the ~20 helpers the 2026-11-01 burn-down added (11 lack docstrings; emit-verbs
+  vary: `_print_*`, `_serve_*`, `_report_*`, `_render_*`), by hand, an hour. The shape after the
+  burn-down, for reference: 1,146 functions, 13 over 80 lines, 2 over 150, 12 nested five deep.
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
