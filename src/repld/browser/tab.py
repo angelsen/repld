@@ -2083,8 +2083,9 @@ class Tab(TabQueryMixin):
     async def expect_auth(self, username: str, password: str) -> str:
         """Pre-arm credentials for the next HTTP Basic/Digest auth challenge
         on this tab. One-shot: consumed by the next Fetch.authRequired, then
-        reverts to cancelling the challenge outright. Only fires on a tab
-        with Fetch enabled (get()/open(), or explicit capture) — see
+        reverts to the claim rule (cancelled inside an agent action or on a
+        taken tab, Chrome's own prompt otherwise). Only fires on a tab with
+        Fetch enabled (get()/open(), or explicit capture) — see
         `cdp._handle_auth`.
         """
         self._session._auth_policy = {"username": username, "password": password}

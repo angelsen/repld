@@ -365,7 +365,7 @@ infinite scroll.
   claiming means acting (changes CLAUDE.md and the help topic wording). Fixes 1, 2, 6, 7 of
   the same review are applied (`action()` origin restore + intercept exit, `pin_lost`/drag
   warning drop-on-None, `_start_ticker` clearing `_tool_caller`).
-- [ ] `handleAuthRequests: True` (`capture.py` `enable`) is bundled with body capture, so every
+- [x] Done: `_handle_auth` answers `Default` with no agent claim (`taken or _action_depth > 0`, the dialog predicate), covered by `phase_6_auth_policy` and `phase_6_auth_live`. Original note: `handleAuthRequests: True` (`capture.py` `enable`) is bundled with body capture, so every
   `get()`/`open()` tab takes the human's HTTP credentials prompt and cancels it unless
   `expect_auth` was armed. Claim-scope it like the picker intercept, or enable it only while an
   `expect_auth` is armed (a re-`Fetch.enable` on arm/consume), since an unarmed challenge is

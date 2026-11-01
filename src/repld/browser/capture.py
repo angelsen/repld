@@ -63,12 +63,11 @@ _ASSET_MIME_MARKERS = ("image/", "font/", "css", "woff", "video/", "audio/")
 async def enable(session: CDPSession) -> None:
     """Enable Fetch interception on a CDPSession.
 
-    `handleAuthRequests: True` routes HTTP Basic/Digest challenges to
-    `cdp._handle_auth` instead of Chrome's native credentials modal — the
-    same "no window CDP can't see" reasoning as the file-chooser intercept
-    in `_enable_domains`, but opt-in because Fetch itself is: a watch()-
-    attached tab still gets the native prompt, same as it still gets no body
-    capture.
+    `handleAuthRequests: True` routes HTTP Basic/Digest challenges through
+    `cdp._handle_auth`, which answers them only under an agent claim and
+    returns the rest to Chrome's own prompt with `Default`. Opt-in because
+    Fetch itself is: a watch()-attached tab never pauses on a challenge, same
+    as it gets no body capture.
     """
     await session.execute(
         "Fetch.enable",

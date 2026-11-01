@@ -1253,15 +1253,20 @@ File choosers (clicking a real <input type=file>-backed control):
 
 HTTP Basic/Digest auth (a 401 with WWW-Authenticate):
   Only intercepted on a tab with Fetch enabled (get()/open(), or explicit
-  capture — see "Network body capture" below); a watch()-attached tab still
-  shows Chrome's native credentials modal. With no pre-arm the challenge is
-  cancelled outright — a clean failed request, never a guessed login:
+  capture — see "Network body capture" below); a watch()-attached tab always
+  shows Chrome's credentials prompt. With no pre-arm the challenge follows
+  the tab's claim: inside an agent action, or on a taken tab, it is
+  cancelled outright — a clean failed request, never a guessed login; with
+  no agent claim (a human on the tab between actions) Chrome shows its own
+  prompt. Pre-arm before navigating:
 
     await tab.expect_auth("user", "hunter2")
     await tab.navigate("https://protected.example/")
 
-  An unhandled challenge pushes `[auth] target: {scheme} auth required
-  (realm=...) — call tab.expect_auth(username, password) before retrying`.
+  A cancelled challenge pushes `[auth] target: {scheme} auth required
+  (realm=...) — call tab.expect_auth(username, password) before retrying`;
+  one left to Chrome pushes `... → left to Chrome's own prompt` to the tab's
+  claim, if it has one.
 
 Permission prompts (camera/mic/geolocation/notifications):
   No CDP event reports these opening, so there's nothing to intercept after

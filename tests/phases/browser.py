@@ -5736,3 +5736,230 @@ def phase_6_set_files_hidden(kernel: Kernel) -> None:
             _lifecycle(frozen, "active")
         pathlib.Path(path).unlink(missing_ok=True)
         h.close()
+
+
+def phase_6_auth_policy(_kernel: Kernel) -> None:
+    """`_handle_auth`'s answer, in isolation — no Chrome.
+
+    A pre-arm answers whoever holds the tab; otherwise the claim decides as
+    for dialogs: cancelled (and pushed to the claim) inside an agent action
+    or on a taken tab, returned to Chrome's own prompt (`Default`) with no
+    agent claim, and that hand-off is pushed to the tab's claim or dropped.
+    """
+
+    class _Cdp:
+        def __init__(
+            self, *, taken: bool = False, depth: int = 0, claim: object = None
+        ) -> None:
+            self.port = 9222
+            self.chrome_target_id = "abcdef123456"
+            self.taken = taken
+            self._action_depth = depth
+            self.in_action = depth > 0
+            self.route_to = claim
+            self._auth_policy: dict | None = None
+            self._auth_log: list[dict] = []
+            self.sent: list[dict] = []
+
+        async def execute(self, method: str, params: dict | None = None) -> dict:
+            self.sent.append(params or {})
+            return {}
+
+    import repld.browser.cdp as _cdp_mod
+    from repld.browser.cdp import _handle_auth
+
+    challenge = {"requestId": "r1", "authChallenge": {"realm": "r", "scheme": "basic"}}
+
+    def _answer(cdp: _Cdp) -> str:
+        return cdp.sent[-1]["authChallengeResponse"]["response"]
+
+    collected: list[str] = []
+    real_push = _cdp_mod.push_channel
+    _cdp_mod.push_channel = lambda text, *a, **k: collected.append(text)  # type: ignore[assignment]
+
+    async def _run() -> None:
+        # Pre-armed: answered once wherever it lands, nothing pushed.
+        cdp = _Cdp()
+        cdp._auth_policy = {"username": "u", "password": "p"}
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(
+            cdp.sent[-1]["authChallengeResponse"],
+            {"response": "ProvideCredentials", "username": "u", "password": "p"},
+            "pre-armed: credentials provided",
+        )
+        assert_eq(cdp._auth_policy, None, "pre-arm is consumed")
+        assert_eq(cdp._auth_log[-1]["source"], "pre-armed", "logged as pre-armed")
+        assert_eq(collected, [], "pre-armed: no push")
+
+        # Inside an agent action: cancelled, the claim told to pre-arm.
+        cdp = _Cdp(depth=1, claim=object())
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(_answer(cdp), "CancelAuth", "in action: cancelled")
+        assert_eq(cdp._auth_log[-1]["source"], "auto", "in action: logged as auto")
+        assert_true(
+            len(collected) == 1 and "expect_auth" in collected[-1],
+            f"in action: the claim is told to pre-arm ({collected!r})",
+        )
+        collected.clear()
+
+        # Taken, between actions: the same.
+        cdp = _Cdp(taken=True, claim=object())
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(_answer(cdp), "CancelAuth", "taken tab: cancelled")
+        assert_eq(len(collected), 1, "taken tab: pushed to the owner")
+        collected.clear()
+
+        # No agent claim: Chrome's own prompt; the tab's claim (a task that
+        # acted earlier, or the tail) hears it was left there.
+        cdp = _Cdp(claim=object())
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(_answer(cdp), "Default", "no agent claim: returned to Chrome")
+        assert_eq(cdp._auth_log[-1]["source"], "human", "logged as the human's")
+        assert_true(
+            len(collected) == 1 and "Chrome's own prompt" in collected[-1],
+            f"no agent claim: the claim hears the hand-off ({collected!r})",
+        )
+        collected.clear()
+
+        # The grace tail only routes, it never answers.
+        cdp = _Cdp(claim=object())
+        cdp.in_action = True
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(_answer(cdp), "Default", "grace tail: returned to Chrome")
+        collected.clear()
+
+        # No claim at all: returned to Chrome, dropped, never broadcast.
+        cdp = _Cdp()
+        await _handle_auth(cdp, challenge)  # type: ignore[arg-type]
+        assert_eq(_answer(cdp), "Default", "unclaimed: returned to Chrome")
+        assert_eq(collected, [], "unclaimed: the hand-off is dropped, not broadcast")
+
+    try:
+        asyncio.run(_run())
+    finally:
+        _cdp_mod.push_channel = real_push
+    print("  ✓ auth policy: pre-arm, action/taken cancel, Chrome's prompt otherwise")
+
+
+def phase_6_auth_live(kernel: Kernel) -> None:
+    """HTTP auth challenges follow the tab's claim, against a real Chrome and
+    a local Basic-auth server: an agent's own navigation is cancelled and
+    reported to it, a pre-arm answers it, a taken tab cancels between
+    actions, and an unclaimed tab's challenge is returned to Chrome.
+
+    Each scenario uses its own realm and directory: Chrome caches Basic
+    credentials per realm and sends them preemptively for every path under
+    an authenticated one's directory, so `/r2` would cover `/r3` (both under
+    `/`) and stop the challenge after the pre-armed success.
+    Whether Chrome then holds the request for a prompt (the headless
+    throwaway does) or cancels is Chrome's; the live assertion is only that
+    repld did not answer.
+    """
+    if not _chrome_ready("phase 6 auth live"):
+        return
+    import base64
+    import http.server
+    import threading
+
+    token = base64.b64encode(b"u:p").decode()
+
+    class _Auth(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            realm = self.path.strip("/").split("/")[0]
+            if not realm:
+                body, status = b"<p>home</p>", 200
+            elif self.headers.get("Authorization") == f"Basic {token}":
+                body, status = b"GRANTED", 200
+            else:
+                body, status = b"DENIED", 401
+            self.send_response(status)
+            if status == 401:
+                self.send_header("WWW-Authenticate", f'Basic realm="{realm}"')
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_a: object) -> None:
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Auth)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    a = _BridgeHarness(kernel)
+
+    def _got(text: str, timeout: float) -> bool:
+        try:
+            a.b.wait_notification(
+                "notifications/claude/channel",
+                kind="auth",
+                where=lambda m: text in m["params"]["content"],
+                timeout=timeout,
+            )
+        except TimeoutError:
+            return False
+        return True
+
+    race = (
+        "Promise.race([fetch('{path}').then(r => 'S' + r.status), "
+        "new Promise(r => setTimeout(() => r('PENDING'), 3000))])"
+    )
+    try:
+        out = a.exec(f"_at = await browser.open('{base}/')\nprint('T', _at.target_id)")
+        m = re.search(r"T (\S+)", out)
+        assert m, f"open carries no target ({out!r})"
+        tid = m.group(1)
+
+        # The agent's own navigation: cancelled inside its span, reported to it.
+        out = a.exec(
+            f"await _at.navigate('{base}/r1/x')\n"
+            "print('BODY', await _at.js('document.body.textContent'), "
+            "_at._session._auth_log[-1]['source'])\n"
+        )
+        assert_true("BODY DENIED auto" in out, f"agent navigation: cancelled ({out!r})")
+        assert_true(_got("realm='r1'", 5), "and the action's session is told")
+        print("  ✓ auth live: an agent's own challenge is cancelled and reported")
+
+        # Pre-armed: answered.
+        out = a.exec(
+            "await _at.expect_auth('u', 'p')\n"
+            f"await _at.navigate('{base}/r2/x')\n"
+            "print('BODY', await _at.js('document.body.textContent'), "
+            "_at._session._auth_log[-1]['resolved'])\n"
+        )
+        assert_true("BODY GRANTED True" in out, f"pre-armed: granted ({out!r})")
+        print("  ✓ auth live: a pre-arm answers the challenge")
+
+        # Taken: a challenge between actions is still the agent's.
+        a.tool("browser_take", {"target": tid})
+        out = a.exec(
+            f"print('R', await _at.js({race.format(path='/r3/x')!r}), "
+            "_at._session._auth_log[-1]['source'])\n"
+        )
+        assert_true("R S401 auto" in out, f"taken tab: cancelled ({out!r})")
+        assert_true(_got("realm='r3'", 5), "and the owner is told")
+        print("  ✓ auth live: a taken tab cancels between actions")
+
+        # Released, past the grace tail: returned to Chrome, nobody woken.
+        a.tool("browser_release", {"target": tid})
+        out = a.exec(
+            "import asyncio\nawait asyncio.sleep(2)\n"
+            f"print('R', await _at.js({race.format(path='/r4/x')!r}), "
+            "_at._session._auth_log[-1]['source'])\n",
+            timeout=30,
+        )
+        assert_true(
+            "R S401 human" in out or "R PENDING human" in out,
+            f"unclaimed tab: returned to Chrome ({out!r})",
+        )
+        assert_true(not _got("realm='r4'", 2), "and no session is woken")
+        print(
+            "  ✓ auth live: an unclaimed tab's challenge goes to Chrome "
+            f"({'cancelled, headless' if 'S401' in out else 'prompt pending'})"
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            a.exec("await _at.close()")
+        srv.shutdown()
+        a.close()

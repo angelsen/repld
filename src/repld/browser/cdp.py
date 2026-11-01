@@ -633,15 +633,18 @@ def unresolved_filechooser_error(
 
 
 async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
-    """Resolve or report an HTTP Basic/Digest auth challenge.
+    """Resolve, hand back, or report an HTTP Basic/Digest auth challenge.
 
     Requires `Fetch.enable` with `handleAuthRequests: True` (capture.enable),
     so this only fires on a tab that already has Fetch on (get()/open(), or
-    explicit capture) — a watch()-attached tab gets the native credentials
-    modal same as before, the same asymmetry `capture.py` already documents
-    for body capture. With no pre-arm the challenge is cancelled outright:
-    guessing credentials is worse than a clean 401, and CancelAuth — unlike
-    leaving a file chooser open — is a definite, non-hanging outcome.
+    explicit capture); a watch()-attached tab never comes through here. A
+    pre-arm answers regardless of who holds the tab. Otherwise the claim
+    decides, as in `_handle_dialog`: inside an agent action or on a taken tab
+    the challenge is cancelled outright (guessing credentials is worse than a
+    clean 401, and CancelAuth is a definite, non-hanging outcome); with no
+    agent claim it is the human's, and `Default` returns it to Chrome, which
+    holds the request for its own credentials prompt (the headless
+    throwaway Chrome included; a Chrome with no login UI cancels).
     """
     request_id = params.get("requestId", "")
     challenge = params.get("authChallenge", {})
@@ -658,6 +661,12 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
             "password": policy.get("password", ""),
         }
         source = "pre-armed"
+    # Depth, not `in_action`, as in `_handle_dialog`: the agent's own
+    # navigation is challenged inside its span; a challenge in the tail or
+    # later is the human's.
+    elif not (cdp.taken or cdp._action_depth > 0):
+        response = {"response": "Default"}
+        source = "human"
     else:
         response = {"response": "CancelAuth"}
         source = "auto"
@@ -686,6 +695,20 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
             "call tab.expect_auth(username, password) before retrying, or it "
             "stays a failed request",
             {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
+        )
+    elif source == "human":
+        _push_tab(
+            cdp,
+            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) → "
+            "left to Chrome's own prompt; tab.expect_auth(username, password) "
+            "answers the next one",
+            {
+                "kind": "auth",
+                "target": short_id,
+                "scheme": scheme,
+                "realm": realm,
+                "action": "waiting",
+            },
         )
 
 
@@ -911,8 +934,7 @@ class CDPSession:
         # One-shot pre-arm set by tab.expect_auth(); consumed by the next
         # Fetch.authRequired.
         self._auth_policy: dict | None = None
-        # Auth challenges seen during the current observed mutation — cleared
-        # by pre_observe, read by post_observe.
+        # Every challenge `_handle_auth` answered; no observation reads it.
         self._auth_log: list[dict] = []
 
         # Pin + label state — lives here (not on Tab) because Tab wrappers

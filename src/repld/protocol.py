@@ -728,12 +728,14 @@ TOOLS = [
         "name": "browser_expect_auth",
         "description": (
             "Pre-arm credentials for the next HTTP Basic/Digest auth "
-            "challenge on a tab. Without this the challenge is cancelled "
-            "outright (a clean failed request, never a guessed login) and "
-            "reported over channel. One-shot: consumed by the next "
+            "challenge on a tab. Without this a challenge inside an agent "
+            "action, or on a taken tab, is cancelled outright (a clean "
+            "failed request, never a guessed login) and reported over "
+            "channel; one with no agent claim on the tab goes to Chrome's "
+            "own credentials prompt. One-shot: consumed by the next "
             "challenge. Only fires on a tab with Fetch enabled (get()/"
-            "open(), or explicit capture) — a watch()-attached tab still "
-            "shows Chrome's native credentials modal."
+            "open(), or explicit capture) — a watch()-attached tab always "
+            "shows Chrome's prompt."
         ),
         "inputSchema": {
             "type": "object",
