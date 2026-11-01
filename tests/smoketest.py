@@ -107,7 +107,12 @@ from phases.channels import (
     phase_4f_meta_augmenter,
     phase_4g_owed_push,
 )
-from phases.core import phase_3, phase_3_argv_and_registry, phase_3_patch_targets
+from phases.core import (
+    phase_3,
+    phase_3_argv_and_registry,
+    phase_3_patch_targets,
+    phase_3_task_spawns,
+)
 from phases.dashboard import phase_14_dashboard
 from phases.defer import phase_7_defer
 from phases.every import phase_10_every
@@ -145,6 +150,7 @@ PHASES = {
         phase_3(k),
         phase_3_argv_and_registry(k),
         phase_3_patch_targets(k),
+        phase_3_task_spawns(k),
     ),
     4: lambda k: (
         phase_4(k),

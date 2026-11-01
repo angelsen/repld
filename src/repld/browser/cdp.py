@@ -1261,7 +1261,7 @@ class CDPSession:
         loop = asyncio.get_running_loop()
         abort: asyncio.Future = loop.create_future()
         self._dialog_waiters.add(abort)
-        task = asyncio.ensure_future(call)
+        task = loop.create_task(call, name="repld-cdp-shared-call")
         try:
             await asyncio.wait({task, abort}, return_when=asyncio.FIRST_COMPLETED)
             if task.done():

@@ -389,3 +389,59 @@ def phase_3_patch_targets(_kernel: Kernel) -> None:
     assert_eq(inert, [], "monkeypatches that nothing resolves through (inert)")
     assert_true(checked >= 8, f"the sweep found the patches (got {checked})")
     print(f"  ✓ {checked} module monkeypatch(es) all target a namespace in use")
+
+
+def phase_3_task_spawns(_kernel: Kernel) -> None:
+    """Every task the package spawns keeps its handle and carries a `repld-` name.
+
+    Both rules are `bg.py`'s: asyncio holds a running task weakly, so a
+    `create_task` whose result is dropped can vanish mid-flight, and
+    `kernel._watch_block` cancels whatever holds the loop unless its name starts
+    with `repld-`, so an unnamed internal task is a kill candidate. `bg.spawn`
+    is the sanctioned spawn; a direct `create_task` is allowed where the handle
+    is stored (`_FrontProbe`, the pill heartbeat) but must still be named.
+
+    Swept rather than listed, like `phase_3_patch_targets`, so a spawn written
+    later is covered without anyone remembering to add it here. A name must be
+    a literal or an f-string whose literal prefix is `repld-`; a name computed
+    elsewhere cannot be checked and is refused.
+    """
+    import ast
+
+    SPAWNERS = {"create_task", "ensure_future", "spawn"}
+    bad: list[str] = []
+    checked = 0
+    for f in sorted((REPO / "src" / "repld").rglob("*.py")):
+        if f.name in ("bg.py", "injected_source.py"):
+            continue
+        tree = ast.parse(f.read_text())
+        dropped = {
+            id(n.value)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+        }
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Attribute):
+                continue
+            attr = n.func.attr
+            if attr not in SPAWNERS:
+                continue
+            is_bg = isinstance(n.func.value, ast.Name) and n.func.value.id == "bg"
+            if attr == "spawn" and not is_bg:
+                continue
+            where = f"{f.relative_to(REPO)}:{n.lineno} {attr}"
+            checked += 1
+            name = next((k.value for k in n.keywords if k.arg == "name"), None)
+            if isinstance(name, ast.JoinedStr) and name.values:
+                name = name.values[0]
+            if not (
+                isinstance(name, ast.Constant)
+                and isinstance(name.value, str)
+                and name.value.startswith("repld-")
+            ):
+                bad.append(f"{where}: no literal `repld-` name")
+            if not is_bg and id(n) in dropped:
+                bad.append(f"{where}: handle dropped (use bg.spawn)")
+    assert_true(not bad, "task spawns held and named:\n    " + "\n    ".join(bad))
+    assert_true(checked >= 20, f"sweep saw only {checked} spawn sites")
+    print(f"  ✓ {checked} task spawn(s) all held and `repld-` named")

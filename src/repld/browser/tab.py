@@ -785,7 +785,7 @@ class Tab(TabQueryMixin):
                 # (`_exec` for Input/captureScreenshot, `inject.check_actionable`).
                 self._front_pending = _FrontProbe(
                     asyncio.get_running_loop().create_task(
-                        self._probe_hidden(front_target)
+                        self._probe_hidden(front_target), name="repld-front-probe"
                     ),
                     front_target,
                 )
@@ -848,7 +848,7 @@ class Tab(TabQueryMixin):
             return
         if pending.settle is None:
             pending.settle = asyncio.get_running_loop().create_task(
-                self._front_settle(pending)
+                self._front_settle(pending), name="repld-front-settle"
             )
         await asyncio.shield(pending.settle)
         if self._front_pending is pending:
