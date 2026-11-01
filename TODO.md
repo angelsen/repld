@@ -232,6 +232,74 @@ infinite scroll.
 
 - [x] A frozen page main thread costs every CDP call its full 30 s (measured 2026-10-23, web.teamviewer.com/remote-support in Chrome 156, port 9241). The page's WebAssembly client freezes the main thread for 12-20 s after each load (`Runtime.evaluate` and `Input.dispatchKeyEvent` both unanswered; the footer then goes "Ingen tilkobling" -> "Klar til tilkobling"), and a redirect to /settings/profile/account hung an evaluate the same way. `tab.js()`/`type_text()` give no shorter bound and no signal that the page, not the connection, is the cause; the lend gist now wraps every check in `asyncio.wait_for(..., 2-5 s)` (lend `src/lend/teamviewer.py` `_support_tab`, `_type_id`). Options: a `timeout=` on `js()`, or a cheap responsiveness probe that names a busy renderer in the error. Open too: whether repld's own attach (Fetch interception on `*`, console capture of the client's heavy logging) lengthens that freeze; untested. Measure by timing the footer in a tab repld never attached against one `get()`/`open()` attached. Done (2026-11-01): `tab.js(timeout=)`, and `CDPSession._send_classified` turns a timed-out page-served command into `RendererBusyError` (a `TimeoutError`) when a browser-level `Target.getTargetInfo` still answers within 5 s; `phase_6_renderer_busy`. Whether repld's own attach lengthens the TeamViewer freeze stays unmeasured.
 
+## Efficiency and reviewability (brainstorm 2026-11-01, measurements in session fc824213)
+
+Prompted by a Lean 4 CRUD-app post. Lean, Rust extensions, io_uring and free-threading were
+rejected: repld's unit of cost is the Chrome round trip (`phase_6_click_round_trips`), not CPU
+or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What survived:
+
+- [ ] **Raise the Python floor next release (Fredrik's call, 2026-11-01; lean 3.14, since 3.13
+  buys nothing).** Measured 2026-11-01: 42 project venvs on this machine, 19 on 3.12, 19 on
+  3.13, 4 on 3.14, no 3.15 installed. The kernel runs on the project venv's interpreter, so a
+  3.14 floor leaves 38 of them below it. **What a below-floor venv does today is a hard
+  failure, verified:** `bind.rebind_exec` execs into `uv run --with[-editable] repld ...`, uv
+  refuses to resolve (`the current Python version (3.11.17) does not satisfy Python>=3.12`),
+  exit 1, and the exec already replaced the process, so the bridge never answers and Claude
+  Code's MCP server fails to start in that project. The bump therefore ships with:
+  (1) a floor check in `rebind_exec` before the exec, `bind.venv_python_version(venv)` against
+  the package's own `requires-python`, falling through to the existing "running unbound" stderr
+  path so such a project keeps exec, browser and gists and loses only its own packages
+  (`gists._explain_missing` already names why); test beside the cross-version case in
+  `phase_16_venv_binding`, which already builds an `_other_minor()` venv;
+  (2) repld's own `.venv` recreated on 3.14 and phases 1-19 run there; check cp314 wheels for
+  duckdb, websockets, pillow, httpx at bump time;
+  (3) a CHANGELOG line stating the requirement plainly, no shim;
+  (4) the 38 venvs recreated per project (`uv venv --python 3.14 && uv sync`) as each is next
+  touched, not as a repld task.
+  Rejected as reasons *for* the bump, so nobody re-litigates them: t-strings (the JS sites
+  escape per value with `json.dumps`), PEP 768 (`_loop_holder` names the holder in-process, and
+  the in-process thread is what makes the cancel possible), free-threading (`LoopOwned`'s
+  snapshot is atomic because of the GIL). The bump is about not serving two-year-old
+  interpreters, not about a feature.
+- [ ] **Lazy `__version__`.** `src/repld/__init__.py` resolves `importlib.metadata.version()`
+  at import, 24 ms of the bridge's ~50 ms import (bare interpreter 9 ms; first `initialize`
+  reply 101 ms via the venv binary, 142 ms through the `uv run` rebind). `bridge.py` reads it
+  only on the cache-check and static-fallback paths, never on attach. The module already has a
+  PEP 562 `__getattr__` for `load_dotenv`; move the version behind it. No PEP 810 needed.
+- [ ] **Does the bridge need to bind at all?** The second interpreter (`rebind_exec` ->
+  `uv run repld bridge`) is ~40 ms per Claude Code session, the largest startup cost. The
+  archived reason for binding is a kernel reason (import the project it sits in), and the
+  kernel is spawned through `bind.repld_argv` regardless (`spawn._kernel_argv`). The bridge
+  reason visible today is an editable repld checkout running its own code rather than the
+  installed tool's. Fredrik's call; measure first: wall clock of the exact argv Claude Code
+  launches, split shim / uv / import / first reply.
+- [ ] **Concurrency sweep in phase 3**, modelled on `phase_3_patch_targets`. Two rules from
+  `bg.py`'s docstring: an unassigned `create_task`/`ensure_future` outside `bg.py` fails (asyncio
+  holds tasks weakly); a repld-internal task with no `repld-` name fails (`_watch_block` spares
+  only those). Drift it would catch today: `browser/tab.py:787,850`, `browser/cdp.py:1264`. The
+  state-file half of a primitive allowlist was dropped: AST cannot tell a state path from a
+  scratch one, so `state.open_private` stays a documented rule.
+- [ ] **Complexity ratchet.** `ruff` runs defaults only; `C901`/`PLR0912`/`PLR0915` at
+  complexity 15, branches 15, statements 60 flag 18 sites in 6 files today (`gist_cmd.py` 2,
+  `browser/observe.py` 2, `dashboard.py`, `browser/row.py`, `browser/cdp.py`, `bridge.py`).
+  Shape measured 2026-11-01: 65 files, 32,620 lines, 1,123 functions, 18 over 80 lines, 3 over
+  150, 13 nested five deep or more. Enable the rules, grandfather the 18 with a `noqa` each, so
+  new ones are refused and the 18 are the burn-down list.
+- [ ] **Burn down the 18 flagged sites, one per change**, each run against the phase that
+  covers it, invariant comments preserved. Predictable shapes: early returns in the five-deep
+  handlers, a dispatch table for `cdp._handle_event` and `session._handle_browser_event`, the
+  190-line `CDPSession.__init__` grouped into state objects. A fan-out fits (one site per
+  worktree, independent judge, serial integration, the devstack dispatch recipe), but the
+  smoketest must not run in parallel across worktrees: phase 6 needs a Chrome and a few hundred
+  MB each, and a full run was killed for memory in session eca05ee1. `help.py` (2,878 lines,
+  mostly doc text) could move its constants to their own module; a `tab.py` (2,449) split is a
+  design decision, not a cleanup.
+- [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
+  `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
+  dep. Stop there.
+- [ ] **py-spy on the kernel during `--phase 6`** before any speed work. Not Tachyon (venv is
+  3.12). Expect the profile to show waiting, not CPU.
+
 ## Testing gaps
 
 - [ ] **`browser/` has no direct coverage.** Phase 6 exercises the tools end to end, but
@@ -340,6 +408,7 @@ infinite scroll.
   no broadcast fallback; an `open()` tab answers prompts and intercepts the picker inside an
   action only, `take()` holds both): `cdp.py` `route_to`/`action()`/`intercepting`,
   `phase_6_claim_routing`, CLAUDE-ARCHIVE "Browser pushes go to the tab's live claim".
+- [ ] **Live claim-model check in Fredrik's headed Chrome (the auth half was done 2026-11-01, session bf1079e4; the rest only on the headless test Chrome).** Three scenarios: (1) a `get()` tab the agent read once and returned from is silent between actions: closing a tab, Save-As, and an upload click on it push nobody (`repld log` shows the events with no target); (2) an idle `open()` tab gives the human the native picker, and the same click during an agent action is intercepted; (3) a second session's `browser_take` suppresses the picker, and closing that session's pane makes it native again. Either a push waking the session in (1) or a suppressed picker in (2)/(3) is a routing bug.
 - [ ] `phase_6_session_gone` timed out once on `download_done` in a full `--phase 6` run after
   the claim-model change (2026-10-31), then passed 3/3 alone and once more in full; the
   confirmation rerun was killed for low memory. Recurred in the next full run (2026-10-31,
