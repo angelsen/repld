@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 from typing import IO, Any
 
-from . import __version__
 from .cli_args import wants_help
 from .core_schemas import PROTOCOL_VERSION
 from .ipc import connect_to_kernel
@@ -121,6 +120,8 @@ def _connect(
     wfile = sock.makefile("w", encoding="utf-8")
 
     # MCP handshake
+    from . import __version__
+
     resp = _call(
         rfile,
         wfile,

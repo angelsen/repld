@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import importlib.metadata
 from typing import TYPE_CHECKING
 
 from .cli import main
 from .content import Image, tool
 
-__version__ = importlib.metadata.version("repld-tool")
-
 if TYPE_CHECKING:
+    __version__: str
     from collections.abc import Callable, Coroutine
     from pathlib import Path
     from typing import Any
@@ -55,7 +53,7 @@ __all__ = ["Image", "load_dotenv", "main", "socket_path", "tool"]
 
 
 def __getattr__(name: str):
-    """Resolve `load_dotenv` without importing the kernel at package import.
+    """Resolve `load_dotenv` and `__version__` lazily, off the bridge's import.
 
     `repld/__init__.py` is imported by every `repld bridge`, which is spawned
     once per Claude Code session and deliberately stays cheap — pulling in
@@ -66,6 +64,15 @@ def __getattr__(name: str):
     PEP 562 only fires for names not found normally, so the builtins that
     `_inject_builtins` setattr's onto this module still take precedence.
     """
+    if name == "__version__":
+        # `importlib.metadata` is ~24 ms, half the bridge's import; only the
+        # discovery paths (cache check, static fallback) and `initialize`
+        # authors read it, and an attached bridge reads it never.
+        import importlib.metadata
+
+        version = importlib.metadata.version("repld-tool")
+        globals()["__version__"] = version
+        return version
     if name == "load_dotenv":
         from .kernel import load_dotenv
 

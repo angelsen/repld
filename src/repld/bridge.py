@@ -45,7 +45,6 @@ import uuid
 from pathlib import Path
 
 from . import (
-    __version__,
     bridge_tools,
     cli_args,
     core_schemas,
@@ -298,6 +297,8 @@ class Bridge:
             data = json.loads(paths.cache_for(self.socket_path).read_text())
         except (OSError, json.JSONDecodeError):
             data = None
+        from . import __version__
+
         if isinstance(data, dict) and data.get("version") == __version__:
             self._cache = data
         return self._cache
@@ -313,6 +314,8 @@ class Bridge:
         resources, and browser state — none of which are static — end up
         spawning a kernel on first real use).
         """
+        from . import __version__
+
         method = msg.get("method")
 
         if method == "initialize":

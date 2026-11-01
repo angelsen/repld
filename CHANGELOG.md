@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The bridge no longer resolves the package version at import: `importlib.metadata` was half its import time (~24 ms of ~50 ms), on every Claude Code session's MCP startup, for a value only the discovery paths read. `repld.__version__` is resolved on first read.
 - Browser event pushes (`dialog`, `filechooser`, `download_*`, `auth`, `console_error`, `controls`, `tab_crashed`, `tab_closed`) go to the tab's owner, else the agent action in flight, else the cell or `defer()` task that last acted on it (an input, navigation or screenshot; a read such as `js()` or `tree()` claims nothing) while that task runs, else the last action's grace tail (`REPLD_BROWSER_ACTION_GRACE_S`, default 1.5 s). A tab nobody claims pushes nobody; no per-tab push broadcasts any more (only `browser_disconnected`/`browser_reconnected` do). An action's own dialog or intercepted file chooser is reported in its receipt, not pushed as well; a raw `tab.click()` from a cell with a pre-armed dialog therefore leaves its record in the receipt's dialog log only.
 - An `open()` tab answers dialogs and intercepts the file picker only while an agent action is in flight; between actions a human on it gets native dialogs and the native picker. `browser_take` (`tab.take()`) keeps the old always-on behaviour. A dialog an agent's own click opens is the agent's on a shared tab too (rejected by policy, reported in the receipt), rather than left to the human.
 
