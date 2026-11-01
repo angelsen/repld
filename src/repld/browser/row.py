@@ -199,7 +199,34 @@ def _parse_json(val: Any) -> Any:
         return None
 
 
-def _dict_from_har_entry(c: dict) -> dict:  # noqa: C901, PLR0912
+def _enrich_request(c: dict, req: dict[str, Any]) -> None:
+    """Add headers, postData and cookies from the raw entry to *req*."""
+    req_headers = _parse_json(c["request_headers"])
+    if req_headers:
+        req["headers"] = req_headers
+    if c["post_data"]:
+        req["postData"] = c["post_data"]
+    req_cookies = _parse_json(c["request_cookies"])
+    if req_cookies:
+        req["cookies"] = req_cookies
+
+
+def _build_initiator(c: dict) -> dict[str, Any] | None:
+    """Build the initiator sub-dict, or None when the entry has no initiator."""
+    init_type = c["initiator_type"]
+    if not init_type:
+        return None
+    initiator: dict[str, Any] = {"type": init_type}
+    if c["initiator_url"]:
+        initiator["url"] = c["initiator_url"]
+    if c["initiator_function"]:
+        initiator["function"] = c["initiator_function"]
+    if c["initiator_line"]:
+        initiator["line"] = c["initiator_line"]
+    return initiator
+
+
+def _dict_from_har_entry(c: dict) -> dict:
     """Build a structured dict from a har_entries query result row."""
     d: dict[str, Any] = {
         "request": {
@@ -216,14 +243,7 @@ def _dict_from_har_entry(c: dict) -> dict:  # noqa: C901, PLR0912
     }
 
     # Request details
-    req_headers = _parse_json(c["request_headers"])
-    if req_headers:
-        d["request"]["headers"] = req_headers
-    if c["post_data"]:
-        d["request"]["postData"] = c["post_data"]
-    req_cookies = _parse_json(c["request_cookies"])
-    if req_cookies:
-        d["request"]["cookies"] = req_cookies
+    _enrich_request(c, d["request"])
 
     # Response details
     if c["status_text"]:
@@ -264,15 +284,8 @@ def _dict_from_har_entry(c: dict) -> dict:  # noqa: C901, PLR0912
         d["curl_command"] = c["curl_command"]
 
     # Initiator
-    init_type = c["initiator_type"]
-    if init_type:
-        initiator: dict[str, Any] = {"type": init_type}
-        if c["initiator_url"]:
-            initiator["url"] = c["initiator_url"]
-        if c["initiator_function"]:
-            initiator["function"] = c["initiator_function"]
-        if c["initiator_line"]:
-            initiator["line"] = c["initiator_line"]
+    initiator = _build_initiator(c)
+    if initiator is not None:
         d["initiator"] = initiator
 
     return d

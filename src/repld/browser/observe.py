@@ -497,7 +497,131 @@ async def compose_tree(
 # ---------------------------------------------------------------------------
 
 
-async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:  # noqa: C901, PLR0912, PLR0915
+async def _resolve_iframe_redirect(
+    tab: Tab, x: float, y: float, backend_node_id: int, node: dict
+) -> dict | None:
+    """If the hit landed on an IFRAME element, return the redirect dict;
+    otherwise return None so the caller continues with the AX-tree path."""
+    if node.get("nodeName", "").upper() != "IFRAME":
+        return None
+    box = await tab._exec("DOM.getBoxModel", {"backendNodeId": backend_node_id})
+    # content quad's first point is the box's top-left corner (tab.py's
+    # _quad_center reads the same list for the center instead).
+    origin_x, origin_y = (box.get("model", {}).get("content") or [0, 0])[:2]
+    return {
+        "iframe": True,
+        "frame_id": node.get("frameId"),
+        "local_x": x - origin_x,
+        "local_y": y - origin_y,
+    }
+
+
+async def _resolve_hit_ax_id(
+    tab: Tab, backend_node_id: int, backend_to_ax_id: dict[int, str]
+) -> str | None:
+    """Map a DOM backend id to its AX node id, walking the DOM parent chain
+    when the hit element itself has no AX representation (e.g. an aria-hidden
+    icon)."""
+    hit_ax_id = backend_to_ax_id.get(backend_node_id)
+    if hit_ax_id is not None:
+        return hit_ax_id
+    try:
+        parent_of = await _dom_parent_map(tab)
+        dom_id: int | None = backend_node_id
+        while dom_id is not None and dom_id not in backend_to_ax_id:
+            dom_id = parent_of.get(dom_id)
+        if dom_id is not None:
+            return backend_to_ax_id[dom_id]
+    except Exception:
+        # Best-effort — a failed DOM walk leaves hit_ax_id None, same
+        # as before this fallback existed.
+        pass
+    return None
+
+
+def _find_anchor(
+    nodes_by_id: dict[str, dict],
+    children_map: dict[str, list[str]],
+    hit_ax_id: str,
+    max_depth: int,
+) -> tuple[list[str], str]:
+    """Walk from the hit node to the root, collecting the elided ancestor
+    spine and picking the best anchor to render the tree from.
+
+    Returns (path, anchor_id).
+    """
+    # Walk to the root, collecting the elided ancestor spine and the
+    # candidate anchors along it (every role surviving SKIP_ROLES).
+    # RootWebArea is never a SKIP_ROLES role, so there's always at least
+    # one candidate, however far up.
+    path: list[str] = []
+    candidates: list[str] = []
+    node_id: str | None = hit_ax_id
+    while node_id is not None:
+        n = nodes_by_id.get(node_id)
+        if n is None:
+            break
+        role = _node_role(n)
+        if role not in SKIP_ROLES:
+            path.append(_node_label(role, _node_name(n), _node_props(n)))
+            candidates.append(node_id)
+        node_id = n.get("parentId")
+    path.reverse()
+
+    # Anchor at the deepest candidate that actually has something to show —
+    # an interactive leaf, or a subtree wider than the single anchor line
+    # itself. A candidate whose trial render is exactly its own line has
+    # nothing under it worth being the root of.
+    anchor_id = candidates[-1]  # falls back to the root-most candidate
+    for cand_id in candidates:
+        role = _node_role(nodes_by_id[cand_id])
+        if role in LEAF_ROLES:
+            anchor_id = cand_id
+            break
+        trial: list[str] = []
+        _build_lines(nodes_by_id, children_map, cand_id, 0, max_depth, trial, Counter())
+        if len(trial) > 1:
+            anchor_id = cand_id
+            break
+
+    return path, anchor_id
+
+
+async def _render_anchor_tree(
+    tab: Tab,
+    nodes_by_id: dict[str, dict],
+    children_map: dict[str, list[str]],
+    anchor_id: str,
+    max_depth: int,
+) -> tuple[list[str], int | None]:
+    """Render the tree rooted at anchor_id, preferring the engine's scoped
+    ariaSnapshot (which provides [ref=eN] handles) and falling back to
+    the raw AX-tree render.
+
+    Returns (tree_lines, anchor_backend_id).
+    """
+    anchor_backend_id = nodes_by_id[anchor_id].get("backendDOMNodeId")
+    tree_lines: list[str] | None = None
+    if anchor_backend_id is not None:
+        from . import inject
+
+        try:
+            text = await inject.scoped_aria_snapshot(tab, anchor_backend_id)
+            tree_lines = text.splitlines() or [""]
+        except Exception:
+            # Broad on purpose: the raw-AX render below is pure local dict
+            # traversal with no failure modes of its own, so falling back to
+            # it is always safe and never worse than skipping the refs.
+            pass
+    if tree_lines is None:
+        tree_lines = []
+        _build_lines(
+            nodes_by_id, children_map, anchor_id, 0, max_depth, tree_lines, Counter()
+        )
+    return tree_lines, anchor_backend_id
+
+
+async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
     """Hit-test (x, y) and return the local structure at that point.
 
     Picks the anchor to render from build_tree_sig's node map (one
@@ -552,17 +676,9 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
 
     described = await tab._exec("DOM.describeNode", {"backendNodeId": backend_node_id})
     node = described.get("node", {})
-    if node.get("nodeName", "").upper() == "IFRAME":
-        box = await tab._exec("DOM.getBoxModel", {"backendNodeId": backend_node_id})
-        # content quad's first point is the box's top-left corner (tab.py's
-        # _quad_center reads the same list for the center instead).
-        origin_x, origin_y = (box.get("model", {}).get("content") or [0, 0])[:2]
-        return {
-            "iframe": True,
-            "frame_id": node.get("frameId"),
-            "local_x": x - origin_x,
-            "local_y": y - origin_y,
-        }
+    redirect = await _resolve_iframe_redirect(tab, x, y, backend_node_id, node)
+    if redirect is not None:
+        return redirect
 
     result = await tab._exec("Accessibility.getFullAXTree", {})
     nodes = result.get("nodes", [])
@@ -573,19 +689,8 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
     backend_to_ax_id: dict[int, str] = {
         n["backendDOMNodeId"]: n["nodeId"] for n in nodes if "backendDOMNodeId" in n
     }
-    hit_ax_id = backend_to_ax_id.get(backend_node_id)
-    if hit_ax_id is None:
-        try:
-            parent_of = await _dom_parent_map(tab)
-            dom_id: int | None = backend_node_id
-            while dom_id is not None and dom_id not in backend_to_ax_id:
-                dom_id = parent_of.get(dom_id)
-            if dom_id is not None:
-                hit_ax_id = backend_to_ax_id[dom_id]
-        except Exception:
-            # Best-effort — a failed DOM walk leaves hit_ax_id None, same
-            # as before this fallback existed.
-            pass
+
+    hit_ax_id = await _resolve_hit_ax_id(tab, backend_node_id, backend_to_ax_id)
     if hit_ax_id is None:
         screenshot = None
         try:
@@ -599,58 +704,10 @@ async def seeded_tree(tab: Tab, x: float, y: float, max_depth: int = 4) -> dict:
             "screenshot": screenshot,
         }
 
-    # Walk to the root, collecting the elided ancestor spine and the
-    # candidate anchors along it (every role surviving SKIP_ROLES).
-    # RootWebArea is never a SKIP_ROLES role, so there's always at least
-    # one candidate, however far up.
-    path: list[str] = []
-    candidates: list[str] = []
-    node_id: str | None = hit_ax_id
-    while node_id is not None:
-        n = nodes_by_id.get(node_id)
-        if n is None:
-            break
-        role = _node_role(n)
-        if role not in SKIP_ROLES:
-            path.append(_node_label(role, _node_name(n), _node_props(n)))
-            candidates.append(node_id)
-        node_id = n.get("parentId")
-    path.reverse()
-
-    # Anchor at the deepest candidate that actually has something to show —
-    # an interactive leaf, or a subtree wider than the single anchor line
-    # itself. A candidate whose trial render is exactly its own line has
-    # nothing under it worth being the root of.
-    anchor_id = candidates[-1]  # falls back to the root-most candidate
-    for cand_id in candidates:
-        role = _node_role(nodes_by_id[cand_id])
-        if role in LEAF_ROLES:
-            anchor_id = cand_id
-            break
-        trial: list[str] = []
-        _build_lines(nodes_by_id, children_map, cand_id, 0, max_depth, trial, Counter())
-        if len(trial) > 1:
-            anchor_id = cand_id
-            break
-
-    anchor_backend_id = nodes_by_id[anchor_id].get("backendDOMNodeId")
-    tree_lines: list[str] | None = None
-    if anchor_backend_id is not None:
-        from . import inject
-
-        try:
-            text = await inject.scoped_aria_snapshot(tab, anchor_backend_id)
-            tree_lines = text.splitlines() or [""]
-        except Exception:
-            # Broad on purpose: the raw-AX render below is pure local dict
-            # traversal with no failure modes of its own, so falling back to
-            # it is always safe and never worse than skipping the refs.
-            pass
-    if tree_lines is None:
-        tree_lines = []
-        _build_lines(
-            nodes_by_id, children_map, anchor_id, 0, max_depth, tree_lines, Counter()
-        )
+    path, anchor_id = _find_anchor(nodes_by_id, children_map, hit_ax_id, max_depth)
+    tree_lines, anchor_backend_id = await _render_anchor_tree(
+        tab, nodes_by_id, children_map, anchor_id, max_depth
+    )
 
     screenshot = None
     try:
@@ -1243,7 +1300,36 @@ def _dom_delta_line(rec: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def format_observation(obs: Observation) -> str:  # noqa: C901, PLR0912
+def _format_network_lines(network: list[NetworkEntry]) -> list[str]:
+    """Format network entries, splitting API calls from assets."""
+    api_entries = [e for e in network if not e.is_asset]
+    asset_entries = [e for e in network if e.is_asset]
+
+    if not api_entries and not asset_entries:
+        return ["network (0 requests)"]
+
+    lines: list[str] = []
+    total = len(network)
+    lines.append(f"network ({total} requests):")
+    for e in api_entries:
+        time_str = f"{e.time_ms}ms" if e.time_ms is not None else "?"
+        # state is dropped for the common 'complete' case — printing it on
+        # every row would bury the one time it matters: a request that
+        # never finished (aborted by navigation, failed, still pending)
+        # otherwise looks identical to a normal one that happened to
+        # return status 0.
+        state_str = f" ({e.state})" if e.state != "complete" else ""
+        lines.append(
+            f"  {e.target}  {e.method}  {e.status} {e.path}{state_str}  "
+            f"{time_str} {size_str(e.size)}"
+        )
+    if asset_entries:
+        total_asset_bytes = sum(e.size for e in asset_entries)
+        lines.append(f"  + {len(asset_entries)} assets ({size_str(total_asset_bytes)})")
+    return lines
+
+
+def format_observation(obs: Observation) -> str:
     """Render observation as plain text."""
     parts: list[str] = []
 
@@ -1303,31 +1389,7 @@ def format_observation(obs: Observation) -> str:  # noqa: C901, PLR0912
 
     # Network
     parts.append("")
-    api_entries = [e for e in obs.network if not e.is_asset]
-    asset_entries = [e for e in obs.network if e.is_asset]
-
-    if api_entries or asset_entries:
-        total = len(obs.network)
-        parts.append(f"network ({total} requests):")
-        for e in api_entries:
-            time_str = f"{e.time_ms}ms" if e.time_ms is not None else "?"
-            # state is dropped for the common 'complete' case — printing it on
-            # every row would bury the one time it matters: a request that
-            # never finished (aborted by navigation, failed, still pending)
-            # otherwise looks identical to a normal one that happened to
-            # return status 0.
-            state_str = f" ({e.state})" if e.state != "complete" else ""
-            parts.append(
-                f"  {e.target}  {e.method}  {e.status} {e.path}{state_str}  "
-                f"{time_str} {size_str(e.size)}"
-            )
-        if asset_entries:
-            total_asset_bytes = sum(e.size for e in asset_entries)
-            parts.append(
-                f"  + {len(asset_entries)} assets ({size_str(total_asset_bytes)})"
-            )
-    else:
-        parts.append("network (0 requests)")
+    parts.extend(_format_network_lines(obs.network))
 
     # Console
     parts.append("")

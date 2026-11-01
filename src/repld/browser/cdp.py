@@ -1303,7 +1303,81 @@ class CDPSession:
         )
         self._event_count += 1
 
-    def _handle_event(self, data: dict) -> None:  # noqa: C901, PLR0912
+    def _track_inflight(
+        self, method: str, params: dict, request_id: str | None
+    ) -> None:
+        """Update the in-flight request map for Network lifecycle events."""
+        if not request_id:
+            return
+        if method == "Network.requestWillBeSent":
+            self._inflight[request_id] = time.monotonic()
+        elif method in ("Network.loadingFinished", "Network.loadingFailed"):
+            self._inflight.pop(request_id, None)
+        elif method == "Network.responseReceived" and _is_streaming(params):
+            # The response arrived; only the body is open-ended. An SSE
+            # stream never emits loadingFinished until it closes, so
+            # counting it as pending work means this tab can never
+            # settle again -- every later mutation would burn its full
+            # deadline. Settle asks "has the network gone quiet", and
+            # for a stream the answer is yes the moment the headers land.
+            self._inflight.pop(request_id, None)
+
+    def _dispatch_async_handler(self, method: str, params: dict) -> None:
+        """Dispatch bg.spawn handlers for events that resume paused requests,
+        answer gates, dismiss dialogs, or resolve auth challenges."""
+        if method == "Fetch.requestPaused" and self._fetch_handler is not None:
+            # Dispatch async handler without blocking the recv loop.
+            # `bg.spawn`, not a bare create_task: this coroutine is the only
+            # thing that ever resumes the paused request, so a task
+            # collected mid-flight leaves it hanging in Chrome until the
+            # request times out -- with `settle` waiting on it the whole
+            # time. See bg.py.
+            bg.spawn(
+                self._fetch_handler(self, params),
+                name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
+            )
+
+        if method == "Runtime.bindingCalled" and self._binding_handler is not None:
+            bg.spawn(
+                self._binding_handler(self, params),
+                name=f"repld-binding-{params.get('name', '?')}",
+            )
+
+        if (
+            method == "Page.javascriptDialogOpening"
+            and self._dialog_handler is not None
+        ):
+            # bg.spawn: this is the only thing that ever dismisses the
+            # dialog, and Chrome's renderer -- and any CDP command already
+            # in flight against it -- stays blocked until it runs.
+            bg.spawn(
+                self._dialog_handler(self, params),
+                name=f"repld-dialog-{params.get('type', '?')}",
+            )
+
+        if method == "Page.fileChooserOpened" and self._filechooser_handler is not None:
+            if self._filechooser_policy is not None:
+                bg.spawn(
+                    self._filechooser_handler(self, params),
+                    name=f"repld-filechooser-{params.get('backendNodeId', '?')}",
+                )
+            else:
+                # Synchronous, not bg.spawn: see _record_filechooser_opened.
+                _record_filechooser_opened(self, params)
+
+        if method == "Fetch.authRequired" and self._auth_handler is not None:
+            # bg.spawn: this is the only thing that ever answers the
+            # challenge, and the paused request hangs in Chrome until it
+            # does -- same reasoning as the Fetch.requestPaused dispatch
+            # above, a distinct branch because authRequired never carries
+            # a networkId/requestId this session's _inflight tracking
+            # would recognise the same way.
+            bg.spawn(
+                self._auth_handler(self, params),
+                name=f"repld-auth-{params.get('requestId', '?')[:8]}",
+            )
+
+    def _handle_event(self, data: dict) -> None:
         """Store event in DuckDB and dispatch Fetch handler if needed."""
         try:
             method = data.get("method", "")
@@ -1316,7 +1390,7 @@ class CDPSession:
                 screencast.on_frame(self, params)
                 return
 
-            # Synchronous insert — microseconds, no contention. store_event
+            # Synchronous insert -- microseconds, no contention. store_event
             # owns the counter (see there); the prune trigger stays here so it
             # is driven by real CDP traffic rather than by a body-capture task.
             #
@@ -1324,7 +1398,7 @@ class CDPSession:
             # point: everything after this is *control flow*, not recording.
             # The `Fetch.requestPaused` branch is the only thing that ever
             # resumes a paused request, and the `Runtime.bindingCalled` branch
-            # is how a pill answers a human gate — under the single outer
+            # is how a pill answers a human gate -- under the single outer
             # `except` a raise from here (a closed DuckDB after a torn-down
             # session, a value the store rejects) skipped both, hanging the
             # request in Chrome with `settle` waiting on it and swallowing the
@@ -1335,83 +1409,17 @@ class CDPSession:
             except Exception as exc:
                 logger.debug("store_event(%s) failed: %s", method, exc)
 
-            if request_id:
-                if method == "Network.requestWillBeSent":
-                    self._inflight[request_id] = time.monotonic()
-                elif method in ("Network.loadingFinished", "Network.loadingFailed"):
-                    self._inflight.pop(request_id, None)
-                elif method == "Network.responseReceived" and _is_streaming(params):
-                    # The response arrived; only the body is open-ended. An SSE
-                    # stream never emits loadingFinished until it closes, so
-                    # counting it as pending work means this tab can never
-                    # settle again — every later mutation would burn its full
-                    # deadline. Settle asks "has the network gone quiet", and
-                    # for a stream the answer is yes the moment the headers land.
-                    self._inflight.pop(request_id, None)
-
-            if method == "Fetch.requestPaused" and self._fetch_handler is not None:
-                # Dispatch async handler without blocking the recv loop.
-                # `bg.spawn`, not a bare create_task: this coroutine is the only
-                # thing that ever resumes the paused request, so a task
-                # collected mid-flight leaves it hanging in Chrome until the
-                # request times out — with `settle` waiting on it the whole
-                # time. See bg.py.
-                bg.spawn(
-                    self._fetch_handler(self, params),
-                    name=f"repld-fetch-{params.get('requestId', '?')[:8]}",
-                )
-
-            if method == "Runtime.bindingCalled" and self._binding_handler is not None:
-                bg.spawn(
-                    self._binding_handler(self, params),
-                    name=f"repld-binding-{params.get('name', '?')}",
-                )
-
-            if (
-                method == "Page.javascriptDialogOpening"
-                and self._dialog_handler is not None
-            ):
-                # bg.spawn: this is the only thing that ever dismisses the
-                # dialog, and Chrome's renderer — and any CDP command already
-                # in flight against it — stays blocked until it runs.
-                bg.spawn(
-                    self._dialog_handler(self, params),
-                    name=f"repld-dialog-{params.get('type', '?')}",
-                )
+            self._track_inflight(method, params, request_id)
+            self._dispatch_async_handler(method, params)
 
             if method == "Page.javascriptDialogClosed":
                 _record_dialog_closed(self, params)
-
-            if (
-                method == "Page.fileChooserOpened"
-                and self._filechooser_handler is not None
-            ):
-                if self._filechooser_policy is not None:
-                    bg.spawn(
-                        self._filechooser_handler(self, params),
-                        name=f"repld-filechooser-{params.get('backendNodeId', '?')}",
-                    )
-                else:
-                    # Synchronous, not bg.spawn: see _record_filechooser_opened.
-                    _record_filechooser_opened(self, params)
-
-            if method == "Fetch.authRequired" and self._auth_handler is not None:
-                # bg.spawn: this is the only thing that ever answers the
-                # challenge, and the paused request hangs in Chrome until it
-                # does — same reasoning as the Fetch.requestPaused dispatch
-                # above, a distinct branch because authRequired never carries
-                # a networkId/requestId this session's _inflight tracking
-                # would recognise the same way.
-                bg.spawn(
-                    self._auth_handler(self, params),
-                    name=f"repld-auth-{params.get('requestId', '?')[:8]}",
-                )
 
             if method == "Runtime.executionContextsCleared":
                 # Navigation replaced the document; every injected engine
                 # (and every aria-ref inside it) died with the old context.
                 # The event carries no frameId, so this clears every frame's
-                # handle, not just the one that navigated — inject.ensure_engine
+                # handle, not just the one that navigated -- inject.ensure_engine
                 # re-instantiates each lazily.
                 self._injected = {}
 
@@ -1436,7 +1444,7 @@ class CDPSession:
             if method == "Runtime.exceptionThrown":
                 _push_exception(params, target_id, self.port, self._loop, self.route_to)
 
-            # Periodic pruning — async task to avoid blocking the recv loop
+            # Periodic pruning -- async task to avoid blocking the recv loop
             if self._event_count >= self._next_prune_check:
                 self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
                 if self._event_count > MAX_EVENTS:

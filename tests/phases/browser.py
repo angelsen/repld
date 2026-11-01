@@ -5905,6 +5905,105 @@ def phase_6_every_tab_fusion(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_seeded_tree(kernel: Kernel) -> None:
+    """seeded_tree / browser_tree(at=...) returns an elided tree rooted at the
+    hit element with real [ref=eN] handles, reports an iframe redirect for a
+    hit on a cross-origin iframe, and captures a crop screenshot.
+
+    Exercises the three main branches: a visible DOM element hit, an iframe
+    hit (OOPIF -- DOM.getNodeForLocation returns the iframe element itself),
+    and a coordinate whose DOM element has no AX representation.
+    """
+    if not _chrome_ready("phase 6 seeded tree"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        # --- 1. Visible element: button at known coordinates -----------------
+        page_btn = (
+            "<body style='margin:0'>"
+            "<button id=btn style='position:absolute;left:50px;top:30px;"
+            "width:120px;height:40px'>Submit</button>"
+        )
+        tid = h.open_tab(page_btn)
+        resp = h.tool("browser_tree", {"target": tid, "at": "110,50"})
+        text = content_text(resp)
+        assert_true(
+            "seed: (110,50)" in text,
+            f"seed header names the coordinate (got {text[:200]!r})",
+        )
+        assert_true(
+            re.search(r"\[ref=f\d+e\d+\]", text) is not None,
+            f"tree carries real [ref=eN] handles (got {text[:300]!r})",
+        )
+        assert_true(
+            "Submit" in text,
+            f"the button's name appears in the tree (got {text[:300]!r})",
+        )
+        assert_true(
+            "screenshot:" in text,
+            f"a screenshot crop is captured (got {text[:400]!r})",
+        )
+        m = re.search(r"\[ref=(f\d+e\d+)\]", text)
+        assert m is not None
+        ref = m.group(1)
+        resp2 = h.tool("browser_click", {"target": tid, "selector": f"aria-ref={ref}"})
+        first_line = content_text(resp2).splitlines()[0]
+        assert_true(
+            first_line.startswith("clicked:"),
+            f"the seeded ref resolves in a click (got {first_line!r})",
+        )
+        print("  ✓ seeded_tree: visible element yields ref handles + screenshot crop")
+
+        # --- 2. Iframe redirect: a cross-origin iframe (OOPIF) --------------
+        # DOM.getNodeForLocation returns the <iframe> element itself for an
+        # out-of-process frame, triggering seeded_tree's iframe redirect path.
+        # The iframe points to a different loopback port that nothing listens
+        # on -- Chrome still creates the OOPIF frame boundary.
+        page_iframe = (
+            "<body style='margin:0'>"
+            "<iframe id=frm src='http://127.0.0.1:1/x' style='position:absolute;"
+            "left:20px;top:20px;width:300px;height:200px;border:0'></iframe>"
+        )
+        tid2 = h.open_tab(page_iframe)
+        resp = h.tool("browser_tree", {"target": tid2, "at": "150,120"})
+        text = content_text(resp)
+        assert_true(
+            "lands inside an iframe" in text,
+            f"an iframe hit reports the redirect (got {text[:300]!r})",
+        )
+        assert_true(
+            "re-issue" in text,
+            f"the redirect tells the caller to re-issue (got {text[:300]!r})",
+        )
+        print("  ✓ seeded_tree: iframe hit returns redirect with local coordinates")
+
+        # --- 3. No AX node: aria-hidden SVG ---------------------------------
+        # An aria-hidden element has no AX representation; the DOM walk may
+        # find an accessible ancestor (the body), or may not. Either path
+        # must return without error.
+        page_hidden = (
+            "<body style='margin:0'>"
+            "<svg aria-hidden=true style='position:absolute;left:50px;top:50px;"
+            "width:80px;height:80px'><circle cx=40 cy=40 r=30/></svg>"
+        )
+        tid3 = h.open_tab(page_hidden)
+        resp = h.tool("browser_tree", {"target": tid3, "at": "90,90"})
+        text = content_text(resp)
+        has_seed = "seed: (90,90)" in text
+        has_no_node = "no accessibility node at this point" in text
+        assert_true(
+            has_seed or has_no_node,
+            f"aria-hidden hit returns either a seeded tree or the no-node "
+            f"fallback (got {text[:300]!r})",
+        )
+        print(
+            "  ✓ seeded_tree: aria-hidden element returns gracefully "
+            f"({'DOM-walked to ancestor' if has_seed else 'no AX node'})"
+        )
+    finally:
+        h.close()
+
+
 def phase_6_set_files_hidden(kernel: Kernel) -> None:
     """set_files on a real backgrounded tab verifies readability; on a frozen one the
     bounded probe reports instead of hanging or raising."""
