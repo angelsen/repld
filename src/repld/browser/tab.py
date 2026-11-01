@@ -20,6 +20,7 @@ from typing import Any
 from .. import bg
 from ..paths import front_lock_for
 from ..state import acquire_lock_blocking
+from . import captcha as captcha_mod
 from . import inject, screencast
 from . import selector as selector_mod
 from .cdp import (
@@ -2309,6 +2310,28 @@ class Tab(TabQueryMixin):
             "height": h,
             "bytes": len(img_bytes),
         }
+
+    # ------------------------------------------------------------------
+    # Captchas
+    # ------------------------------------------------------------------
+
+    async def captchas(self) -> list[captcha_mod.Captcha]:
+        """Captcha widgets in this page: reCAPTCHA v2/v3, hCaptcha, Turnstile,
+        Arkose, each with its state (`unsolved`, `challenge` open, `solved`,
+        or `invisible` for a scored v3). Read from the page's own document by
+        vendor fingerprint, so a captcha inside a same-process child iframe is
+        not seen. Detection only: a human solves it, see `wait_captcha`.
+        """
+        return await captcha_mod.detect(self)
+
+    async def wait_captcha(
+        self, timeout: float = captcha_mod.WATCH_S
+    ) -> list[captcha_mod.Captcha]:
+        """Wait until no captcha on this page needs a human (polled each
+        second), returning what was found. Raises TimeoutError naming what is
+        still unsolved. The hand-off: tell the human which tab, await this.
+        """
+        return await captcha_mod.wait_solved(self, timeout)
 
     # ------------------------------------------------------------------
     # Controls protocol

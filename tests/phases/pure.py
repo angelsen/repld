@@ -1317,6 +1317,81 @@ def _renderer_busy_classification() -> None:
     )
 
 
+def _captcha_describe() -> None:
+    """`captcha.parse`/`describe`: the detect script's records become the one
+    observation line an agent needs — vendor, state, and that a human solves it."""
+    from repld.browser import captcha
+
+    raw = [
+        {
+            "vendor": "recaptcha_v2",
+            "state": "unsolved",
+            "visible": True,
+            "iframe": "https://www.google.com/recaptcha/api2/anchor?k=x",
+            "sitekey": "x",
+        },
+        {
+            "vendor": "recaptcha_v2",
+            "state": "challenge",
+            "visible": True,
+            "iframe": "",
+            "sitekey": "",
+        },
+        {
+            "vendor": "hcaptcha",
+            "state": "solved",
+            "visible": True,
+            "iframe": "",
+            "sitekey": "",
+        },
+        {
+            "vendor": "turnstile",
+            "state": "unsolved",
+            "visible": False,
+            "iframe": "",
+            "sitekey": "",
+        },
+        {
+            "vendor": "recaptcha_v3",
+            "state": "invisible",
+            "visible": False,
+            "iframe": "",
+            "sitekey": "",
+        },
+        {"nope": 1},
+        "junk",
+    ]
+    found = captcha.parse(raw)
+    assert_eq(len(found), 5, "malformed records are skipped, the rest kept")
+    assert_eq(
+        [c.needs_human for c in found],
+        [True, True, False, True, False],
+        "unsolved and challenge need a human; solved and a scored v3 do not",
+    )
+    lines = [captcha.describe(c) for c in found]
+    assert_true(
+        lines[0].startswith("captcha: reCAPTCHA v2 → unsolved; needs a human")
+        and "wait_captcha" in lines[0],
+        f"an unsolved widget names the hand-off ({lines[0]!r})",
+    )
+    assert_true(
+        "challenge open" in lines[1],
+        f"the image grid reads as a challenge ({lines[1]!r})",
+    )
+    assert_eq(lines[2], "captcha: hCaptcha → solved", "a solved widget is one word")
+    assert_true(
+        "widget hidden" in lines[3] and "needs a human" in lines[3],
+        f"a hidden unsolved widget says so, it still needs the human ({lines[3]!r})",
+    )
+    assert_true(
+        "nothing to tick" in lines[4], f"a scored v3 is informational ({lines[4]!r})"
+    )
+    assert_eq(captcha.parse(None), [], "a non-list value is no captcha")
+    print(
+        "  ✓ captcha: parse skips junk, describe names vendor, state and the hand-off"
+    )
+
+
 def _inflight_crash_failure() -> None:
     from types import SimpleNamespace
     from typing import Any, cast
@@ -2141,6 +2216,7 @@ def phase_2_pure() -> None:
     _tab_lifecycle_pushes()
     _crashed_tab_guard()
     _renderer_busy_classification()
+    _captcha_describe()
     _download_cap()
     _inflight_crash_failure()
     _files_probe_timeout()

@@ -934,6 +934,8 @@ class CDPSession:
         # File choosers seen during the current observed mutation — cleared by
         # pre_observe, read by post_observe/unresolved_filechooser_error.
         self._filechooser_log: list[dict] = []
+        # The solved watcher `captcha.report` started; ends itself when the page goes.
+        self._captcha_watch: asyncio.Task | None = None
 
         # HTTP auth handler — opt-in with Fetch (capture.enable passes
         # handleAuthRequests=True), unlike dialog/filechooser above.

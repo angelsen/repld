@@ -399,6 +399,7 @@ class BrowserDispatchMixin:
         return browser.browser_for(tab.target_id)._session
 
     def _bh_tree(self, browser, args):
+        from .browser import captcha
         from .browser.observe import compose_aria_tree, compose_tree
 
         tab = self._get_tab(browser, args)
@@ -414,6 +415,11 @@ class BrowserDispatchMixin:
             lines, _, _ = self._run_async(compose_tree(tab, session))
         else:
             lines, _ = self._run_async(compose_aria_tree(tab, session))
+        try:
+            found = self._run_async(captcha.detect(tab))
+        except Exception:
+            found = []
+        lines = list(lines) + [captcha.describe(c) for c in found]
         return "\n".join(lines)
 
     # ------------------------------------------------------------------

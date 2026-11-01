@@ -1253,6 +1253,23 @@ File choosers (clicking a real <input type=file>-backed control):
   channel, and raises out of the triggering click/type/navigate/invoke call
   — the same contract as an auto-rejected confirm().
 
+Captchas (reCAPTCHA v2/v3, hCaptcha, Turnstile, Arkose):
+  The aria tree shows the vendor's widget as a bare `iframe`, so a submit it
+  disables would read as disabled for no reason. Every observation and
+  browser_tree therefore ends with a `captcha:` line per widget, read from
+  the page's own document by vendor fingerprint (container, response field,
+  iframe origin): `captcha: reCAPTCHA v2 → unsolved; needs a human, hand off
+  and await tab.wait_captcha()`, `→ challenge open` while the image grid is
+  up, `→ solved` once the response field holds a token; a scored reCAPTCHA
+  v3 reads `→ scored invisibly on submit, nothing to tick`. repld never
+  solves one. Hand off: tell the human which tab, then `await
+  tab.wait_captcha()` (polls each second, TimeoutError after 600 s) and
+  finish the action yourself; `tab.captchas()` is the one-shot read. A
+  `[captcha] target: <vendor> solved` push also goes to the tab's live claim
+  (a cell or defer() task that acted on it) when the token lands, so a
+  running cell can await the push instead. Not seen: a captcha inside a
+  same-process child iframe of the page (the query does not cross frames).
+
 HTTP Basic/Digest auth (a 401 with WWW-Authenticate):
   Only intercepted on a tab with Fetch enabled (get()/open(), or explicit
   capture — see "Network body capture" below); a watch()-attached tab always
@@ -1938,6 +1955,7 @@ Channel kinds:
   console_error         console.error or uncaught exception from watched tab
   dialog                native JS dialog auto-dismissed (target, dialog_type, action in meta)
   filechooser           native file chooser opened — resolved (pre-armed) or left open (target, mode in meta)
+  captcha               a captcha needs a human, or was solved (target, vendor, state in meta)
   auth                  HTTP Basic/Digest challenge cancelled, no pre-arm (target, scheme, realm in meta)
   browser_warning       a drag endpoint was occluded by another element (target in meta)
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
@@ -1951,6 +1969,8 @@ Channel kinds:
 Tab (async unless noted):
   tab.js(expr, await_promise=, user_gesture=, timeout=) → any (RendererBusyError, a TimeoutError, when the page's main thread is stuck and the browser still answers)
   tab.tree(mode="aria", at=None, in_crop=None)  → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
+  tab.captchas()                                → list[Captcha] (vendor, state unsolved|challenge|solved|invisible, visible, iframe, sitekey; detection only)
+  tab.wait_captcha(timeout=600)                 → list[Captcha] (polls until no captcha needs a human; TimeoutError naming what is still unsolved)
   tab.click(selector_or_x_y, button=, click_count=) → Receipt (strict resolve + actionability wait; names what was hit; 'x,y' clicks a viewport point with no DOM to resolve)
   tab.plan_click(selector_or_x_y, button=, click_count=) → Action (resolves and hit-tests, presses nothing; action.run() clicks at the planned point, action.gate() holds it behind a confirm gate and raises ActionDeclined on no)
   tab.wheel(x, y, dy=, dx=)                        → Receipt (a real wheel event at a viewport point; positive dy scrolls down)

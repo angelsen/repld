@@ -15,6 +15,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from . import captcha as captcha_mod
 from .cdp import TabCrashedError
 from .row import size_str
 from .session import BrowserSession
@@ -963,6 +964,8 @@ class Observation:
     # File choosers opened during this mutation, resolved or not — see
     # CDPSession._filechooser_log.
     filechoosers: list[dict] = field(default_factory=list)
+    # Captcha widgets in the page after the mutation — see captcha.detect.
+    captchas: list[captcha_mod.Captcha] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1280,13 @@ def format_observation(obs: Observation) -> str:
     if obs.filechoosers:
         parts.append("")
 
+    # Captchas — the aria tree shows the vendor iframe as a bare `iframe`, so
+    # without this line a submit it disables reads as disabled for no reason.
+    for c in obs.captchas:
+        parts.append(captcha_mod.describe(c))
+    if obs.captchas:
+        parts.append("")
+
     # Changes — what this mutation did to the AX tree, before the full tree.
     if obs.changes is not None:
         if obs.changes:
@@ -1410,6 +1420,10 @@ async def post_observe(
 
     dialogs = [d for t in all_tabs_post for d in t._session._dialog_log]
     filechoosers = [f for t in all_tabs_post for f in t._session._filechooser_log]
+    try:
+        captchas = await captcha_mod.detect(tab)
+    except Exception:
+        captchas = []  # a page with no evaluable document reports none
 
     obs = Observation(
         url=tab.url,
@@ -1420,9 +1434,11 @@ async def post_observe(
         changes=changes,
         dialogs=dialogs,
         filechoosers=filechoosers,
+        captchas=captchas,
     )
 
     text = format_observation(obs)
+    captcha_mod.report(tab, captchas)
 
     # Detect blocking parent dialogs (iframe targets only)
     warnings = await _detect_parent_dialogs(tab, session)

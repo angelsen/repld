@@ -3771,6 +3771,80 @@ def phase_6_renderer_busy(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_captcha(kernel: Kernel) -> None:
+    """A captcha is named in the observation and the tree, read as state
+    changes, and its solving reaches the cell that handed it off.
+
+    The fixture is a reCAPTCHA v2 skeleton: the anchor and bframe iframes
+    point at a refused local port (only their `src` matters), the response
+    textarea and the sitekey container are the real names. No vendor script
+    runs; the fingerprint is the whole contract.
+    """
+    if not _chrome_ready("phase 6 captcha"):
+        return
+    h = _BridgeHarness(kernel)
+    page = (
+        "<div class=g-recaptcha data-sitekey=k1></div>"
+        "<iframe id=anchor src='http://127.0.0.1:9/recaptcha/api2/anchor?k=k1'"
+        " style='width:300px;height:78px;border:0'></iframe>"
+        "<div id=bwrap style='visibility:hidden'><iframe id=bframe"
+        " src='http://127.0.0.1:9/recaptcha/api2/bframe' style='width:400px;height:580px'></iframe></div>"
+        "<textarea name=g-recaptcha-response style='display:none'></textarea>"
+        "<button id=go onclick='window.n=(window.n||0)+1'>Submit</button>"
+    )
+    try:
+        tid = h.open_tab(page)
+        resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
+        text = content_text(resp)
+        assert_true(
+            "captcha: reCAPTCHA v2 → unsolved; needs a human" in text,
+            f"the click's observation names the unsolved captcha ({text[:300]!r})",
+        )
+        tree = content_text(h.tool("browser_tree", {"target": tid}))
+        assert_true(
+            tree.rstrip().endswith(
+                "needs a human, hand off and await tab.wait_captcha()"
+            ),
+            f"browser_tree ends with the captcha line ({tree[-200:]!r})",
+        )
+        out = h.exec(
+            f"_t = await browser.get({tid!r})\n"
+            "_c0 = await _t.captchas()\n"
+            "await _t.js(\"document.getElementById('bwrap').style.visibility='visible'\")\n"
+            "_c1 = await _t.captchas()\n"
+            "await _t.click('#go')  # the cell acts, so the solved push is owed to it\n"
+            "async def _solve():\n"
+            "    await asyncio.sleep(1.5)\n"
+            "    await _t.js(\"document.querySelector('[name=g-recaptcha-response]').value='tok'\")\n"
+            "_s = asyncio.ensure_future(_solve())\n"
+            "_c2 = await _t.wait_captcha(timeout=10)\n"
+            "await _s\n"
+            "await asyncio.sleep(2.5)\n"
+            "print('CAP', [(c.vendor, c.state, c.visible, c.sitekey) for c in _c0],"
+            " [c.state for c in _c1], [c.state for c in _c2])",
+            timeout=30,
+        )
+        assert_true(
+            "CAP [('recaptcha_v2', 'unsolved', True, 'k1')] ['challenge'] ['solved']"
+            in out,
+            f"captchas(): unsolved with its sitekey, challenge once the bframe shows, solved once the token lands ({out!r})",
+        )
+        h.b.wait_notification(
+            "notifications/claude/channel",
+            kind="captcha",
+            where=lambda m: (
+                m["params"].get("meta", {}).get("state") == "solved"
+                and tid in m["params"]["content"]
+            ),
+            timeout=5,
+        )
+        print(
+            "  ✓ captcha: named in observation and tree; states track the page; solved push reaches the cell"
+        )
+    finally:
+        h.close()
+
+
 def phase_6_dialog_policy(_kernel: Kernel) -> None:
     """`_handle_dialog`'s accept/reject decision, in isolation — no Chrome.
 
