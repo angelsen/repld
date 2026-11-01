@@ -1,9 +1,9 @@
 """Unix-socket IPC server (kernel side).
 
 NDJSON wire protocol: one JSON-RPC object per line, \\n-terminated. The socket
-is the session — there is no session id. What sits on the other end is
-`bridge.py`, a stateful proxy rather than a byte-pipe; see its module docstring
-for why it can't be one.
+is the session, there is no session id. What sits on the other end is
+`bridge.py`, a stateful proxy rather than a byte-pipe; see its module
+docstring for why it cannot be one.
 
 Each connection gets a reader thread (parses NDJSON, dispatches via handler)
 and on-demand writes (held under a per-session lock). `broadcast_channel()`
@@ -11,7 +11,7 @@ delivers server-initiated notifications (channel pushes) to all connected
 sessions; `post_to()` targets one.
 
 Scope: this module is the socket layer only. Where state files live is
-`paths.py`; how they're written and validated is `state.py`.
+`paths.py`; how they are written and validated is `state.py`.
 """
 
 import enum
@@ -33,11 +33,16 @@ from .state import read_lock
 Handler = Callable[[dict, "Session"], dict | None]
 
 
+# ---------------------------------------------------------------------------
+# Connection helpers
+# ---------------------------------------------------------------------------
+
+
 def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     """Read lockfile, validate kernel pid, connect unix socket.
 
     Returns (sock, lock_info) on success, or an error message string on failure.
-    Used by both ``bridge`` and ``exec`` subcommands.
+    Used by both `bridge` and `exec` subcommands.
     """
     lock = read_lock(lock_path)
     if isinstance(lock, str):
@@ -68,8 +73,8 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     return sock, lock
 
 
-def _peer_pid(sock: socket.socket) -> int | None:
-    """The connecting process's pid via SO_PEERCRED; None where that's unavailable."""
+def _resolve_peer_pid(sock: socket.socket) -> int | None:
+    """The connecting process's pid via SO_PEERCRED; None where unavailable."""
     opt = getattr(socket, "SO_PEERCRED", None)
     if opt is None:
         return None
@@ -82,7 +87,7 @@ def _peer_pid(sock: socket.socket) -> int | None:
     return pid or None
 
 
-def _ancestry(pid: int) -> list[int]:
+def _resolve_ancestry(pid: int) -> list[int]:
     """`pid` and its ancestors, nearest first, via /proc; [] if unreadable."""
     chain: list[int] = []
     while pid > 1 and pid not in chain:
@@ -91,14 +96,17 @@ def _ancestry(pid: int) -> list[int]:
             stat = Path(f"/proc/{pid}/stat").read_text()
         except OSError:
             break
-        # comm (field 2) may itself contain spaces and parens — split after the last ')'.
+        # comm (field 2) may itself contain spaces and parens; split after the last ')'.
         pid = int(stat.rsplit(")", 1)[1].split()[1])
     return chain
 
 
-def _valid_inbox_socket(path: object) -> str | None:
-    """A bridge-supplied path the kernel will connect to: only a Claude Code
-    inbox, `.../cc-socks/<name>.sock`, never an arbitrary socket."""
+def _check_inbox_socket(path: object) -> str | None:
+    """Validate a bridge-supplied inbox path.
+
+    Only a Claude Code inbox, `.../cc-socks/<name>.sock`, is accepted;
+    arbitrary socket paths are refused.
+    """
     if not isinstance(path, str):
         return None
     p = Path(path)
@@ -106,9 +114,16 @@ def _valid_inbox_socket(path: object) -> str | None:
     return path if ok else None
 
 
+# ---------------------------------------------------------------------------
+# Value types
+# ---------------------------------------------------------------------------
+
+
 class Post(enum.Enum):
-    """How far a channel push got on one connection. `WRITTEN` is the most a
-    push can know: Claude Code never acknowledges one."""
+    """Delivery outcome for a channel push on one connection.
+
+    `WRITTEN` is the most a push can know: Claude Code never acknowledges one.
+    """
 
     WRITTEN = "written"  # on the wire to the bridge or inbox, or queued only pending `initialized`
     HELD = "held"        # parked: queued, not yet on the wire
@@ -117,19 +132,25 @@ class Post(enum.Enum):
 
 
 class Rebind(NamedTuple):
+    """Result of `rebind_claude_session`: what was replaced and how many held pushes flushed."""
+
     old_id: str | None
     flushed: int  # parked or outbox pushes this rebind delivered to the successor
 
 
 class _Owed(NamedTuple):
+    """A channel push held in a park queue or the server outbox."""
+
     msg: dict
     cb: "Callable[[bool], None] | None"
     until: float | None  # monotonic deadline; None = owed to this connection only
 
 
-def _fire(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> None:
-    """Run delivery callbacks with no lock held: they are caller code
-    (`tasks.mark_push_delivered`)."""
+def _run_callbacks(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> None:
+    """Run delivery callbacks with no lock held.
+
+    They are caller code (`tasks.mark_push_delivered`).
+    """
     for cb, ok in callbacks:
         try:
             cb(ok)
@@ -137,10 +158,18 @@ def _fire(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> None:
             pass  # a broken callback must not break the flush
 
 
+# ---------------------------------------------------------------------------
+# Session (one connection)
+# ---------------------------------------------------------------------------
+
+
 class Session:
-    def __init__(self, sock: socket.socket):
+    """One accepted unix-socket connection, with write serialization and park/queue state."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        """Wrap an accepted socket with NDJSON read/write handles and push queues."""
         self.sock = sock
-        self.peer_pid = _peer_pid(sock)
+        self.peer_pid = _resolve_peer_pid(sock)
         self.rfile = sock.makefile("r", encoding="utf-8")
         self.wfile = sock.makefile("w", encoding="utf-8")
         self.write_lock = threading.Lock()
@@ -151,7 +180,7 @@ class Session:
         # threading.Timer(1.0) retry hack.
         self.pending: list[dict] = []
         # Channel notifications are held here instead of written while
-        # `parked` is set — see `park()`.
+        # `parked` is set; see `park()`.
         self.parked = False
         self.parked_queue: list[_Owed] = []
         self.park_deadline: float | None = None
@@ -172,64 +201,11 @@ class Session:
 
     @property
     def closed(self) -> bool:
+        """Whether this connection has been shut down."""
         return self._closed
 
-    def _write_msg(self, msg: dict) -> bool:
-        """Write one NDJSON line + flush; close the session on I/O failure.
-
-        Caller must hold write_lock. Returns whether the write succeeded —
-        `_unpark_and_flush` needs this to know which queued messages actually
-        went out before reporting outcomes through `on_parked_flush`.
-        """
-        try:
-            self.wfile.write(json.dumps(msg) + "\n")
-            self.wfile.flush()
-            return True
-        except (BrokenPipeError, OSError, ValueError):
-            self._close_locked()
-            return False
-
-    def _emit(self, msg: dict) -> bool:
-        """`_write_msg`, except a channel push for a `bg` session with a known
-        inbox goes there: a `claude --bg` worker drops channel pushes. Caller
-        holds write_lock."""
-        if (
-            msg.get("method") == CHANNEL_METHOD
-            and self.claude_session_kind == "bg"
-            and self.inbox_socket is not None
-        ):
-            return self._write_inbox(msg)
-        return self._write_msg(msg)
-
-    def _write_inbox(self, msg: dict) -> bool:
-        """One bare `type:user` line to the session's inbox socket. It arrives
-        framed as a peer's message with no meta, so `kind`/`task_id` ride in
-        the text (and `roster`, which can run to 600 chars, stays out). A
-        failure never closes the session (the bridge connection is fine) but reads as `Post.FAILED`.
-        Short timeout: this runs on the kernel loop."""
-        params = msg.get("params") or {}
-        meta = params.get("meta") or {}
-        head = " ".join(
-            f'{k}="{meta[k]}"' for k in ("kind", "task_id") if k in meta
-        ) + "".join(
-            f' {k}="{v}"'
-            for k, v in meta.items()
-            if k not in ("kind", "task_id", "roster")
-        )
-        text = f"[repld push {head.strip()}]\n{params.get('content', '')}"
-        line = json.dumps(
-            {"type": "user", "message": {"role": "user", "content": text}}
-        )
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(0.25)
-                s.connect(str(self.inbox_socket))
-                s.sendall((line + "\n").encode("utf-8"))
-            return True
-        except OSError:
-            return False
-
     def write(self, msg: dict) -> None:
+        """Send a JSON-RPC response or notification under the write lock."""
         with self.write_lock:
             if self._closed:
                 return
@@ -277,7 +253,7 @@ class Session:
         landing in that gap would otherwise wake the conversation that has
         already decided to leave, in a context about to be dropped. On
         timeout with no rebind, delivers anyway to whatever conversation the
-        connection currently has — a handoff that never gets its clear must
+        connection currently has. A handoff that never gets its clear must
         not lose the push outright. Re-parking an already-parked connection
         is a no-op; it keeps the original deadline.
         """
@@ -297,12 +273,111 @@ class Session:
         parked (including a park the timeout already released)."""
         return self._unpark_and_flush()
 
-    def _unpark_and_flush(self) -> int:
-        """Shared body of `unpark()` and the park timeout: whichever runs
-        first does the flush, the other's guard makes it a no-op — both can
-        race in from different threads (an explicit rebind vs. the Timer).
+    def take_parked(self) -> list["_Owed"]:
+        """Empty a closed connection's park queue for the `Server` to settle.
 
-        Callbacks fire after `write_lock` is released — they run arbitrary
+        Only after close: `post_channel` refuses then, so nothing lands behind it.
+        """
+        with self.write_lock:
+            assert self._closed
+            queued, self.parked_queue = self.parked_queue, []
+        return queued
+
+    def set_initialized(self) -> None:
+        """Flush pre-init push queue and mark this session as ready for channel pushes."""
+        with self.write_lock:
+            if self._closed or self.initialized:
+                return
+            self.initialized = True
+            pending, self.pending = self.pending, []
+            for msg in pending:
+                self._emit(msg)
+                if self._closed:
+                    return
+
+    def close(self) -> None:
+        """Shut down the socket and release resources under the write lock."""
+        with self.write_lock:
+            self._close_locked()
+
+    def say_goodbye(self) -> None:
+        """Mark the coming EOF as a clean shutdown.
+
+        Skips `pending`/park on purpose: it is addressed to the bridge, never the client.
+        """
+        with self.write_lock:
+            if not self._closed:
+                self._write_msg(_notification(BRIDGE_GOODBYE_METHOD, {}))
+
+    # -- private helpers (called under write_lock) --------------------------
+
+    def _write_msg(self, msg: dict) -> bool:
+        """Write one NDJSON line + flush; close the session on I/O failure.
+
+        Caller must hold write_lock. Returns whether the write succeeded;
+        `_unpark_and_flush` needs this to know which queued messages actually
+        went out before reporting outcomes through `on_parked_flush`.
+        """
+        try:
+            self.wfile.write(json.dumps(msg) + "\n")
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, OSError, ValueError):
+            self._close_locked()
+            return False
+
+    def _emit(self, msg: dict) -> bool:
+        """Route a channel push to the wire or the inbox.
+
+        A `bg` session with a known inbox gets the push there instead: a
+        `claude --bg` worker drops channel pushes. Caller holds write_lock.
+        """
+        if (
+            msg.get("method") == CHANNEL_METHOD
+            and self.claude_session_kind == "bg"
+            and self.inbox_socket is not None
+        ):
+            return self._write_inbox(msg)
+        return self._write_msg(msg)
+
+    def _write_inbox(self, msg: dict) -> bool:
+        """One bare `type:user` line to the session's inbox socket.
+
+        It arrives framed as a peer's message with no meta, so `kind`/`task_id`
+        ride in the text (and `roster`, which can run to 600 chars, stays out).
+        A failure never closes the session (the bridge connection is fine) but
+        reads as `Post.FAILED`. Short timeout: this runs on the kernel loop.
+        """
+        params = msg.get("params") or {}
+        meta = params.get("meta") or {}
+        head = " ".join(
+            f'{k}="{meta[k]}"' for k in ("kind", "task_id") if k in meta
+        ) + "".join(
+            f' {k}="{v}"'
+            for k, v in meta.items()
+            if k not in ("kind", "task_id", "roster")
+        )
+        text = f"[repld push {head.strip()}]\n{params.get('content', '')}"
+        line = json.dumps(
+            {"type": "user", "message": {"role": "user", "content": text}}
+        )
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.25)
+                s.connect(str(self.inbox_socket))
+                s.sendall((line + "\n").encode("utf-8"))
+            return True
+        except OSError:
+            return False
+
+    def _unpark_and_flush(self) -> int:
+        """Shared body of `unpark()` and the park timeout.
+
+        Whichever runs first does the flush, the other's guard makes it a
+        no-op. Both can race in from different threads (an explicit rebind
+        vs. the Timer).
+
+        Callbacks fire after `write_lock` is released: they run arbitrary
         caller code (`tasks.mark_push_delivered` today), and calling that
         while still holding a lock this module's own `write()`/`post_channel`
         need is an unnecessary way to invite a deadlock later.
@@ -327,29 +402,14 @@ class Session:
                 flushed += ok
                 if item.cb is not None:
                     callbacks.append((item.cb, ok))
-        _fire(callbacks)
+        _run_callbacks(callbacks)
         return flushed
 
-    def take_parked(self) -> list["_Owed"]:
-        """Empty a closed connection's park queue for the `Server` to settle.
-        Only after close: `post_channel` refuses then, so nothing lands behind it."""
-        with self.write_lock:
-            assert self._closed
-            queued, self.parked_queue = self.parked_queue, []
-        return queued
-
-    def set_initialized(self) -> None:
-        with self.write_lock:
-            if self._closed or self.initialized:
-                return
-            self.initialized = True
-            pending, self.pending = self.pending, []
-            for msg in pending:
-                self._emit(msg)
-                if self._closed:
-                    return
-
     def _close_locked(self) -> None:
+        """Shut down the socket, cancel any park timer, close file handles.
+
+        Caller must hold write_lock. Idempotent.
+        """
         if self._closed:
             return
         self._closed = True
@@ -374,24 +434,20 @@ class Session:
             except (BrokenPipeError, OSError, ValueError):
                 pass
 
-    def close(self) -> None:
-        with self.write_lock:
-            self._close_locked()
 
-    def say_goodbye(self) -> None:
-        """Mark the coming EOF as a clean shutdown. Skips `pending`/park on purpose:
-        it is addressed to the bridge, never the client."""
-        with self.write_lock:
-            if not self._closed:
-                self._write_msg(_notification(BRIDGE_GOODBYE_METHOD, {}))
-
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
 
 # How long `Server.stop` lets requests already being served finish writing their reply.
 STOP_GRACE_S = 1.0
 
 
 class Server:
-    def __init__(self, socket_path: Path, handler: Handler):
+    """Accept unix-socket connections, dispatch JSON-RPC requests, and deliver channel pushes."""
+
+    def __init__(self, socket_path: Path, handler: Handler) -> None:
+        """Bind socket path and handler; call `start()` to begin accepting."""
         self.socket_path = Path(socket_path)
         self.handler = handler
         self.sock: socket.socket | None = None
@@ -403,7 +459,7 @@ class Server:
         self._claude_sessions: dict[str, Session] = {}
         # claude_session_id -> pushes owed to whichever connection next
         # carries that id, oldest first. Same lock as `_claude_sessions`, so
-        # a register and an enqueue can't miss each other.
+        # a register and an enqueue cannot miss each other.
         self._outbox: dict[str, list[_Owed]] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
@@ -413,15 +469,16 @@ class Server:
         self._inflight_cv = threading.Condition()
 
     def start(self) -> None:
+        """Bind the unix socket and start the accept thread."""
         if self.socket_path.exists():
             self.socket_path.unlink()
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         # umask around the bind rather than a chmod after it: `bind()` creates
         # the node with the process umask applied, so chmod-ing afterwards
         # leaves a window in which the socket is connectable by anyone. The
-        # 0700 project directory is the real barrier — this is the same
-        # defence in depth every other runtime file gets (`state.open_private`,
-        # `atomic_write_json(chmod=…)`).
+        # 0700 project directory is the real barrier, the same defence in depth
+        # every other runtime file gets (`state.open_private`,
+        # `atomic_write_json(chmod=0o600)`).
         old_umask = os.umask(0o177)
         try:
             self.sock.bind(str(self.socket_path))
@@ -433,79 +490,15 @@ class Server:
         )
         self.accept_thread.start()
 
-    def _accept_loop(self) -> None:
-        assert self.sock is not None
-        while not self._stop:
-            try:
-                conn, _ = self.sock.accept()
-            except OSError:
-                return
-            session = Session(conn)
-            with self.sessions_lock:
-                self.sessions.add(session)
-            threading.Thread(
-                target=self._read_loop,
-                args=(session,),
-                daemon=True,
-                name="repld-ipc-reader",
-            ).start()
-
-    def _read_loop(self, session: Session) -> None:
-        try:
-            for line in session.rfile:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    req = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                with self._inflight_cv:
-                    self._inflight += 1
-                try:
-                    try:
-                        resp = self.handler(req, session)
-                    except Exception as e:
-                        rid = req.get("id")
-                        if rid is not None:
-                            resp = _error(rid, -32603, f"internal: {e!r}")
-                        else:
-                            resp = None
-                    if resp is not None:
-                        session.write(resp)
-                finally:
-                    with self._inflight_cv:
-                        self._inflight -= 1
-                        self._inflight_cv.notify_all()
-        except (BrokenPipeError, OSError, ValueError):
-            pass
-        finally:
-            with self.sessions_lock:
-                self.sessions.discard(session)
-                # Only if it's still this session — a reconnect can have
-                # already replaced the entry via register_claude_session.
-                if (
-                    session.claude_session_id is not None
-                    and self._claude_sessions.get(session.claude_session_id) is session
-                ):
-                    del self._claude_sessions[session.claude_session_id]
-            session.close()
-            self._settle_parked(session)
-            for hook in _close_hooks:
-                try:
-                    hook(session)
-                except Exception:
-                    pass
-
     def broadcast_channel(self, msg: dict, *, exclude: "Session | None" = None) -> None:
         """Post a server-initiated notification to every connected session.
 
-        Sessions that haven't sent notifications/initialized yet queue the
+        Sessions that have not sent notifications/initialized yet queue the
         message and flush it when they do.
 
-        `exclude`: skip this one session — for a self-reported update whose
+        `exclude`: skip this one session, for a self-reported update whose
         caller already has the result synchronously (its own return value)
-        and doesn't need the broadcast echoed back to itself, without
+        and does not need the broadcast echoed back to itself, without
         downgrading everyone else's copy to a targeted per-session loop.
         """
         with self.sessions_lock:
@@ -522,11 +515,13 @@ class Server:
         *,
         on_parked_flush: "Callable[[bool], None] | None" = None,
     ) -> bool | None:
-        """Post to one session. False if it's gone; None if it's currently
-        parked (queued, not yet on the wire — see `Session.park`;
-        `on_parked_flush` reports the eventual outcome); True otherwise
-        (written now, or queued only pending notifications/initialized).
-        False also for a write that failed (a `bg` inbox that is gone).
+        """Post to one session.
+
+        False if it is gone; None if it is currently parked (queued, not yet
+        on the wire, see `Session.park`; `on_parked_flush` reports the
+        eventual outcome); True otherwise (written now, or queued only pending
+        notifications/initialized). False also for a write that failed (a
+        `bg` inbox that is gone).
         """
         outcome = self.deliver(session, msg, on_flush=on_parked_flush)
         if outcome is Post.FAILED or session.closed:
@@ -541,12 +536,14 @@ class Server:
         on_flush: "Callable[[bool], None] | None" = None,
         owed_until: float | None = None,
     ) -> Post:
-        """`post_to` with the outcome spelled out, and, given `owed_until` (a
-        `time.monotonic()` deadline), owed to `session`'s claude_session_id
-        rather than to the connection: once `session` is gone it goes to the
-        live connection carrying that id, else the outbox (`Post.QUEUED`)
-        until one registers. `on_flush` fires once for any outcome not known
-        at return (`HELD`, `QUEUED`), `False` on expiry.
+        """Post with the outcome spelled out, and optional outbox ownership.
+
+        Given `owed_until` (a `time.monotonic()` deadline), the push is owed
+        to `session`'s claude_session_id rather than to the connection: once
+        `session` is gone it goes to the live connection carrying that id,
+        else the outbox (`Post.QUEUED`) until one registers. `on_flush`
+        fires once for any outcome not known at return (`HELD`, `QUEUED`),
+        `False` on expiry.
         """
         with self.sessions_lock:
             live = session in self.sessions
@@ -560,86 +557,6 @@ class Server:
             return Post.FAILED
         return self._owe(session.claude_session_id, _Owed(msg, on_flush, owed_until))
 
-    def _owe(self, session_id: str, item: "_Owed") -> Post:
-        if item.until is not None and item.until <= time.monotonic():
-            return Post.FAILED
-        with self.sessions_lock:
-            target = self._claude_sessions.get(session_id)
-            if target is None or target.closed or target not in self.sessions:
-                self._outbox.setdefault(session_id, []).append(item)
-                return Post.QUEUED
-        outcome = target.post_channel(
-            item.msg, on_parked_flush=item.cb, owed_until=item.until
-        )
-        if outcome is Post.FAILED and target.closed:
-            return self._owe(session_id, item)
-        return outcome
-
-    def _drain_outbox(self, session_id: str, session: Session) -> int:
-        """Post what is owed to `session_id` to `session`, in order; call after
-        registering it, so a push owed meanwhile goes to it directly rather than
-        into an outbox nothing drains. Returns how many went out (or were parked)."""
-        with self.sessions_lock:
-            owed = self._outbox.pop(session_id, [])
-        sent = 0
-        callbacks: list[tuple[Callable[[bool], None], bool]] = []
-        now = time.monotonic()
-        for item in owed:
-            if item.until is not None and item.until <= now:
-                if item.cb is not None:
-                    callbacks.append((item.cb, False))
-                continue
-            outcome = session.post_channel(
-                item.msg, on_parked_flush=item.cb, owed_until=item.until
-            )
-            if outcome is Post.FAILED and session.closed:
-                outcome = self._owe(session_id, item)
-            if outcome is Post.QUEUED or outcome is Post.HELD:
-                sent += outcome is Post.HELD
-                continue
-            sent += outcome is Post.WRITTEN
-            if item.cb is not None:
-                callbacks.append((item.cb, outcome is Post.WRITTEN))
-        _fire(callbacks)
-        return sent
-
-    def _settle_parked(self, session: Session) -> None:
-        """A closed connection's held pushes: owed ones move to its id's
-        outbox, the rest report `False` instead of vanishing."""
-        callbacks: list[tuple[Callable[[bool], None], bool]] = []
-        sid = session.claude_session_id
-        for item in session.take_parked():
-            if item.until is not None and sid is not None:
-                outcome = self._owe(sid, item)
-                if outcome is Post.QUEUED or outcome is Post.HELD:
-                    continue
-                ok = outcome is Post.WRITTEN
-            else:
-                ok = False
-            if item.cb is not None:
-                callbacks.append((item.cb, ok))
-        _fire(callbacks)
-
-    def expire_outbox(self) -> int:
-        """Drop owed pushes past their deadline, reporting each `False`."""
-        now = time.monotonic()
-        callbacks: list[tuple[Callable[[bool], None], bool]] = []
-        with self.sessions_lock:
-            for sid in list(self._outbox):
-                keep = []
-                for item in self._outbox[sid]:
-                    if item.until is not None and item.until <= now:
-                        if item.cb is not None:
-                            callbacks.append((item.cb, False))
-                    else:
-                        keep.append(item)
-                if keep:
-                    self._outbox[sid] = keep
-                else:
-                    del self._outbox[sid]
-        _fire(callbacks)
-        return len(callbacks)
-
     def register_claude_session(
         self,
         session: Session,
@@ -651,14 +568,14 @@ class Server:
         """Bind a Claude Code session id to this connection.
 
         Replaces any existing entry for the same id without unregistering
-        it first — a reconnecting bridge (kernel restart) presents the same
+        it first. A reconnecting bridge (kernel restart) presents the same
         id on a fresh Session, and the old one is already gone or going.
         Whatever the outbox holds for the id is delivered here.
         """
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
         session.claude_session_kind = session_kind
-        session.inbox_socket = _valid_inbox_socket(inbox_socket)
+        session.inbox_socket = _check_inbox_socket(inbox_socket)
         with self.sessions_lock:
             self._claude_sessions[session_id] = session
         self._drain_outbox(session_id, session)
@@ -674,18 +591,18 @@ class Server:
 
         Returns the id it replaced and how many parked or outbox pushes the
         rebind delivered to the successor (0 when nothing was held, or when the
-        park timeout had already delivered them). The match is the connected session whose
-        bridge shares the nearest ancestor with `pid`, the one closest to that
-        ancestor if several do; raises LookupError on no match and ValueError
-        when two are equally close.
+        park timeout had already delivered them). The match is the connected
+        session whose bridge shares the nearest ancestor with `pid`, the one
+        closest to that ancestor if several do; raises LookupError on no match
+        and ValueError when two are equally close.
         """
         with self.sessions_lock:
             candidates = [
-                (s, _ancestry(s.peer_pid))
+                (s, _resolve_ancestry(s.peer_pid))
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
-        for ancestor in _ancestry(pid):
+        for ancestor in _resolve_ancestry(pid):
             hits = [
                 (s, chain.index(ancestor))
                 for s, chain in candidates
@@ -728,10 +645,12 @@ class Server:
         return Rebind(old_id, flushed)
 
     def find_claude_session(self, session_id: str) -> Session | None:
+        """Return the live Session registered under `session_id`, or None."""
         with self.sessions_lock:
             return self._claude_sessions.get(session_id)
 
     def list_claude_sessions(self) -> list[tuple[str | None, str | None, str | None]]:
+        """All connected non-peer sessions as (session_id, project_dir, kind) tuples."""
         with self.sessions_lock:
             targets = list(self.sessions)
         return [
@@ -740,7 +659,28 @@ class Server:
             if not s.peer
         ]
 
+    def expire_outbox(self) -> int:
+        """Drop owed pushes past their deadline, reporting each `False`."""
+        now = time.monotonic()
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        with self.sessions_lock:
+            for sid in list(self._outbox):
+                keep = []
+                for item in self._outbox[sid]:
+                    expired = item.until is not None and item.until <= now
+                    if not expired:
+                        keep.append(item)
+                    elif item.cb is not None:
+                        callbacks.append((item.cb, False))
+                if keep:
+                    self._outbox[sid] = keep
+                else:
+                    del self._outbox[sid]
+        _run_callbacks(callbacks)
+        return len(callbacks)
+
     def stop(self) -> None:
+        """Shut down the server: drain in-flight requests, goodbye each session, remove socket."""
         if self._stop:
             return
         self._stop = True
@@ -764,6 +704,149 @@ class Server:
         except OSError:
             pass
 
+    # -- private helpers ----------------------------------------------------
+
+    def _accept_loop(self) -> None:
+        """Accept connections until stopped, spawning a reader thread per connection."""
+        assert self.sock is not None
+        while not self._stop:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            session = Session(conn)
+            with self.sessions_lock:
+                self.sessions.add(session)
+            threading.Thread(
+                target=self._read_loop,
+                args=(session,),
+                daemon=True,
+                name="repld-ipc-reader",
+            ).start()
+
+    def _read_loop(self, session: Session) -> None:
+        """Read NDJSON lines, dispatch each through `handler`, write the reply."""
+        try:
+            for line in session.rfile:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    req = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                self._handle_request(session, req)
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        finally:
+            self._on_reader_done(session)
+
+    def _handle_request(self, session: Session, req: dict) -> None:
+        """Dispatch one request, tracking inflight count for graceful shutdown."""
+        with self._inflight_cv:
+            self._inflight += 1
+        try:
+            try:
+                resp = self.handler(req, session)
+            except Exception as e:
+                rid = req.get("id")
+                if rid is not None:
+                    resp = _error(rid, -32603, f"internal: {e!r}")
+                else:
+                    resp = None
+            if resp is not None:
+                session.write(resp)
+        finally:
+            with self._inflight_cv:
+                self._inflight -= 1
+                self._inflight_cv.notify_all()
+
+    def _on_reader_done(self, session: Session) -> None:
+        """Clean up after a reader thread exits: unregister, close, settle, hooks."""
+        with self.sessions_lock:
+            self.sessions.discard(session)
+            # Only if it is still this session; a reconnect can have
+            # already replaced the entry via register_claude_session.
+            if (
+                session.claude_session_id is not None
+                and self._claude_sessions.get(session.claude_session_id) is session
+            ):
+                del self._claude_sessions[session.claude_session_id]
+        session.close()
+        self._settle_parked(session)
+        for hook in _close_hooks:
+            try:
+                hook(session)
+            except Exception:
+                pass
+
+    def _owe(self, session_id: str, item: "_Owed") -> Post:
+        """Enqueue a push owed to `session_id`, delivering it now if a live session exists."""
+        if item.until is not None and item.until <= time.monotonic():
+            return Post.FAILED
+        with self.sessions_lock:
+            target = self._claude_sessions.get(session_id)
+            if target is None or target.closed or target not in self.sessions:
+                self._outbox.setdefault(session_id, []).append(item)
+                return Post.QUEUED
+        outcome = target.post_channel(
+            item.msg, on_parked_flush=item.cb, owed_until=item.until
+        )
+        if outcome is Post.FAILED and target.closed:
+            return self._owe(session_id, item)
+        return outcome
+
+    def _drain_outbox(self, session_id: str, session: Session) -> int:
+        """Post what is owed to `session_id` to `session`, in order.
+
+        Call after registering it, so a push owed meanwhile goes to it directly
+        rather than into an outbox nothing drains. Returns how many went out
+        (or were parked).
+        """
+        with self.sessions_lock:
+            owed = self._outbox.pop(session_id, [])
+        sent = 0
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        now = time.monotonic()
+        for item in owed:
+            if item.until is not None and item.until <= now:
+                if item.cb is not None:
+                    callbacks.append((item.cb, False))
+                continue
+            outcome = session.post_channel(
+                item.msg, on_parked_flush=item.cb, owed_until=item.until
+            )
+            if outcome is Post.FAILED and session.closed:
+                outcome = self._owe(session_id, item)
+            if outcome is Post.QUEUED or outcome is Post.HELD:
+                sent += outcome is Post.HELD
+                continue
+            sent += outcome is Post.WRITTEN
+            if item.cb is not None:
+                callbacks.append((item.cb, outcome is Post.WRITTEN))
+        _run_callbacks(callbacks)
+        return sent
+
+    def _settle_parked(self, session: Session) -> None:
+        """Move a closed connection's held owed pushes to the outbox; report the rest as failed."""
+        callbacks: list[tuple[Callable[[bool], None], bool]] = []
+        sid = session.claude_session_id
+        for item in session.take_parked():
+            if item.until is not None and sid is not None:
+                outcome = self._owe(sid, item)
+                if outcome is Post.QUEUED or outcome is Post.HELD:
+                    continue
+                ok = outcome is Post.WRITTEN
+            else:
+                ok = False
+            if item.cb is not None:
+                callbacks.append((item.cb, ok))
+        _run_callbacks(callbacks)
+
+
+# ---------------------------------------------------------------------------
+# Module-level API (delegates to the singleton Server)
+# ---------------------------------------------------------------------------
 
 _server: Server | None = None
 # Called on the reader thread once a connection is closed and its parked
@@ -772,10 +855,12 @@ _close_hooks: list[Callable[[Session], None]] = []
 
 
 def on_session_closed(hook: Callable[[Session], None]) -> None:
+    """Register a callback fired after a connection closes and its parked pushes settle."""
     _close_hooks.append(hook)
 
 
 def start_server(socket_path: Path, handler: Handler) -> Server:
+    """Create, start and register the singleton IPC server."""
     global _server
     _server = Server(socket_path, handler)
     _server.start()
@@ -783,7 +868,7 @@ def start_server(socket_path: Path, handler: Handler) -> Server:
 
 
 def socket_path() -> Path:
-    """This kernel's IPC socket — the `socket_path` that `repld status --json` reports.
+    """This kernel's IPC socket, the `socket_path` that `repld status --json` reports.
 
     Every per-kernel state file is this path with another suffix, so `.parent`
     is where a gist writes files an outside reader finds by that key. It is not
@@ -795,11 +880,13 @@ def socket_path() -> Path:
 
 
 def stop_server() -> None:
+    """Shut down the singleton server, if running."""
     if _server is not None:
         _server.stop()
 
 
 def broadcast_channel(msg: dict, *, exclude: "Session | None" = None) -> None:
+    """Broadcast a channel push to all connected sessions."""
     if _server is not None:
         _server.broadcast_channel(msg, exclude=exclude)
 
@@ -812,10 +899,10 @@ def post_to(
 ) -> bool | None:
     """Deliver a server-initiated notification to one session only.
 
-    False means the session disconnected — callers drop the message rather
+    False means the session disconnected. Callers drop the message rather
     than falling back to a broadcast, which would leak one session's output
-    into every other one. None means it's parked instead (see `Server.post_to`)
-    — also not a broadcast case, just not yet on the wire.
+    into every other one. None means it is parked instead (see `Server.post_to`),
+    also not a broadcast case, just not yet on the wire.
     """
     if _server is None:
         return False
@@ -836,6 +923,7 @@ def deliver(
 
 
 def expire_outbox() -> int:
+    """Drop expired outbox pushes, returning how many were dropped."""
     if _server is None:
         return 0
     return _server.expire_outbox()
@@ -848,6 +936,7 @@ def register_claude_session(
     session_kind: str | None = None,
     inbox_socket: str | None = None,
 ) -> None:
+    """Bind a Claude Code session id to a connection (delegates to the server)."""
     if _server is not None:
         _server.register_claude_session(
             session, session_id, project_dir, session_kind, inbox_socket
@@ -855,19 +944,23 @@ def register_claude_session(
 
 
 def rebind_claude_session(new_id: str, pid: int, old_id: str | None = None) -> Rebind:
-    """See `Server.rebind_claude_session` — for a SessionStart hook after `/clear`,
-    which keeps the MCP connection (and the bridge's env-derived id) alive."""
+    """Re-key a live connection under `new_id`.
+
+    For a SessionStart hook after `/clear`, which keeps the MCP connection
+    (and the bridge's env-derived id) alive. See `Server.rebind_claude_session`.
+    """
     if _server is None:
         raise LookupError("no IPC server in this process")
     return _server.rebind_claude_session(new_id, pid, old_id)
 
 
 def park_pushes(session_id: str, timeout_s: float = 300) -> bool:
-    """Hold channel pushes bound for the connection registered under
-    `session_id` — see `Session.park`. Keyed on the connection rather than
-    the id itself, since a push is addressed to the `Session` object;
-    `rebind_claude_session` releases it, or call `unpark_pushes` directly if
-    the handoff gets called off. False if no connected session currently
+    """Hold channel pushes bound for the connection registered under `session_id`.
+
+    See `Session.park`. Keyed on the connection rather than the id itself,
+    since a push is addressed to the `Session` object;
+    `rebind_claude_session` releases it, or call `unpark_pushes` directly
+    if the handoff gets called off. False if no connected session currently
     carries that id.
 
     The 300s default clears the recap-to-`/clear` gaps a supervised clear
@@ -881,11 +974,12 @@ def park_pushes(session_id: str, timeout_s: float = 300) -> bool:
 
 
 def unpark_pushes(session_id: str) -> bool:
-    """Release a park early for the connection registered under
-    `session_id`, without a rebind — for a handoff that gets called off: the
-    same conversation continues and should get its held pushes at once
-    rather than wait out the park's timeout. False if no connected session
-    currently carries that id; a no-op (still True) if nothing is parked.
+    """Release a park early for the connection registered under `session_id`.
+
+    Without a rebind, for a handoff that gets called off: the same conversation
+    continues and should get its held pushes at once rather than wait out the
+    park's timeout. False if no connected session currently carries that id;
+    a no-op (still True) if nothing is parked.
     """
     session = find_claude_session(session_id)
     if session is None:
@@ -895,12 +989,14 @@ def unpark_pushes(session_id: str) -> bool:
 
 
 def find_claude_session(session_id: str) -> Session | None:
+    """Return the live Session registered under `session_id`, or None."""
     if _server is None:
         return None
     return _server.find_claude_session(session_id)
 
 
 def list_claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
+    """All connected non-peer sessions as (session_id, project_dir, kind) tuples."""
     if _server is None:
         return []
     return _server.list_claude_sessions()

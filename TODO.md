@@ -350,6 +350,19 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   text. Full suite and commit by hand per slice. Then ratchets to hold it: missing-public-
   docstring rule and nesting depth 4, grandfathered at zero. Cost ~10M tokens over the three
   slices at 2026-11-01 rates.
+  Progress 2026-11-01: step 0 committed (045c174f: house style in CLAUDE.md,
+  `scripts/style-measure.py` with `--bodies` as the judge's behaviour oracle, `smoketest.py
+  --phases`, `.claude/workflows/readability.js`). Slice one (kernel, bridge, ipc, protocol,
+  tasks, gates) ran as two workflows (13 + 3 agents, 1.9M tokens, 70 + 22 min): 6/6 landed,
+  phases 1-19 green (444 checks). What the read corrected in the house style: section banners
+  are an existing idiom (156 on master) and stay, in the module's own form; docstrings are
+  single-backticked (the workers wrote 216 lines of RST double backticks, swept by hand); a
+  docstring-density rise where docstrings were missing is not a rejection (protocol.py was
+  rejected on that and re-run); adding a missing annotation is housekeeping; `--` is never a
+  dash. Workers converted em dashes in MCP tool descriptions and one error message too
+  (agent-facing text, no caller parses it). Ratchet counts after slice one: D101-103 109 -> 81,
+  PLR1702 at depth 4 14 -> 12. Next: browser slice (18 items, 2 at a time, `--only` cases per
+  file), then CLI+gists (15), then the runtime remainder (22).
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.

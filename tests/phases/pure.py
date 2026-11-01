@@ -2181,7 +2181,8 @@ def _no_display_delegates() -> None:
     assert_eq(str(got), "count\n-----\n3", "str() of a no_display() result")
     assert_eq(f"{got}", "count\n-----\n3", "f-string of a no_display() result")
     assert_true(got == "count\n-----\n3", "no_display() result == its value")
-    assert_true(not (got != "count\n-----\n3"), "no_display() result != is False")
+    # `!=` is the operator under test, not a spelling of `==`.
+    assert_true(not (got != "count\n-----\n3"), "no_display() result != is False")  # noqa: SIM202
     assert_eq(repr(got), repr("count\n-----\n3"), "repr() of a no_display() result")
     assert_true(runtime.no_display(3) == 3, "no_display(3) == 3")
     assert_true(runtime.no_display(3) != 4, "no_display(3) != 4")

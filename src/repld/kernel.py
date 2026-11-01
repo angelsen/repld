@@ -58,13 +58,14 @@ def _claim_project(socket_path: Path) -> int:
     makes an externally-started kernel adopted rather than competed with.
 
     Ensures the runtime root first. This is the earliest thing in `run_kernel`
-    and `state.acquire_lock` does its own `mkdir(parents=True, mode=0o700)` —
+    and `state.acquire_lock` does its own `mkdir(parents=True, mode=0o700)`,
     which applies the mode to the *leaf* only, the exact failure
     `paths.ensure_runtime_dir` exists to prevent: the root could be brought
     into being at umask default and skip the foreign-owner refusal, only to be
     chmod'd back much later in `_boot_runtime`. The project directory itself
-    is first created here, by `acquire_lock`'s mkdir of the flock's parent. `state.py` can't call this itself — it imports nothing
-    from repld on purpose — so it belongs at the caller.
+    is first created here, by `acquire_lock`'s mkdir of the flock's parent.
+    `state.py` can't call this itself (it imports nothing from repld on
+    purpose), so it belongs at the caller.
     """
     paths.ensure_runtime_dir()
     fd = state.acquire_lock(paths.flock_for(socket_path))
@@ -75,7 +76,7 @@ def _claim_project(socket_path: Path) -> int:
         if stderr is not None:
             stderr.write(
                 f"\033[90m[repld] kernel already running for this project "
-                f"(pid={pid}) — nothing to do\033[0m\n"
+                f"(pid={pid}), nothing to do\033[0m\n"
             )
             stderr.flush()
         raise SystemExit(0)
@@ -83,6 +84,7 @@ def _claim_project(socket_path: Path) -> int:
 
 
 def _write_lockfile(socket_path: Path, dashboard_port: int | None = None) -> None:
+    """Persist pid, socket, cwd and interpreter into the per-project lock file."""
     info: dict[str, object] = {
         "pid": os.getpid(),
         "socket_path": str(socket_path),
@@ -116,7 +118,7 @@ def _write_cache(socket_path: Path) -> None:
     try:
         cache = build_discovery_cache()
     except Exception as e:
-        # Discovery must never take boot down — a missing cache just means
+        # Discovery must never take boot down. A missing cache just means
         # the next bridge falls back to its static tool set.
         print(f"repld: failed to build discovery cache: {e}", file=sys.stderr)
         return
@@ -136,7 +138,7 @@ _INIT_WAIT_SECONDS = 30.0
 
 _active_lock_path: Path | None = None
 # No module-level handle for the flock fd, deliberately. There used to be one,
-# on the stated grounds that it "must stay open for the process's whole life —
+# on the stated grounds that it "must stay open for the process's whole life,
 # closing it releases the lock", and it was written twice and read never.
 # The rationale was also wrong: `state.acquire_lock` returns a raw int from
 # `os.open`, and an int has no finalizer, so the descriptor stays open whether
@@ -159,13 +161,13 @@ def load_dotenv() -> None:
     """Load KEY=VALUE pairs from ./.env into os.environ (stdlib only).
 
     Skips comments, blank lines, and export prefixes. Strips surrounding
-    quotes. Does NOT override existing env vars — so a var already set, by an
+    quotes. Does NOT override existing env vars, so a var already set, by an
     earlier call or by the shell, wins.
 
     Public because the kernel reads `./.env` exactly once, at boot, while
     `./gists` reload themselves on mtime. A value written to `.env` afterwards
     is invisible until something asks: `from repld import load_dotenv`. The
-    no-override rule means a var captured while empty stays empty — clear it
+    no-override rule means a var captured while empty stays empty; clear it
     first (`os.environ.pop("KEY", None)`) if you are correcting one.
     """
     p = Path.cwd() / ".env"
@@ -190,6 +192,7 @@ def load_dotenv() -> None:
 
 
 def _cleanup_lockfile() -> None:
+    """Remove the per-project lock file on exit, if one was written."""
     if _active_lock_path is None:
         return
     try:
@@ -209,6 +212,7 @@ def _banner(
     kill_threshold: float | None,
     dashboard_port: int | None = None,
 ) -> str:
+    """Build the startup banner printed to stderr at kernel boot."""
     lines = [
         f"\033[90m[repld] pid={os.getpid()}  socket={socket_path}",
         (
@@ -224,18 +228,18 @@ def _banner(
     ]
     if dashboard_port is not None:
         # The port, not a URL: `GET /` needs the API token now, and this banner
-        # goes to the systemd journal on a service-spawned kernel — a readable
+        # goes to the systemd journal on a service-spawned kernel, a readable
         # destination that a credential has no business reaching. `repld
         # dashboard` reads the token from the 0600 hint file instead.
         lines.append(
-            f"  dashboard: port {dashboard_port} — open with \033[0m\033[4mrepld "
+            f"  dashboard: port {dashboard_port}, open with \033[0m\033[4mrepld "
             f"dashboard\033[0m\033[90m"
         )
     lines += [
         "  register:  claude mcp add repld -- repld bridge",
         "  launch:    claude --dangerously-load-development-channels server:repld",
         "  human:     repld exec   # interactive REPL (state shared with agent)",
-        "  observe:   repld log -f · repld status · repld dashboard\033[0m",
+        "  observe:   repld log -f | repld status | repld dashboard\033[0m",
     ]
     return "\n".join(lines)
 
@@ -250,22 +254,22 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
 
     session=None (default) broadcasts to every connected MCP session,
     returning None. session=<claude_session_id> targets one session by the
-    id claude_sessions() lists — returns True if delivered, False if that
+    id claude_sessions() lists, returning True if delivered, False if that
     session isn't connected or the write failed (a `bg` session's inbox socket
     is gone). No fallback to broadcast on a miss: that would
     defeat the point of asking for one session specifically. A parked
-    target (ipc.park_pushes) returns None — held, not dropped; the eventual
+    target (ipc.park_pushes) returns None (held, not dropped); the eventual
     outcome is only observable via push_channel's on_parked_flush=, the way
     _maybe_push_done does for task completions.
 
     exclude=<claude_session_id>, only meaningful alongside the broadcast
-    path (session left at its default None — combining it with an explicit
+    path (session left at its default None; combining it with an explicit
     session is a contradiction and exclude is silently ignored then): skips
     that one session. For a self-report that already has this update some
     other way (its own synchronous return value, e.g. roster.report()) and
-    doesn't need it echoed back to itself — current_session_id() is the id
+    doesn't need it echoed back to itself, current_session_id() is the id
     to pass. An id that doesn't resolve to a connected session (already
-    disconnected, never connected) is a no-op — the same as not excluding
+    disconnected, never connected) is a no-op, the same as not excluding
     anyone, since there's nothing to skip.
     """
     if session is not None:
@@ -283,19 +287,20 @@ def _claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
 
     All three are None for a session with no Claude Code identity (a
     hand-run bridge, or a non-Claude-Code MCP client). kind is "bg" for a
-    `claude --bg` worker, else None — whether such a session actually acts
+    `claude --bg` worker, else None; whether such a session actually acts
     on a later channel push the way an interactive one does is not yet
     established; this only identifies which sessions are `--bg`. Named
     apart from the existing `repld.sessions` submodule (kernel-*process*
-    registry, `sessions.py`) — setattr-ing `repld.sessions` here would
+    registry, `sessions.py`): setattr-ing `repld.sessions` here would
     shadow that submodule import.
     """
     return ipc.list_claude_sessions()
 
 
 def _current_session_id() -> str | None:
-    """The Claude Code session id that asked for the code currently running,
-    if any — the same id claude_sessions() lists and notify(session=...) /
+    """The Claude Code session id that asked for the code currently running.
+
+    Returns the same id claude_sessions() lists and notify(session=...) /
     notify(exclude=...) both take.
 
     None when there's nothing to attribute to: an ambient context with no
@@ -305,7 +310,7 @@ def _current_session_id() -> str | None:
 
     Reads the SAME `origin` a deferred task already inherits for its own
     completion push (see tasks.new_task's docstring, and defer()'s own
-    "inherit the calling cell's originating session" comment) — this is the
+    "inherit the calling cell's originating session" comment). This is the
     general form of that lookup, usable by any code wanting to know who
     asked for it, not just the task-completion bookkeeping that motivated
     tracking `origin` in the first place.
@@ -379,9 +384,9 @@ _LOOP_MACHINERY = (
 def _is_starved(frames: "list[traceback.FrameSummary]") -> bool:
     """True when the sampled stack means the OS never scheduled the loop
     thread, not that a callback held it. Two signatures, both stdlib:
-    - the whole (post-`_LOOP_MACHINERY`-filter) stack is `selectors.*.select`
-      — the loop was idling in its own wait, no task or callback running.
-    - any frame is `subprocess.py`'s `_execute_child` — the fork/exec inside
+    - the whole (post-`_LOOP_MACHINERY`-filter) stack is `selectors.*.select`:
+      the loop was idling in its own wait, no task or callback running.
+    - any frame is `subprocess.py`'s `_execute_child`: the fork/exec inside
       an *already-async* `create_subprocess_exec`, unavoidably on the loop
       and not fixable by wrapping in `asyncio.to_thread()`.
     """
@@ -408,15 +413,19 @@ class _Pressure:
 
     @property
     def overloaded(self) -> bool:
-        """Load past core count, or swap past 80% full: thresholds a normal
-        dev machine doesn't cross by accident. Past either, even normally-fast
-        repld-internal code (a DuckDB insert documented in microseconds) can
-        take seconds — every syscall pays for page faults under real
-        thrashing, thread pool included, so it's not a to_thread fix either."""
+        """Load past core count, or swap past 80% full.
+
+        Thresholds a normal dev machine doesn't cross by accident. Past either,
+        even normally-fast repld-internal code (a DuckDB insert documented in
+        microseconds) can take seconds: every syscall pays for page faults
+        under real thrashing, thread pool included, so it's not a to_thread
+        fix either.
+        """
         swap_frac = self.swap_used / self.swap_total if self.swap_total else 0.0
         return self.load1 > self.cores or swap_frac > 0.8
 
     def describe(self) -> str:
+        """Format load, RAM and swap as a one-line human-readable summary."""
         gib = 1024**3
         return (
             f"load {self.load1:.1f}, {self.mem_used / gib:.1f}/{self.mem_total / gib:.1f} GB RAM, "
@@ -426,7 +435,7 @@ class _Pressure:
 
 def _read_pressure() -> _Pressure | None:
     """Best-effort load/RAM/swap sample. Linux only (reads /proc/meminfo
-    directly rather than adding a dependency for it — stdlib only in core);
+    directly rather than adding a dependency for it, stdlib only in core);
     None anywhere the read fails."""
     try:
         load1, _, _ = os.getloadavg()
@@ -478,14 +487,17 @@ class _Holder:
 
     @property
     def name(self) -> str:
+        """The asyncio task name, or 'a loop callback' for plain callbacks."""
         return self.task.get_name() if self.task is not None else "a loop callback"
 
     @property
     def origin(self) -> "ipc.Session | None":
+        """The IPC session that started this task, if any."""
         entry = tasks.get(self.task_id) if self.task_id else None
         return entry.get("origin") if entry else None
 
     def describe(self) -> str:
+        """Format the holder name, culprit frame and stack for a channel push."""
         lines = [self.name + (f" (task {self.task_id})" if self.task_id else "")]
         if self.culprit:
             lines.append(f"  blocked at: {self.culprit}")
@@ -494,6 +506,7 @@ class _Holder:
 
 
 def _loop_holder(loop: asyncio.AbstractEventLoop, thread_id: int) -> _Holder:
+    """Snapshot the task and stack holding the loop right now."""
     task = asyncio.current_task(loop)
     frame = sys._current_frames().get(thread_id)
     frames = []
@@ -522,6 +535,7 @@ def _loop_holder(loop: asyncio.AbstractEventLoop, thread_id: int) -> _Holder:
 
 
 def _push_holder(content: str, kind: str, holder: _Holder, **meta: str) -> None:
+    """Push a watchdog event scoped to the holder's session, falling back to broadcast."""
     # Call-scoped when the holder runs for a session; a miss broadcasts, since a
     # wedged loop stalls every session on the kernel.
     push_channel(
@@ -550,12 +564,12 @@ def _watch_block(
     # slow by the machine thrashing, not by anything the stack names.
     starved = holder.starved or (pressure is not None and pressure.overloaded)
     if starved:
-        advice = "— loop thread descheduled by the OS, not blocked by a callback" + (
+        advice = "-- loop thread descheduled by the OS, not blocked by a callback" + (
             f" ({pressure.describe()})" if pressure else ""
         )
     else:
         advice = (
-            "— likely sync I/O on the shared loop; wrap blocking calls in "
+            "-- likely sync I/O on the shared loop; wrap blocking calls in "
             "asyncio.to_thread()"
         )
     _push_holder(
@@ -677,6 +691,7 @@ def _maybe_push_done(task_id: str) -> None:
 
 
 def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:
+    """Emit CellDone, finalize the task registry entry, and push if nudged."""
     elapsed = (time.monotonic() - t_start) * 1000
     events.emit(CellDone(task_id, elapsed, task.get("exception")))
     tasks.finalize(task_id)
@@ -685,10 +700,10 @@ def _finalize_cell(task_id: str, task: dict, t_start: float) -> None:
 
 @contextlib.asynccontextmanager
 async def _task_scope(task_id: str):
-    """Set up per-task lifecycle bookkeeping shared by _run_cell/_run_deferred.
+    """Bind per-task lifecycle bookkeeping shared by _run_cell/_run_deferred.
 
     Sets _current_task ContextVar so that asyncio.create_task() calls inside
-    user code inherit it via copy_context() — preserving per-task output
+    user code inherit it via copy_context(), preserving per-task output
     attribution for fire-and-forget background tasks. Finalizes (emits
     CellDone, pushes channel) on the way out regardless of how the body exits.
     """
@@ -707,12 +722,12 @@ async def _task_scope(task_id: str):
 
 
 async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) -> None:
-    """Coroutine that runs on the bg asyncio loop.
+    """Compile and execute one cell on the bg asyncio loop.
 
     Waits for the project bootstrap first. The socket binds before
-    `repld_init.py` runs — deliberately, since the bridge only allows a spawn
-    5s to become connectable and a bootstrap that raises a tunnel takes longer
-    — so without this the first `exec` after a lazy spawn races it and sees a
+    `repld_init.py` runs (deliberately, since the bridge only allows a spawn
+    5s to become connectable and a bootstrap that raises a tunnel takes longer),
+    so without this the first `exec` after a lazy spawn races it and sees a
     bare `__main__`. Waiting here rather than delaying the bind keeps lazy
     spawn working and costs nothing once the bootstrap is done: the cell still
     gets its task_id immediately, and a wait past `exec`'s timeout degrades
@@ -741,7 +756,7 @@ async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) 
             task["exception"] = type(exc).__name__
 
 
-_RESULT_REPR_LIMIT = 2000  # get_task's "result" field — a preview, not a payload
+_RESULT_REPR_LIMIT = 2000  # get_task's "result" field: a preview, not a payload
 
 
 def _safe_repr(value: object) -> str:
@@ -752,22 +767,22 @@ def _safe_repr(value: object) -> str:
     except Exception as exc:
         return f"<repr() failed: {type(exc).__name__}>"
     if len(text) > _RESULT_REPR_LIMIT:
-        text = text[:_RESULT_REPR_LIMIT] + f"… ({len(text)} chars total)"
+        text = text[:_RESULT_REPR_LIMIT] + f"... ({len(text)} chars total)"
     return text
 
 
 async def _run_deferred(task_id: str, thunk) -> None:
     """Build and await a user-supplied awaitable within the task lifecycle.
 
-    `thunk` is always a zero-arg callable — defer() wraps a coroutine object
-    passed directly as ``lambda: coro``, so this only has one code path.
+    `thunk` is always a zero-arg callable: defer() wraps a coroutine object
+    passed directly as `lambda: coro`, so this only has one code path.
     Calling it here, inside a coroutine already scheduled on the kernel's
     loop (`asyncio.run_coroutine_threadsafe`), is what lets a factory like
-    ``lambda: asyncio.gather(...)`` build its awaitable with a loop actually
+    `lambda: asyncio.gather(...)` build its awaitable with a loop actually
     running: `asyncio.gather()`/`create_task()`/`ensure_future()` all reach
     for the *current thread's* loop at construction time, not just to await,
     and a sync cell's body runs off-loop (`asyncio.to_thread`) to keep the
-    kernel responsive — so building one directly in the cell raises "no
+    kernel responsive, so building one directly in the cell raises "no
     current event loop" before defer() ever gets a look at it.
 
     An `exec` cell's trailing expression gets `_`/`_N` plus a printed repr()
@@ -808,7 +823,7 @@ async def _run_peer_call(task_id: str, func, args: list, kwargs: dict) -> None:
     stall the kernel. The return is stored as a detached JSON copy
     (`task["peer_value"]`) so the reader thread never serialises live state.
     """
-    from . import peer_host, runtime
+    from . import runtime
     from .core_schemas import PEER_MAX_PAYLOAD_BYTES
 
     async with _task_scope(task_id) as task:
@@ -820,19 +835,8 @@ async def _run_peer_call(task_id: str, func, args: list, kwargs: dict) -> None:
                 if inspect.isawaitable(result):
                     result = await result
             value, _ = runtime.unwrap_display(result)
-            try:
-                text = json.dumps(value)
-            except (TypeError, ValueError) as exc:
-                raise peer_host.PayloadError(
-                    f"return value is not JSON-serializable ({type(value).__name__}: "
-                    f"{exc}); write it to a file and return the path"
-                ) from exc
-            if len(text) > PEER_MAX_PAYLOAD_BYTES:
-                raise peer_host.PayloadError(
-                    f"return value is {len(text)} bytes of JSON, over the "
-                    f"{PEER_MAX_PAYLOAD_BYTES} limit; write it to a file and return the path"
-                )
-            task["peer_value"] = json.loads(text)
+            encoded = _encode_peer_value(value, PEER_MAX_PAYLOAD_BYTES)
+            task["peer_value"] = json.loads(encoded)
             task["result"] = _safe_repr(value)
         except asyncio.CancelledError:
             task["exception"] = "CancelledError"
@@ -852,6 +856,25 @@ async def _run_peer_call(task_id: str, func, args: list, kwargs: dict) -> None:
             sys.stderr.write(tb)
 
 
+def _encode_peer_value(value: object, max_bytes: int) -> str:
+    """Serialize a peer call's return value to JSON, enforcing the payload cap."""
+    from . import peer_host
+
+    try:
+        text = json.dumps(value)
+    except (TypeError, ValueError) as exc:
+        raise peer_host.PayloadError(
+            f"return value is not JSON-serializable ({type(value).__name__}: "
+            f"{exc}); write it to a file and return the path"
+        ) from exc
+    if len(text) > max_bytes:
+        raise peer_host.PayloadError(
+            f"return value is {len(text)} bytes of JSON, over the "
+            f"{max_bytes} limit; write it to a file and return the path"
+        )
+    return text
+
+
 def _make_defer(loop: asyncio.AbstractEventLoop):
     """Return a defer(coro, label=None) function bound to the kernel's loop."""
 
@@ -859,8 +882,8 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
         """Schedule a coroutine as a tracked task. Returns task_id immediately.
 
         `coro` is normally a coroutine object (`defer(my_async_fn())`). It
-        may also be a zero-arg callable that *builds* one —
-        `defer(lambda: asyncio.gather(one(), two()))` — for constructs that
+        may also be a zero-arg callable that *builds* one,
+        `defer(lambda: asyncio.gather(one(), two()))`, for constructs that
         need a running loop to construct, not just to await. A sync cell's
         body runs in a worker thread with no event loop set, so calling
         `asyncio.gather(...)` there eagerly (as a `defer()` argument) fails
@@ -919,23 +942,27 @@ def _make_defer(loop: asyncio.AbstractEventLoop):
 
 @dataclass(eq=False)
 class EveryHandle:
+    """Handle for a registered @every ticker, exposing cancel and repr."""
+
     label: str
     seconds: float
     _task: "asyncio.Task[None]"
     tab: str | None = None
 
     def cancel(self) -> None:
+        """Cancel this ticker and remove it from the registry."""
         self._task.cancel()
         with _every_lock:
             _every_registry.discard(self)
 
     def __repr__(self) -> str:
+        """Format as <every Ns: label [tab=pattern]>."""
         suffix = f" tab={self.tab!r}" if self.tab else ""
         return f"<every {self.seconds}s: {self.label}{suffix}>"
 
 
 # Mutated from the asyncio loop thread (_start_ticker) and from sync-cell
-# threads (EveryHandle.cancel() via asyncio.to_thread) — needs a lock like
+# threads (EveryHandle.cancel() via asyncio.to_thread), needs a lock like
 # every other cross-thread registry in this codebase (tasks._tasks_lock,
 # gates._gates_lock). The dashboard's HTTP handler reads it via every_snapshot()
 # too, but that runs on the same shared loop (dashboard.start_dashboard
@@ -953,7 +980,7 @@ def every_snapshot() -> list[EveryHandle]:
 async def _start_ticker(
     fn, seconds: float, label: str, delay: float = 0.0, tab: str | None = None
 ) -> None:
-    """Coroutine that runs on the shared asyncio loop.
+    """Run one @every ticker on the shared asyncio loop.
 
     Runs the first tick after `delay` seconds (immediately by default), then
     sleeps `seconds` between ticks. Catches exceptions so one bad tick doesn't
@@ -961,24 +988,24 @@ async def _start_ticker(
 
     `tab=` resolves `browser.get(tab)` fresh on every tick and passes the
     live Tab to `fn`, rather than `fn` closing over one captured at
-    registration — a Tab captured hours ago is exactly what a navigation or
+    registration. A Tab captured hours ago is exactly what a navigation or
     crash invalidates. The resolve happens inside the existing per-tick
     try/except, so a missing page logs and retries next tick.
 
-    **A ticker's output is ambient, so it must clear the inherited task id.**
+    A ticker's output is ambient, so it must clear the inherited task id.
     `_task_scope` is what binds `tasks._current_task`, and it wraps `_run_cell`
-    and `_run_deferred` — a ticker goes through neither, because it has no task
+    and `_run_deferred`. A ticker goes through neither, because it has no task
     registry entry to attribute to. It inherits one anyway: `every(...)` applied
     inside an exec cell schedules this coroutine from that cell's context, and
     `copy_context()` carries `_current_task` into a task that then outlives the
     cell by weeks. Every downstream cap is keyed on that id and reset only by
-    the cell's `CellDone`, which fired long ago — so a ticker's `print()` filled
+    the cell's `CellDone`, which fired long ago, so a ticker's `print()` filled
     the *cell's* 4 KB budget and was then dropped permanently by the pane
     (`display._truncated_tasks`) and by the event log
     (`eventlog._chunk_capped`), which on a headless kernel is the only surface
     there is. The spill went the same way: writes landed in the finished cell's
     file until `_prune_spill_files` unlinked it an hour later, and then nowhere.
-    Clearing it also restores what `defer()` documents about itself — a
+    Clearing it also restores what `defer()` documents about itself: a
     `defer()` from a tick body is meant to be ambient, and was instead
     inheriting a dead cell's `origin`, which the targeted-push rule says to
     *drop* rather than broadcast once that session disconnects.
@@ -997,38 +1024,44 @@ async def _start_ticker(
 
     # One unregister covering every way out, rather than a discard at each
     # `await` that can be cancelled. It was the latter, and the await a ticker
-    # spends nearly all its life in — the inter-tick sleep — was the one
+    # spends nearly all its life in (the inter-tick sleep) was the one
     # missing it: `EveryHandle.cancel()` discards first so the user-facing
     # path looked fine, but the watchdog cancels by task (`_watch_block`
     # cancels whichever task holds a wedged loop), which left `every.list()`
-    # and the dashboard reporting a ticker that no longer existed. `except Exception` below cannot swallow the cancellation
-    # on its way here — `CancelledError` is a `BaseException`.
+    # and the dashboard reporting a ticker that no longer existed.
+    # `except Exception` below cannot swallow the cancellation on its way
+    # here: `CancelledError` is a `BaseException`.
     try:
         if delay > 0:
             await asyncio.sleep(delay)
 
         while True:
-            try:
-                if tab is not None:
-                    result = fn(await __main__.browser.get(tab))
-                else:
-                    result = fn()
-                if inspect.iscoroutine(result):
-                    result = await result
-            except Exception as exc:
-                _push(
-                    f"@every {label}: {type(exc).__name__}: {exc}",
-                    "every",
-                    label=label,
-                    error="1",
-                )
-            else:
-                if result is not None:
-                    _push(str(result), "every", label=label)
+            await _run_one_tick(fn, label, tab)
             await asyncio.sleep(seconds)
     finally:
         with _every_lock:
             _every_registry.discard(handle)
+
+
+async def _run_one_tick(fn, label: str, tab: str | None) -> None:
+    """Execute a single tick of an @every function, catching exceptions."""
+    try:
+        if tab is not None:
+            result = fn(await __main__.browser.get(tab))
+        else:
+            result = fn()
+        if inspect.iscoroutine(result):
+            result = await result
+    except Exception as exc:
+        _push(
+            f"@every {label}: {type(exc).__name__}: {exc}",
+            "every",
+            label=label,
+            error="1",
+        )
+        return
+    if result is not None:
+        _push(str(result), "every", label=label)
 
 
 def _make_every(loop: asyncio.AbstractEventLoop):
@@ -1061,13 +1094,13 @@ def _make_every(loop: asyncio.AbstractEventLoop):
         loop tick completes.
         """
         # `browser` is injected once at boot (_inject_builtins) and never
-        # appears later, so checking per-tick could never self-heal — it just
+        # appears later, so checking per-tick could never self-heal; it just
         # pushed the same error every `seconds` forever. Refuse the
         # registration instead, so the registering cell errors once.
         if tab is not None and getattr(__main__, "browser", None) is None:
             raise RuntimeError(
-                "every(tab=...) needs the browser builtin — install the "
-                "`browser` extra, or run `repld browser` instead of `repld`"
+                "every(tab=...) needs the browser builtin. Install the "
+                "`browser` extra, or run `repld browser` instead of `repld`."
             )
 
         def decorator(fn):
@@ -1097,10 +1130,14 @@ def _make_every(loop: asyncio.AbstractEventLoop):
 
 
 class _Context:
-    def __init__(self, loop: asyncio.AbstractEventLoop):
+    """Adapter between the IPC dispatcher and the kernel's asyncio loop."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind to the kernel's asyncio loop."""
         self.loop = loop
 
     def start_task(self, src: str, *, origin=None):
+        """Create a tracked task for an exec cell and schedule it on the loop."""
         n = next(_exec_count)
         task_id, task = tasks.new_task(origin=origin)
         events.emit(CellStart(task_id, src, time.time()))
@@ -1136,7 +1173,7 @@ class _Context:
         tool calls that have no deferral to degrade into. `exec` gets its
         task_id immediately and turns a long wait into the ordinary
         `{task_id, done:false}` plus a completion push, so it must *not* come
-        through here — but a gist or browser tool answers inline or not at all,
+        through here, but a gist or browser tool answers inline or not at all,
         and one arriving before `repld_init.py` finished sees a bare `__main__`.
         That is not hypothetical since lazy spawn: `tools/call` is what spawns
         the kernel, and the socket binds before the bootstrap runs.
@@ -1156,14 +1193,16 @@ class _Context:
             fut.cancel()
 
     def snapshot(self, task_id: str) -> dict | None:
+        """Return a JSON-safe snapshot of the given task, or None if unknown."""
         return tasks.snapshot(task_id)
 
     def mark_nudged(self, task_id: str) -> bool:
+        """Promise a completion push for task_id; returns False if already done."""
         return tasks.mark_nudged(task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         """Attempt to cancel a running cell. Returns True if the cancellation
-        request was scheduled. Cannot preempt tight sync loops — only
+        request was scheduled. Cannot preempt tight sync loops; only
         await-yielding code is cancellable."""
         task = tasks.get(task_id)
         if task is None:
@@ -1181,8 +1220,8 @@ class _Context:
 
 # Auto-executed into `__main__` at boot when it exists in the kernel's cwd.
 # A convention rather than a flag because the kernel that matters is usually
-# one nobody started by hand — the bridge spawns it lazily, and `repld
-# restart` respawns it — and none of those paths could carry an argument.
+# one nobody started by hand (the bridge spawns it lazily, and `repld
+# restart` respawns it), and none of those paths could carry an argument.
 # The project directory is the source of truth, exactly as it already is for
 # `./.env` (`load_dotenv`) and `./gists` (`gists.install`).
 INIT_FILENAME = "repld_init.py"
@@ -1209,7 +1248,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
             _run_cell(task_id, src, n, wait_ready=False), loop
         )
         # Block until the bootstrap completes (including any run_until_complete
-        # semantics — background tasks it spawned stay alive on the loop).
+        # semantics; background tasks it spawned stay alive on the loop).
         future.result(timeout=_INIT_WAIT_SECONDS)
     except Exception:
         tb = traceback.format_exc()
@@ -1221,7 +1260,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
         )
         return
     # Only ever emitted when a bootstrap actually ran. On a bridge-spawned
-    # kernel this is the only sign that `__main__` arrived pre-populated —
+    # kernel this is the only sign that `__main__` arrived pre-populated;
     # nobody watched it boot.
     _push(f"[repld] {path.name} loaded", "init_loaded", file=str(path))
 
@@ -1249,22 +1288,23 @@ async def _drain_loop_tasks() -> None:
 
 
 def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
+    """Drain loop tasks within a 2s budget, stop the loop, and close IPC."""
     if loop.is_running():
         try:
             asyncio.run_coroutine_threadsafe(_drain_loop_tasks(), loop).result(
                 timeout=2.0
             )
         except (concurrent.futures.TimeoutError, RuntimeError):
-            pass  # loop wedged or already stopping — best effort
+            pass  # loop wedged or already stopping, best effort
     loop.call_soon_threadsafe(loop.stop)
     ipc.stop_server()
 
 
 def _confirm_browser_restore(ports: list[int], patterns: list[str]) -> bool:
-    """Ask on the real terminal (writing to sys.__stdout__ to bypass the
-    tee, which by this point in boot has already redirected sys.stdout for
-    task-output capture) whether to reconnect Chrome ports / re-watch
-    patterns from the previous kernel run.
+    """Ask on the real terminal whether to reconnect Chrome ports / re-watch patterns.
+
+    Writes to sys.__stdout__ to bypass the tee, which by this point in boot
+    has already redirected sys.stdout for task-output capture.
     """
     parts = []
     if ports:
@@ -1286,10 +1326,10 @@ def _restore_browser_state(
 
     Reconnects saved Chrome ports, re-watches patterns, and restores the
     console-error suppress list and the Fetch-capture exemption list.
-    Best-effort — failures are reported to
-    stderr but never block boot. Reconnect/re-watch is opt-in: prompted on
-    the real terminal when `interactive`, skipped otherwise (headless boot
-    or non-tty stdin can't be prompted, so it defaults to not reconnecting).
+    Best-effort: failures are reported to stderr but never block boot.
+    Reconnect/re-watch is opt-in: prompted on the real terminal when
+    `interactive`, skipped otherwise (headless boot or non-tty stdin can't
+    be prompted, so it defaults to not reconnecting).
     """
     browser = getattr(__main__, "browser", None)
     ports = hint.get("chrome_ports", [])
@@ -1349,7 +1389,7 @@ def _restore_browser_state(
 
 
 def _start_loop() -> tuple[asyncio.AbstractEventLoop, int]:
-    """1. Start the asyncio loop on a daemon thread; returns it and the thread's ident."""
+    """Start the asyncio loop on a daemon thread; returns it and the thread's ident."""
     loop = asyncio.new_event_loop()
     loop.set_exception_handler(_asyncio_exception_handler)
     thread = threading.Thread(
@@ -1361,7 +1401,7 @@ def _start_loop() -> tuple[asyncio.AbstractEventLoop, int]:
 
 
 def _boot_runtime(sock_path: Path, display: bool) -> None:
-    """2. Event queue, event log, tee, .env, gists — before any user code runs."""
+    """Event queue, event log, tee, .env, gists: everything before user code runs."""
     # The queue is the TUI's, and only the TUI's. Headless, the event log's
     # sink is the sole consumer, so skip the queue rather than paying a put +
     # a cross-thread wakeup per event to move it nowhere.
@@ -1377,14 +1417,14 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
 
     # 2a. Reclaim what dead kernels left in RUNTIME_DIR. Boot is the only
     # sensible moment: nothing runs on the way out of a SIGKILL, and a kernel
-    # can't tidy up after files it hasn't written yet. Best-effort — a failed
+    # can't tidy up after files it hasn't written yet. Best-effort: a failed
     # sweep is never a reason to refuse to start.
     try:
         paths.ensure_runtime_dir()
         state.sweep_dead_pid_files(paths.RUNTIME_DIR)
         # 2a-ii. Same idea, one level up: reclaim a dead kernel's whole
         # PROJECTS_DIR/<slug>/ directory, not just the per-process scratch
-        # above — see state.sweep_dead_project_dirs' docstring.
+        # above. See state.sweep_dead_project_dirs' docstring.
         state.sweep_dead_project_dirs(paths.PROJECTS_DIR)
     except Exception as e:
         print(f"repld: could not sweep stale runtime files: {e}", file=sys.stderr)
@@ -1402,7 +1442,7 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     # The usual path is that `bind.rebind_exec` re-execed us into it before we
     # got here, making this a no-op; it earns its keep when that couldn't
     # happen (no uv on PATH, or a kernel started by hand). A version mismatch
-    # returns None and is left alone — splicing a venv built for a different
+    # returns None and is left alone: splicing a venv built for a different
     # Python onto sys.path half-works, which is worse than not trying.
     from . import bind as _bind
 
@@ -1412,7 +1452,7 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     if _project_venv is not None and not _bind.is_bound(_project_venv):  # noqa: SIM102
         if _bind.adopt(_project_venv) is None:
             print(
-                f"repld: {_bind.describe(_project_venv)} — its packages are "
+                f"repld: {_bind.describe(_project_venv)}, its packages are "
                 "not importable here; `repld restart` under the project's "
                 "interpreter to fix",
                 file=sys.stderr,
@@ -1421,8 +1461,8 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     # 2c. Set up gist directories on sys.path with auto-reload.
     from . import gists as _gists
 
-    # `paths.gist_dirs()` is the definition of this precedence — global before
-    # local — and `gist_lint` resolves against the same call rather than
+    # `paths.gist_dirs()` is the definition of this precedence (global before
+    # local), and `gist_lint` resolves against the same call rather than
     # against a copy that used to sit here.
     _gists.install(paths.gist_dirs())
 
@@ -1436,7 +1476,7 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
 
 
 def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
-    """3. Inject helpers into __main__ + repld module."""
+    """Inject helpers into __main__ + repld module."""
     import pydoc
 
     import repld as _repld_mod
@@ -1461,7 +1501,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
     for _name, _fn in _helpers.items():
         setattr(__main__, _name, _fn)
         setattr(_repld_mod, _name, _fn)
-    # Pager-free help — pydoc's default pager forks less(1) on the kernel tty,
+    # Pager-free help: pydoc's default pager forks less(1) on the kernel tty,
     # bypassing _Tee and deadlocking the asyncio loop. Helper(output=...) writes
     # directly through sys.stdout (the _Tee) so output flows to exec clients.
     # setattr, not assignment: basedpyright rejects unknown attributes on a
@@ -1478,19 +1518,19 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         # No atexit disconnect hook, and adding one cannot work: `_shutdown`
         # stops the loop before atexit runs, so a coroutine scheduled there is
         # never driven and the wait just burns its timeout. Tabs clean
-        # themselves up anyway — the pill's staleness check removes it, and the
+        # themselves up anyway: the pill's staleness check removes it, and the
         # beforeunload guard with it, once Python stops heartbeating, which is
         # exactly what a stopped loop looks like from the page.
     except ImportError as e:
-        # Not an error — most projects never install the extra. But swallowing
-        # it silently means the failure surfaces much later and somewhere else:
-        # `NameError: name 'browser' is not defined` in a cell, or 21 tools
-        # simply absent from tools/list. Both read as "this kernel has no
+        # Not an error: most projects never install the extra. But swallowing
+        # it silently means the failure surfaces much later and somewhere else
+        # (`NameError: name 'browser' is not defined` in a cell, or 21 tools
+        # simply absent from tools/list). Both read as "this kernel has no
         # browser" and neither says *why*, which sends the reader looking at
         # the browser stack instead of at the environment. This is the only
         # place that knows which module was missing, so it says so.
         print(
-            f"repld: browser disabled — cannot import {e.name or e}. "
+            f"repld: browser disabled, cannot import {e.name or e}. "
             "Install the `browser` extra, or run `repld browser` instead of "
             "`repld`.",
             file=sys.stderr,
@@ -1500,7 +1540,7 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
 def _start_services(
     loop: asyncio.AbstractEventLoop, sock_path: Path, display: bool
 ) -> int | None:
-    """4. IPC, dashboard, browser restore, lockfile, session registry.
+    """IPC, dashboard, browser restore, lockfile, session registry.
 
     Returns the dashboard port (None if the dashboard failed to start).
     """
@@ -1510,7 +1550,7 @@ def _start_services(
     ipc.start_server(sock_path, dispatcher.handle)
     ipc.on_session_closed(lambda session: _release_taken_tabs(session, loop))
 
-    # 4b. Dashboard HTTP server — reuse previous state from persistent hint file.
+    # 4b. Dashboard HTTP server: reuse previous state from persistent hint file.
     from . import dashboard
 
     _kernel_start_time = time.monotonic()
@@ -1575,8 +1615,8 @@ def _start_watchdog(
     sock_path: Path,
     dashboard_port: int | None,
 ) -> threading.Event:
-    """5+6. Loop watchdog + banner. Returns the kernel's stop event."""
-    # 5. Loop watchdog — channel-push if the bg loop wedges (typically a
+    """Loop watchdog + banner. Returns the kernel's stop event."""
+    # 5. Loop watchdog: channel-push if the bg loop wedges (typically a
     #    cell doing sync I/O while uvicorn or similar lives on the loop).
     #    Tunable via REPLD_LOOP_BLOCK_THRESHOLD (seconds, default 5).
     #    Kill threshold: cancel the holding task after REPLD_LOOP_KILL_THRESHOLD (default 30s).
@@ -1608,21 +1648,21 @@ def _report_boot_failure() -> None:
     """Put the in-flight exception on the *real* stderr, bypassing the tee.
 
     `install_tee()` runs partway through `_boot_runtime`, and `_Tee.write`
-    deliberately never touches `self.real` — the display thread owns the
-    terminal. Anything that dies after that point therefore reaches only the
+    deliberately never touches `self.real` (the display thread owns the
+    terminal). Anything that dies after that point therefore reaches only the
     event log, and there is no display thread yet to render it, so a kernel
     that fails to boot exits non-zero having printed nothing at all. That is
     how a too-long `--socket` path or an already-bound port presents: a silent
     exit 1.
 
     The exception is re-raised by the caller, so the event log still gets its
-    copy through the normal unhandled-exception path — this only adds the
+    copy through the normal unhandled-exception path; this only adds the
     destination a human is actually looking at.
     """
     import traceback
 
     real = sys.__stderr__
-    if real is None:  # stderr closed (detached spawn) — the event log has it
+    if real is None:  # stderr closed (detached spawn); the event log has it
         return
     try:
         real.write("\nrepld: kernel failed to start\n")
@@ -1638,12 +1678,12 @@ def _proc_start(pid: int) -> str | None:
         stat = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
         return None
-    # comm (field 2) may contain spaces and parens — split after the last ')'.
+    # comm (field 2) may contain spaces and parens; split after the last ')'.
     return stat.rsplit(")", 1)[1].split()[19]
 
 
 def _watch_owner(pid: int, stop: threading.Event) -> None:
-    """Set `stop` once process `pid` exits — an --ephemeral kernel's bridge.
+    """Set `stop` once process `pid` exits (an --ephemeral kernel's bridge).
 
     Polls pid *and* start time: the kernel is a systemd unit, not the bridge's
     child, and a bare pid check would be fooled by a recycled pid forever.
@@ -1699,6 +1739,7 @@ def _watch_listings(stop: threading.Event, interval: float = 2.0) -> None:
 
 
 def _reclaim_ephemeral_dir(sock_path: Path) -> None:
+    """Remove the ephemeral socket directory on exit, if it lives under the ephemeral root."""
     # Only ever the private dir `bridge._ephemeral_socket_path` made.
     if sock_path.parent.parent == paths.RUNTIME_DIR / "ephemeral":
         shutil.rmtree(sock_path.parent, ignore_errors=True)
@@ -1709,6 +1750,7 @@ def run_kernel(
     *,
     display: bool = True,
 ) -> int:
+    """Boot and run the kernel for the current project, returning 0 on clean exit."""
     sock_path = Path(socket_path) if socket_path else default_socket_path()
     _claim_project(sock_path)
     # Set by an --ephemeral bridge: this kernel dies with that process however
@@ -1737,7 +1779,7 @@ def run_kernel(
         # Release the cells that queued behind the bootstrap. Unconditional and
         # in a `finally`-shaped position: `_run_init_file` never raises, but a
         # bootstrap that fails, times out, or doesn't exist must still let exec
-        # through — a kernel nobody can run code in cannot be repaired.
+        # through. A kernel nobody can run code in cannot be repaired.
         loop.call_soon_threadsafe(_init_done.set)
         _watch_listings(stop)
     except Exception:
@@ -1757,7 +1799,7 @@ def run_kernel(
 
         run_display(stop)
     else:
-        # Nothing to consume — _boot_runtime disabled the queue. Just park.
+        # Nothing to consume; _boot_runtime disabled the queue. Just park.
         stop.wait()
 
     _shutdown(loop)

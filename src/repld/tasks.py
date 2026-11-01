@@ -10,7 +10,7 @@ A spill lives for _EVICT_AGE after its cell completes, then `_prune_spill_files`
 drops the task entry and unlinks the file. That bound is what keeps a kernel
 running for weeks from filling tmpfs with one file per cell. `_sweep_orphans`
 applies the same bound to the runtime files that have no task entry to hang
-off — resource spills and browser screenshots.
+off (resource spills and browser screenshots).
 """
 
 import asyncio
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 # what's returned in the `exec` / `get_task` response body.
 PREVIEW_HEAD_LINES = 5
 PREVIEW_TAIL_LINES = 5
-PREVIEW_MAX_BYTES = 4 * 1024  # wire budget — independent of display.VIEWER_MAX_BYTES
+PREVIEW_MAX_BYTES = 4 * 1024  # wire budget, independent of display.VIEWER_MAX_BYTES
 PREVIEW_MAX_LINE = 400        # per-line clamp for unbroken-text lines
 
 _current_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -53,9 +53,12 @@ _last_prune = 0.0
 
 
 def _open_spill(task: dict, task_id: str) -> io.TextIOWrapper:
-    # 0600, not 0644: a spill holds whatever the cell printed — tokens, API
-    # responses, query results — and under the /tmp fallback the directory is
-    # the only other thing standing between it and other local users.
+    """Open a 0600 spill file for *task_id* and record it on the task dict.
+
+    0600, not 0644: a spill holds whatever the cell printed (tokens, API
+    responses, query results), and under the /tmp fallback the directory is
+    the only other thing standing between it and other local users.
+    """
     ensure_runtime_dir()
     path = RUNTIME_DIR / f"{os.getpid()}-{task_id}.out"
     fp = open_private(path)
@@ -69,7 +72,7 @@ class _Tee(io.TextIOBase):
 
     Persists writes to the active task's spill file (lazily opened on first
     write) and emits StdoutChunk / StderrChunk events. Does NOT write to
-    self.real — the display thread owns sys.__stdout__.
+    self.real; the display thread owns sys.__stdout__.
 
     Async tasks spawned via asyncio.create_task() inside user code inherit
     the ContextVar via copy_context(), so fire-and-forget output stays
@@ -77,10 +80,12 @@ class _Tee(io.TextIOBase):
     """
 
     def __init__(self, real: io.TextIOBase, stream: Literal["stdout", "stderr"]):
+        """Wrap *real* as the interceptor for *stream*."""
         self.real = real
         self.stream = stream
 
     def write(self, s: str) -> int:
+        """Append *s* to the active task's spill and emit a chunk event."""
         if not s:
             return 0
         task_id = _current_task.get()
@@ -103,16 +108,19 @@ class _Tee(io.TextIOBase):
         return len(s)
 
     def flush(self) -> None:
-        pass
+        """No-op; each write already flushes the spill file."""
 
     def isatty(self) -> bool:
+        """Delegate to the underlying real stream."""
         return self.real.isatty()
 
     def fileno(self) -> int:
+        """Delegate to the underlying real stream."""
         return self.real.fileno()
 
 
 def install_tee() -> None:
+    """Replace sys.stdout/stderr with _Tee interceptors, once."""
     if not isinstance(sys.stdout, _Tee):
         sys.stdout = _Tee(sys.__stdout__, "stdout")  # type: ignore[arg-type]
     if not isinstance(sys.stderr, _Tee):
@@ -164,16 +172,17 @@ def current_caller() -> dict | None:
 
 
 def task_id_of(atask: asyncio.Task[object]) -> str | None:
-    """The repld task *atask* runs on behalf of — callable from any thread."""
+    """The repld task *atask* runs on behalf of, callable from any thread."""
     return atask.get_context().get(_current_task)
 
 
 def new_task(origin: object = None) -> tuple[str, dict]:
+    """Allocate a fresh task entry and register it under _tasks_lock."""
     task_id = uuid.uuid4().hex[:12]
     task: dict = {
         "done_event": threading.Event(),
         "started_at": time.time(),  # wall-clock, matching kernel.lock's started_at
-        "finished_at": None,        # wall-clock, set by finalize() — public `done_at`
+        "finished_at": None,        # wall-clock, set by finalize(); public `done_at`
         "exception": None,
         # Bounded-repr'd, never the raw object: this dict feeds straight into
         # get_task's `json.dumps(snap)`, and an arbitrary result (a DataFrame,
@@ -185,8 +194,8 @@ def new_task(origin: object = None) -> tuple[str, dict]:
         "nudged": False,
         # True/False once a completion push to `origin` was attempted; None
         # if none was owed (answered inline, still running), it broadcast,
-        # or it is held (parked) or queued (`origin`'s id has no connection)
-        # — those flip to True/False later via mark_push_delivered().
+        # or it is held (parked) or queued (`origin`'s id has no connection).
+        # Those flip to True/False later via mark_push_delivered().
         "push_delivered": None,
         # What `push_delivered`'s None hides: "none" (no push owed: inline,
         # still running, ambient), "broadcast", "held" (parked), "queued"
@@ -209,7 +218,7 @@ def new_task(origin: object = None) -> tuple[str, dict]:
 
 
 def get(task_id: str) -> dict | None:
-    """Thread-safe lookup — callers outside this module should use this
+    """Thread-safe lookup. Callers outside this module should use this
     instead of reaching into `_tasks` directly."""
     with _tasks_lock:
         return _tasks.get(task_id)
@@ -228,7 +237,7 @@ def record_push(task_id: str, delivered: bool | None, push_state: str) -> None:
 
 def mark_push_delivered(task_id: str, delivered: bool) -> None:
     """Update `push_delivered` once a held or queued completion push actually
-    flushes, or expires — `kernel._maybe_push_done`'s own synchronous set only
+    flushes or expires. `kernel._maybe_push_done`'s own synchronous set only
     knows "held"/"queued" at push time, not the eventual outcome. `ipc`'s
     flush callback is the caller; a no-op if the task is gone by then.
     """
@@ -264,6 +273,7 @@ def _read_from(task: dict, offset: int = 0) -> str:
 
 
 def _clip_line(line: str) -> str:
+    """Clamp a single line to PREVIEW_MAX_LINE, appending a length notice."""
     if len(line) <= PREVIEW_MAX_LINE:
         return line
     keep = PREVIEW_MAX_LINE - 40
@@ -276,7 +286,7 @@ def _make_preview(full: str) -> tuple[str, bool]:
     """Build a head+tail preview with per-line and total-byte clamps.
 
     Three regimes:
-      - len(full) ≤ MAX_BYTES: return as-is, untruncated.
+      - len(full) <= MAX_BYTES: return as-is, untruncated.
       - many lines: head/tail slice with elision marker; each line clamped.
       - few but wide lines: per-line clamp catches the giant ones.
     """
@@ -332,7 +342,7 @@ def spill_text(text: str, label: str = "output") -> dict:
 def spill_marker(path: str) -> str:
     """Canonical '[full output: {path}]' marker.
 
-    Agents and tests grep for this exact shape — every wire-facing producer
+    Agents and tests grep for this exact shape, so every wire-facing producer
     must build it here.  (display.py's 'full: {path}' viewer-cap notice is a
     deliberately distinct, terminal-only variant.)
     """
@@ -352,7 +362,7 @@ def snapshot(task_id: str) -> dict | None:
     # `_tasks_lock` and unlinks *outside* it, so a poll resolving `get()` just
     # before the pop and reading just after the unlink got a FileNotFoundError
     # out of here, up through the dispatcher, and back to the agent as a bare
-    # `-32603 internal` — on the `exec`/`get_task` hot path. An evicted spill
+    # `-32603 internal` on the `exec`/`get_task` hot path. An evicted spill
     # is missing output, not a protocol error.
     try:
         full = _read_from(task)
@@ -386,7 +396,7 @@ def mark_nudged(task_id: str) -> bool:
 
     The check and the flag are one critical section, paired with the one in
     `claim_done_push`, because the window between them is wide: `_exec` takes
-    a full `snapshot()` — a re-read of the entire spill file — between its
+    a full `snapshot()` (a re-read of the entire spill file) between its
     wait expiring and this call. A cell landing in that gap used to have its
     push dropped for not being nudged yet *and* be reported as still running.
     """
@@ -415,14 +425,17 @@ def claim_done_push(task_id: str) -> bool:
 
 
 def finalize(task_id: str) -> None:
+    """Mark the task done, record wall-clock finish time, and trigger pruning.
+
+    Does not close the spill handle immediately: background asyncio tasks
+    spawned by the cell may keep printing after it returns (they inherit
+    task_id via the ContextVar). Handles are closed by _prune_spill_files
+    after _PRUNE_AGE seconds.
+    """
     global _finalize_count
     task = get(task_id)
     if task is None:
         return
-    # Don't close spill_file immediately: background asyncio tasks spawned by
-    # this cell may keep printing after the cell returns (they inherit task_id
-    # via the ContextVar). Handles are closed by _prune_spill_files after
-    # _PRUNE_AGE seconds.
     fp = task.get("spill_file")
     if fp is not None and fp is not _CLOSED:
         try:
@@ -430,15 +443,15 @@ def finalize(task_id: str) -> None:
         except Exception:
             pass
     # Under the lock, so `mark_nudged` either gets its promise in before this
-    # or sees the task as finished — never lands between this and the
+    # or sees the task as finished. It never lands between this and the
     # `claim_done_push` that follows it, which would strand the push.
     with _tasks_lock:
         task["done_event"].set()
-    task["done_at"] = time.monotonic()  # eviction clock — see _prune_spill_files
+    task["done_at"] = time.monotonic()  # eviction clock, see _prune_spill_files
     task["finished_at"] = (
         time.time()
     )  # wall-clock, matching started_at; public `done_at`
-    # Drop the asyncio.Task reference now — it's no longer needed once the
+    # Drop the asyncio.Task reference now: it is no longer needed once the
     # cell is done, and holding it keeps the whole coroutine frame chain alive.
     task["asyncio_task"] = None
     _finalize_count += 1
@@ -451,7 +464,7 @@ def maybe_prune() -> None:
 
     `finalize`'s every-_PRUNE_EVERY-calls trigger only fires while cells are
     running, so a kernel that executes a handful of cells and then idles for a
-    week never reaches it — the entries and their spill files sit there for the
+    week never reaches it. The entries and their spill files sit there for the
     life of the process, and `_EVICT_AGE` stops describing anything real. The
     kernel's watchdog thread ticks regardless of load, so it calls this; the
     interval check keeps that cheap.
@@ -477,23 +490,21 @@ def _close_spill(task: dict) -> None:
 
 
 def _prune_spill_files() -> None:
-    """Close spill file handles on tasks completed more than _PRUNE_AGE ago,
-    and drop entries — and their spill files — once they're older than
-    _EVICT_AGE.
+    """Close spill handles past _PRUNE_AGE, evict entries and files past _EVICT_AGE.
 
     Both halves exist because a kernel is meant to run for weeks: without the
     eviction it accumulates one dict entry per exec/defer call forever, and
     without the unlink it accumulates one file per output-producing cell.
-    `state.sweep_dead_pid_files` can't help there — it only reclaims what a
+    `state.sweep_dead_pid_files` cannot help there; it only reclaims what a
     *dead* pid left behind, and a live kernel's own files are untouchable by
     construction. Evicting the entry without unlinking would in fact make them
     unreclaimable until the kernel exits.
 
     _EVICT_AGE is therefore also the retention window on a spill path handed
-    to an agent: roughly an hour on, `[full output: …]` from an old response
+    to an agent: roughly an hour on, `[full output: ...]` from an old response
     stops resolving. Anything still wanted by then belongs somewhere durable.
     Roughly, because eviction happens on the next sweep past the deadline, not
-    at it — whichever of `finalize`'s call counter or `maybe_prune`'s interval
+    at it, whichever of `finalize`'s call counter or `maybe_prune`'s interval
     comes first.
 
     The registry can only account for what it knows about, so `_sweep_orphans`
@@ -529,9 +540,9 @@ def _prune_spill_files() -> None:
 def _sweep_orphans() -> None:
     """Reclaim this kernel's own runtime files that no task entry owns.
 
-    Three producers write `{pid}-…` into RUNTIME_DIR without going through the
-    task registry: `spill_text` (oversized `resources/read` responses, and any
-    browser tool response past the preview budget — `browser_tree` and
+    Three producers write `{pid}-...` into RUNTIME_DIR without going through
+    the task registry: `spill_text` (oversized `resources/read` responses, and
+    any browser tool response past the preview budget, since `browser_tree` and
     `browser_network` routinely are), and `Tab.screenshot`. Nothing above
     reaches them: `_prune_spill_files` walks `_tasks`, and
     `state.sweep_dead_pid_files` only reclaims what a *dead* pid left, so for a
@@ -539,7 +550,7 @@ def _sweep_orphans() -> None:
 
     Same `_EVICT_AGE` as a task spill, deliberately: both hand the agent a path
     in a tool response, so both should stay resolvable for the same hour. Live
-    tasks' spill paths are excluded — they age out by `done_at` above, and a
+    tasks' spill paths are excluded; they age out by `done_at` above, and a
     long-idle task holding an open handle would otherwise have the file pulled
     out from under it.
     """

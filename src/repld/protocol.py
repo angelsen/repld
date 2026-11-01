@@ -1,7 +1,7 @@
 """MCP JSON-RPC tool schemas + dispatch.
 
-Kernel-side only. `bridge.py` is a stateful proxy — it tracks in-flight ids and
-replays the client's handshake onto a fresh kernel — but it never interprets a
+Kernel-side only. `bridge.py` is a stateful proxy: it tracks in-flight ids and
+replays the client's handshake onto a fresh kernel, but it never interprets a
 tool call, so every schema and handler below lives on this side of the socket.
 """
 
@@ -55,37 +55,6 @@ from .state import read_lock
 from .tasks import spill_marker
 from .tasks import spill_text as _spill_text
 
-
-def _unknown_task(rid, tid: str) -> dict:
-    """Names the kernel asked: an id is only known to the kernel it ran on, and
-    `repld tasks wait` picks its kernel from the caller's cwd."""
-    try:
-        lock = read_lock(lock_for(ipc.socket_path()))
-        cwd = lock.get("cwd") if isinstance(lock, dict) else None
-    except Exception:
-        cwd = None
-    return _error(
-        rid,
-        -32602,
-        f"unknown task_id: {tid} (kernel: {cwd or os.getcwd()}; a task is known "
-        "only to the kernel it ran on, for an hour after it finishes)",
-    )
-
-
-def _peer_gone(sock: socket.socket) -> bool:
-    """Whether the client end of *sock* already hung up.
-
-    Used by `_tasks_wait` while blocked inside `Dispatcher.handle`, where
-    `session.closed` can't yet reflect a mid-wait disconnect (see there).
-    """
-    try:
-        return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
-    except BlockingIOError:
-        return False
-    except OSError:
-        return True
-
-
 _TARGET_DESC = "Chrome target_id from browser_tabs"
 
 # The `target` property, one object shared by the fifteen browser tools whose
@@ -95,8 +64,8 @@ _TARGET_DESC = "Chrome target_id from browser_tabs"
 # itself for gist tools. Anything that later wants to edit a schema in place
 # has to copy first, or it edits all fifteen.
 #
-# `browser_detach` and `browser_clear` deliberately keep their own literal —
-# both say something the shared text can't ("detach one tab", "omit to clear
+# `browser_detach` and `browser_clear` deliberately keep their own literal:
+# both say something the shared text cannot ("detach one tab", "omit to clear
 # all"), which is the distinction worth preserving over the uniformity.
 _TARGET_PARAM = {"type": "string", "description": _TARGET_DESC}
 
@@ -141,11 +110,11 @@ TOOLS = [
                 "pattern": {"type": "string"},
                 "target": {
                     "type": "string",
-                    "description": "Short target ID (e.g. '9222:a1b2c3') — detach one tab",
+                    "description": "Short target ID (e.g. '9222:a1b2c3'), detach one tab",
                 },
                 "port": {
                     "type": "integer",
-                    "description": "Chrome debug port — disconnect the entire browser",
+                    "description": "Chrome debug port, disconnect the entire browser",
                 },
             },
             "required": [],
@@ -209,10 +178,10 @@ TOOLS = [
         "name": "browser_request",
         "description": (
             "Inspect a captured request by request_id. Returns full HAR entry "
-            "with request/response headers, postData, auth scheme, timing — "
+            "with request/response headers, postData, auth scheme, timing, "
             "everything except the response body (use browser_body for that). "
             "Cookie and long header values are truncated by default (noise, "
-            "not secrecy — they dominate every dump); pass full=true, or use "
+            "not secrecy; they dominate every dump); pass full=true, or use "
             "tab.request(id) in exec, for the verbatim values."
         ),
         "inputSchema": {
@@ -241,7 +210,7 @@ TOOLS = [
         "name": "browser_navigate",
         "description": (
             "Navigate a tab to a URL. Returns observation (tree + network + console delta). "
-            "Blocked on iframe targets (would destroy embedded app session) — use click/fetch instead. "
+            "Blocked on iframe targets (would destroy embedded app session). Use click/fetch instead. "
             "Pass force=true to override."
         ),
         "inputSchema": {
@@ -308,7 +277,7 @@ TOOLS = [
         "name": "browser_tree",
         "description": (
             "Accessibility snapshot of the page. Default mode 'aria': "
-            "LLM-oriented snapshot with [ref=eN] handles — use them as "
+            "LLM-oriented snapshot with [ref=eN] handles. Use them as "
             "aria-ref=eN selectors in browser_click/browser_type; refs stay "
             "valid until the next snapshot, navigation, or reattach. "
             "Mode 'ax': raw CDP accessibility tree (pierces same-process "
@@ -318,8 +287,8 @@ TOOLS = [
             "human, repld never solves one. "
             "Pass at='x,y' instead to hit-test a coordinate (a screenshot "
             "region, a failed click) and get a small elided tree rooted "
-            "there, with real [ref=eN] handles — ignores mode. Always also "
-            "captures a screenshot cropped to the hit — to act on a point "
+            "there, with real [ref=eN] handles (ignores mode). Always also "
+            "captures a screenshot cropped to the hit. To act on a point "
             "you see in it, pass at='local_x,local_y' with in_crop=<that "
             "screenshot's path>; no scale/offset math needed, the crop "
             "carries its own translation. A hit on an iframe reports the "
@@ -341,8 +310,8 @@ TOOLS = [
                 "in_crop": {
                     "type": "string",
                     "description": (
-                        "Path to an earlier browser_tree(at=...) screenshot — "
-                        "at= is then a pixel within it, not a page coordinate"
+                        "Path to an earlier browser_tree(at=...) screenshot. "
+                        "`at=` is then a pixel within it, not a page coordinate"
                     ),
                 },
             },
@@ -356,7 +325,7 @@ TOOLS = [
             "Returns {status, ok, body, base64Encoded}. Binary responses "
             "(invalid UTF-8) are base64-encoded with base64Encoded=true. "
             "Content-Type defaults to application/json for a dict body, "
-            "application/x-www-form-urlencoded for a string body — pass "
+            "application/x-www-form-urlencoded for a string body. Pass "
             "headers to override (e.g. for raw JSON text or plain text)."
         ),
         "inputSchema": {
@@ -425,7 +394,7 @@ TOOLS = [
     {
         "name": "browser_select",
         "description": (
-            "Select an option in a dropdown — native <select> (set via the "
+            "Select an option in a dropdown. Native <select> (set via the "
             "prototype setter + input/change events) or a custom widget "
             "(react-select-style: clicks the field, waits for a role=option "
             "matching the name, clicks it). A miss lists the visible "
@@ -448,7 +417,7 @@ TOOLS = [
         "name": "browser_hover",
         "description": (
             "Hover an element, strictly resolved like browser_click, and "
-            "leave the pointer parked on it — hover-revealed UI (menus, "
+            "leave the pointer parked on it. Hover-revealed UI (menus, "
             "toolbars, tooltips) stays up for a following browser_click, and "
             "the observation's changes: section reports what the hover "
             "revealed. Also takes 'x,y' page coordinates, for visual-only "
@@ -471,13 +440,13 @@ TOOLS = [
         "name": "browser_drag",
         "description": (
             "Mouse drag in a single call: press, micro-stepped then paced "
-            "moves with the button held, dwell, release — gesture state "
+            "moves with the button held, dwell, release. Gesture state "
             "can't survive being split across calls. Endpoints are selectors "
             "(strictly resolved) or 'x,y' coordinates. A drop target that "
             "only appears once the drag starts is re-resolved mid-gesture. "
             "Covers pointer/mouse-event drag (SVG editors, sliders, drag "
             "libraries); native HTML5 draggable DnD rides a different "
-            "browser pipeline — an observation saying 'changes: none' after "
+            "browser pipeline. An observation saying 'changes: none' after "
             "dragging one is the tell. Returns receipt + observation."
         ),
         "inputSchema": {
@@ -534,7 +503,7 @@ TOOLS = [
     },
     {
         "name": "browser_screenshot",
-        "description": "Capture a native-resolution PNG screenshot of a tab. Use Read to view. Raises if it exceeds the vision API's token budget instead of silently shrinking it — pass force=true to send it natively anyway, or crop to a smaller region instead (browser_tree(at=...) does this). For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}. Reapplying the override on an already-emulated tab can leave viewport metrics inconsistent (clientWidth != innerWidth) — prefer a fresh tab per distinct size, and verify document.documentElement.clientWidth === window.innerWidth before trusting the capture.",
+        "description": "Capture a native-resolution PNG screenshot of a tab. Use Read to view. Raises if it exceeds the vision API's token budget instead of silently shrinking it. Pass force=true to send it natively anyway, or crop to a smaller region instead (browser_tree(at=...) does this). For crisp text, first resize the viewport: browser_cdp(target, method='Emulation.setDeviceMetricsOverride', params={width: 1440, height: 900, deviceScaleFactor: 1, mobile: false}). For mobile: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true}. Reapplying the override on an already-emulated tab can leave viewport metrics inconsistent (clientWidth != innerWidth). Prefer a fresh tab per distinct size, and verify document.documentElement.clientWidth === window.innerWidth before trusting the capture.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -598,7 +567,7 @@ TOOLS = [
     {
         "name": "browser_invoke",
         "description": (
-            "Invoke a control action on a tab. Returns {result, observation} — `result` is "
+            "Invoke a control action on a tab. Returns {result, observation}. `result` is "
             "whatever window.controls.invoke() returned (by convention "
             "{returned, stateBefore, stateAfter, duration}), `observation` is the full "
             "observation pipeline (settle + tree + network + console delta) after the action."
@@ -736,7 +705,7 @@ TOOLS = [
             "channel; one with no agent claim on the tab goes to Chrome's "
             "own credentials prompt. One-shot: consumed by the next "
             "challenge. Only fires on a tab with Fetch enabled (get()/"
-            "open(), or explicit capture) — a watch()-attached tab always "
+            "open(), or explicit capture). A watch()-attached tab always "
             "shows Chrome's prompt."
         ),
         "inputSchema": {
@@ -753,10 +722,10 @@ TOOLS = [
         "name": "browser_grant_permissions",
         "description": (
             "Pre-authorize permissions (e.g. 'geolocation', 'notifications', "
-            "'camera', 'microphone' — Chrome's Browser.grantPermissions "
+            "'camera', 'microphone', Chrome's Browser.grantPermissions "
             "names) for a tab's origin, so a page request never surfaces "
             "Chrome's native permission bubble. Must be called before the "
-            "page asks — there's no interceptable event to answer "
+            "page asks; there is no interceptable event to answer "
             "after the fact, unlike a file chooser or dialog. Nothing is "
             "pre-authorized by default."
         ),
@@ -783,13 +752,13 @@ TOOLS = [
 _STATIC_SCHEMAS = {t["name"]: t for t in TOOLS}
 
 # MCP tool annotations (2025-03-26), applied by name so the classification
-# reads as one table. Hints only — clients use readOnlyHint for permission
+# reads as one table. Hints only: clients use readOnlyHint for permission
 # ergonomics, openWorldHint marks tools that reach the live web rather than
 # repld's own state. Core tools carry theirs inline in core_schemas.CORE_TOOLS
 # (those dicts are shared with the bridge and must not be mutated here);
 # bridge_tools.SCHEMAS carry theirs inline for the same reason.
 _TOOL_ANNOTATIONS = {
-    # DuckDB/store reads and page reads — no mutation anywhere.
+    # DuckDB/store reads and page reads, no mutation anywhere.
     "browser_tabs": {"readOnlyHint": True},
     "browser_pages": {"readOnlyHint": True},
     "browser_network": {"readOnlyHint": True},
@@ -804,7 +773,7 @@ _TOOL_ANNOTATIONS = {
     "browser_detach": {"destructiveHint": False, "idempotentHint": True},
     # Deletes captured history.
     "browser_clear": {"idempotentHint": True},
-    # Drive the live page — external, arbitrary web state.
+    # Drive the live page, external, arbitrary web state.
     "browser_js": {"openWorldHint": True},
     "browser_fetch": {"openWorldHint": True},
     "browser_cdp": {"openWorldHint": True},
@@ -829,6 +798,7 @@ _TOOL_ANNOTATIONS = {
 
 
 def _apply_annotations() -> None:
+    """Stamp `_TOOL_ANNOTATIONS` onto matching entries in `TOOLS`."""
     for tool in TOOLS:
         ann = _TOOL_ANNOTATIONS.get(tool["name"])
         if ann is not None:
@@ -859,12 +829,12 @@ _BROWSER_RESOURCES = [
     {
         "uri": "repld://browser/controls",
         "name": "browser-controls",
-        "description": "Controls exposed by window.controls on attached tabs — actions with param schemas, properties, state.",
+        "description": "Controls exposed by window.controls on attached tabs: actions with param schemas, properties, state.",
         "mimeType": "application/json",
     },
 ]
 
-# resources/read returns full text — resources are on-demand pulls, unlike
+# resources/read returns full text: resources are on-demand pulls, unlike
 # exec output. The cap only guards the unbounded producers (browser network/
 # console dumps); everything above it falls back to the spill preview.
 _RESOURCE_MAX_BYTES = 64 * 1024
@@ -874,13 +844,17 @@ _RESOURCE_MIMETYPES = {
 
 
 class Dispatcher(BrowserDispatchMixin):
-    def __init__(self, ctx: KernelContext):
+    """Kernel-side MCP method dispatcher, one instance per kernel."""
+
+    def __init__(self, ctx: KernelContext) -> None:
+        """Bind the dispatcher to its kernel context."""
         from . import __version__
 
         self.ctx = ctx
         self.server_version = __version__
 
-    def handle(self, req: dict, session) -> dict | None:
+    def handle(self, req: dict, session: ipc.Session) -> dict | None:
+        """Dispatch one JSON-RPC request and return the response, or `None` for notifications."""
         method = req.get("method")
         rid = req.get("id")
         if method == "initialize":
@@ -910,7 +884,7 @@ class Dispatcher(BrowserDispatchMixin):
             return _response(rid, {"gates": gates.open_gates()})
         if method == "gates/resolve":
             return self._gates_resolve(rid, req.get("params", {}))
-        # `repld tasks wait`/`cancel` — bare JSON-RPC like the gates methods
+        # `repld tasks wait`/`cancel`, bare JSON-RPC like the gates methods
         # above, for the same reason: `repld tasks` is the only caller, no MCP
         # client is ever told these exist, and `cancel` already has an MCP
         # tool twin (_cancel below) that agents use instead.
@@ -927,140 +901,14 @@ class Dispatcher(BrowserDispatchMixin):
             return None
         return _error(rid, -32601, f"method not found: {method}")
 
-    def _tasks_wait(self, rid, params: dict, session) -> dict | None:
-        """Block this connection's reader thread until a task finishes.
+    # ------------------------------------------------------------------
+    # initialize
+    # ------------------------------------------------------------------
 
-        Safe to block here: each IPC connection gets its own reader thread
-        (`ipc.Server._read_loop`), and `done_event.wait()` releases the GIL —
-        the kernel's asyncio loop is never touched. `session.closed` alone
-        can't see the CLI hang up mid-wait, because that flag is only set by
-        the same reader thread's own `for line in session.rfile` loop, which
-        can't take its next turn until this call returns — so `_peer_gone`
-        probes the socket directly instead.
-        """
-        from . import tasks
-
-        tid = params.get("task_id")
-        if not tid:
-            return _error(rid, -32602, "missing task_id")
-        task = tasks.get(tid)
-        if task is None:
-            return _unknown_task(rid, tid)
-        done_event = task["done_event"]
-        while not done_event.wait(timeout=2.0):
-            if session.closed or _peer_gone(session.sock):
-                return None
-        snap = self.ctx.snapshot(tid)
-        if snap is None:
-            return _error(rid, -32602, f"task evicted: {tid}")
-        return _response(rid, snap)
-
-    def _tasks_cancel(self, rid, params: dict) -> dict:
-        tid = params.get("task_id")
-        if not tid:
-            return _error(rid, -32602, "missing task_id")
-        return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
-
-    def _peer(self, rid, method: str, params: dict, session) -> dict | None:
-        """`peer/list`, `peer/inspect`, `peer/call`.
-
-        The first request marks the connection `Session.peer`: it is one call's
-        socket, not a session, so channel pushes and broadcasts skip it. A
-        JSON-RPC error here always means the target did not run; one that ran
-        and raised comes back as `result.error` (see `_peer_call`).
-        """
-        from . import peer_host
-
-        session.peer = True
-        try:
-            if method == PEER_CALL_METHOD:
-                return self._peer_call(rid, params, session)
-            self.ctx.wait_ready()
-            if method == PEER_LIST_METHOD:
-                return _response(rid, peer_host.describe_surface())
-            return _response(rid, peer_host.inspect_target(peer_host.target_of(params)))
-        except peer_host.TargetError as exc:
-            return _error(rid, exc.code, str(exc), exc.data)
-
-    def _peer_call(self, rid, params: dict, session) -> dict | None:
-        """Resolve, vet and run one call; block this connection's reader thread
-        until it finishes (the `_tasks_wait` pattern), or cancel it if the
-        caller hangs up first. The loop is never touched from here."""
-        from . import peer_host, tasks
-
-        args = params.get("args", [])
-        kwargs = params.get("kwargs", {})
-        meta = params.get("_meta") or {}
-        caller = meta.get("caller") if isinstance(meta, dict) else None
-        if (
-            not isinstance(args, list)
-            or not isinstance(kwargs, dict)
-            or (caller is not None and not isinstance(caller, dict))
-        ):
-            return _error(rid, -32602, "args must be a list, kwargs an object")
-        reason = peer_host.check_chain(caller, str(ipc.socket_path()))
-        if reason is not None:
-            raise peer_host.refusal(reason, caller)
-        # Same wait the other lazy-spawn triggers take: the first call may be
-        # what started this kernel, and `repld_init.py` has not run yet.
-        self.ctx.wait_ready()
-        target = peer_host.target_of(params)
-        func = peer_host.resolve_target(target)
-        peer_host.bind_check(func, args, kwargs)
-
-        stamped = dict(caller or {})
-        claimed_pid = (stamped.get("kernel") or {}).get("pid")
-        # SO_PEERCRED is the one thing here the caller cannot lie about.
-        stamped["pid_verified"] = (
-            session.peer_pid is not None and claimed_pid == session.peer_pid
-        )
-        stamped["peer_pid"] = session.peer_pid
-        task_id, done_event = self.ctx.start_peer_call(
-            target, func, args, kwargs, stamped, origin=session
-        )
-        while not done_event.wait(timeout=0.25):
-            if session.closed or _peer_gone(session.sock):
-                # The task may not have entered `_task_scope` yet, in which
-                # case there is no asyncio task to cancel; retry briefly.
-                for _ in range(8):
-                    if self.ctx.cancel_task(task_id) or done_event.wait(timeout=0.25):
-                        break
-                return None
-        task = tasks.get(task_id)
-        snap = self.ctx.snapshot(task_id)
-        if task is None or snap is None:
-            return _error(rid, -32603, f"peer task evicted: {task_id}")
-        err = task.get("peer_error")
-        if err is None and task["exception"]:
-            err = {"type": task["exception"], "message": "", "traceback": ""}
-        started = task["started_at"]
-        elapsed_ms = ((task.get("finished_at") or time.time()) - started) * 1000
-        result = {
-            "task_id": task_id,
-            "value": None if err else task.get("peer_value"),
-            "error": {**err, "output": snap["text"]} if err else None,
-            "elapsed_ms": round(elapsed_ms, 1),
-            "spill_path": snap["spill_path"],
-        }
-        task.pop("peer_value", None)
-        return _response(rid, result)
-
-    def _gates_resolve(self, rid, params: dict) -> dict:
-        """Answer one pending gate; `gates.answer_gate` owns the coercion."""
-        from . import gates
-
-        gate_id = params.get("gate_id")
-        if not gate_id:
-            return _error(rid, -32602, "missing gate_id")
-        if "value" not in params:
-            return _error(rid, -32602, "missing value")
-        try:
-            value = gates.answer_gate(gate_id, str(params["value"]))
-        except gates.GateAnswerError as exc:
-            return _error(rid, -32602, str(exc))
-        return _response(rid, {"gate_id": gate_id, "value": value})
-
-    def _initialize(self, rid, params: dict, session=None) -> dict:
+    def _initialize(
+        self, rid, params: dict, session: ipc.Session | None = None
+    ) -> dict:
+        """Negotiate protocol version and register the bridge's Claude session."""
         # Bridge-identity fields ride on `initialize`'s own params (see
         # bridge._replay_handshake) rather than a separate round-trip, so a
         # kernel restart re-identifies the session for free on replay.
@@ -1086,10 +934,18 @@ class Dispatcher(BrowserDispatchMixin):
             },
         )
 
-    def _tools_list(self, rid) -> dict:
-        return _response(rid, {"tools": _compute_tools()})
+    # ------------------------------------------------------------------
+    # tools/list, tools/call
+    # ------------------------------------------------------------------
 
-    def _tools_call(self, rid, params: dict, session=None) -> dict:
+    def _tools_list(self, rid) -> dict:
+        """Return the full tool catalogue including bridge and gist tools."""
+        return _response(rid, {"tools": _build_tools()})
+
+    def _tools_call(
+        self, rid, params: dict, session: ipc.Session | None = None
+    ) -> dict:
+        """Route a `tools/call` to the matching handler."""
         name = params.get("name")
         args = params.get("arguments") or {}
         problem = (
@@ -1108,18 +964,18 @@ class Dispatcher(BrowserDispatchMixin):
         if not name:
             return _error(rid, -32602, "missing tool name")
         if name in _bridge_tool_names():
-            # We advertise these but never serve them — the bridge answers them
+            # We advertise these but never serve them: the bridge answers them
             # on the way in. Arriving here means the client is talking to the
             # socket directly, so say that rather than reporting "unknown tool"
             # for a name that is right there in tools/list.
             return _error(
                 rid,
                 -32601,
-                f"{name} is served by `repld bridge`, not the kernel — this "
+                f"{name} is served by `repld bridge`, not the kernel. This "
                 "connection bypassed it",
             )
         # Everything past here answers inline off live state, with no deferral
-        # to fall back on — so unlike `exec` above (which gets its task_id
+        # to fall back on, so unlike `exec` above (which gets its task_id
         # immediately and waits inside `_run_cell`), these have to wait for the
         # project bootstrap here or risk running against a bare `__main__`.
         # `tools/call` is itself what lazily spawns a kernel, and the socket
@@ -1130,7 +986,8 @@ class Dispatcher(BrowserDispatchMixin):
             return self._browser_tool(rid, name, args, session=session)
         return self._gist_tool(rid, name, args)
 
-    def _exec(self, rid, args: dict, session=None) -> dict:
+    def _exec(self, rid, args: dict, session: ipc.Session | None = None) -> dict:
+        """Run a cell and return inline or defer with a task_id."""
         src = args.get("code", "")
         timeout = float(args.get("timeout", 2.0))
         # origin=session: if this cell outruns `timeout`, its completion push
@@ -1140,7 +997,7 @@ class Dispatcher(BrowserDispatchMixin):
         snap = self.ctx.snapshot(task_id)
         assert snap is not None  # task_id was just created by start_task
         # `mark_nudged` is what promises the completion push, and it refuses
-        # when the cell finished first — including in the window this very
+        # when the cell finished first, including in the window this very
         # snapshot() opens, which for a multi-megabyte spill is milliseconds
         # wide. Taking its word for it is the difference between answering
         # with the result and telling the client to wait for a channel
@@ -1178,6 +1035,7 @@ class Dispatcher(BrowserDispatchMixin):
         )
 
     def _get_task(self, rid, args: dict) -> dict:
+        """Return a task snapshot as `structuredContent`."""
         tid = args.get("task_id")
         if not tid:
             return _error(rid, -32602, "missing task_id")
@@ -1197,6 +1055,7 @@ class Dispatcher(BrowserDispatchMixin):
         )
 
     def _cancel(self, rid, args: dict) -> dict:
+        """Cancel a running task by id."""
         tid = args.get("task_id")
         if not tid:
             return _error(rid, -32602, "missing task_id")
@@ -1220,7 +1079,7 @@ class Dispatcher(BrowserDispatchMixin):
         Handlers return str or JSON-serializable data; the text block goes
         through the same spill pipeline as exec/browser tools, since a
         handler is arbitrary code with no more bound on its output than an
-        exec cell. `structuredContent` carries the dict as-is — it has no
+        exec cell. `structuredContent` carries the dict as-is, it has no
         text-shaped preview to spill. A `content.Image`, or a list holding
         one, becomes one content block per item; an image is never spilled.
         """
@@ -1260,7 +1119,7 @@ class Dispatcher(BrowserDispatchMixin):
                     )
                     continue
                 if isinstance(item, dict) and "structuredContent" not in body:
-                    # Dict returns ride as structuredContent too — no outputSchema
+                    # Dict returns ride as structuredContent too, no outputSchema
                     # (nothing to infer one from), which the spec allows; only
                     # objects qualify, since structuredContent is object-typed in
                     # 2025-06-18. The text block stays the canonical fallback.
@@ -1279,9 +1138,11 @@ class Dispatcher(BrowserDispatchMixin):
     # ------------------------------------------------------------------
 
     def _resources_list(self, rid) -> dict:
-        return _response(rid, {"resources": _compute_resources()})
+        """Return the full resource catalogue including gist resources."""
+        return _response(rid, {"resources": _build_resources()})
 
     def _read_resource(self, rid, params: dict) -> dict:
+        """Resolve a `repld://` URI and return its text content."""
         uri = params.get("uri", "")
         try:
             # Static docs first: `core_schemas.DOC_HELP_ATTRS` is the one map,
@@ -1305,7 +1166,7 @@ class Dispatcher(BrowserDispatchMixin):
                 mime = _RESOURCE_MIMETYPES.get(uri, "text/plain")
             else:
                 sp = _spill_text(text, label=uri.split("/")[-1])
-                # Preview + [full output: …] marker isn't valid JSON anymore.
+                # Preview + [full output: ...] marker is not valid JSON anymore.
                 # The fallback is a marker, not `text`: it only fires if the
                 # spill came back with neither preview nor truncation flag,
                 # and emitting the whole >64KB payload there would be the one
@@ -1319,6 +1180,7 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32000, f"resource read: {exc}")
 
     def _resource_tabs(self) -> str:
+        """List attached tabs as target_id / url / title lines."""
         browser = self._get_browser()
         tabs = browser.tabs
         if not tabs:
@@ -1328,19 +1190,22 @@ class Dispatcher(BrowserDispatchMixin):
             lines.append(f"{t.target_id}  {t.url}  {t.title}")
         return "\n".join(lines)
 
-    def _collect_rows(self, method: str, empty: str) -> str:
-        """Concatenate repr'd rows of tab.<method>() across all attached tabs."""
+    def _format_tab_rows(self, method: str, empty: str) -> str:
+        """Format repr'd rows of `tab.<method>()` across all attached tabs."""
         browser = self._get_browser()
         lines = [repr(r) for tab in browser.tabs for r in getattr(tab, method)()]
         return "\n".join(lines) if lines else empty
 
     def _resource_network(self) -> str:
-        return self._collect_rows("network", "(no network events captured)")
+        """Return captured network events across all tabs."""
+        return self._format_tab_rows("network", "(no network events captured)")
 
     def _resource_console(self) -> str:
-        return self._collect_rows("console", "(no console events captured)")
+        """Return captured console messages across all tabs."""
+        return self._format_tab_rows("console", "(no console events captured)")
 
     def _resource_controls(self) -> str:
+        """Return window.controls schemas across all tabs as JSON."""
         browser = self._get_browser()
         result: dict = {}
         for tab in browser.tabs:
@@ -1352,11 +1217,13 @@ class Dispatcher(BrowserDispatchMixin):
         return json.dumps(result, indent=2)
 
     def _resource_gist(self, name: str) -> str:
+        """Return the introspection text for one gist."""
         from . import gists
 
         return gists.introspect(name)
 
     def _resource_registry(self) -> str:
+        """Return the gist registry summary."""
         from . import gists
 
         return gists.registry_summary()
@@ -1369,9 +1236,158 @@ class Dispatcher(BrowserDispatchMixin):
         "repld://gists/_registry": _resource_registry,
     }
 
+    # ------------------------------------------------------------------
+    # Gates
+    # ------------------------------------------------------------------
+
+    def _gates_resolve(self, rid, params: dict) -> dict:
+        """Answer one pending gate; `gates.answer_gate` owns the coercion."""
+        from . import gates
+
+        gate_id = params.get("gate_id")
+        if not gate_id:
+            return _error(rid, -32602, "missing gate_id")
+        if "value" not in params:
+            return _error(rid, -32602, "missing value")
+        try:
+            value = gates.answer_gate(gate_id, str(params["value"]))
+        except gates.GateAnswerError as exc:
+            return _error(rid, -32602, str(exc))
+        return _response(rid, {"gate_id": gate_id, "value": value})
+
+    # ------------------------------------------------------------------
+    # Tasks CLI (bare JSON-RPC, not MCP tools)
+    # ------------------------------------------------------------------
+
+    def _tasks_wait(self, rid, params: dict, session: ipc.Session) -> dict | None:
+        """Block this connection's reader thread until a task finishes.
+
+        Safe to block here: each IPC connection gets its own reader thread
+        (`ipc.Server._read_loop`), and `done_event.wait()` releases the GIL,
+        the kernel's asyncio loop is never touched. `session.closed` alone
+        cannot see the CLI hang up mid-wait, because that flag is only set by
+        the same reader thread's own `for line in session.rfile` loop, which
+        cannot take its next turn until this call returns, so `_peer_gone`
+        probes the socket directly instead.
+        """
+        from . import tasks
+
+        tid = params.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
+        task = tasks.get(tid)
+        if task is None:
+            return _unknown_task(rid, tid)
+        done_event = task["done_event"]
+        while not done_event.wait(timeout=2.0):
+            if session.closed or _peer_gone(session.sock):
+                return None
+        snap = self.ctx.snapshot(tid)
+        if snap is None:
+            return _error(rid, -32602, f"task evicted: {tid}")
+        return _response(rid, snap)
+
+    def _tasks_cancel(self, rid, params: dict) -> dict:
+        """Cancel a task by id over the IPC socket."""
+        tid = params.get("task_id")
+        if not tid:
+            return _error(rid, -32602, "missing task_id")
+        return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
+
+    # ------------------------------------------------------------------
+    # Peer calls (kernel-to-kernel, bare JSON-RPC)
+    # ------------------------------------------------------------------
+
+    def _peer(
+        self, rid, method: str, params: dict, session: ipc.Session
+    ) -> dict | None:
+        """`peer/list`, `peer/inspect`, `peer/call`.
+
+        The first request marks the connection `Session.peer`: it is one call's
+        socket, not a session, so channel pushes and broadcasts skip it. A
+        JSON-RPC error here always means the target did not run; one that ran
+        and raised comes back as `result.error` (see `_peer_call`).
+        """
+        from . import peer_host
+
+        session.peer = True
+        try:
+            if method == PEER_CALL_METHOD:
+                return self._peer_call(rid, params, session)
+            self.ctx.wait_ready()
+            if method == PEER_LIST_METHOD:
+                return _response(rid, peer_host.describe_surface())
+            return _response(rid, peer_host.inspect_target(peer_host.target_of(params)))
+        except peer_host.TargetError as exc:
+            return _error(rid, exc.code, str(exc), exc.data)
+
+    def _peer_call(self, rid, params: dict, session: ipc.Session) -> dict | None:
+        """Resolve, vet and run one call; block this connection's reader thread
+        until it finishes (the `_tasks_wait` pattern), or cancel it if the
+        caller hangs up first. The loop is never touched from here."""
+        from . import peer_host, tasks
+
+        args = params.get("args", [])
+        kwargs = params.get("kwargs", {})
+        meta = params.get("_meta") or {}
+        caller = meta.get("caller") if isinstance(meta, dict) else None
+        if (
+            not isinstance(args, list)
+            or not isinstance(kwargs, dict)
+            or (caller is not None and not isinstance(caller, dict))
+        ):
+            return _error(rid, -32602, "args must be a list, kwargs an object")
+        reason = peer_host.check_chain(caller, str(ipc.socket_path()))
+        if reason is not None:
+            raise peer_host.refusal(reason, caller)
+        # Same wait the other lazy-spawn triggers take: the first call may be
+        # what started this kernel, and `repld_init.py` has not run yet.
+        self.ctx.wait_ready()
+        target = peer_host.target_of(params)
+        func = peer_host.resolve_target(target)
+        peer_host.bind_check(func, args, kwargs)
+
+        stamped = dict(caller or {})
+        claimed_pid = (stamped.get("kernel") or {}).get("pid")
+        # SO_PEERCRED is the one thing here the caller cannot lie about.
+        stamped["pid_verified"] = (
+            session.peer_pid is not None and claimed_pid == session.peer_pid
+        )
+        stamped["peer_pid"] = session.peer_pid
+        task_id, done_event = self.ctx.start_peer_call(
+            target, func, args, kwargs, stamped, origin=session
+        )
+        while not done_event.wait(timeout=0.25):
+            if not (session.closed or _peer_gone(session.sock)):
+                continue
+            # The task may not have entered `_task_scope` yet, in which
+            # case there is no asyncio task to cancel; retry briefly.
+            for _ in range(8):
+                if self.ctx.cancel_task(task_id) or done_event.wait(timeout=0.25):
+                    break
+            return None
+        task = tasks.get(task_id)
+        snap = self.ctx.snapshot(task_id)
+        if task is None or snap is None:
+            return _error(rid, -32603, f"peer task evicted: {task_id}")
+        err = task.get("peer_error")
+        if err is None and task["exception"]:
+            err = {"type": task["exception"], "message": "", "traceback": ""}
+        started = task["started_at"]
+        elapsed_ms = ((task.get("finished_at") or time.time()) - started) * 1000
+        result = {
+            "task_id": task_id,
+            "value": None if err else task.get("peer_value"),
+            "error": {**err, "output": snap["text"]} if err else None,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "spill_path": snap["spill_path"],
+        }
+        task.pop("peer_value", None)
+        return _response(rid, result)
+
 
 def _format_spill(sp: dict, fallback: str) -> str:
-    """Render a spill_text()/snapshot() dict as tool/resource response text."""
+    """Render a `spill_text()`/`snapshot()` dict as tool/resource response text."""
     parts = []
     if sp["text"]:
         parts.append(sp["text"].rstrip())
@@ -1380,17 +1396,49 @@ def _format_spill(sp: dict, fallback: str) -> str:
     return "\n".join(parts) or fallback
 
 
+def _unknown_task(rid, tid: str) -> dict:
+    """Build an error naming the kernel asked; a task is only known to the kernel it ran on."""
+    try:
+        lock = read_lock(lock_for(ipc.socket_path()))
+        cwd = lock.get("cwd") if isinstance(lock, dict) else None
+    except Exception:
+        cwd = None
+    return _error(
+        rid,
+        -32602,
+        f"unknown task_id: {tid} (kernel: {cwd or os.getcwd()}; a task is known "
+        "only to the kernel it ran on, for an hour after it finishes)",
+    )
+
+
+def _peer_gone(sock: socket.socket) -> bool:
+    """Whether the client end of `sock` already hung up.
+
+    Used by `_tasks_wait` while blocked inside `Dispatcher.handle`, where
+    `session.closed` cannot yet reflect a mid-wait disconnect (see there).
+    """
+    try:
+        return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 def _has_browser() -> bool:
+    """Whether the `browser` builtin is installed in `__main__`."""
     return "browser" in __main__.__dict__
 
 
 def _bridge_tool_names() -> frozenset[str]:
+    """Return the set of tool names served by the bridge, not the kernel."""
     from . import bridge_tools
 
     return frozenset(bridge_tools.BRIDGE_TOOLS)
 
 
-def _compute_tools() -> list[dict]:
+def _build_tools() -> list[dict]:
+    """Build the full tool list for `tools/list`."""
     from . import bridge_tools, gists
 
     has_browser = _has_browser()
@@ -1403,7 +1451,8 @@ def _compute_tools() -> list[dict]:
     return tools + bridge_tools.SCHEMAS + gists.scan_tools()
 
 
-def _compute_resources() -> list[dict]:
+def _build_resources() -> list[dict]:
+    """Build the full resource list for `resources/list`."""
     from . import gists
 
     resources = _wire(STATIC_RESOURCES) + (
@@ -1424,7 +1473,7 @@ def _compute_resources() -> list[dict]:
 def listing_state() -> tuple[tuple, tuple]:
     """Cheap fingerprints of what `tools/list` and `resources/list` would say.
 
-    Import-free, unlike `_compute_tools`: `scan_tools` imports the owning gist,
+    Import-free, unlike `_build_tools`: `scan_tools` imports the owning gist,
     which must not happen on the poller's thread. A gist file's mtime stands in
     for its inferred schema, so an edit to a tool's signature changes it.
     """
@@ -1442,9 +1491,9 @@ def listing_state() -> tuple[tuple, tuple]:
 
 
 def build_discovery_cache() -> dict:
-    """Compute the full initialize/tools/resources triple for `kernel.cache`.
+    """Build the initialize/tools/resources triple for `kernel.cache`.
 
-    Same composition `_initialize`/`_tools_list`/`_resources_list` produce —
+    Same composition `_initialize`/`_tools_list`/`_resources_list` produce,
     called once at boot so the bridge can answer MCP discovery methods without
     a live kernel (see `kernel._write_cache`).
     """
@@ -1454,8 +1503,8 @@ def build_discovery_cache() -> dict:
         "protocolVersion": PROTOCOL_VERSION,
         "version": __version__,
         "instructions": _build_instructions(),
-        "tools": _compute_tools(),
-        "resources": _compute_resources(),
+        "tools": _build_tools(),
+        "resources": _build_resources(),
     }
 
 

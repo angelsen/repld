@@ -43,16 +43,16 @@ No CI configured yet. If you add any, update this file.
 
 The readability judge (`.claude/workflows/readability.js`) checks these; lint holds the two a tool can measure (`D101`/`D102`/`D103`, `PLR1702` at depth 4). `scripts/style-measure.py FILE` reports a module's densities, lengths, missing docstrings, nesting sites and helper verbs; `--bodies` hashes each function's code with its docstring stripped, so a diff of two runs names the functions whose behaviour could have changed.
 
-1. Signatures are fully typed, parameters and return. A docstring never restates them.
-2. Every module-level function, class and public method has a prose docstring whose first line states the contract (what the caller gets, or what must hold), not the name rephrased. No `Args:`/`Returns:` sections.
-3. Comments state invariants, workarounds and why the counter-intuitive is correct, nothing else. Never what the code does, never what changed.
+1. Signatures are fully typed, parameters and return. A docstring never restates them. Adding a missing annotation is housekeeping, not a signature change.
+2. Every function, class and method has a prose docstring whose first line states the contract (what the caller gets, or what must hold), not the name rephrased; a closure takes its enclosing function's. No `Args:`/`Returns:` sections. Code in prose is single-backticked. A module that lacked docstrings gains them; what is judged is each docstring, never the count.
+3. Comments state invariants, workarounds and why the counter-intuitive is correct, nothing else. Never what the code does, never what changed. The one exception is a section banner marking a region of rule 5's order, in the module's existing form (`# -- name ----` inside a class; a dashed rule, `# Name`, a dashed rule at module level).
 4. A body reads top down: refusals and trivial exits first as early returns, then the happy path, the rare case last. A reader states what the function does from its body without opening the helpers. Nesting stops at depth 4; flatten with an early return or `continue` before extracting.
 5. A module reads top down too: docstring, imports, constants, the public surface in the order the module docstring tells it, each private helper after its first caller.
 6. A helper exists for a unit a reader wants a name for, never to satisfy a number. Its name is verb-first and says what it decides or produces.
 7. House verbs, one meaning each: `resolve` (name to object), `ensure` (idempotent setup), `build` (compose a value), `parse` (text to value), `render` (to ANSI or markup), `format` (to plain text), `print` (stdout for a human), `push` (a channel message), `emit` (an event log entry), `handle`/`on_` (an incoming event), `is_`/`has_` (predicate), `check` (verify, raising or reporting), `sweep`/`prune` (cleanup), `spawn`/`start`/`stop` (a process or task).
 8. Delete, don't guard: no check for a state the annotations make impossible, no `try` around a path that cannot raise. Match the module's defensiveness; a guard the siblings lack is hedging.
 9. No structure for a use case that has not arrived: no base class, registry, hook or option with one user.
-10. ASCII only in code, strings, comments and docstrings. No em dashes.
+10. ASCII only in code, strings, comments and docstrings. No em dashes, and no `--` standing in for one: reword with a comma, colon, full stop or parentheses.
 
 ## Releasing
 
