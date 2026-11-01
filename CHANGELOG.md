@@ -19,6 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A project whose `.venv` runs a Python below repld's floor no longer kills the bridge at startup: the rebind used to exec into `uv run`, which refuses to resolve repld for that interpreter, with nothing left to fall back to, so Claude Code's MCP server failed to start in that project. The kernel now runs unbound there with a note naming the floor; exec, browser and gists work, and only the project's own packages are missing until the venv is recreated.
 - The `element.click()` fallback an occluded click takes runs under a CDP user gesture, so a `window.open` in the handler opens instead of being popup-blocked as an untrusted click's is. The receipt still names the path.
 - A warm `tab.click(selector)` is six awaited round trips instead of eight: the front probe and the child-frame tree ride the same hop as the top frame's resolve. Every input method and `screenshot()` collects the probe before the first command a hidden tab would drop or throttle.
 - A human's dialog, file picker, download or tab close on a tab an agent once read, or on a tab no agent attached, no longer wakes that agent or every agent.

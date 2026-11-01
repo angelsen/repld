@@ -246,11 +246,10 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   refuses to resolve (`the current Python version (3.11.17) does not satisfy Python>=3.12`),
   exit 1, and the exec already replaced the process, so the bridge never answers and Claude
   Code's MCP server fails to start in that project. The bump therefore ships with:
-  (1) a floor check in `rebind_exec` before the exec, `bind.venv_python_version(venv)` against
-  the package's own `requires-python`, falling through to the existing "running unbound" stderr
-  path so such a project keeps exec, browser and gists and loses only its own packages
-  (`gists._explain_missing` already names why); test beside the cross-version case in
-  `phase_16_venv_binding`, which already builds an `_other_minor()` venv;
+  (1) ~~a floor check in `rebind_exec` before the exec~~ done: `bind.PYTHON_FLOOR`, checked
+  before `execvp`, falls through to the "running unbound" stderr path; phase 16 builds a venv
+  one minor below the floor, stubs `os.execvp`, and pins the constant to `requires-python`,
+  so the bump is the constant plus pyproject;
   (2) repld's own `.venv` recreated on 3.14 and phases 1-19 run there; check cp314 wheels for
   duckdb, websockets, pillow, httpx at bump time;
   (3) a CHANGELOG line stating the requirement plainly, no shim;
@@ -261,7 +260,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   the in-process thread is what makes the cancel possible), free-threading (`LoopOwned`'s
   snapshot is atomic because of the GIL). The bump is about not serving two-year-old
   interpreters, not about a feature.
-- [ ] **Lazy `__version__`.** `src/repld/__init__.py` resolves `importlib.metadata.version()`
+- [x] **Lazy `__version__`.** Done (1b199e85): behind the package `__getattr__`, cached on first read; bridge import 33-40 ms -> 22-27 ms. `src/repld/__init__.py` resolves `importlib.metadata.version()`
   at import, 24 ms of the bridge's ~50 ms import (bare interpreter 9 ms; first `initialize`
   reply 101 ms via the venv binary, 142 ms through the `uv run` rebind). `bridge.py` reads it
   only on the cache-check and static-fallback paths, never on attach. The module already has a
@@ -273,19 +272,19 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   reason visible today is an editable repld checkout running its own code rather than the
   installed tool's. Fredrik's call; measure first: wall clock of the exact argv Claude Code
   launches, split shim / uv / import / first reply.
-- [ ] **Concurrency sweep in phase 3**, modelled on `phase_3_patch_targets`. Two rules from
+- [x] **Concurrency sweep in phase 3** (done, c9333ec6: `phase_3_task_spawns`, the three sites named), modelled on `phase_3_patch_targets`. Two rules from
   `bg.py`'s docstring: an unassigned `create_task`/`ensure_future` outside `bg.py` fails (asyncio
   holds tasks weakly); a repld-internal task with no `repld-` name fails (`_watch_block` spares
   only those). Drift it would catch today: `browser/tab.py:787,850`, `browser/cdp.py:1264`. The
   state-file half of a primitive allowlist was dropped: AST cannot tell a state path from a
   scratch one, so `state.open_private` stays a documented rule.
-- [ ] **Complexity ratchet.** `ruff` runs defaults only; `C901`/`PLR0912`/`PLR0915` at
-  complexity 15, branches 15, statements 60 flag 18 sites in 6 files today (`gist_cmd.py` 2,
+- [x] **Complexity ratchet.** Done (77234426). `C901`/`PLR0912`/`PLR0915` at
+  complexity 15, branches 15, statements 60: 18 findings on 8 functions in 6 files at enable time (`gist_cmd.py` 2,
   `browser/observe.py` 2, `dashboard.py`, `browser/row.py`, `browser/cdp.py`, `bridge.py`).
   Shape measured 2026-11-01: 65 files, 32,620 lines, 1,123 functions, 18 over 80 lines, 3 over
-  150, 13 nested five deep or more. Enable the rules, grandfather the 18 with a `noqa` each, so
-  new ones are refused and the 18 are the burn-down list.
-- [ ] **Burn down the 18 flagged sites, one per change**, each run against the phase that
+  150, 13 nested five deep or more. The 8 carry a `noqa` each, new ones are refused, `tests/`
+  and `scripts/` are exempt.
+- [ ] **Burn down the 8 `noqa`'d functions, one per change**, each run against the phase that
   covers it, invariant comments preserved. Predictable shapes: early returns in the five-deep
   handlers, a dispatch table for `cdp._handle_event` and `session._handle_browser_event`, the
   190-line `CDPSession.__init__` grouped into state objects. A fan-out fits (one site per

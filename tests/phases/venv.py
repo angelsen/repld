@@ -8,7 +8,9 @@ packages import anywhere. Splicing it anyway *half*-works, which is worse to
 debug than a clean refusal — so the refusal assertion is the important one here.
 """
 
+import contextlib
 import importlib.metadata
+import io
 import json
 import os
 import shutil
@@ -380,6 +382,41 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
             described = bind.describe(cross)
             assert_true("not bound" in described, f"describe() says so: {described!r}")
             print("  ✓ cross-version venv refused, sys.path left alone")
+
+        # --- below the floor: no re-exec. `uv run` would refuse to resolve
+        # repld for that interpreter, and execvp has no return, so the guard
+        # must decide before it. ---
+        assert_eq(
+            importlib.metadata.metadata("repld-tool").get("Requires-Python"),
+            f">={bind.PYTHON_FLOOR[0]}.{bind.PYTHON_FLOOR[1]}",
+            "bind.PYTHON_FLOOR matches pyproject's requires-python",
+        )
+        old_root = tmp / "old"
+        old_root.mkdir()
+        below = f"{bind.PYTHON_FLOOR[0]}.{bind.PYTHON_FLOOR[1] - 1}"
+        old = _make_venv(old_root, python=below)
+        if old is None:
+            print(f"  ⚠ Python {below} unavailable — skipping floor-guard check")
+        else:
+            os.chdir(old_root)
+            os.environ.pop(bind.SENTINEL, None)
+            execs: list[list[str]] = []
+            real_execvp = os.execvp
+            os.execvp = lambda _file, args: execs.append([str(a) for a in args])  # pyright: ignore[reportAttributeAccessIssue]
+            err = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(err):
+                    bind.rebind_exec(["bridge"])
+            finally:
+                os.execvp = real_execvp
+                os.environ.pop(bind.SENTINEL, None)
+            assert_eq(execs, [], "no re-exec into a venv below the floor")
+            assert_true(
+                "floor" in err.getvalue(), f"stderr names the floor: {err.getvalue()!r}"
+            )
+            described = bind.describe(old)
+            assert_true("below" in described, f"describe() says so: {described!r}")
+            print(f"  ✓ venv below the floor ({below}) runs unbound, no exec")
 
         # --- the sentinel is what stops `uv run … repld` re-entering forever ---
         os.chdir(tmp)

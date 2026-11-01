@@ -37,6 +37,12 @@ from pathlib import Path
 # point, so without a sentinel the bind check would fire again and fork-bomb.
 SENTINEL = "REPLD_BOUND"
 
+# pyproject's `requires-python`, as a tuple; phase 16 pins the two together.
+# A constant rather than importlib.metadata so the bridge's import stays
+# cheap, and checked *before* the re-exec: `uv run` refuses to resolve repld
+# for an interpreter below it, and an exec has no return to fall back to.
+PYTHON_FLOOR = (3, 12)
+
 
 def project_venv(cwd: Path | None = None, *, ambient: bool = True) -> Path | None:
     """The project virtualenv: ``./.venv``, falling back to ``$VIRTUAL_ENV``.
@@ -132,6 +138,12 @@ def describe(venv: Path | None) -> str:
     target = f"{version[0]}.{version[1]}" if version else "?"
     if is_bound(venv):
         return f"Python {running}, bound to {venv}"
+    if version is not None and version < PYTHON_FLOOR:
+        floor = f"{PYTHON_FLOOR[0]}.{PYTHON_FLOOR[1]}"
+        return (
+            f"Python {running}, project venv is {target} ({venv}), "
+            f"below repld's floor {floor}: not bound"
+        )
     return f"Python {running}, project venv is {target} ({venv}) — not bound"
 
 
@@ -242,13 +254,25 @@ def rebind_exec(argv: list[str]) -> None:
 
     Callers run this before doing any work. Failures are non-fatal by design:
     an unbound kernel still works for everything that doesn't need the
-    project's packages, so a missing uv or a venv we can't read must not stop
-    repld from starting.
+    project's packages, so a missing uv, a venv we can't read, or a venv below
+    ``PYTHON_FLOOR`` must not stop repld from starting. The last is decided
+    here because past ``execvp`` there is nothing left to decide it.
     """
     if os.environ.get(SENTINEL):
         return
     venv = project_venv()
     if venv is None or is_bound(venv):
+        return
+    version = venv_python_version(venv)
+    if version is not None and version < PYTHON_FLOOR:
+        floor = f"{PYTHON_FLOOR[0]}.{PYTHON_FLOOR[1]}"
+        print(
+            f"repld: project venv is Python {version[0]}.{version[1]}, below "
+            f"repld's floor {floor}; running unbound under Python "
+            f"{sys.version_info[0]}.{sys.version_info[1]}, so its packages "
+            f"won't import until the venv is recreated on {floor}+",
+            file=sys.stderr,
+        )
         return
     cmd = uv_run_argv(argv)
     if cmd is None:
