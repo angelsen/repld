@@ -286,7 +286,7 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
                 raise RuntimeError("Cannot reach Chrome on port 3333: refused")
 
         b = Browser(port=3333)
-        b._connected = True         # stale: was connected, Chrome died since
+        b._connected = True  # stale: was connected, Chrome died since
         b._session = _DeadSocket()  # type: ignore[assignment]
         try:
             await b._ensure_connected()
@@ -512,7 +512,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     def _stocked_pool() -> "BrowserPool":
         pool = BrowserPool()
         dead = _Dead(port=1111)
-        dead._connected = True                           # sorts first, looks connected, isn't
+        dead._connected = True  # sorts first, looks connected, isn't
         dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
             "dead-target", "http://dead/"
         )
@@ -603,7 +603,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute     # type: ignore[assignment]
+        session.execute = fake_execute  # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -699,7 +699,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
@@ -2282,6 +2282,7 @@ def phase_6_claim_routing(kernel: Kernel) -> None:
         b.exec("await _c2.set_files([])")
         a.tool("browser_take", {"target": tid2})
         out = b.exec(
+            "import asyncio\n"
             "_n = len(_s2._filechooser_log)\n"
             "await _c2.js(\"document.getElementById('f').click()\")\n"
             "await asyncio.sleep(0.5)\n"
@@ -3349,7 +3350,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",    # bare tag — the regression
+        "main",  # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",
@@ -3675,6 +3676,7 @@ def phase_6_click_round_trips(kernel: Kernel) -> None:
             '<button id=tgt onclick="window.hit=(window.hit||0)+1">Go</button>'
         )
         out = h.exec(
+            "import asyncio\n"
             f"_t = await browser.get({tid!r})\n"
             "_bs = _t._session.browser_session\n"
             "await _t.click('#tgt')  # cold: engine injection\n"
@@ -3735,6 +3737,7 @@ def phase_6_renderer_busy(kernel: Kernel) -> None:
     try:
         tid = h.open_tab("<p>busy</p>")
         out = h.exec(
+            "import asyncio\n"
             f"_t = await browser.get({tid!r})\n"
             "await _t.js('setTimeout(() => { const e = performance.now();"
             " while (performance.now() - e < 3000) {} }, 0)', await_promise=False)\n"
@@ -3808,6 +3811,7 @@ def phase_6_captcha(kernel: Kernel) -> None:
             f"browser_tree ends with the captcha line ({tree[-200:]!r})",
         )
         out = h.exec(
+            "import asyncio\n"
             f"_t = await browser.get({tid!r})\n"
             "_c0 = await _t.captchas()\n"
             "await _t.js(\"document.getElementById('bwrap').style.visibility='visible'\")\n"
@@ -4024,7 +4028,7 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
             assert_eq(collected, [], "no claim: the reject is dropped, not broadcast")
             cdp = _Cdp(mode="shared")
-            cdp.route_to = object()                                             # a live claim
+            cdp.route_to = object()  # a live claim
             await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
             assert_eq(
                 len(collected), 1, "outside a window the reject pushes to the claim"
@@ -4562,6 +4566,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
         print("  ✓ screencast: JPEG frames flow, are acked, never stored; one per tab")
 
         out = h.exec(
+            "import asyncio\n"
             "_before = _n[0]\n"
             "await _t.navigate('data:text/html,'"
             f" + {anim!r} + '<p>second</p>')\n"
@@ -4571,6 +4576,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
         assert_true("SC2 True" in out, f"frames continue across a navigation ({out!r})")
 
         out = h.exec(
+            "import asyncio\n"
             "await _sc.stop()\n"
             "_n1 = _n[0]; await asyncio.sleep(0.7)\n"
             "print('SC3', _sc.active, _n[0] - _n1 <= 1)"
@@ -4581,6 +4587,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
         print("  ✓ screencast: survives navigation, stop() is final")
 
         out = h.exec(
+            "import asyncio\n"
             "_slow = [0]\n"
             "async def _hold(f):\n"
             "    _slow[0] += 1\n"
@@ -4600,6 +4607,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
         )
 
         out = h.exec(
+            "import asyncio\n"
             "def _bad(f): raise ValueError('boom')\n"
             "_sc = await _t.screencast(_bad)\n"
             "await asyncio.sleep(1)\n"
@@ -4613,6 +4621,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
         print("  ✓ screencast: a slow handler throttles, a raising one does not stall")
 
         out = h.exec(
+            "import asyncio\n"
             "_n[0] = 0\n"
             "_sc = await _t.screencast(_on)\n"
             "await asyncio.sleep(0.5)\n"
@@ -4732,6 +4741,7 @@ def phase_6_plan_click(kernel: Kernel) -> None:
         assert_true(m is not None, "opened the button page")
         assert m is not None
         out = h.exec(
+            "import asyncio\n"
             f"_t = await browser.get({m.group(1)!r})\n"
             "import json\n"
             "_a = await _t.plan_click('#b')\n"
@@ -4813,6 +4823,7 @@ def phase_6_session_gone(kernel: Kernel) -> None:
         )
         assert_true("GONE up True" in out, f"the fake provider attaches ({out!r})")
         out = h.exec(
+            "import asyncio\n"
             "from repld import tasks as _tasks\n"
             "_o = _tasks.current_origin()\n"
             "_f = asyncio.get_running_loop().create_future()\n"
@@ -4852,6 +4863,7 @@ def phase_6_session_gone(kernel: Kernel) -> None:
 
 
 _REDIAL_PROVIDER = (
+    "import asyncio\n"
     "import json as _j, websockets as _w\n"
     "from websockets.datastructures import Headers as _H\n"
     "from websockets.http11 import Response as _R\n"
@@ -4948,6 +4960,7 @@ def phase_6_url_redial(kernel: Kernel) -> None:
 
         # -- a provider that stays away is retired after the bound --
         h.exec(
+            "import asyncio\n"
             "import sys as _sy\n_sm = _sy.modules['repld.browser.session']\n"
             "_sm.URL_UNREACHABLE_RETIRE_S = 0.4\n"
             "_srv, _b, _cdp = await _redial_up()\n"
@@ -4987,6 +5000,7 @@ def phase_6_scoped_lease(kernel: Kernel) -> None:
     h = _BridgeHarness(kernel)
     try:
         out = h.exec(
+            "import asyncio\n"
             "import json as _j, websockets as _w\n"
             f"_png = {_PNG_1X1!r}\n"
             "_probe = {'err': \"Runtime.evaluate is outside this lease's view scope\"}\n"

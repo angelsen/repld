@@ -1,11 +1,14 @@
 """Captcha detection: vendor fingerprints read from the page's own document.
 
-Detection and hand-off only, never solving. Each vendor leaves a container,
+Detection and hand-off only, never solving.  Each vendor leaves a container,
 a hidden response field and an iframe from its own origin in the page that
-embeds it, so nothing here enters the captcha's cross-origin frame. A
+embeds it, so nothing here enters the captcha's cross-origin frame.  A
 captcha inside a same-process child iframe of the page is not seen (the
 query does not cross frames); one inside an attached iframe *target* is,
 when that target is the tab observed.
+
+Public surface: `Captcha`, `parse`, `describe`, `detect`, `wait_solved`,
+`report`.
 """
 
 from __future__ import annotations
@@ -35,9 +38,10 @@ VENDOR_NAMES = {
     "arkose": "Arkose FunCaptcha",
 }
 
-# The iframe origin names the vendor; the response field names the state. hCaptcha's
-# drop-in mode reuses the `g-recaptcha-response` field, so the field alone never
-# decides the vendor. reCAPTCHA v3 has no widget: only `grecaptcha.execute` exists.
+# The iframe origin names the vendor; the response field names the state.
+# hCaptcha's drop-in mode reuses the `g-recaptcha-response` field, so the
+# field alone never decides the vendor.  reCAPTCHA v3 has no widget: only
+# `grecaptcha.execute` exists.
 _DETECT_JS = """\
 (() => {
   const frames = Array.from(document.querySelectorAll('iframe'));
@@ -105,10 +109,12 @@ class Captcha:
 
     @property
     def needs_human(self) -> bool:
+        """True when the widget is unsolved or showing a challenge."""
         return self.state in ("unsolved", "challenge")
 
     @property
     def name(self) -> str:
+        """Human-readable vendor name from `VENDOR_NAMES`, falling back to the key."""
         return VENDOR_NAMES.get(self.vendor, self.vendor)
 
 
@@ -133,7 +139,7 @@ def parse(raw: Any) -> list[Captcha]:
 
 
 def describe(c: Captcha) -> str:
-    """The observation / tree line for one captcha."""
+    """The observation/tree line for one captcha widget."""
     if c.state == "solved":
         return f"captcha: {c.name} → solved"
     if c.state == "invisible":
@@ -148,15 +154,18 @@ def describe(c: Captcha) -> str:
 
 
 async def detect(tab: Tab) -> list[Captcha]:
-    """Captchas in `tab`'s document. One `Runtime.evaluate`, no activation granted."""
+    """Run `_DETECT_JS` in `tab` and return the parsed widgets.
+
+    One `Runtime.evaluate` per call, no user-gesture activation granted.
+    """
     raw = await tab.js(_DETECT_JS, user_gesture=False, await_promise=False)
     return parse(raw)
 
 
 async def wait_solved(tab: Tab, timeout: float = WATCH_S) -> list[Captcha]:
-    """Poll until no captcha on `tab` needs a human; the list as last seen.
+    """Poll until no captcha on `tab` needs a human, returning the final list.
 
-    Raises TimeoutError naming what is still unsolved.
+    Raises `TimeoutError` naming what is still unsolved.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
@@ -172,7 +181,7 @@ async def wait_solved(tab: Tab, timeout: float = WATCH_S) -> list[Captcha]:
 
 
 def report(tab: Tab, found: list[Captcha]) -> None:
-    """Announce captchas that need a human and start the solved watcher.
+    """Push a hand-off notice for each pending captcha and start the solved watcher.
 
     The announcement is receipt-carried (the observation names it), so inside
     an action window it is log-only; the solved push is what the hand-off
@@ -204,6 +213,12 @@ def report(tab: Tab, found: list[Captcha]) -> None:
 
 
 async def _watch(tab: Tab, vendors: set[str]) -> None:
+    """Poll for solved transitions and push each one to the tab's claim.
+
+    Carries on through `DialogPendingError` (the human's dialog) and
+    `TimeoutError` (a busy page).  Any other exception ends the watcher,
+    since it usually means the page's document is gone.
+    """
     cdp = tab._session
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     loop = asyncio.get_running_loop()

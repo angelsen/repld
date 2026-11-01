@@ -1,7 +1,14 @@
-"""CDPSession: per-target DuckDB event store.
+"""Per-target DuckDB event store and CDP session multiplexer.
 
-Owns an in-memory DuckDB. Events are inserted synchronously on the asyncio
-event loop (microsecond inserts). FIFO pruning at 50k events.
+`CDPSession` owns an in-memory DuckDB written synchronously on the asyncio
+loop (microsecond inserts, FIFO-pruned at 50k events), the in-flight request
+map that `observe.settle` reads, the action window that routes pushes to
+their owner, and the native-prompt policy (dialog, file chooser, HTTP auth).
+
+Module order: streaming predicates, console-error dedup, controls observation,
+push helpers, native-prompt handlers (dialog, file chooser, auth), error
+builders, then `CDPSession` itself (init, schema, routing, action window,
+mode, command execution, event handling, query interface, cleanup).
 """
 
 import asyncio
@@ -34,7 +41,7 @@ PRUNE_CHECK_INTERVAL = 1_000
 
 # Backstop for requests that never report a terminal event. The bound that
 # matters is the longest deadline any *caller* gives settle, not the 5s default
-# on `observe.settle` itself — nothing passes that. The real ceiling is
+# on `observe.settle` itself (nothing passes that). The real ceiling is
 # `browser_dispatch._SETTLE_NAVIGATION_S` (8s, for navigate/open); this sits
 # well clear of it, so an entry is only ever evicted long after any settle that
 # could legitimately have been waiting on it. Raise it if that ceiling rises.
@@ -90,6 +97,7 @@ def is_endless(content_type: str, has_length: bool) -> bool:
 
 
 def _is_streaming(params: dict) -> bool:
+    """True when a `Network.responseReceived` event describes an endless body."""
     response = params.get("response") or {}
     headers = response.get("headers") or {}
     has_length = any(k.lower() == "content-length" for k in headers)
@@ -103,7 +111,7 @@ def _is_streaming(params: dict) -> bool:
 _suppress_patterns: set[str] = set()
 
 # URL globs exempted from Fetch interception entirely on matching tabs
-# (browser.no_capture), not just body capture — the round trip every paused
+# (browser.no_capture), not just body capture: the round trip every paused
 # request takes through the kernel's event loop is enough latency on its own
 # to break a timing-sensitive page, with no network-level symptom at all (a
 # blank page + JS error killed ExtJS 6's eval-based class loader on one real
@@ -114,19 +122,22 @@ _suppress_patterns: set[str] = set()
 # common case).
 _no_capture_patterns: set[str] = set()
 
-_DEDUP_WINDOW = 2.0  # seconds — collapse rapid bursts
+_DEDUP_WINDOW = 2.0  # seconds; collapse rapid bursts
 # How long after a Tab input method returns its tab still counts as acted on:
 # Page.fileChooserOpened and Browser.downloadWillBegin land after the click's
 # CDP ack, and a click handler's first console.error later still.
 ACTION_GRACE_S = float(os.environ.get("REPLD_BROWSER_ACTION_GRACE_S", "1.5"))
-_HINT_WINDOW = 30.0  # seconds — track recurring errors for suppress hint
+_HINT_WINDOW = 30.0  # seconds; track recurring errors for suppress hint
 _HINT_THRESHOLD = 3  # show hint after this many pushes in the hint window
 
 
 class _DedupEntry:
+    """One pending console-error dedup window, keyed by error text."""
+
     __slots__ = ("count", "meta", "session", "text")
 
-    def __init__(self, text: str, meta: dict, session: "Session | None" = None):
+    def __init__(self, text: str, meta: dict, session: "Session | None" = None) -> None:
+        """Hold the first push's text and meta; `count` tracks duplicates."""
         self.count = 0
         self.text = text
         self.meta = meta
@@ -136,7 +147,7 @@ class _DedupEntry:
 _dedup_pending: dict[str, _DedupEntry] = {}
 
 
-# key → how many times this error has been seen inside `_HINT_WINDOW`. A
+# key to how many times this error has been seen inside `_HINT_WINDOW`. A
 # `__slots__` class wrapping the one int bought nothing: the counter is only
 # ever incremented and compared, and `_flush_dedup` had to build a throwaway
 # instance just to serve as a `dict.get` default.
@@ -144,6 +155,7 @@ _hint_counts: dict[str, int] = {}
 
 
 def _expire_hint(key: str) -> None:
+    """Remove a hint counter after its window elapses."""
     _hint_counts.pop(key, None)
 
 
@@ -156,20 +168,22 @@ def _track_hint(key: str, loop: asyncio.AbstractEventLoop) -> bool:
     return _hint_counts[key] >= _HINT_THRESHOLD
 
 
-_SUPPRESS_HINT = ' — browser.suppress("...") to mute'
+_SUPPRESS_HINT = ' (browser.suppress("...") to mute)'
 
 
 def _is_suppressed(text: str) -> bool:
+    """True when `text` matches any active suppress pattern."""
     return any(pat in text for pat in _suppress_patterns)
 
 
 def _flush_dedup(key: str) -> None:
+    """Emit the collapsed count for one dedup window, then drop it."""
     entry = _dedup_pending.pop(key, None)
     if entry is None or entry.count == 0:
         return
     try:
         total = entry.count + 1
-        msg = f"{entry.text} (×{total} tabs)"
+        msg = f"{entry.text} (x{total} tabs)"
         if _hint_counts.get(key, 0) >= _HINT_THRESHOLD:
             msg += _SUPPRESS_HINT
         push_channel(msg, entry.meta, session=entry.session)
@@ -184,18 +198,21 @@ def _dedup_push(
     loop: asyncio.AbstractEventLoop | None,
     session: "Session | None" = None,
 ) -> None:
+    """Push a console error, collapsing duplicates within `_DEDUP_WINDOW`.
+
+    With no loop the dedup window cannot be scheduled, so the push goes out
+    immediately. Unreachable today (`BrowserSession.attach` always passes the
+    running loop), spelled out so the no-loop path degrades to noise rather
+    than silence.
+    """
     if loop is None:
         # Both windows below are opened by registering a dict entry and closed
         # only by a `call_later` callback. With no loop to schedule one, the
         # entry would never be flushed or expired, and since the first branch
         # collapses into an existing entry and returns, this would be the last
-        # time this error text was ever reported — silence, from an error
-        # reporter, for the rest of the session. Degrade to no dedup instead:
+        # time this error text was ever reported (silence, from an error
+        # reporter, for the rest of the session). Degrade to no dedup instead:
         # noisier is the right direction to fail in here.
-        #
-        # Unreachable today (BrowserSession.attach always passes the running
-        # loop), which is exactly why it is spelled out rather than left as a
-        # falsy check that reads like it was considered.
         try:
             push_channel(text, meta, session=session)
         except Exception:
@@ -242,9 +259,10 @@ _CONTROLS_STATE_LIMIT = 300  # a before/after preview, not the full state
 
 
 def _clip_state(text: str) -> str:
+    """Truncate a controls state string to a preview length."""
     if len(text) <= _CONTROLS_STATE_LIMIT:
         return text
-    return text[:_CONTROLS_STATE_LIMIT] + f"… ({len(text)} chars total)"
+    return text[:_CONTROLS_STATE_LIMIT] + f"... ({len(text)} chars total)"
 
 
 # Per-session sequence for the injected engine's frameSeq option: it prefixes
@@ -286,7 +304,7 @@ def _check_controls_observation(
     error = obs.get("error")
     line = f"[controls] {summary}"
     if raw_before != raw_after:
-        line += f" — state: {before!r} → {after!r}"
+        line += f", state: {before!r} -> {after!r}"
     if duration:
         line += f" ({duration}ms)"
     if error:
@@ -343,6 +361,7 @@ class RendererBusyError(TimeoutError):
 
 
 def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
+    """Build a `DialogPendingError` describing the open human-owned dialog."""
     d = cdp._open_dialog or {}
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     return DialogPendingError(
@@ -358,7 +377,7 @@ def _push_tab(
     """Push a tab event to its live claim (`route_to`); no claim, no push.
 
     `in_receipt` marks a push the acting call's receipt already carries
-    (`_dialog_log`/`_filechooser_log` → observation, or the raised
+    (`_dialog_log`/`_filechooser_log` feeding the observation, or the raised
     unresolved error): inside its action window it is log-only.
     """
     if in_receipt and cdp.in_action:
@@ -432,7 +451,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     action = "accepted" if accept else "rejected"
     _push_tab(
         cdp,
-        f"[dialog:{dialog_type}] {short_id}: {message!r} → {action} ({source})",
+        f"[dialog:{dialog_type}] {short_id}: {message!r} -> {action} ({source})",
         {
             "kind": "dialog",
             "target": short_id,
@@ -444,6 +463,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
 
 
 def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) -> None:
+    """Record a dialog left for the human and wake in-flight renderer commands."""
     entry = {
         "type": dialog_type,
         "message": message,
@@ -467,7 +487,7 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     _push_tab(
         cdp,
-        f"[dialog:{dialog_type}] {short_id}: {message!r} → waiting for the human",
+        f"[dialog:{dialog_type}] {short_id}: {message!r} -> waiting for the human",
         {
             "kind": "dialog",
             "target": short_id,
@@ -480,6 +500,7 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
 
 
 def _push_tab_crashed(cdp: "CDPSession") -> None:
+    """Push a `tab_crashed` notification to the tab's live claim."""
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     _push_tab(
         cdp,
@@ -505,7 +526,7 @@ def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
         return  # nobody heard it open; session=None would broadcast
     push_channel(
         f"[dialog:{opened['type']}] {short_id}: {opened['message']!r} "
-        f"→ {action} by {by}",
+        f"-> {action} by {by}",
         {
             "kind": "dialog",
             "target": short_id,
@@ -518,21 +539,21 @@ def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
 
 
 def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
-    """Log + announce an unresolved file chooser — called directly from
-    `_handle_event`, not through `bg.spawn`.
+    """Log and announce an unresolved file chooser, called directly from
+    `_handle_event` (not through `bg.spawn`).
 
-    Unlike the pre-armed path below, there's no I/O to await here, so this
+    Unlike the pre-armed path below, there is no I/O to await here, so this
     stays synchronous on purpose: a JS dialog blocks the renderer (and the
-    Input.dispatch* that triggered it) until `Page.handleJavaScriptDialog`
+    `Input.dispatch*` that triggered it) until `Page.handleJavaScriptDialog`
     answers it, which serializes dismissal before the triggering call can
-    even return — a file chooser is explicitly non-blocking (the click
-    returns immediately), so nothing forces a `bg.spawn`ed handler to run
-    before `Tab._ensure_front`'s post-click check reads `_filechooser_log`.
-    Found live: a raw `tab.click()` through `exec` (no settle step) saw the
-    click return with no error, and only after that did the channel push
-    for the opened chooser land — the settle step every MCP tool call makes
-    happened to buy the spawned task enough time to run first, coincidentally
-    masking the race there.
+    even return. A file chooser is explicitly non-blocking (the click returns
+    immediately), so nothing forces a `bg.spawn`ed handler to run before
+    `Tab._ensure_front`'s post-click check reads `_filechooser_log`. Found
+    live: a raw `tab.click()` through `exec` (no settle step) saw the click
+    return with no error, and only after that did the channel push for the
+    opened chooser land. The settle step every MCP tool call makes happened
+    to buy the spawned task enough time to run first, coincidentally masking
+    the race there.
     """
     backend_node_id = params.get("backendNodeId")
     mode = params.get("mode", "selectSingle")
@@ -541,7 +562,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
         # showOpenFilePicker and friends carry no node: nothing set_files can answer.
         _push_tab(
             cdp,
-            f"[filechooser] {short_id}: picker API opened (mode={mode}) — "
+            f"[filechooser] {short_id}: picker API opened (mode={mode}), "
             "no input node, human-only"
             + (
                 " (blocked: this tab suppresses native pickers)"
@@ -561,7 +582,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
         # The human's picker is open; an agent click here isn't left unresolved.
         _push_tab(
             cdp,
-            f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab — "
+            f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab, "
             "the native picker is showing; tab.set_files(paths) still works",
             {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
         )
@@ -571,7 +592,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
     )
     _push_tab(
         cdp,
-        f"[filechooser] {short_id}: opened (mode={mode}) — "
+        f"[filechooser] {short_id}: opened (mode={mode}); "
         "call tab.set_files(paths) or it stays open",
         {"kind": "filechooser", "target": short_id, "mode": mode},
         in_receipt=True,
@@ -579,12 +600,12 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
 
 
 async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
-    """Resolve a pre-armed file-chooser prompt via DOM.setFileInputFiles.
+    """Resolve a pre-armed file-chooser prompt via `DOM.setFileInputFiles`.
 
-    Only reached when `tab.expect_file_chooser()` armed `_filechooser_policy`
-    — an unresolved chooser is recorded synchronously by
+    Only reached when `tab.expect_file_chooser()` armed `_filechooser_policy`.
+    An unresolved chooser is recorded synchronously by
     `_record_filechooser_opened` instead, from `_handle_event` directly, so
-    it can't race `Tab._ensure_front`'s check (see that function's docstring).
+    it cannot race `Tab._ensure_front`'s check (see that function's docstring).
     """
     backend_node_id = params.get("backendNodeId")
     mode = params.get("mode", "selectSingle")
@@ -611,7 +632,7 @@ async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
     )
     _push_tab(
         cdp,
-        f"[filechooser] {short_id}: opened (mode={mode}) → "
+        f"[filechooser] {short_id}: opened (mode={mode}) -> "
         f"{len(paths)} file(s) set (pre-armed)",
         {"kind": "filechooser", "target": short_id, "action": "set"},
         in_receipt=True,
@@ -625,7 +646,7 @@ def unresolved_filechooser_error(
     resolved, or None if `filechooser_log[start:]` holds no such entry.
 
     Every unresolved entry raises (unlike `unresolved_dialog_error`, which
-    only raises for confirm/prompt) — a file chooser has no safe default to
+    only raises for confirm/prompt). A file chooser has no safe default to
     accept, so "opened, still open" is always worth surfacing rather than
     only when a real decision got guessed.
     """
@@ -633,7 +654,7 @@ def unresolved_filechooser_error(
         if not entry["resolved"]:
             return RuntimeError(
                 f"file chooser opened (mode={entry['mode']}) and was left "
-                "unresolved — call tab.set_files(paths) to select files, "
+                "unresolved: call tab.set_files(paths) to select files, "
                 "or tab.set_files([]) to cancel it."
             )
     return None
@@ -698,7 +719,7 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
     if source == "auto":
         _push_tab(
             cdp,
-            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) — "
+            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}); "
             "call tab.expect_auth(username, password) before retrying, or it "
             "stays a failed request",
             {"kind": "auth", "target": short_id, "scheme": scheme, "realm": realm},
@@ -706,7 +727,7 @@ async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
     elif source == "human":
         _push_tab(
             cdp,
-            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) → "
+            f"[auth] {short_id}: {scheme} auth required (realm={realm!r}) -> "
             "left to Chrome's own prompt; tab.expect_auth(username, password) "
             "answers the next one",
             {
@@ -728,7 +749,7 @@ def unresolved_dialog_error(
     Shared by Tab's own action methods (start = the log length before the
     action, so only *this* call's dialogs count) and browser_dispatch.py's
     cross-tab mutation sweep (start = 0, since pre_observe already clears
-    the log per mutation). Only confirm/prompt raise — accepting one is
+    the log per mutation). Only confirm/prompt raise: accepting one is
     never a guess (alert has no other option; beforeunload reflects the
     pin's own guard_unload), so neither belongs here.
     """
@@ -736,7 +757,7 @@ def unresolved_dialog_error(
         if d["source"] == "auto" and d["type"] in ("confirm", "prompt"):
             return RuntimeError(
                 f"{d['type']}() dialog {d['message']!r} was auto-rejected "
-                "(no explicit decision) — call browser_dismiss_dialog"
+                "(no explicit decision): call browser_dismiss_dialog"
                 "(target, accept=true) then repeat the action to accept it."
             )
     return None
@@ -798,6 +819,13 @@ class CDPSession:
         send_nowait: Any = None,      # BrowserSession.send_nowait bound method
         browser_session: Any = None,  # owning BrowserSession, for re-attach
     ) -> None:
+        """Bind to one Chrome target with its own DuckDB store and CDP channel.
+
+        State is grouped by concern: identity, routing (action window, owner,
+        task claim), the event store (DuckDB, counters, in-flight map), Fetch
+        capture, native-prompt handlers (dialog, file chooser, auth), pin/label,
+        the injected engine cache, and the screencast.
+        """
         self._send = send
         self._send_nowait = send_nowait or send
         self._loop = loop
@@ -821,155 +849,154 @@ class CDPSession:
         # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
         # (inherited by tabs it auto-attaches), cleared by `release()`.
         self.owner: Session | None = None
-        self.owner_from_opener = (
-            False  # set by auto-attach; a later pattern match may replace it
-        )
-        # Set by `Tab.close` so the resulting targetDestroyed isn't echoed back as `tab_closed`.
+        # Set by auto-attach; a later pattern match may replace it.
+        self.owner_from_opener = False
+        # Set by `Tab.close` so the resulting targetDestroyed is not echoed
+        # back as `tab_closed`.
         self.closing: bool = False
 
-        # In-memory DuckDB.  The main connection is written only from the
-        # asyncio loop thread (store_event/_async_prune); query/fetch_body/
-        # clear_events may run on IPC reader threads, so they open a
-        # per-call cursor — a duplicated connection sharing this in-memory
-        # DB, DuckDB's sanctioned cross-thread pattern (MVCC isolates
-        # readers from the loop-thread writer).
+        # In-memory DuckDB. The main connection is written only from the
+        # asyncio loop thread (`store_event`/`_async_prune`); `query`/
+        # `fetch_body`/`clear_events` may run on IPC reader threads, so they
+        # open a per-call cursor, a duplicated connection sharing this
+        # in-memory DB (DuckDB's sanctioned cross-thread pattern; MVCC
+        # isolates readers from the loop-thread writer).
         import duckdb
 
         self.db = duckdb.connect(":memory:")
         self._setup_schema()
 
         # Guards the per-call cursors against `cleanup()` closing the
-        # connection under them. The read side got the cross-thread treatment
-        # and the close did not: `cleanup()` runs on the loop (disconnect,
-        # _reconnect, Target.targetDestroyed) while `query`/`query_dicts`/
+        # connection under them. `cleanup()` runs on the loop (disconnect,
+        # `_reconnect`, `Target.targetDestroyed`) while `query`/`query_dicts`/
         # `clear_events`/`fetch_body` are off-loop by design, so a tab closing
-        # mid-query made `self.db.cursor()` raise a bare DuckDB "connection
-        # already closed" that reached the agent as `browser_network:
-        # Connection Error`. See `_cursor`.
+        # mid-query used to raise a bare DuckDB "connection already closed"
+        # that reached the agent as `browser_network: Connection Error`.
+        # See `_cursor`.
         self._db_lock = threading.Lock()
         self._db_closed = False
 
-        # Event count for FIFO pruning, maintained by store_event so it covers
-        # *every* insert. It used to be incremented in _handle_event instead,
-        # which meant capture.py's synthetic rows (Network.requestBodyCaptured
-        # / responseBodyCaptured, written by calling store_event directly) were
-        # the only ones never counted — and those are the rows that dominate
-        # the store's memory, at up to _MAX_BODY_SIZE each.
+        # Event count for FIFO pruning, maintained by `store_event` so it
+        # covers *every* insert (capture.py's synthetic body rows included,
+        # which dominate the store's memory at up to `_MAX_BODY_SIZE` each).
         self._event_count = 0
-        # Next count at which _handle_event checks whether a prune is due. A
-        # threshold rather than `_event_count % PRUNE_CHECK_INTERVAL == 0`:
-        # body captures now advance the counter too, so it can step by more
-        # than one between checks and skip an exact multiple entirely.
+        # Next count at which `_handle_event` checks whether a prune is due.
+        # A threshold rather than modulo: body captures advance the counter
+        # too, so it can step by more than one between checks and skip an
+        # exact multiple entirely.
         self._next_prune_check = PRUNE_CHECK_INTERVAL
 
-        # In-flight requestIds -> monotonic time they were opened. Maintained
-        # by _handle_event, read by observe.settle() via inflight_count().
-        # Keyed by id (not a counter) so it stays self-correcting: redirect
-        # re-emits are idempotent, terminal events for pre-attach requests are
-        # no-op discards.  WS never enters (no Network.requestWillBeSent for
-        # WebSockets).  The timestamp is what lets inflight_count() age out a
-        # response whose body never ends — see _INFLIGHT_MAX_AGE.
+        # In-flight requestIds to the monotonic time they were opened.
+        # Maintained by `_handle_event`, read by `observe.settle()` via
+        # `inflight_count()`. Keyed by id (not a counter) so it stays
+        # self-correcting: redirect re-emits are idempotent, terminal events
+        # for pre-attach requests are no-op discards. WebSocket never enters
+        # (no `Network.requestWillBeSent`). The timestamp lets
+        # `inflight_count()` age out a response whose body never ends
+        # (see `_INFLIGHT_MAX_AGE`).
         self._inflight: LoopOwned[str, float] = LoopOwned("CDPSession._inflight")
 
         # Serializes state-preserving reattach (BrowserSession.reattach_session)
         self._reattach_lock = asyncio.Lock()
 
-        # Fetch body capture state.  False by default — enabled by get()/open(),
-        # or explicitly via tab.capture_bodies = True / tab.enable_capture().
+        # False by default, enabled by `get()`/`open()` or explicitly via
+        # `tab.capture_bodies = True` / `tab.enable_capture()`.
         self.capture_bodies: bool = False
         self._fetch_enabled: bool = False
-        # Serializes enable_fetch/disable_fetch. `Tab.capture_bodies`'s setter
-        # is fire-and-forget (it schedules a task and returns), so a
+        # Serializes `enable_fetch`/`disable_fetch`. `Tab.capture_bodies`'s
+        # setter is fire-and-forget (it schedules a task and returns), so a
         # True-then-False pair races: both claim their flag before awaiting,
-        # then interleave, and the pair could settle as capture_bodies=True with
-        # Fetch actually disabled. Under the lock the last call issued is the
-        # one that decides.
+        # then interleave, and the pair could settle as `capture_bodies=True`
+        # with Fetch actually disabled. Under the lock the last call issued
+        # is the one that decides.
         self._fetch_lock = asyncio.Lock()
 
-        # Fetch handler (set by capture.enable, cleared by capture.disable)
+        # Fetch handler (set by capture.enable, cleared by capture.disable);
+        # binding handler (set by Tab._setup_binding).
         self._fetch_handler: Any | None = None
-
-        # Binding handler (set by Tab._setup_binding)
         self._binding_handler: Any | None = None
 
-        # Dialog handler — always-on (unlike fetch/binding, which are opt-in),
-        # since Page.enable is already part of _enable_domains(). A function
-        # reference, so it survives _reattach_core without replaying anything.
+        # Dialog handler. Always-on (unlike fetch/binding, which are opt-in),
+        # since `Page.enable` is already part of `_enable_domains()`. A
+        # function reference, so it survives `_reattach_core` without replay.
         self._dialog_handler: Any | None = _handle_dialog
-        # One-shot pre-arm set by tab.dismiss_dialog()/browser_dismiss_dialog;
-        # consumed (reset to None) by the next Page.javascriptDialogOpening.
+        # One-shot pre-arm set by `tab.dismiss_dialog()`/`browser_dismiss_dialog`;
+        # consumed (reset to None) by the next `Page.javascriptDialogOpening`.
         self._dialog_policy: dict | None = None
-        # Dialogs dismissed during the current observed mutation — cleared by
-        # pre_observe, read by post_observe to report them in the observation.
+        # Dialogs dismissed during the current observed mutation. Cleared by
+        # `pre_observe`, read by `post_observe` to report them.
         self._dialog_log: list[dict] = []
 
-        # File-chooser handler — always-on, same reasoning as the dialog
-        # handler: Page.setInterceptFileChooserDialog is part of
-        # _enable_domains(), not opt-in.
+        # File-chooser handler. Always-on, same reasoning as the dialog
+        # handler: `Page.setInterceptFileChooserDialog` is part of
+        # `_enable_domains()`, not opt-in.
         self._filechooser_handler: Any | None = _handle_filechooser
-        # One-shot pre-arm set by tab.expect_file_chooser(); consumed by the
-        # next Page.fileChooserOpened.
+        # One-shot pre-arm set by `tab.expect_file_chooser()`; consumed by
+        # the next `Page.fileChooserOpened`.
         self._filechooser_policy: dict | None = None
-        # backendNodeId/mode of the most recent file chooser still waiting on
-        # Tab.set_files() — unlike a dialog there is no default to guess, so
-        # this is never auto-resolved, only tracked until answered.
+        # `backendNodeId`/mode of the most recent file chooser still waiting
+        # on `Tab.set_files()`. Unlike a dialog there is no default to guess,
+        # so this is never auto-resolved, only tracked until answered.
         self._filechooser_pending: dict | None = None
-        # "agent": repld answers native prompts here, but only inside an action
-        # window unless `taken`. "shared": the human may be using the tab, so
-        # their dialogs and file picker stay native. Set at attach (open() →
-        # agent), changed only by Tab.take()/release(); `taken` is the explicit
-        # take(), the one claim that holds the picker intercept between actions.
+        # "agent": repld answers native prompts here, but only inside an
+        # action window unless `taken`. "shared": the human may be using the
+        # tab, so their dialogs and file picker stay native. Set at attach
+        # (`open()` -> agent), changed only by `Tab.take()`/`release()`;
+        # `taken` is the explicit `take()`, the one claim that holds the
+        # picker intercept between actions.
         self.mode: str = "shared"
         self.taken: bool = False
-        # `Tab.auto_front`: False keeps `_ensure_front` from raising this tab's window, for a tab whose window belongs
-        # to someone else (a lent tab); input to it while hidden may then be dropped.
+        # `Tab.auto_front`: False keeps `_ensure_front` from raising this
+        # tab's window, for a tab whose window belongs to someone else (a
+        # lent tab); input to it while hidden may then be dropped.
         self.auto_front: bool = True
-        # Dialog left open for the human (`_leave_dialog_to_human`), cleared by
-        # `_record_dialog_closed`; `_dialog_waiters` are the in-flight
+        # Dialog left open for the human (`_leave_dialog_to_human`), cleared
+        # by `_record_dialog_closed`; `_dialog_waiters` are the in-flight
         # renderer-bound commands to wake when one opens.
         self._open_dialog: dict | None = None
-        # Set by Inspector.targetCrashed; cleared when the renderer is replaced.
+        # Set by `Inspector.targetCrashed`; cleared when the renderer is
+        # replaced.
         self.crashed: bool = False
         self._dialog_waiters: set[asyncio.Future] = set()
-        # File choosers seen during the current observed mutation — cleared by
-        # pre_observe, read by post_observe/unresolved_filechooser_error.
+        # File choosers seen during the current observed mutation. Cleared by
+        # `pre_observe`, read by `post_observe`/`unresolved_filechooser_error`.
         self._filechooser_log: list[dict] = []
-        # The solved watcher `captcha.report` started; ends itself when the page goes.
+        # The solved watcher `captcha.report` started; ends itself when the
+        # page goes.
         self._captcha_watch: asyncio.Task | None = None
 
-        # HTTP auth handler — opt-in with Fetch (capture.enable passes
-        # handleAuthRequests=True), unlike dialog/filechooser above.
+        # HTTP auth handler. Opt-in with Fetch (`capture.enable` passes
+        # `handleAuthRequests=True`), unlike dialog/filechooser above.
         self._auth_handler: Any | None = _handle_auth
-        # One-shot pre-arm set by tab.expect_auth(); consumed by the next
-        # Fetch.authRequired.
+        # One-shot pre-arm set by `tab.expect_auth()`; consumed by the next
+        # `Fetch.authRequired`.
         self._auth_policy: dict | None = None
         # Every challenge `_handle_auth` answered; no observation reads it.
         self._auth_log: list[dict] = []
 
-        # Pin + label state — lives here (not on Tab) because Tab wrappers
-        # are ephemeral (a fresh Tab is constructed on every _iter_tabs()/
-        # get() call) while CDPSession persists for the life of the
+        # Pin + label state lives here (not on Tab) because Tab wrappers are
+        # ephemeral (a fresh Tab is constructed on every `_iter_tabs()`/
+        # `get()` call) while CDPSession persists for the life of the
         # attachment.
         self._pinned: bool = False
-        self._pin_reason: str = ""
-        self._pin_origin: str = ""
+        self._pin_reason, self._pin_origin = "", ""
         self._pin_guard_unload: bool = True
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._label_text: str | None = None
         self._label_color: str | None = None
         self._label_script_id: str | None = None
 
-        # Whether the last ready-wait had an explicit caller-supplied ready=
+        # Whether the last ready-wait had an explicit caller-supplied `ready=`
         # condition that was polled and satisfied, rather than the bare
-        # document.readyState fallback (a guess, not a confirmation) — same
+        # `document.readyState` fallback (a guess, not a confirmation). Same
         # ephemeral-Tab-vs-persistent-CDPSession reasoning as pin/label above.
         self._ready_confirmed: bool = False
 
-        # Injected-engine handles (inject.EngineHandle), keyed by frameId —
-        # None for the top frame, a real frameId for a child. Lives here for
-        # the same reason as pin/label state, and is *cache*, not
-        # registration: per-document (executionContextsCleared drops the
-        # whole dict) and per-session (_reattach_core drops it — every
+        # Injected-engine handles (`inject.EngineHandle`), keyed by frameId
+        # (None for the top frame, a real frameId for a child). Lives here
+        # for the same reason as pin/label state, and is *cache*, not
+        # registration: per-document (`executionContextsCleared` drops the
+        # whole dict) and per-session (`_reattach_core` drops it, since every
         # objectId dies with its sessionId).
         self._injected: dict[str | None, Any] = {}
         self._injected_lock = asyncio.Lock()
@@ -1019,6 +1046,7 @@ class CDPSession:
         return None
 
     def _task_claim(self) -> "Session | None":
+        """The session of the task that last acted on this tab, while it runs."""
         tid = self.last_caller_task
         if tid is None:
             return None
@@ -1030,6 +1058,7 @@ class CDPSession:
 
     @property
     def in_action(self) -> bool:
+        """True while an action span is open or the grace tail has not elapsed."""
         return self._action_depth > 0 or time.monotonic() < self._action_until
 
     @property
@@ -1083,6 +1112,7 @@ class CDPSession:
         await self.intercept_file_chooser(self.intercepting)
 
     async def intercept_file_chooser(self, enabled: bool) -> None:
+        """Toggle `Page.setInterceptFileChooserDialog`; errors are swallowed."""
         try:
             await self.send_nowait(
                 "Page.setInterceptFileChooserDialog", {"enabled": enabled}
@@ -1093,16 +1123,18 @@ class CDPSession:
     async def _enable_domains(self) -> None:
         """Enable required CDP domains on attach.
 
-        Fire-and-forget — all enables are sent over the single multiplexed
-        WebSocket without awaiting Chrome's ack.  This keeps attach near-instant
-        even with many concurrent tabs.  Fetch interception is separate
-        (enable_fetch) and triggered by get()/open() or tab.capture_bodies = True.
+        Fire-and-forget: all enables are sent over the single multiplexed
+        WebSocket without awaiting Chrome's ack. This keeps attach near-instant
+        even with many concurrent tabs. Fetch interception is separate
+        (`enable_fetch`) and triggered by `get()`/`open()` or
+        `tab.capture_bodies = True`.
 
         `Page.setInterceptFileChooserDialog` is replayed here iff
         `intercepting`: it stops a native OS-level file picker from ever
-        opening, and that window is invisible to Page.captureScreenshot and the
-        AX tree alike — there is no "observe it, then decide" for something CDP
-        can't see. Downloads are observed, never redirected: see `BrowserSession`.
+        opening, and that window is invisible to `Page.captureScreenshot` and
+        the AX tree alike (there is no "observe it, then decide" for something
+        CDP cannot see). Downloads are observed, never redirected: see
+        `BrowserSession`.
         """
         # A reattach may have missed the Closed event; a stale flag would fail
         # every renderer-bound command on this tab from here on.
@@ -1133,11 +1165,11 @@ class CDPSession:
         `_reattach_core` re-enables Fetch on a session that had it, and it can
         be reached *from inside* an in-flight `enable_fetch`: that call's
         `Fetch.enable` goes through `BrowserSession.execute`, which on a dead
-        socket triggers `_reconnect` → `_reattach_core` → back here. Taking
-        `_fetch_lock` again on the same task would deadlock outright, since
-        asyncio.Lock is not reentrant — the identical reason
+        socket triggers `_reconnect` then `_reattach_core` then back here.
+        Taking `_fetch_lock` again on the same task would deadlock outright,
+        since `asyncio.Lock` is not reentrant (the identical reason
         `reattach_session` is a locked wrapper over `_reattach_core` rather
-        than locking the core itself.
+        than locking the core itself).
         """
         if self._fetch_enabled:
             return
@@ -1172,7 +1204,7 @@ class CDPSession:
                 # exception until it was made to propagate, so this branch was
                 # dead and a failed disable read as a success. It restores both
                 # flags because `capture.disable` leaves `_fetch_handler` in
-                # place when Chrome refuses — the session is still capturing,
+                # place when Chrome refuses: the session is still capturing,
                 # and saying otherwise would strand paused requests.
                 self._fetch_enabled = True
                 self.capture_bodies = True
@@ -1237,6 +1269,7 @@ class CDPSession:
         return True
 
     def _crashed_error(self) -> TabCrashedError:
+        """Build a `TabCrashedError` with the reload hint for this target."""
         short_id = f"{self.port}:{self.chrome_target_id[:6].lower()}"
         return TabCrashedError(f"tab {short_id} has crashed; {self.reload_hint()}")
 
@@ -1281,14 +1314,14 @@ class CDPSession:
         return await self._send_nowait(method, params, self._session_id)
 
     # ------------------------------------------------------------------
-    # Event handling (sync — called from recv loop on asyncio thread)
+    # Event handling (sync, called from recv loop on asyncio thread)
     # ------------------------------------------------------------------
 
     @loop_only
     def store_event(self, event: dict, method: str, request_id: str | None) -> None:
         """Insert an event row into this session's DuckDB event store.
 
-        Counts the row as well as writing it — capture.py stores its synthetic
+        Counts the row as well as writing it. `capture.py` stores its synthetic
         body rows through here, and those have to age out of the FIFO like
         anything else.
         """
@@ -1454,20 +1487,20 @@ class CDPSession:
             logger.debug("_handle_event error: %s", exc)
 
     async def _async_prune(self) -> None:
-        """FIFO prune oldest events, on the loop — deliberately, see below.
+        """FIFO prune oldest events, on the loop (deliberately, see below).
 
         `create_task` only gets this out of the recv *handler*; the SQL still
         runs on the shared loop. That is fine here, and measured: the delete is
         a rowid-range op on a columnar store, so it costs ~7 ms flat at
-        MAX_EVENTS — independent of row width (checked at 2 KB/event) — and
-        fires at most once per PRUNE_CHECK_INTERVAL events, i.e. under 10 µs
-        amortised per event. That is at the level the observation pipeline was
-        *optimised down to*, not above it, so `to_thread` here would buy single
-        -digit milliseconds in exchange for a second writer to the event store
-        (its own cursor, since `store_event` holds the main connection) plus an
-        in-flight guard, because the loop keeps counting past MAX_EVENTS while
-        a thread works and would spawn a concurrent delete over the same rows.
-        Not worth it. Re-measure before assuming otherwise.
+        `MAX_EVENTS`, independent of row width (checked at 2 KB/event), and
+        fires at most once per `PRUNE_CHECK_INTERVAL` events (under 10 us
+        amortised per event). That is at the level the observation pipeline was
+        *optimised down to*, not above it, so `to_thread` here would buy
+        single-digit milliseconds in exchange for a second writer to the event
+        store (its own cursor, since `store_event` holds the main connection)
+        plus an in-flight guard, because the loop keeps counting past
+        `MAX_EVENTS` while a thread works and would spawn a concurrent delete
+        over the same rows. Not worth it. Re-measure before assuming otherwise.
         """
         excess = self._event_count - MAX_EVENTS
         delete_count = max(excess, PRUNE_BATCH_SIZE)
@@ -1496,22 +1529,22 @@ class CDPSession:
 
         The lock spans execute-and-fetch rather than just `self.db.cursor()`,
         because a close landing anywhere in between is the same crash. That
-        means `cleanup()` waits out an in-flight query — bounded by the slowest
+        means `cleanup()` waits out an in-flight query, bounded by the slowest
         CTE the views build (tens of milliseconds, the figure `observe.py`
         measured), and only when a read is genuinely running. Deliberate: the
         alternative is closing the connection out from under a live cursor.
 
         It does *not* serialize against the loop's own writes. `store_event`
         and `_async_prune` go through `self.db` directly, and so does
-        `cleanup()` — all three run on the loop, so they are already ordered
-        with respect to each other, and DuckDB's MVCC isolates this cursor from
-        that writer. Only the off-loop readers need the guard.
+        `cleanup()`. All three run on the loop, so they are already ordered
+        with respect to each other, and DuckDB's MVCC isolates this cursor
+        from that writer. Only the off-loop readers need the guard.
         """
         with self._db_lock:
             if self._db_closed:
                 raise RuntimeError(
                     f"event store for target {self.chrome_target_id[:8]} is closed "
-                    "— the tab was detached or the browser reconnected"
+                    "(the tab was detached or the browser reconnected)"
                 )
             cur = self.db.cursor()
             try:
@@ -1532,7 +1565,7 @@ class CDPSession:
 
     def query_dicts(self, sql: str, params: list | None = None) -> list[dict]:
         """Like `query`, but rows are dicts keyed by the query's live column
-        names — a `SELECT *` reorder or rename can't silently misassign
+        names. A `SELECT *` reorder or rename cannot silently misassign
         fields the way a positionally-zipped tuple would."""
         with self._cursor() as cur:
             result = cur.execute(sql, params) if params else cur.execute(sql)
@@ -1571,18 +1604,18 @@ class CDPSession:
         except Exception as exc:
             logger.debug("fetch_body DB check %s: %s", request_id, exc)
 
-        # Synchronous CDP fallback — must be called from a thread, not the event loop.
-        # self._loop is set at construction time by BrowserSession.attach().
+        # Synchronous CDP fallback. Must be called from a thread, not the event
+        # loop. self._loop is set at construction time by BrowserSession.attach().
         if self._loop is None:
             raise RuntimeError(
-                "CDPSession has no event loop — cannot fetch body via CDP"
+                "CDPSession has no event loop; cannot fetch body via CDP"
             )
         if on_loop(self._loop):
             # Blocking on fut.result() here would stall the loop the
             # coroutine needs, timing out after 10s. Fail fast instead.
             return {
                 "error": "body not in capture store; a blocking CDP fetch would "
-                "stall the kernel loop — use await tab.cdp("
+                "stall the kernel loop; use await tab.cdp("
                 "'Network.getResponseBody', requestId=...) instead"
             }
         fut = asyncio.run_coroutine_threadsafe(
@@ -1600,7 +1633,7 @@ class CDPSession:
         `_is_streaming` handles the case we can name, but it can only act on a
         response we actually saw: a request whose `Network.responseReceived`
         never arrives (a hung connection, a body Chrome stops reporting on, a
-        stream with a mime type we didn't recognise) would otherwise sit here
+        stream with a mime type we did not recognise) would otherwise sit here
         forever and pin this tab's settle at its full deadline for the rest of
         the session. `_INFLIGHT_MAX_AGE` is deliberately far longer than any
         request settle would legitimately wait on, so this evicts wedged
@@ -1628,14 +1661,14 @@ class CDPSession:
         self._inflight.clear()
 
     def clear_events(self) -> None:
-        """Delete all stored events.  Cursor per call — may run on IPC threads.
+        """Delete all stored events. Cursor per call; may run on IPC threads.
 
         The delete is deliberately off-loop-safe; the counters are not, and the
         two halves are reached differently for that reason. `_event_count`,
         `_next_prune_check` and `_inflight` are written by `store_event` and
         `_handle_event` from the recv handler, and `self._event_count += 1` is
         a read-modify-write that a foreign thread's `= 0` can land inside and
-        lose — leaving the FIFO prune trigger describing a store it no longer
+        lose, leaving the FIFO prune trigger describing a store it no longer
         matches.
 
         `browser_dispatch._run_sync_on_loop` already puts the MCP `browser_clear`
@@ -1645,7 +1678,7 @@ class CDPSession:
         each entry point is what makes the rule hold for all of them.
 
         The scheduled reset can miss events that arrive between the delete and
-        it — the count drifts low by however many, never high — and
+        it (the count drifts low by however many, never high), and
         `_async_prune` recounts with `SELECT COUNT(*)` on its next sweep, so the
         drift is bounded and self-correcting. A lost increment is not.
         """
@@ -1662,7 +1695,7 @@ class CDPSession:
         Under `_db_lock`, so it waits out any off-loop reader holding a cursor
         rather than closing the connection beneath it, and marks the store
         closed so a reader arriving afterwards gets an attributable error
-        instead of a raw DuckDB one. Idempotent — every teardown path
+        instead of a raw DuckDB one. Idempotent: every teardown path
         (`disconnect`, a failed `_reconnect`, `Target.targetDestroyed`) can
         reach it, and two of them can reach it for the same session.
         """

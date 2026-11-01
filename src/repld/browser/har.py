@@ -1,32 +1,36 @@
 """HAR view + console view SQL definitions for DuckDB.
 
-Uses json_transform for typed extraction — each CTE parses the JSON event
-once and exposes fields via struct dot notation.  Small CTEs (1–2 fields)
-keep plain json_extract_string for brevity.
+Uses `json_transform` for typed extraction: each CTE parses the JSON event
+once and exposes fields via struct dot notation.  Small CTEs (one or two
+fields) keep plain `json_extract_string` for brevity.
 
 Ported from webtap's har.py with:
 - Redirect fix: separate rows per redirect hop instead of MAX() GROUP BY
-- is_final flag on request_hops: JOIN-level filtering replaces per-column
-  CASE WHEN window-function guards in http_entries
-- Added derived columns: initiator_*, curl_command, auth_scheme, auth_cookies,
-  csrf_token_header, mime_family, is_asset, loader_id, frame_id
-- console_entries view for Runtime.consoleAPICalled + Runtime.exceptionThrown + Log.entryAdded
+- `is_final` flag on `request_hops`: JOIN-level filtering replaces per-column
+  CASE WHEN window-function guards in `http_entries`
+- Added derived columns: `initiator_*`, `curl_command`, `auth_scheme`,
+  `auth_cookies`, `csrf_token_header`, `mime_family`, `is_asset`, `loader_id`,
+  `frame_id`
+- `console_entries` view for `Runtime.consoleAPICalled` +
+  `Runtime.exceptionThrown` + `Log.entryAdded`
 
-**No view here ends in ORDER BY, deliberately.** Every one of them used to, and
-every caller overrides it anyway — `tab_query`'s four query methods, `tab.request`,
-and `observe`'s two delta functions all name their own ordering — so the sort ran
-over the full CTE result before the outer query re-sorted and applied its LIMIT.
-Measured at 40k events: 35.4 ms → 30.4 ms on the `har_summary WHERE id > ?` that
-`post_observe` runs per tab per mutation. The bigger reason is correctness: a
-view-level ORDER BY is not a guarantee SQL owes an outer query, but it *looks*
-like one, and a caller that leans on it fails only once the result set outgrows
-its LIMIT. That is not hypothetical — `Tab.sse()` / `Tab.lifecycle()` shipped
-with `LIMIT 500` and no ORDER BY against views defined oldest-first, and silently
-returned the oldest 500 entries instead of the newest past that mark. Add the
-ORDER BY to the query, never to the view.
+**No view here ends in ORDER BY, deliberately.** Every one of them used to,
+and every caller overrides it anyway (`tab_query`'s four query methods,
+`tab.request`, and `observe`'s two delta functions all name their own
+ordering), so the sort ran over the full CTE result before the outer query
+re-sorted and applied its LIMIT. Measured at 40k events: 35.4 ms down to
+30.4 ms on the `har_summary WHERE id > ?` that `post_observe` runs per tab
+per mutation. The bigger reason is correctness: a view-level ORDER BY is not
+a guarantee SQL owes an outer query, but it *looks* like one, and a caller
+that leans on it fails only once the result set outgrows its LIMIT. That is
+not hypothetical. `Tab.sse()` / `Tab.lifecycle()` shipped with `LIMIT 500`
+and no ORDER BY against views defined oldest-first, and silently returned the
+oldest 500 entries instead of the newest past that mark. Add the ORDER BY to
+the query, never to the view.
 """
 
 import logging
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +78,7 @@ active_paused AS (
     QUALIFY ROW_NUMBER() OVER (PARTITION BY pf.network_id ORDER BY pf.paused_id DESC) = 1
 ),
 
--- HTTP Request: one row per requestWillBeSent (includes redirects — each redirect emits a new event)
+-- HTTP Request: one row per requestWillBeSent (includes redirects, each emitting a new event)
 all_requests AS (
     SELECT
         rowid,
@@ -297,7 +301,7 @@ ws_closed AS (
     GROUP BY request_id
 ),
 
--- HTTP entries: one row per request_id × redirect_index hop
+-- HTTP entries: one row per (request_id, redirect_index) hop
 -- JOINs gated on rh.is_final restrict response/finish/error data to the last hop
 http_entries AS (
     SELECT
@@ -394,7 +398,7 @@ http_entries AS (
                  -- escaped quote, reopen). Spelled with chr(92) rather than a
                  -- '\' literal because this SQL lives in a non-raw Python
                  -- string, which would eat the backslash before DuckDB sees it
-                 -- and emit ''' — a curl that still runs, but silently drops
+                 -- and emit ''', a curl that still runs but silently drops
                  -- the apostrophe and everything quoted around it.
                  THEN CONCAT(' --data-raw ', chr(39), REPLACE(crb.body, chr(39), chr(39) || chr(92) || chr(39) || chr(39)), chr(39))
                  ELSE '' END
@@ -479,7 +483,7 @@ SELECT * FROM websocket_entries
 """
 
 # ---------------------------------------------------------------------------
-# HAR summary view — lightweight list for network() command
+# HAR summary view: lightweight projection for network() command
 # ---------------------------------------------------------------------------
 
 _HAR_SUMMARY_SQL = """
@@ -632,7 +636,7 @@ FROM (
 """
 
 
-def _create_views(db_execute) -> None:
+def _create_views(db_execute: Callable[[str], object]) -> None:
     """Create all HAR, console, SSE, and lifecycle views. Called from CDPSession init."""
     db_execute(_HAR_ENTRIES_SQL)
     db_execute(_HAR_SUMMARY_SQL)

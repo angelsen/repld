@@ -9,13 +9,13 @@ are replayed to the page via fulfillRequest.
 
 **Capturing a body is not free, so it is not the default for everything.**
 Interception is registered on `*` at both stages, unscoped by resource type.
-`Fetch.RequestPattern` does support a `resourceType` filter, but it's
-inclusive-only — excluding `_ASSET_RESOURCE_TYPES` would take one pattern per
-*remaining* type across both stages, not one exclusion — so the filtering
-happens here instead, in `_should_capture_body`. The cost isn't only the
+`Fetch.RequestPattern` does support a `resourceType` filter, but it is
+inclusive-only (excluding `_ASSET_RESOURCE_TYPES` would take one pattern per
+*remaining* type across both stages, not one exclusion), so the filtering
+happens here instead, in `_should_capture_body`. The cost is not only the
 skipped types' round trip: every request still pauses at both stages and
 crosses the DevTools WebSocket into the Python kernel before Chrome may
-proceed, even ones `_should_capture_body` discards outright — that pause
+proceed, even ones `_should_capture_body` discards outright. That pause
 alone is enough added latency to break a timing-sensitive page, with no
 network-level symptom at all (ExtJS 6's eval-based class loader threw and
 the page never painted). `browser.no_capture()` is the escape hatch until
@@ -29,7 +29,7 @@ matching response, added to page-load latency on any tab `get()`/`open()`
 touched. Worth it for the JSON/XHR/document traffic the whole capture store
 exists to make greppable; not worth it for images, fonts, stylesheets, media
 and scripts, which `tab.network()` hides by default and `format_observation`
-collapses to a byte count. Skipping them costs nothing that isn't recoverable:
+collapses to a byte count. Skipping them costs nothing that is not recoverable:
 `CDPSession.fetch_body` already falls back to `Network.getResponseBody` for
 anything with no stored body, so an asset body is still one call away when
 someone actually wants it.
@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_BODY_SIZE = 500_000
 
-# What counts as an asset, mirroring har.py's `is_asset` derivation exactly —
-# the same five resource types and the same mime markers. That column is this
+# What counts as an asset, mirroring har.py's `is_asset` derivation exactly.
+# The same five resource types and the same mime markers. That column is this
 # codebase's one definition of "network noise" (it drives `tab.network()`'s
 # `include_assets=False` default and `format_observation`'s asset rollup), so
 # capture and query have to agree about which requests it names. Two lists,
@@ -61,12 +61,12 @@ _ASSET_MIME_MARKERS = ("image/", "font/", "css", "woff", "video/", "audio/")
 
 
 async def enable(session: CDPSession) -> None:
-    """Enable Fetch interception on a CDPSession.
+    """Register the Fetch handler and arm auth interception for a session.
 
     `handleAuthRequests: True` routes HTTP Basic/Digest challenges through
     `cdp._handle_auth`, which answers them only under an agent claim and
     returns the rest to Chrome's own prompt with `Default`. Opt-in because
-    Fetch itself is: a watch()-attached tab never pauses on a challenge, same
+    Fetch itself is: a `watch()`-attached tab never pauses on a challenge, same
     as it gets no body capture.
     """
     await session.execute(
@@ -84,10 +84,10 @@ async def enable(session: CDPSession) -> None:
 
 
 async def disable(session: CDPSession) -> None:
-    """Disable Fetch interception on a CDPSession.
+    """Clear the Fetch handler only after Chrome confirms interception is off.
 
-    Propagates, and clears the handler only after Chrome has confirmed —
-    the mirror of `enable`, whose failure has always reached the caller.
+    Propagates on failure, the mirror of `enable` whose failure has always
+    reached the caller.
 
     Both halves of that matter. This used to swallow the `Fetch.disable`
     exception and clear `_fetch_handler` regardless, which made
@@ -105,10 +105,11 @@ async def disable(session: CDPSession) -> None:
 
 
 async def handle_paused(session: CDPSession, params: dict) -> None:
-    """Handle a Fetch.requestPaused event.
+    """Resume a paused request, optionally capturing its body.
 
     Request stage: capture POST body, continue.
-    Response stage: capture body for small JSON responses, pass through everything else.
+    Response stage: capture body for small non-asset responses, pass through
+    everything else.
     """
     request_id = params.get("requestId", "")
     network_id = params.get("networkId", request_id)
@@ -127,7 +128,7 @@ async def handle_paused(session: CDPSession, params: dict) -> None:
     except Exception as exc:
         logger.debug("handle_paused error for %s: %s", request_id, exc)
         # Unguarded on purpose: _fast_continue swallows its own exceptions, so
-        # a try/except here would never fire. Chrome still needs the continue —
+        # a try/except here would never fire. Chrome still needs the continue;
         # a paused request nobody resumes hangs the page.
         await _fast_continue(session, request_id, is_response)
 
@@ -137,55 +138,13 @@ async def _fast_continue(
 ) -> None:
     """Continue a paused request without body capture.
 
-    Uses send_nowait — no roundtrip wait for Chrome's ack.
+    Uses `send_nowait`, so there is no roundtrip wait for Chrome's ack.
     """
     method = "Fetch.continueResponse" if is_response else "Fetch.continueRequest"
     try:
         await session.send_nowait(method, {"requestId": request_id})
     except Exception as exc:
         logger.debug("fast_continue %s: %s", request_id, exc)
-
-
-def _should_capture_body(params: dict) -> bool:
-    """Decide whether to even attempt a response body fetch.
-
-    Skips redirects (CDP puts them in kRedirectReceived state —
-    getResponseBody errors), endless streams (`cdp.is_endless` — getResponseBody
-    blocks until the stream closes), and assets (see the module docstring: the fetch +
-    fulfill round trip costs more than the body is worth, and
-    `fetch_body` can still get it on demand).
-
-    NOT a size gate: Content-Length is absent on chunked responses and,
-    when present, reflects the wire (possibly compressed) size rather
-    than the decoded body getResponseBody returns — the actual cap is
-    enforced in _handle_response after the body comes back.
-    """
-    status = params.get("responseStatusCode", 0)
-    if status in (301, 302, 303, 307, 308):
-        return False
-
-    if params.get("resourceType", "") in _ASSET_RESOURCE_TYPES:
-        return False
-
-    response_headers = params.get("responseHeaders", [])
-    content_type = ""
-    has_length = False
-    for h in response_headers:
-        name = h.get("name", "").lower()
-        if name == "content-type":
-            content_type = h.get("value", "").lower()
-        elif name == "content-length":
-            has_length = True
-
-    # `cdp.is_endless`, not a local list: cdp drops the same responses from
-    # `_inflight`, and a rule that drifts between the two reintroduces one of
-    # the two hangs. The 5 s timeout below does not cover this: a timed-out
-    # getResponseBody leaves the response paused, and continueResponse after it
-    # never releases the page's fetch.
-    if is_endless(content_type, has_length):
-        return False
-
-    return not any(marker in content_type for marker in _ASSET_MIME_MARKERS)
 
 
 async def _handle_response(
@@ -242,7 +201,7 @@ async def _handle_response(
         )
 
     # Replay body to the page via fulfillRequest.  getResponseBody consumes
-    # the internal buffer — continueResponse after it delivers empty.
+    # the internal buffer, so continueResponse after it delivers empty.
     if body:
         try:
             await session.execute(
@@ -258,11 +217,76 @@ async def _handle_response(
         except Exception as exc:
             logger.debug("fulfillRequest %s: %s", request_id, exc)
 
-    # Fallback: body empty or fulfillRequest failed — let original through
+    # Fallback: body empty or fulfillRequest failed, let original through.
     try:
         await session.send_nowait("Fetch.continueResponse", {"requestId": request_id})
     except Exception as exc:
         logger.debug("continueResponse fallback %s: %s", request_id, exc)
+
+
+def _should_capture_body(params: dict) -> bool:
+    """Decide whether a response body is worth fetching through the DevTools socket.
+
+    Skips redirects (CDP puts them in kRedirectReceived state, so
+    `getResponseBody` errors), endless streams (`cdp.is_endless`, because
+    `getResponseBody` blocks until the stream closes), and assets (see the
+    module docstring: the fetch + fulfill round trip costs more than the body
+    is worth, and `fetch_body` can still get it on demand).
+
+    NOT a size gate: Content-Length is absent on chunked responses and,
+    when present, reflects the wire (possibly compressed) size rather
+    than the decoded body `getResponseBody` returns. The actual cap is
+    enforced in `_handle_response` after the body comes back.
+    """
+    status = params.get("responseStatusCode", 0)
+    if status in (301, 302, 303, 307, 308):
+        return False
+
+    if params.get("resourceType", "") in _ASSET_RESOURCE_TYPES:
+        return False
+
+    response_headers = params.get("responseHeaders", [])
+    content_type = ""
+    has_length = False
+    for h in response_headers:
+        name = h.get("name", "").lower()
+        if name == "content-type":
+            content_type = h.get("value", "").lower()
+        elif name == "content-length":
+            has_length = True
+
+    # `cdp.is_endless`, not a local list: cdp drops the same responses from
+    # `_inflight`, and a rule that drifts between the two reintroduces one of
+    # the two hangs. The 5 s timeout below does not cover this: a timed-out
+    # getResponseBody leaves the response paused, and continueResponse after it
+    # never releases the page's fetch.
+    if is_endless(content_type, has_length):
+        return False
+
+    return not any(marker in content_type for marker in _ASSET_MIME_MARKERS)
+
+
+def _store_response_body(
+    session: CDPSession,
+    network_id: str,
+    body: str,
+    base64_encoded: bool,
+    capture_meta: dict,
+) -> None:
+    """Write a captured response body into the event store as a synthetic event."""
+    event = {
+        "method": "Network.responseBodyCaptured",
+        "params": {
+            "requestId": network_id,
+            "body": body,
+            "base64Encoded": base64_encoded,
+            "capture": capture_meta,
+        },
+    }
+    try:
+        session.store_event(event, "Network.responseBodyCaptured", network_id)
+    except Exception as exc:
+        logger.debug("store_response_body %s: %s", network_id, exc)
 
 
 async def _handle_request(
@@ -293,7 +317,7 @@ async def _handle_request(
 
 
 def _store_request_body(session: CDPSession, network_id: str, body: str) -> None:
-    """Store a captured request POST body as a synthetic event."""
+    """Write a captured request POST body into the event store as a synthetic event."""
     event = {
         "method": "Network.requestBodyCaptured",
         "params": {"requestId": network_id, "body": body},
@@ -302,26 +326,3 @@ def _store_request_body(session: CDPSession, network_id: str, body: str) -> None
         session.store_event(event, "Network.requestBodyCaptured", network_id)
     except Exception as exc:
         logger.debug("store_request_body %s: %s", network_id, exc)
-
-
-def _store_response_body(
-    session: CDPSession,
-    network_id: str,
-    body: str,
-    base64_encoded: bool,
-    capture_meta: dict,
-) -> None:
-    """Store a captured response body as a synthetic event."""
-    event = {
-        "method": "Network.responseBodyCaptured",
-        "params": {
-            "requestId": network_id,
-            "body": body,
-            "base64Encoded": base64_encoded,
-            "capture": capture_meta,
-        },
-    }
-    try:
-        session.store_event(event, "Network.responseBodyCaptured", network_id)
-    except Exception as exc:
-        logger.debug("store_response_body %s: %s", network_id, exc)

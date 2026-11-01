@@ -1,8 +1,14 @@
-"""Pin/gate/label UI — JS/CSS blobs and the CDP binding handler behind
-Tab.pin(), Tab._set_label(), and the human-gate pill.
+"""Pin/gate/label UI: JS/CSS blobs and the CDP binding handler behind
+`Tab.pin()`, `Tab._set_label()`, and the human-gate pill.
 """
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cdp import CDPSession
 
 __all__ = [
     "BINDING_NAME",
@@ -14,21 +20,21 @@ __all__ = [
     "reapply_label",
 ]
 
-# The CDP binding the pill calls to answer a gate. Registered per *session* —
+# The CDP binding the pill calls to answer a gate.  Registered per *session*:
 # `Tab._setup_binding` on the first pin, `BrowserSession._reattach_core` again
-# on every session that outlives a reconnect — because Chrome drops the binding
-# from the page when the session that added it detaches. Spelled literally
+# on every session that outlives a reconnect, because Chrome drops the binding
+# from the page when the session that added it detaches.  Spelled literally
 # inside `_PIN_JS` below as well: that blob is a raw JS string with no
 # substitution pass of its own, so the name lives in two places by necessity.
 BINDING_NAME = "__repld_resolve"
 
 # ---------------------------------------------------------------------------
-# Pill JS/CSS blob — injected via Runtime.evaluate on tab.pin()
+# Pill JS/CSS blob, injected via Runtime.evaluate on tab.pin()
 # ---------------------------------------------------------------------------
 _PIN_JS = r"""
 (function() {
   if (window.__repld_pill) {
-    // Already injected — idempotent, just ensure update function is live
+    // Already injected; idempotent, just ensure update function is live
     return;
   }
 
@@ -150,7 +156,7 @@ _PIN_JS = r"""
   `;
   document.head.appendChild(style);
 
-  // ---- DOM (createElement only — no innerHTML, Trusted Types safe) ----
+  // ---- DOM (createElement only, no innerHTML; Trusted Types safe) ----
   function _el(tag, attrs, children) {
     var e = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function(k) {
@@ -295,7 +301,7 @@ _PIN_JS = r"""
 
   // ---- Heartbeat (liveness) ----
   // %STALE_MS%/%CHECK_MS% substituted at injection time from tab.py's
-  // _HEARTBEAT_INTERVAL_S/_HEARTBEAT_MAX_MISSES — keep the two in lockstep.
+  // _HEARTBEAT_INTERVAL_S/_HEARTBEAT_MAX_MISSES.  Keep the two in lockstep.
   window.__repld_hb = Date.now();
   window.__repld_hb_timer = setInterval(function() {
     if (Date.now() - window.__repld_hb > %STALE_MS%) {
@@ -307,7 +313,7 @@ _PIN_JS = r"""
   // Opt-out via pin(guard_unload=False): this fires on ANY unload, same-
   // origin included, so a caller actively driving a live-reloading dev
   // server (Vite HMR etc.) would otherwise have every framework-initiated
-  // reload blocked behind this native confirm dialog — indistinguishable
+  // reload blocked behind this native confirm dialog, indistinguishable
   // from a hung tab from the CDP side, since nothing can dismiss it.
   if (%GUARD_UNLOAD%) {
     window.__repld_beforeunload = function(e) {
@@ -322,19 +328,20 @@ _PIN_JS = r"""
 
 
 # ---------------------------------------------------------------------------
-# Label JS — injected via Page.addScriptToEvaluateOnNewDocument
+# Label JS, injected via Page.addScriptToEvaluateOnNewDocument
 # ---------------------------------------------------------------------------
 # **Must not touch `document.body` at top level.**
-# `addScriptToEvaluateOnNewDocument` runs at document *start*, before the page's
-# own scripts and before the parser has built `<body>` — so `document.body` is
-# null there and any reach through it throws. That took out the whole mount, on
-# exactly the code path the registration exists for: surviving a navigation.
-# `runImmediately: True` also evaluates it against the currently-loaded
-# document, where body *does* exist, so setting a label looked like it worked
-# and the bar then silently failed to come back on the next page.
+# `addScriptToEvaluateOnNewDocument` runs at document *start*, before the
+# page's own scripts and before the parser has built `<body>`, so
+# `document.body` is null there and any reach through it throws.  That took
+# out the whole mount, on exactly the code path the registration exists for:
+# surviving a navigation.  `runImmediately: True` also evaluates it against
+# the currently-loaded document, where body *does* exist, so setting a label
+# looked like it worked and the bar then silently failed to come back on the
+# next page.
 #
 # `_PIN_JS` above dereferences `document.body` freely because it goes in via
-# `Runtime.evaluate` on a live page. The two are not interchangeable.
+# `Runtime.evaluate` on a live page.  The two are not interchangeable.
 _LABEL_JS = r"""
 (function() {
   function mount() {
@@ -359,6 +366,7 @@ _label_color_index = 0
 
 
 def _next_label_color() -> str:
+    """Cycle through `_LABEL_PALETTE` and return the next hex colour."""
     global _label_color_index
     color = _LABEL_PALETTE[_label_color_index % len(_LABEL_PALETTE)]
     _label_color_index += 1
@@ -366,16 +374,16 @@ def _next_label_color() -> str:
 
 
 def label_script(text: str, color: str) -> str:
-    """`_LABEL_JS` with this label's text and colour substituted in."""
+    """Return `_LABEL_JS` with *text* and *color* substituted into the placeholders."""
     return _LABEL_JS.replace("%TEXT%", json.dumps(text)).replace("%COLOR%", color)
 
 
-async def reapply_label(session) -> None:
+async def reapply_label(session: CDPSession) -> None:
     """Re-register the label bar's on-new-document script on *session*.
 
     `Page.addScriptToEvaluateOnNewDocument` is session-scoped exactly like
     `Runtime.addBinding`, so a reattach drops it and the identifier held in
-    `_label_script_id` refers to nothing. Called from
+    `_label_script_id` refers to nothing.  Called from
     `BrowserSession._reattach_core` for the same reason the binding is: a
     reattach caused by *navigation* would be repaired by the next `_set_label`,
     but a WebSocket `_reconnect` (sleep, network blip, Chrome restart)
@@ -383,8 +391,8 @@ async def reapply_label(session) -> None:
 
     This failure is invisible at the moment it happens, which is what made it
     outlive the binding fix beside it: the bar is live DOM, so it survives on
-    the *current* document and only fails to come back on the next navigation
-    — the one thing the registration exists for. `_LABEL_JS`'s `mount()` is a
+    the *current* document and only fails to come back on the next navigation,
+    the one thing the registration exists for.  `_LABEL_JS`'s `mount()` is a
     no-op when the bar is already there, so `runImmediately` re-evaluating
     against a document that still has one costs nothing.
     """
@@ -400,8 +408,8 @@ async def reapply_label(session) -> None:
     session._label_script_id = result.get("identifier")
 
 
-async def _handle_binding(session, params: dict) -> None:
-    """Handle __repld_resolve callback from pill UI."""
+async def _handle_binding(session: CDPSession, params: dict) -> None:
+    """Dispatch a `Runtime.bindingCalled` payload from the pill to `resolve_gate`."""
     payload_str = params.get("payload", "{}")
     try:
         payload = json.loads(payload_str)

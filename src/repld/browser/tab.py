@@ -1,4 +1,4 @@
-"""Tab facade — user-friendly API over CDPSession.
+"""Tab facade: user-friendly API over CDPSession.
 
 Wraps CDPSession with JS eval, DOM interaction, and CDP passthrough.
 Row/Rows types and the DuckDB-backed query methods (network/console/sse/
@@ -44,7 +44,7 @@ from .target import make_target
 __all__ = ["Action", "ActionDeclined", "BrowserJSError", "Receipt", "Tab"]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
-# heard from Python in _HEARTBEAT_STALE_MS — kept in lockstep with the
+# heard from Python in _HEARTBEAT_STALE_MS, kept in lockstep with the
 # Python-side give-up point (interval * max misses) via the same constants,
 # substituted into _PIN_JS at injection time (see tab.py:_inject_pin).
 _PROBE_TIMEOUT_S = 5  # set_files readability probe; a hidden tab never answers
@@ -58,7 +58,7 @@ _HEARTBEAT_STALE_MS = _HEARTBEAT_INTERVAL_S * _HEARTBEAT_MAX_MISSES * 1000
 _KEY_ALIASES = {"Space": " "}
 _KEY_CODE = {" ": "Space"}
 # Enter/Space must carry the produced character or Chromium's native
-# button/form activation never fires — the DOM keydown/keyup still dispatch.
+# button/form activation never fires. The DOM keydown/keyup still dispatch.
 _KEY_TEXT = {"Enter": "\r", " ": " "}
 # Chromium's *editing* actions dispatch on windowsVirtualKeyCode, not the
 # key/code strings: without it, Backspace fires keydown/keyup but deletes
@@ -88,7 +88,7 @@ _MODIFIER_BITS = {"Alt": 1, "Control": 2, "Ctrl": 2, "Meta": 4, "Cmd": 4, "Shift
 # Grace period at the end of `_reattach`, after the ready signal is satisfied.
 # The re-attach re-enables this session's CDP domains through
 # `CDPSession._enable_domains`, which sends every `*.enable` with `send_nowait`
-# — deliberately, to keep attach fast, but it means they are in flight and
+# (deliberately, to keep attach fast), but it means they are in flight and
 # unacknowledged when the ready signal fires. Returning at that moment hands
 # back a Tab whose Network/Runtime/Log events Chrome may not be emitting yet,
 # so the first thing the caller does after a reattach is the thing least likely
@@ -97,15 +97,15 @@ _POST_REATTACH_SETTLE_S = 0.3
 
 # Default budget for the ready-signal poll (get()/open()/reattach). Was 10s;
 # raised after a live-verified Meta Ads Manager attach genuinely took 12.6s
-# end-to-end on a correct selector — not a stuck/wrong condition, just a slow
-# cold load. 15s gives real headroom over that without padding for slowness
+# end-to-end on a correct selector (not a stuck/wrong condition, just a slow
+# cold load). 15s gives real headroom over that without padding for slowness
 # nothing has actually shown; a wrong/never-satisfied ready= should still
 # fail loud in well under it, not be encouraged to just wait longer.
 _DEFAULT_READY_TIMEOUT_S = 15.0
 
 # _ensure_front's filechooser poll budget: several times the real
 # click-to-log-entry latency (single-digit ms), kept small because it's paid
-# on every input-dispatching call, chooser or not — see that docstring.
+# on every input-dispatching call, chooser or not (see that docstring).
 _FILECHOOSER_POLL_ITERS = 4
 _FILECHOOSER_POLL_INTERVAL_S = 0.015
 
@@ -132,11 +132,10 @@ def _format_stack_trace(stack_trace: dict | None) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Receipt:
-    """What an input action actually did — returned by click/tap/type_text/
-    select_option so a misdirected action is visible in the same call.
+    """What an input action actually did, returned by click/tap/type_text/select_option.
 
-    `line` is the rendered one-liner (also what str()/repr() show, so a cell
-    or observation prints it directly); `warning` is True when the action
+    `line` is the rendered one-liner (also what `str()`/`repr()` show, so a
+    cell or observation prints it directly); `warning` is True when the action
     landed somewhere unrelated to the resolved target.
     """
 
@@ -144,9 +143,11 @@ class Receipt:
     warning: bool = False
 
     def __str__(self) -> str:
+        """The receipt line, so a cell prints the one-liner directly."""
         return self.line
 
     def __repr__(self) -> str:
+        """Same as `__str__`: the receipt line is the whole representation."""
         return self.line
 
 
@@ -213,6 +214,7 @@ class BrowserJSError(Exception):
     def __init__(
         self, text: str, stack: str = "", url: str = "", line: int = 0
     ) -> None:
+        """Store the exception text, JS stack, source URL and line number."""
         self.text = text
         self.stack = stack
         self.url = url
@@ -245,6 +247,7 @@ class Tab(TabQueryMixin):
         port: int = 9222,
         ready: str | None = None,
     ) -> None:
+        """Wrap a CDPSession with its Chrome target ID and optional ready signal."""
         self._session = session
         self._chrome_target_id = chrome_target_id
         self._port = port
@@ -270,30 +273,35 @@ class Tab(TabQueryMixin):
 
     @property
     def url(self) -> str:
+        """Current page URL from Chrome's target info."""
         return self._session.target_info.get("url", "")
 
     @property
     def title(self) -> str:
+        """Current page title from Chrome's target info."""
         return self._session.target_info.get("title", "")
 
     @property
     def type(self) -> str:
+        """Target type: `page`, `iframe`, or another Chrome target kind."""
         return self._session.target_info.get("type", "page")
 
     @property
     def parent_frame_id(self) -> str:
+        """Parent frame ID for an iframe target, empty for a top-level page."""
         return self._session.target_info.get("parentFrameId", "")
 
     @property
     def capture_bodies(self) -> bool:
+        """Whether Fetch body capture is enabled on this tab's session."""
         return self._session.capture_bodies
 
     @capture_bodies.setter
     def capture_bodies(self, value: bool) -> None:
-        """Fire-and-forget toggle — the flag flips only once enable_fetch()/
-        disable_fetch() actually completes, not when this setter returns.
+        """Fire-and-forget toggle; the flag flips only once `enable_fetch()`/
+        `disable_fetch()` actually completes, not when this setter returns.
         Callers that need the ordering guarantee should await
-        enable_capture()/disable_capture() instead."""
+        `enable_capture()`/`disable_capture()` instead."""
         loop = self._session._loop
         if loop is None:
             raise RuntimeError("tab session has no event loop (not attached)")
@@ -320,12 +328,12 @@ class Tab(TabQueryMixin):
 
     @property
     def ready_confirmed(self) -> bool:
-        """True if the last ready-wait used an explicit ``ready=`` condition.
+        """True if the last ready-wait used an explicit `ready=` condition.
 
-        False if it fell back to the bare ``document.readyState === 'complete'``
-        default — a best-effort heuristic, not a confirmation the page's
-        content has actually rendered.  Lives on CDPSession, so it persists
-        across Tab re-wrapping (re-``get()``-ing an already-attached tab
+        False if it fell back to the bare `document.readyState === 'complete'`
+        default, a best-effort heuristic rather than a confirmation the page's
+        content has actually rendered. Lives on CDPSession, so it persists
+        across Tab re-wrapping (re-`get()`-ing an already-attached tab
         returns the original attach's value, not a reset default).
         """
         return self._session._ready_confirmed
@@ -400,18 +408,18 @@ class Tab(TabQueryMixin):
         """Inject pill + heartbeat, and (unless `guard_unload=False`) a
         beforeunload guard. Idempotent.
 
-        `guard_unload` defaults True — pin()'s original, always-on
-        behavior — for every existing caller protecting a long-lived
-        interactive session from accidental tab close. Set it False for a
-        tab you're actively driving against a live-reloading dev server:
-        the guard's `beforeunload` handler fires on ANY unload, same-origin
-        included, so it blocks a framework's own HMR full-page reload
-        (Vite, etc.) behind a native "Leave site?" confirm dialog that a
-        CDP driver can't dismiss on its own — indistinguishable from a
-        hung tab from the caller's side (found live: a pinned tab wedged
-        mid dev-loop, `Page.navigate`/`Runtime.evaluate` both timing out,
-        while the exact same page was instant unpinned).
-        Only settable on the first `pin()` call — a reason-only re-pin
+        `guard_unload` defaults True, `pin()`'s original always-on behavior,
+        for every existing caller protecting a long-lived interactive session
+        from accidental tab close. Set it False for a tab you're actively
+        driving against a live-reloading dev server: the guard's
+        `beforeunload` handler fires on ANY unload, same-origin included, so
+        it blocks a framework's own HMR full-page reload (Vite, etc.) behind
+        a native "Leave site?" confirm dialog that a CDP driver can't dismiss
+        on its own (indistinguishable from a hung tab from the caller's side;
+        found live: a pinned tab wedged mid dev-loop,
+        `Page.navigate`/`Runtime.evaluate` both timing out, while the exact
+        same page was instant unpinned).
+        Only settable on the first `pin()` call; a reason-only re-pin
         (already pinned, no state to change) doesn't revisit it.
         """
         session = self._session
@@ -453,9 +461,9 @@ class Tab(TabQueryMixin):
         The state clears in a `finally` for the same reason `pin()` rolls back
         in an `except`: the DOM half can fail on its own. Removing the pill is
         a `Runtime.evaluate` on a tab that may already be gone, in which case
-        `_exec` raises "target ... no longer exists" — and by then the
-        heartbeat, the one other thing that would eventually have cleared
-        `_pinned`, has already been cancelled. Leaving the flag set stranded
+        `_exec` raises "target ... no longer exists", and by then the
+        heartbeat (the one other thing that would eventually have cleared
+        `_pinned`) has already been cancelled. Leaving the flag set stranded
         the session pinned forever: `pin()` afterwards sees `_pinned` and takes
         the reason-only branch, so it never re-injects and never restarts the
         heartbeat, and nothing else ever writes False.
@@ -497,14 +505,12 @@ class Tab(TabQueryMixin):
             if status == "ok":
                 continue
             if status == "reload":
-                try:
-                    await self._inject_pin()
-                except Exception:
+                if not await self._try_reinject_pin():
                     misses += 1
                     if misses >= _HEARTBEAT_MAX_MISSES:
                         break
                 continue
-            # Cross-origin — pin contract broken.
+            # Cross-origin: pin contract broken.
             _push_tab(
                 session,
                 f"pinned tab navigated away from {origin}",
@@ -517,11 +523,19 @@ class Tab(TabQueryMixin):
         session._pin_origin = ""
         session._pin_guard_unload = True
 
+    async def _try_reinject_pin(self) -> bool:
+        """Re-inject the pin pill after a same-origin reload. False on failure."""
+        try:
+            await self._inject_pin()
+            return True
+        except Exception:
+            return False
+
     async def _setup_binding(self) -> None:
         """Register the gate-callback CDP binding on this session.
 
         Setting `_binding_handler` is also what tells `_reattach_core` this
-        session owes a re-registration after a reconnect — see there.
+        session owes a re-registration after a reconnect (see that method).
         """
         await self._exec("Runtime.addBinding", {"name": BINDING_NAME})
         self._session._binding_handler = _handle_binding
@@ -538,7 +552,7 @@ class Tab(TabQueryMixin):
         elif kind == "choose" and options:
             buttons = [{"label": opt, "value": opt, "style": ""} for opt in options]
         else:
-            return  # ask() not supported in pill — terminal only
+            return  # ask() not supported in pill (terminal only)
         await self.js(
             f"__repld_gate({json.dumps(gate_id)}, {json.dumps(prompt)}, {json.dumps(buttons)})"
         )
@@ -560,10 +574,11 @@ class Tab(TabQueryMixin):
         return await _choose(prompt, options, tab=self, **kw)
 
     async def ask(self, prompt: str, **kw: Any) -> str:
-        """Gate routed like confirm/choose — but the pill UI has no text
-        input, so this one never reaches the tab. It is answered wherever an
-        ordinary `ask()` is: the kernel's pane, or `repld gate answer` when
-        there isn't one."""
+        """Gate routed like confirm/choose, but the pill UI has no text input.
+
+        This one never reaches the tab. It is answered wherever an ordinary
+        `ask()` is: the kernel's pane, or `repld gate answer` when there
+        isn't one."""
         from ..gates import ask as _ask
 
         return await _ask(prompt, tab=self, **kw)
@@ -582,14 +597,14 @@ class Tab(TabQueryMixin):
     async def _reattach(self) -> None:
         """Re-attach to the same target after session invalidation (HMR, navigation).
 
-        The target ID usually survives — only the CDP session ID changes.
+        The target ID usually survives; only the CDP session ID changes.
         The CDPSession object is preserved (event history, capture, pin and
         label state); the pin pill re-injects via the heartbeat loop, and the
-        session-scoped registrations that died with the old session — the gate
-        binding and the label's addScriptToEvaluateOnNewDocument — are restored
+        session-scoped registrations that died with the old session (the gate
+        binding and the label's `addScriptToEvaluateOnNewDocument`) are restored
         by `_reattach_core`, so both paths into a reattach get them rather than
-        only this one.  Waits for the ready signal (selector or JS expression)
-        if set, otherwise waits for document.readyState === "complete".
+        only this one. Waits for the ready signal (selector or JS expression)
+        if set, otherwise waits for `document.readyState === "complete"`.
         """
         browser_session = self._session.browser_session
         if browser_session is None:
@@ -603,17 +618,17 @@ class Tab(TabQueryMixin):
     async def _await_ready_signal(
         self, ready: str, timeout: float = _DEFAULT_READY_TIMEOUT_S
     ) -> None:
-        """Wait for a ready signal — selector or JS expression, by shape.
+        """Wait for a ready signal (selector or JS expression, by shape).
 
         Classification comes from `selector.looks_like_selector`, not from a
         second opinion held here. This used to test
         `startswith((".", "#", "[", "data-"))`, which disagreed with the
-        selector module — the owner of the question — about every bare tag and
+        selector module (the owner of the question) about every bare tag and
         custom element. `ready="main"` and `ready="my-app"` took the JS branch,
-        evaluated as bare identifiers, came back as a ReferenceError whose
+        evaluated as bare identifiers, came back as a `ReferenceError` whose
         `result.value` is simply absent, and polled silently for the full
         timeout while `ready="#app"` worked. The selector branch polls
-        `inject.selector_exists` — existence only, never strictness: a ready
+        `inject.selector_exists`, existence only, never strictness: a ready
         signal that matched three nodes has still fired.
         """
         is_selector = selector_mod.looks_like_selector(ready)
@@ -652,13 +667,13 @@ class Tab(TabQueryMixin):
         waits for the ready signal, and retries once.
 
         If the re-attach itself fails, the *target* was destroyed outright,
-        not just its session — e.g. a cross-origin navigation Chrome handled
-        with a process swap, or the tab/window was closed. _reattach() still
+        not just its session (e.g. a cross-origin navigation Chrome handled
+        with a process swap, or the tab/window was closed). `_reattach()` still
         addresses the old target ID (per its own docstring's "usually
-        survives" caveat), so that failure is Target.attachToTarget's raw
-        CDP error, e.g. "No target with given id found" — not obviously
+        survives" caveat), so that failure is `Target.attachToTarget`'s raw
+        CDP error, e.g. "No target with given id found", not obviously
         actionable on its own. Re-raised here as a clear, distinct error
-        pointing at browser_tabs, since this Tab handle can't recover itself.
+        pointing at `browser_tabs`, since this Tab handle can't recover itself.
 
         Input and screenshot commands collect `_ensure_front`'s pending probe
         first: a hidden tab drops the former and hangs the latter.
@@ -683,26 +698,26 @@ class Tab(TabQueryMixin):
             return await self._session.execute(method, params, timeout)
 
     async def _front_target(self) -> "Tab":
-        """The Tab whose window should actually be raised: self, unless
-        self is an iframe — Page.bringToFront only accepts top-level
-        targets (confirmed live: browser_hover on an iframe target raised
+        """The Tab whose window should actually be raised: self, unless self
+        is an iframe. `Page.bringToFront` only accepts top-level targets
+        (confirmed live: `browser_hover` on an iframe target raised
         "Command can only be executed on top-level targets" the moment the
-        Chrome window itself lost OS focus, since document.visibilityState
-        is "hidden" for the iframe too and _ensure_front tried to front it
+        Chrome window itself lost OS focus, since `document.visibilityState`
+        is "hidden" for the iframe too and `_ensure_front` tried to front it
         directly).
 
         Resolves via `BrowserSession.find_frame_owner` (a `DOM.getFrameOwner`
         call per attached page), not by matching `parentFrameId` against a
-        candidate's own `targetId` — confirmed live those two identifiers
+        candidate's own `targetId`. Confirmed live: those two identifiers
         are *not* reliably equal for an ordinary page target (`Page.
         getFrameTree` showed a real target's own main frame id differing
         from its Chrome target id), so that comparison silently found no
         parent for a page whose ids happened to disagree. `CDPSession.
         browser_session` is the same back-reference `_reattach()` already
-        relies on — a Tab only holds its own session, not the pool.
+        relies on; a Tab only holds its own session, not the pool.
 
-        Falls back to self when no parent is attached or resolvable — the
-        caller then skips Page.bringToFront rather than attempting it on
+        Falls back to self when no parent is attached or resolvable. The
+        caller then skips `Page.bringToFront` rather than attempting it on
         an iframe and raising the same error, best-effort over a target we
         have no way to locate.
         """
@@ -725,50 +740,50 @@ class Tab(TabQueryMixin):
 
         Also the choke point for every input-dispatching method's dialog and
         file-chooser guarantees: it raises if the action triggered a
-        confirm()/prompt() that got auto-rejected, or opened a file chooser
+        `confirm()`/`prompt()` that got auto-rejected, or opened a file chooser
         nobody resolved, so `tab.click()` called directly from a gist gets
         the same "never silently succeed on a state CDP can't see" contract
         `browser_click` gets via `browser_dispatch._raise_on_unresolved_dialog`
-        — see `cdp.unresolved_dialog_error`/`cdp.unresolved_filechooser_error`.
+        (see `cdp.unresolved_dialog_error`/`cdp.unresolved_filechooser_error`).
 
         The filechooser half polls briefly instead of reading the log once:
         `Page.fileChooserOpened` is genuinely async relative to the
         `Input.dispatch*Event` that triggers it (unlike a JS dialog, which
-        blocks the renderer — and that command's own ack — until
+        blocks the renderer, and that command's own ack, until
         `Page.handleJavaScriptDialog` answers it), so the entry can land
         after this function's own dispatch already returned. Pairs with
         `cdp._record_filechooser_opened` logging synchronously rather than
         via `bg.spawn`, so once the event arrives nothing further delays it
         reaching the log.
 
-        `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event` —
+        `click`/`tap`/`type_text`/`key`/... all ride `Input.dispatch*Event`,
         the renderer's real input pipeline, which Chrome silently drops for
         a tab whose window is occluded or backgrounded
         (`document.visibilityState === "hidden"`): the CDP command still
         acks, no exception is raised, and no handler on the page ever
-        fires. Resolving a selector doesn't hit this — `DOM.getContentQuads`
+        fires. Resolving a selector doesn't hit this; `DOM.getContentQuads`
         and `Runtime.evaluate` both work fine on a hidden tab, which is why
         the failure looks like nothing happened rather than an error. Costs
         one `Runtime.evaluate` per call, sent without awaiting so the body's
         own resolve shares its round trip, and `Page.bringToFront` only on
-        the degraded path — the multi-window watch workflow this kernel
-        exists for means N-1 tabs are hidden at any given time, so this
-        can't be opt-in.
+        the degraded path. The multi-window watch workflow this kernel exists
+        for means N-1 tabs are hidden at any given time, so this can't be
+        opt-in.
 
-        Checks and fronts via `_front_target()`, not `self` directly — an
+        Checks and fronts via `_front_target()`, not `self` directly: an
         iframe target has no window of its own to raise; its enclosing page
         does. Skips `Page.bringToFront` outright when that resolution falls
         back to an unresolvable iframe (`_front_target()`'s own fallback),
         rather than attempting it and raising the same top-level-only error.
 
         `Page.bringToFront` raises a window at the Chrome-instance level, not
-        per-call — two concurrent front-then-act sequences against different
+        per-call. Two concurrent front-then-act sequences against different
         tabs of the *same* Chrome instance (even across two separate repld
         kernels pointed at the same `--remote-debugging-port`, which share no
         in-process state to coordinate through) can otherwise interleave: A
         fronts tab 1, B fronts tab 2 before A's dispatch lands, A's input
         goes to the wrong window. The lock is a blocking flock (`state.
-        acquire_lock_blocking`, off-thread — LOCK_EX with no LOCK_NB
+        acquire_lock_blocking`, off-thread; `LOCK_EX` with no `LOCK_NB`
         genuinely blocks, and this runs from the kernel loop), held by the
         caller for its whole body via `async with`, not just the front call:
         a race that reopens between fronting and dispatching is the same
@@ -792,7 +807,7 @@ class Tab(TabQueryMixin):
             # Recorded before yield so the check below only sees dialogs/
             # choosers this call triggered, not ones already sitting in the
             # log from an earlier action nobody read. Only raised on a clean
-            # yield — a body that already raised (e.g. element not found)
+            # yield. A body that already raised (e.g. element not found)
             # propagates through yield itself and skips straight to finally.
             # The window opens after the flock: a span waiting on the lock
             # must not attribute another caller's events to itself. The
@@ -839,10 +854,11 @@ class Tab(TabQueryMixin):
         )
 
     async def _settle_front(self) -> None:
-        """Collect `_ensure_front`'s probe and raise the window if it read
-        hidden. A no-op outside a span, or once collected. Concurrent callers
-        share one settle and all wait for it; shielded, so one caller's
-        cancellation does not fail the others."""
+        """Collect `_ensure_front`'s probe and raise the window if hidden.
+
+        A no-op outside a span, or once collected. Concurrent callers share
+        one settle and all wait for it; shielded, so one caller's cancellation
+        does not fail the others."""
         pending = self._front_pending
         if pending is None:
             return
@@ -856,6 +872,7 @@ class Tab(TabQueryMixin):
 
     @staticmethod
     async def _front_settle(pending: "_FrontProbe") -> None:
+        """Await the probe and front the target if it read hidden."""
         if await pending.probe:
             await pending.target._exec("Page.bringToFront")
 
@@ -874,11 +891,11 @@ class Tab(TabQueryMixin):
                 task.exception()
 
     async def set_viewport(self, width: int, height: int) -> None:
-        """Emulate a fixed viewport (Emulation.setDeviceMetricsOverride).
+        """Emulate a fixed viewport (`Emulation.setDeviceMetricsOverride`).
 
-        deviceScaleFactor pinned to 1 so page pixels are screenshot pixels.
-        Use a fresh tab per distinct size — re-overriding an already-
-        overridden tab can leave clientWidth and innerWidth disagreeing.
+        `deviceScaleFactor` pinned to 1 so page pixels are screenshot pixels.
+        Use a fresh tab per distinct size; re-overriding an already-overridden
+        tab can leave `clientWidth` and `innerWidth` disagreeing.
         """
         await self._exec(
             "Emulation.setDeviceMetricsOverride",
@@ -886,28 +903,31 @@ class Tab(TabQueryMixin):
         )
 
     async def front(self) -> None:
-        """Bring this tab's window to the front (Page.bringToFront).
+        """Bring this tab's window to the front (`Page.bringToFront`).
 
-        click()/tap()/type_text()/key() already do this automatically when
-        the tab is backgrounded — call this directly to raise a tab for its
-        own sake (e.g. before a screenshot a human is watching for), or to
-        avoid paying the visibility check on every call in a script that
-        knows it's about to do a lot of input against one tab.
+        `click()`/`tap()`/`type_text()`/`key()` already do this automatically
+        when the tab is backgrounded. Call this directly to raise a tab for
+        its own sake (e.g. before a screenshot a human is watching for), or to
+        avoid paying the visibility check on every call in a script that knows
+        it's about to do a lot of input against one tab.
         """
         await self._exec("Page.bringToFront")
 
     @property
     def auto_front(self) -> bool:
-        """Whether input actions and screenshot() raise this tab's window when
-        Chrome reports it hidden (default True). Set False for a tab whose
-        window belongs to someone else, a lent tab say: their window stays
-        where they put it, and input to it while hidden may be dropped.
-        Kept on the tab's session, so it holds for every later `get()`.
+        """Whether input actions and `screenshot()` raise this tab's window
+        when Chrome reports it hidden (default True).
+
+        Set False for a tab whose window belongs to someone else (a lent tab,
+        say): their window stays where they put it, and input to it while
+        hidden may be dropped. Kept on the tab's session, so it holds for
+        every later `get()`.
         """
         return self._session.auto_front
 
     @auto_front.setter
     def auto_front(self, value: bool) -> None:
+        """Write-through to the session so the flag persists across re-wrapping."""
         self._session.auto_front = bool(value)
 
     # ------------------------------------------------------------------
@@ -920,22 +940,14 @@ class Tab(TabQueryMixin):
         user_gesture: bool = True,
         timeout: float = 30,
     ) -> Any:
-        """Evaluate JavaScript expression in the page context.
+        """Evaluate a JavaScript expression in the page and return its value.
 
-        Args:
-            expr: JavaScript expression to evaluate.
-            await_promise: Await a Promise result. Default awaits (like the
-                DevTools console); pass False to return without awaiting.
-            user_gesture: Simulate a user gesture (makes isTrusted=true).
-            timeout: Seconds to wait for the page. A page whose main thread
-                is busy or frozen raises RendererBusyError (a TimeoutError)
-                saying so, once the browser has answered a probe.
-
-        Returns:
-            The evaluated result as a Python value.
-
-        Raises:
-            BrowserJSError: If the JS throws an exception.
+        `await_promise` (default True) awaits a Promise result like the
+        DevTools console; pass False to return without awaiting.
+        `user_gesture` simulates a user gesture (`isTrusted=true`).
+        `timeout` bounds the wait; a page whose main thread is busy or frozen
+        raises `RendererBusyError` (a `TimeoutError`) once the browser has
+        answered a probe. Raises `BrowserJSError` when the JS throws.
         """
         result = await self._exec(
             "Runtime.evaluate",
@@ -946,7 +958,7 @@ class Tab(TabQueryMixin):
                 # (and let/const redeclaration across calls). Without it, any
                 # `await` outside an async function is a parse-time SyntaxError.
                 # replMode wraps the evaluation in its own completion promise,
-                # which awaitPromise unwraps here — a promise *returned by* the
+                # which awaitPromise unwraps here. A promise *returned by* the
                 # code keeps its identity (objectId) and is awaited below.
                 "replMode": True,
                 "awaitPromise": True,
@@ -1008,11 +1020,11 @@ class Tab(TabQueryMixin):
         The scroll is load-bearing: quads are viewport coordinates and
         clipping isn't visibility, so an element below a scroll fold (the
         page's or a scrollable listbox's) passes the visible check while its
-        center lies outside the clip — a click there hits whatever is
-        actually at that point. Best-effort: a detached or unscrollable node
-        falls through to the hit test.
+        center lies outside the clip. A click there hits whatever is actually
+        at that point. Best-effort: a detached or unscrollable node falls
+        through to the hit test.
 
-        DOM.getContentQuads returns no quads for a zero-area element; the
+        `DOM.getContentQuads` returns no quads for a zero-area element; the
         bounding-rect fallback keeps a lone hidden match (an off-screen real
         control behind a styled proxy) addressable, per the resolve policy.
         """
@@ -1032,7 +1044,7 @@ class Tab(TabQueryMixin):
             return self._quad_center(qs)
         # Same frame-relative caveat as inject.hit_receipt: for a child-frame
         # element this returns coordinates relative to that frame, not the
-        # page — accepted here too, since it's the zero-area fallback only.
+        # page. Accepted here too, since it's the zero-area fallback only.
         result = await inject.call_engine(
             self,
             "function(el) { const r = el.getBoundingClientRect();"
@@ -1048,16 +1060,17 @@ class Tab(TabQueryMixin):
     async def _receipt_for(
         self, el: inject.ResolvedElement, x: float, y: float, *, verb: str
     ) -> Receipt:
+        """Build a Receipt by hit-testing *el* at (*x*, *y*)."""
         data = await inject.hit_receipt(self, el, x, y)
         t = data.get("target") or {}
         h = data.get("hit")
-        tdesc = " — ".join(p for p in (t.get("preview"), t.get("sel")) if p)
+        tdesc = " / ".join(p for p in (t.get("preview"), t.get("sel")) if p)
         if data.get("related", True) or h is None:
             line = f"{verb}: {tdesc} ({x:.0f},{y:.0f})"
             if el.note:
                 line += f" [{el.note}]"
             return Receipt(line=line)
-        hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+        hdesc = " / ".join(p for p in (h.get("preview"), h.get("sel")) if p)
         return Receipt(
             line=f"warning: {verb} at ({x:.0f},{y:.0f}) hits {hdesc}, not {tdesc}",
             warning=True,
@@ -1077,7 +1090,7 @@ class Tab(TabQueryMixin):
         The mouse arrives (`mouseMoved`) before anything else runs. Found
         live: `mousePressed`/`mouseReleased` with no preceding move on an
         SVG diagram node fired pointerdown/mousedown/pointerup/mouseup but
-        never native `click` — and every JS-observable cause was ruled out
+        never native `click`, and every JS-observable cause was ruled out
         by direct instrumentation (pressed-element identity and DOM
         membership held throughout, no position shift, no
         `preventDefault()` at either event phase, no
@@ -1088,24 +1101,24 @@ class Tab(TabQueryMixin):
         "click relies on move-down-up protocol commands being sent
         synchronously"), and `CRMouse.down` skips dispatching
         `mousePressed` outright when the drag manager thinks a drag is
-        already in flight — proof native drag detection can preempt click
-        handling invisibly to any JS instrumentation. Playwright's own
+        already in flight, proof that native drag detection can preempt
+        click handling invisibly to any JS instrumentation. Playwright's own
         `Mouse.click()` calls `move()` unconditionally before every
         `down()`/`up()` pair for exactly this reason; a plain
         `mousePressed`+`mouseReleased` is not sufficient on a page whose
         elements are drag targets. The hit test runs after the move (real
-        DOM, not the pre-arrival one) but still *before* dispatch — the
+        DOM, not the pre-arrival one) but still *before* dispatch; the
         click's own handlers may re-render further still. When the point
         lands on something unrelated, a plain left-click switches to
         `element.click()`: dispatching at the coordinates can start a drag
         on a pan layer, while a DOM click reaches the resolved element the
-        way assistive tech does. It is isTrusted=false, so the receipt names
-        the path taken; it runs under a CDP user gesture, so a `window.open`
-        in the handler is not popup-blocked the way an untrusted click's is
-        (seen live: a Connect button under a reopened dropdown opened its
-        session as a blocked popup). Modified clicks (right/double) have no
-        element.click() equivalent and keep the coordinate dispatch plus the
-        warning.
+        way assistive tech does. It is `isTrusted=false`, so the receipt
+        names the path taken; it runs under a CDP user gesture, so a
+        `window.open` in the handler is not popup-blocked the way an
+        untrusted click's is (seen live: a Connect button under a reopened
+        dropdown opened its session as a blocked popup). Modified clicks
+        (right/double) have no `element.click()` equivalent and keep the
+        coordinate dispatch plus the warning.
         """
         x, y = await self._element_center_of(el, selector)
         await self._exec(
@@ -1114,14 +1127,14 @@ class Tab(TabQueryMixin):
         data = await inject.hit_receipt(self, el, x, y)
         t = data.get("target") or {}
         hit = data.get("hit")
-        tdesc = " — ".join(p for p in (t.get("preview"), t.get("sel")) if p)
+        tdesc = " / ".join(p for p in (t.get("preview"), t.get("sel")) if p)
 
         if hit is not None and not data.get("related", True):
-            hdesc = " — ".join(p for p in (hit.get("preview"), hit.get("sel")) if p)
+            hdesc = " / ".join(p for p in (hit.get("preview"), hit.get("sel")) if p)
             if button == "left" and click_count == 1:
                 receipt = Receipt(
                     line=(
-                        f"clicked via element.click(): {tdesc} — point "
+                        f"clicked via element.click(): {tdesc}, point "
                         f"({x:.0f},{y:.0f}) occluded by {hdesc}"
                     )
                 )
@@ -1305,16 +1318,16 @@ class Tab(TabQueryMixin):
         return Receipt(line=f"wheel: ({x:.0f},{y:.0f}) dx={dx:g} dy={dy:g}")
 
     async def hover(self, selector: "str | tuple[float, float]") -> Receipt:
-        """Move the mouse over an element — or an (x, y) / 'x,y' point — and
+        """Move the mouse over an element (or an (x, y) / 'x,y' point) and
         leave it there.
 
-        The selector form resolves strictly like click(). The coordinate form
-        is for visual-only targets whose accessible proxy sits elsewhere
-        (SVG diagram nodes with an off-canvas aria twin) — there is no
-        element.click()-style fallback for hover, so coordinates are the only
-        route to those. Either way the pointer stays parked after the call,
-        so :hover styling and mouseenter-revealed UI (menus, toolbars,
-        tooltips) remain up for a following click — and the observation's
+        The selector form resolves strictly like `click()`. The coordinate
+        form is for visual-only targets whose accessible proxy sits elsewhere
+        (SVG diagram nodes with an off-canvas aria twin); there is no
+        `element.click()`-style fallback for hover, so coordinates are the
+        only route to those. Either way the pointer stays parked after the
+        call, so `:hover` styling and mouseenter-revealed UI (menus, toolbars,
+        tooltips) remain up for a following click, and the observation's
         `changes:` section reports what the hover revealed.
         """
         async with self._ensure_front():
@@ -1355,7 +1368,7 @@ class Tab(TabQueryMixin):
         )
         x, y = await self._element_center_of(el, spec)
         preview, sel = await inject.describe_element(self, el)
-        desc = " — ".join(p for p in (preview, sel) if p)
+        desc = " / ".join(p for p in (preview, sel) if p)
         return x, y, el, desc or str(spec)
 
     async def drag(
@@ -1367,23 +1380,23 @@ class Tab(TabQueryMixin):
         duration_ms: int = 400,
         dwell_ms: int = 150,
     ) -> Receipt:
-        """Mouse drag from *source* to *to* — press, paced moves, release,
+        """Mouse drag from *source* to *to*: press, paced moves, release,
         atomically in one call. Endpoints are selectors or (x, y) / 'x,y'.
 
         Gesture state (an app's mousemove tracking) cannot survive being
         split across separate calls, so the whole sequence is one method.
-        Dispatches real mouse events (buttons=1 held through the moves) —
-        covers pointer/mouse-event drag (SVG editors, drag libraries, sliders);
-        native HTML5 draggable=true DnD rides a separate browser pipeline
-        these events don't start, so a `changes: none` observation after
-        dragging one is the tell.
+        Dispatches real mouse events (`buttons=1` held through the moves),
+        covering pointer/mouse-event drag (SVG editors, drag libraries,
+        sliders); native HTML5 `draggable=true` DnD rides a separate browser
+        pipeline these events don't start, so a `changes: none` observation
+        after dragging one is the tell.
 
         A drop target that only appears once the drag starts (drop zones) is
         handled: if *to* doesn't resolve up front, the drag begins and the
         selector is re-resolved mid-gesture.
 
         *dwell_ms* holds the pointer at the drop point (repeated same-position
-        mouseMoved events) before releasing — many editors run their own
+        `mouseMoved` events) before releasing. Many editors run their own
         debounced hit-detection on move events and only arm a drop target
         once it reports itself hovered, which a same-frame arrive-then-release
         never gives time to fire. 0 disables the hold for gestures where it's
@@ -1392,17 +1405,9 @@ class Tab(TabQueryMixin):
         async with self._ensure_front():
             x1, y1, src_el, src_desc = await self._resolve_drag_point(source)
             if src_el is not None:
-                data = await inject.hit_receipt(self, src_el, x1, y1)
-                if data.get("hit") is not None and not data.get("related", True):
-                    h = data["hit"]
-                    hdesc = " — ".join(p for p in (h.get("preview"), h.get("sel")) if p)
-                    _push_tab(
-                        self._session,
-                        f"drag source point ({x1:.0f},{y1:.0f}) occluded by {hdesc}",
-                        {"kind": "browser_warning", "target": self.target_id},
-                    )
+                await self._warn_if_source_occluded(src_el, x1, y1)
 
-            # Resolve the drop point before pressing when it already exists —
+            # Resolve the drop point before pressing when it already exists;
             # a wrong-direction first nudge matters at 6 px drag scale.
             deferred_target = False
             try:
@@ -1428,7 +1433,7 @@ class Tab(TabQueryMixin):
                     "clickCount": 1,
                 },
             )
-            # From here the button is down — never leave the page mid-drag: the
+            # From here the button is down. Never leave the page mid-drag: the
             # release in `finally` fires at the last point the pointer reached.
             cur_x, cur_y = x1, y1
 
@@ -1441,30 +1446,9 @@ class Tab(TabQueryMixin):
                 )
 
             try:
-                if deferred_target:
-                    # Cross the typical dragstart threshold so drag-revealed drop
-                    # zones mount, then resolve the selector for real. Two 2 px
-                    # diagonal steps, not one 4 px jump — same small-origin rule
-                    # as the micro-steps below.
-                    for d in (2.0, 4.0):
-                        await _move(x1 + d, y1 + d)
-                        await asyncio.sleep(0.03)
-                    x2, y2, tgt_el, tgt_desc = await self._resolve_drag_point(to)
-                else:
-                    # Micro-steps first: a first move of distance/steps px exits a
-                    # small origin (a 10 px SVG port) before the app's drag-slop
-                    # threshold arms, and the whole gesture reads as a stray
-                    # click. 2 px increments stay inside anything big enough to
-                    # press; three of them cross any typical slop threshold.
-                    dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
-                    for d in (2.0, 4.0, 6.0):
-                        if d >= dist:
-                            break
-                        await _move(
-                            x1 + (x2 - x1) * d / dist, y1 + (y2 - y1) * d / dist
-                        )
-                        await asyncio.sleep(0.03)
-
+                x2, y2, tgt_el, tgt_desc = await self._drag_initial_moves(
+                    _move, deferred_target, x1, y1, x2, y2, tgt_el, tgt_desc, to
+                )
                 delay = duration_ms / max(steps, 1) / 1000
                 sx, sy = cur_x, cur_y
                 for i in range(1, steps + 1):
@@ -1483,14 +1467,7 @@ class Tab(TabQueryMixin):
                 drop_note = ""
                 warning = False
                 if tgt_el is not None:
-                    data = await inject.hit_receipt(self, tgt_el, x2, y2)
-                    if data.get("hit") is not None and not data.get("related", True):
-                        h = data["hit"]
-                        hdesc = " — ".join(
-                            p for p in (h.get("preview"), h.get("sel")) if p
-                        )
-                        drop_note = f" — warning: drop point hits {hdesc}"
-                        warning = True
+                    drop_note, warning = await self._check_drop_hit(tgt_el, x2, y2)
             finally:
                 await self._exec(
                     "Input.dispatchMouseEvent",
@@ -1505,11 +1482,77 @@ class Tab(TabQueryMixin):
                 )
             return Receipt(
                 line=(
-                    f"dragged: {src_desc} ({x1:.0f},{y1:.0f}) → "
+                    f"dragged: {src_desc} ({x1:.0f},{y1:.0f}) -> "
                     f"({x2:.0f},{y2:.0f}) {tgt_desc}{drop_note}"
                 ),
                 warning=warning,
             )
+
+    async def _drag_initial_moves(
+        self,
+        _move: Callable[[float, float], Awaitable[None]],
+        deferred_target: bool,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        tgt_el: "inject.ResolvedElement | None",
+        tgt_desc: str,
+        to: "str | tuple[float, float]",
+    ) -> tuple[float, float, "inject.ResolvedElement | None", str]:
+        """Threshold and micro-step moves at the start of a drag gesture.
+
+        For a deferred target, crosses the dragstart threshold and resolves the
+        drop selector mid-gesture. Otherwise, micro-steps out of a small origin
+        before the main arc. Returns the (possibly re-resolved) drop point.
+        """
+        if deferred_target:
+            # Cross the typical dragstart threshold so drag-revealed drop
+            # zones mount, then resolve the selector for real. Two 2 px
+            # diagonal steps, not one 4 px jump (same small-origin rule
+            # as the micro-steps below).
+            for d in (2.0, 4.0):
+                await _move(x1 + d, y1 + d)
+                await asyncio.sleep(0.03)
+            return await self._resolve_drag_point(to)
+        # Micro-steps first: a first move of distance/steps px exits a
+        # small origin (a 10 px SVG port) before the app's drag-slop
+        # threshold arms, and the whole gesture reads as a stray
+        # click. 2 px increments stay inside anything big enough to
+        # press; three of them cross any typical slop threshold.
+        dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        for d in (2.0, 4.0, 6.0):
+            if d >= dist:
+                break
+            await _move(x1 + (x2 - x1) * d / dist, y1 + (y2 - y1) * d / dist)
+            await asyncio.sleep(0.03)
+        return x2, y2, tgt_el, tgt_desc
+
+    async def _warn_if_source_occluded(
+        self, src_el: inject.ResolvedElement, x: float, y: float
+    ) -> None:
+        """Push a browser_warning if the drag source point is occluded."""
+        data = await inject.hit_receipt(self, src_el, x, y)
+        if data.get("hit") is None or data.get("related", True):
+            return
+        h = data["hit"]
+        hdesc = " / ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+        _push_tab(
+            self._session,
+            f"drag source point ({x:.0f},{y:.0f}) occluded by {hdesc}",
+            {"kind": "browser_warning", "target": self.target_id},
+        )
+
+    async def _check_drop_hit(
+        self, tgt_el: inject.ResolvedElement, x: float, y: float
+    ) -> tuple[str, bool]:
+        """Hit-test the drop point and return (note suffix, warning flag)."""
+        data = await inject.hit_receipt(self, tgt_el, x, y)
+        if data.get("hit") is not None and not data.get("related", True):
+            h = data["hit"]
+            hdesc = " / ".join(p for p in (h.get("preview"), h.get("sel")) if p)
+            return f", warning: drop point hits {hdesc}", True
+        return "", False
 
     async def type_text(
         self,
@@ -1522,8 +1565,8 @@ class Tab(TabQueryMixin):
         """Clear field and type text. Auto-waits up to 2s, strictly resolved.
 
         Selects all existing content, types over it via key events, then
-        *verifies the value landed*. If the keystrokes changed nothing — the
-        signature of a framework-controlled input swallowing them — it falls
+        *verifies the value landed*. If the keystrokes changed nothing (the
+        signature of a framework-controlled input swallowing them), it falls
         back to setting the value through the native prototype setter plus
         bubbled input/change events, and re-verifies. The Receipt says which
         path the text took.
@@ -1548,7 +1591,7 @@ class Tab(TabQueryMixin):
             if after == text:
                 note = "value verified"
             elif after == before:
-                # Keystrokes changed nothing — a controlled input reverted them.
+                # Keystrokes changed nothing: a controlled input reverted them.
                 # `after != before but != text` is deliberately NOT this branch:
                 # a masking/formatting field transformed the input legitimately,
                 # and overwriting it with the raw text would undo the widget.
@@ -1563,7 +1606,7 @@ class Tab(TabQueryMixin):
                 note = f"value transformed to {after!r}"
 
             preview, sel = await inject.describe_element(self, el)
-            tdesc = " — ".join(p for p in (preview, sel) if p)
+            tdesc = " / ".join(p for p in (preview, sel) if p)
             receipt = Receipt(line=f"typed into {tdesc} ({note})")
 
             if press_enter:
@@ -1575,8 +1618,8 @@ class Tab(TabQueryMixin):
             return receipt
 
     async def _type_chars(self, text: str, *, delay_ms: int = 0) -> None:
-        """Key events into whatever holds focus — the shared core of
-        type_text and select_option's type-to-filter."""
+        """Key events into whatever holds focus (shared core of `type_text`
+        and `select_option`'s type-to-filter)."""
         for char in text:
             for event_type in ("keyDown", "keyUp"):
                 await self._exec(
@@ -1590,14 +1633,14 @@ class Tab(TabQueryMixin):
                 await asyncio.sleep(delay_ms / 1000)
 
     async def select_option(self, selector: str, option: str) -> Receipt:
-        """Select *option* in a dropdown — native <select> or custom listbox.
+        """Select *option* in a dropdown, native `<select>` or custom listbox.
 
-        Native <select>: finds the option by label (else value) and sets it
+        Native `<select>`: finds the option by label (else value) and sets it
         through the prototype setter + input/change events. Custom widgets
-        (react-select-style): clicks the field, waits for a role=option
+        (react-select-style): clicks the field, waits for a `role=option`
         matching *option* (exact, then substring), clicks it. When the click
-        focuses an element declaring aria-autocomplete, *option* is typed
-        into it first and resolution runs against the filtered listbox —
+        focuses an element declaring `aria-autocomplete`, *option* is typed
+        into it first and resolution runs against the filtered listbox,
         which is what reaches an option a virtualized list hasn't rendered.
         A miss lists the visible options' accessible names.
         """
@@ -1612,14 +1655,14 @@ class Tab(TabQueryMixin):
                 frame_id=el.frame_id,
             )
             preview, sel = await inject.describe_element(self, el)
-            tdesc = " — ".join(p for p in (preview, sel) if p)
+            tdesc = " / ".join(p for p in (preview, sel) if p)
 
             if tag_r.get("result", {}).get("value") == "SELECT":
                 v = await inject.select_native(self, el, option)
                 if not v.get("ok"):
                     raise RuntimeError(
                         f"option {option!r} not found in {tdesc}"
-                        f" — options: {v.get('options')}"
+                        f" (options: {v.get('options')})"
                     )
                 return Receipt(line=f'selected "{option}" in {tdesc}')
 
@@ -1661,17 +1704,17 @@ class Tab(TabQueryMixin):
                 if names:
                     raise RuntimeError(
                         f"{opt_label} not found after opening {tdesc}{via}"
-                        f" — visible options: {names}"
+                        f" (visible options: {names})"
                     ) from exc
                 raise RuntimeError(
-                    f"{opt_label} not found — no listbox opened after clicking {tdesc}{via}"
+                    f"{opt_label} not found, no listbox opened after clicking {tdesc}{via}"
                 ) from exc
             await inject.check_actionable(
                 self, opt_el, ("visible", "stable"), selector=opt_label
             )
             # A just-opened menu is still moving: Popper repositions the listbox
             # after first paint, and the engine's 1-rAF stable check passes inside
-            # that window — a click at the pre-reposition point lands outside the
+            # that window. A click at the pre-reposition point lands outside the
             # menu. Sample the option's center 120 ms apart until it stops moving.
             loop = asyncio.get_running_loop()
             prev: tuple[float, float] | None = None
@@ -1694,7 +1737,7 @@ class Tab(TabQueryMixin):
             # choice in input.value and puts role=combobox on the input itself, so
             # a `closest` self-match walks up two levels to the value container
             # instead. try/except: the click may have replaced the field element
-            # outright, detaching our handle — not a failure.
+            # outright, detaching our handle. Not a failure.
             verified = False
             try:
                 v = await inject.call_engine(
@@ -1717,10 +1760,10 @@ class Tab(TabQueryMixin):
             return Receipt(line=f'selected "{option}" in {tdesc}{suffix}')
 
     async def key(self, key: str) -> None:
-        """Dispatch one key press — a named key, a printable character, or a
+        """Dispatch one key press: a named key, a printable character, or a
         modifier combo.
 
-        Accepts KeyboardEvent.key names ("Enter", "Backspace", "ArrowLeft",
+        Accepts `KeyboardEvent.key` names ("Enter", "Backspace", "ArrowLeft",
         "F5", "Space" as an alias for " "), single printable characters ("a"),
         and "+"-joined combos with Ctrl/Control, Alt, Shift, Cmd/Meta
         modifiers ("Ctrl+A", "Shift+Tab"). A trailing "+" is the plus key
@@ -1743,6 +1786,7 @@ class Tab(TabQueryMixin):
                     await asyncio.sleep(delay_ms / 1000)
 
     async def _dispatch_key(self, spec: str) -> None:
+        """Parse a key spec into CDP params and send keyDown + keyUp."""
         if spec.endswith("+"):
             # "Ctrl++" / bare "+": the key is a literal plus.
             key = "+"
@@ -1755,7 +1799,7 @@ class Tab(TabQueryMixin):
             bit = _MODIFIER_BITS.get(m)
             if bit is None:
                 raise ValueError(
-                    f"unknown modifier {m!r} in {spec!r} — use Ctrl/Alt/Shift/Cmd"
+                    f"unknown modifier {m!r} in {spec!r} (use Ctrl/Alt/Shift/Cmd)"
                 )
             modifiers |= bit
 
@@ -1771,7 +1815,7 @@ class Tab(TabQueryMixin):
             if vk is None and (ch.isalpha() or ch.isdigit()):
                 vk = ord(ch)
         text = _KEY_TEXT.get(key)
-        # A printable key produces its character — unless Ctrl/Alt/Meta is
+        # A printable key produces its character, unless Ctrl/Alt/Meta is
         # held, where the browser runs the shortcut instead of inserting text.
         if text is None and len(key) == 1 and not (modifiers & 0b111):
             text = key
@@ -1804,11 +1848,12 @@ class Tab(TabQueryMixin):
     async def tap(self, selector_or_x, y: float | None = None) -> Receipt:
         """Touch tap. Accepts a selector or (x, y) coordinates.
 
-        Uses Input.dispatchTouchEvent — triggers touchstart/touchend listeners
-        that dispatchMouseEvent won't reach. Use for mobile Chrome via ADB.
-        The selector form resolves strictly, waits for visible/stable, and
-        returns a Receipt like click(); the raw-coordinate form has no target
-        element to check, so its receipt is just the point.
+        Uses `Input.dispatchTouchEvent`, triggering touchstart/touchend
+        listeners that `dispatchMouseEvent` won't reach. Use for mobile
+        Chrome via ADB. The selector form resolves strictly, waits for
+        visible/stable, and returns a Receipt like `click()`; the
+        raw-coordinate form has no target element to check, so its receipt
+        is just the point.
         """
         async with self._ensure_front():
             if y is not None:
@@ -1839,7 +1884,7 @@ class Tab(TabQueryMixin):
     ) -> None:
         """Touch swipe from (x1,y1) to (x2,y2).
 
-        Dispatches touchStart → touchMove × steps → touchEnd.
+        Dispatches touchStart -> touchMove x steps -> touchEnd.
         For scrolling on mobile Chrome via ADB.
         """
         async with self._ensure_front():
@@ -1864,8 +1909,8 @@ class Tab(TabQueryMixin):
     ) -> None:
         """Touch-scroll a container by (dx, dy) pixels. Auto-waits up to 2s.
 
-        Sugar over swipe() — resolves selector to its center, then swipes in
-        the opposite direction (scrollBy semantics: positive dy scrolls down,
+        Sugar over `swipe()`: resolves selector to its center, then swipes in
+        the opposite direction (`scrollBy` semantics: positive dy scrolls down,
         positive dx scrolls right). For scrolling on mobile Chrome via ADB.
         """
         el = await inject.resolve_element(self, selector)
@@ -1879,29 +1924,29 @@ class Tab(TabQueryMixin):
         at: "str | tuple[float, float] | None" = None,
         in_crop: str | None = None,
     ) -> list[str]:
-        """Accessibility snapshot as text lines. Standalone read — no settle.
+        """Accessibility snapshot as text lines. Standalone read, no settle.
 
-        mode="aria" (default): Playwright ariaSnapshot with [ref=…] handles,
-        usable as aria-ref=<ref> selectors in click/type until the next
-        snapshot or navigation. mode="ax": the raw CDP accessibility tree
-        (pierces same-process iframes, no refs).
+        `mode="aria"` (default): Playwright ariaSnapshot with `[ref=...]`
+        handles, usable as `aria-ref=<ref>` selectors in click/type until
+        the next snapshot or navigation. `mode="ax"`: the raw CDP
+        accessibility tree (pierces same-process iframes, no refs).
 
-        at=(x, y) / 'x,y' hit-tests that point instead and returns a small
-        elided tree rooted there, with real [ref=…] handles (same engine as
-        mode="aria", just scoped) — ignores mode, and always also captures a
-        screenshot cropped to the hit — for "where is this on the page" when
-        you have a coordinate (a screenshot region, a failed click) rather
-        than a selector to grow a tree from. A point that lands on an
+        `at=(x, y)` / `'x,y'` hit-tests that point instead and returns a
+        small elided tree rooted there, with real `[ref=...]` handles (same
+        engine as `mode="aria"`, just scoped). Ignores mode, and always also
+        captures a screenshot cropped to the hit, for "where is this on the
+        page" when you have a coordinate (a screenshot region, a failed click)
+        rather than a selector to grow a tree from. A point that lands on an
         iframe reports the redirect (target + translated local coordinate)
-        instead of a tree — cross-frame hit-testing needs a second call
+        instead of a tree; cross-frame hit-testing needs a second call
         against that target's own session.
 
-        in_crop=<path> reinterprets at= as a pixel *within* an earlier
-        seed's screenshot instead of a page coordinate — the crop embeds
-        its own translation (repld.browser.png.embed_crop_metadata), so
-        picking a point you see in that image needs no scale/offset math
-        of your own: pass it straight through and this seeds the page at
-        the point it actually corresponds to.
+        `in_crop=<path>` reinterprets `at=` as a pixel *within* an earlier
+        seed's screenshot instead of a page coordinate. The crop embeds its
+        own translation (`repld.browser.png.embed_crop_metadata`), so picking
+        a point you see in that image needs no scale/offset math of your own:
+        pass it straight through and this seeds the page at the point it
+        actually corresponds to.
         """
         from .observe import (
             build_aria_tree,
@@ -1920,7 +1965,7 @@ class Tab(TabQueryMixin):
                 meta = read_crop_metadata(in_crop)
                 if meta is None:
                     raise ValueError(
-                        f"{in_crop!r} carries no repld crop metadata — pass a "
+                        f"{in_crop!r} carries no repld crop metadata. Pass a "
                         "path from a previous browser_tree(at=...) screenshot, "
                         "or drop in_crop= and pass at= as a page coordinate"
                     )
@@ -1948,15 +1993,15 @@ class Tab(TabQueryMixin):
     ) -> dict:
         """In-page JS fetch with Python-ergonomic args.
 
-        Returns {status: int, ok: bool, body: Any, base64Encoded: bool}.
-        Body is auto-parsed as JSON whenever it's valid JSON — regardless of
-        Content-Type, since plenty of real APIs serve JSON as text/plain or
-        text/html and get it wrong. A non-JSON text body is returned as-is.
-        Binary responses (invalid UTF-8) are base64-encoded and returned with
-        base64Encoded=True, matching the {body, base64Encoded} convention
-        used by tab.body() / Fetch.getResponseBody. Content-Type defaults to
-        application/json for a dict body, application/x-www-form-urlencoded
-        for a string body — pass `headers={"Content-Type": ...}` to override
+        Returns `{status, ok, body, base64Encoded}`. Body is auto-parsed as
+        JSON whenever it's valid JSON, regardless of Content-Type, since
+        plenty of real APIs serve JSON as text/plain or text/html and get it
+        wrong. A non-JSON text body is returned as-is. Binary responses
+        (invalid UTF-8) are base64-encoded and returned with
+        `base64Encoded=True`, matching the `{body, base64Encoded}` convention
+        used by `tab.body()` / `Fetch.getResponseBody`. Content-Type defaults
+        to application/json for a dict body, application/x-www-form-urlencoded
+        for a string body; pass `headers={"Content-Type": ...}` to override
         (e.g. for a raw JSON string or plain text body).
         """
         body_js = "undefined"
@@ -1995,13 +2040,13 @@ class Tab(TabQueryMixin):
   let body, base64Encoded = false;
   try {{
     body = new TextDecoder('utf-8', {{fatal: true}}).decode(bytes);
-    // Try JSON regardless of Content-Type — plenty of real APIs mislabel
+    // Try JSON regardless of Content-Type; plenty of real APIs mislabel
     // JSON as text/plain or text/html. A non-JSON string falls through.
     if (body) {{
       try {{ body = JSON.parse(body); }} catch(e) {{}}
     }}
   }} catch(e) {{
-    // Invalid UTF-8 — binary payload. toBase64() is Chrome 140+, which is
+    // Invalid UTF-8, binary payload. toBase64() is Chrome 140+, which is
     // repld's floor; the btoa fallback it replaced had to chunk by hand,
     // because String.fromCharCode spread over a whole buffer blows the call
     // stack somewhere north of 64K arguments.
@@ -2016,11 +2061,11 @@ class Tab(TabQueryMixin):
     async def wait_for(self, selector: str, *, timeout: float = 5.0) -> None:
         """Wait for an element matching *selector* to appear in the DOM.
 
-        Uses the same selector syntax as click/type_text (CSS, text=, role=,
-        label=, :has-text). Existence only — no strictness or visibility, so
-        it can watch for elements a later click would still have to
-        disambiguate. Polls every 0.1s up to *timeout* seconds. Raises
-        RuntimeError if the element never appears.
+        Uses the same selector syntax as click/type_text (CSS, `text=`,
+        `role=`, `label=`, `:has-text`). Existence only, no strictness or
+        visibility, so it can watch for elements a later click would still
+        have to disambiguate. Polls every 0.1s up to *timeout* seconds.
+        Raises `RuntimeError` if the element never appears.
         """
         deadline = asyncio.get_running_loop().time() + timeout
         while not await inject.selector_exists(self, selector):
@@ -2040,14 +2085,15 @@ class Tab(TabQueryMixin):
         """Answer the dialog open on this tab, or pre-arm the next one.
 
         On an `agent` tab dialogs are answered the instant they open, so
-        nothing hangs - but confirm()/prompt() reject by default and the
+        nothing hangs, but `confirm()`/`prompt()` reject by default and the
         action that triggered one raises instead of returning a receipt, since
-        accepting one is never guessed. Call this first with accept=True, then
-        repeat the action, to get the dialog to actually accept. One-shot:
-        consumed by the next dialog, then reverts to the reject default.
+        accepting one is never guessed. Call this first with `accept=True`,
+        then repeat the action, to get the dialog to actually accept.
+        One-shot: consumed by the next dialog, then reverts to the reject
+        default.
 
-        A `shared` tab's dialog is left to the human; if one is open now, this
-        answers it for them instead of pre-arming.
+        A `shared` tab's dialog is left to the human; if one is open now,
+        this answers it for them instead of pre-arming.
         """
         opened = self._session._open_dialog
         params: dict = {"accept": accept}
@@ -2127,8 +2173,8 @@ class Tab(TabQueryMixin):
         bad = result.get("result", {}).get("value") or []
         if bad:
             raise RuntimeError(
-                "files set but unreadable by the page (" + "; ".join(bad) + ") — "
-                "the browser cannot open the path; on a device it must be readable "
+                "files set but unreadable by the page (" + "; ".join(bad) + "). "
+                "The browser cannot open the path; on a device it must be readable "
                 "by Chrome's uid"
             )
         return ""
@@ -2136,12 +2182,12 @@ class Tab(TabQueryMixin):
     async def set_files(self, paths: list[str]) -> str:
         """Resolve the most recent unanswered file chooser on this tab.
 
-        Empty paths cancels it — same as declining the real picker.
+        Empty paths cancels it, same as declining the real picker.
         """
         pending = self._session._filechooser_pending
         if pending is None:
             raise RuntimeError(
-                f"no open file chooser on {self.target_id} — trigger one "
+                f"no open file chooser on {self.target_id}. Trigger one "
                 "first (click the upload control), or call "
                 "expect_file_chooser(paths) before clicking to pre-arm it"
             )
@@ -2161,10 +2207,10 @@ class Tab(TabQueryMixin):
 
     async def expect_auth(self, username: str, password: str) -> str:
         """Pre-arm credentials for the next HTTP Basic/Digest auth challenge
-        on this tab. One-shot: consumed by the next Fetch.authRequired, then
+        on this tab. One-shot: consumed by the next `Fetch.authRequired`, then
         reverts to the claim rule (cancelled inside an agent action or on a
         taken tab, Chrome's own prompt otherwise). Only fires on a tab with
-        Fetch enabled (get()/open(), or explicit capture) — see
+        Fetch enabled (`get()`/`open()`, or explicit capture); see
         `cdp._handle_auth`.
         """
         self._session._auth_policy = {"username": username, "password": password}
@@ -2175,10 +2221,10 @@ class Tab(TabQueryMixin):
     ) -> str:
         """Pre-authorize permissions (e.g. 'geolocation', 'notifications',
         'camera', 'microphone') for this tab's origin, so a page request
-        never surfaces Chrome's native permission bubble — invisible to CDP
+        never surfaces Chrome's native permission bubble (invisible to CDP
         the same way a file chooser is, but with no interceptable event to
         report it after the fact, so this has to be called *before* the
-        page asks. Explicit and opt-in: nothing is pre-authorized by
+        page asks). Explicit and opt-in: nothing is pre-authorized by
         default, since silently granting camera/mic access is a real change
         to what the page can do, not a UI blind spot to paper over.
         """
@@ -2196,9 +2242,10 @@ class Tab(TabQueryMixin):
 
     async def _wait_condition(self, timeout: float = _DEFAULT_READY_TIMEOUT_S) -> None:
         """Resolve and poll the ready signal, then record whether it was an
-        explicit ready= (confirmed) or the readyState fallback (a guess) —
-        only once the poll actually succeeds, since a raise leaves the Tab
-        unusable and must not leave a stale confirmed=True behind it.
+        explicit `ready=` (confirmed) or the `readyState` fallback (a guess).
+
+        Recorded only once the poll actually succeeds, since a raise leaves
+        the Tab unusable and must not leave a stale `confirmed=True` behind.
         """
         ready = self._ready or "document.readyState === 'complete'"
         await self._await_ready_signal(ready, timeout)
@@ -2215,7 +2262,7 @@ class Tab(TabQueryMixin):
         it (`session.py`'s `_handle_browser_event`). That event can lag a
         navigate by a couple hundred ms behind what the page itself already
         reports, and `_glob_target_id`'s fast path (`browser.py`) reads this
-        field directly — a `browser.get(url)` for the tab that just navigated
+        field directly. A `browser.get(url)` for the tab that just navigated
         there could still miss it.
         """
         result = await self._exec(
@@ -2270,15 +2317,15 @@ class Tab(TabQueryMixin):
         """Capture a native-resolution PNG screenshot.
 
         Raises if the capture exceeds the vision API's token budget instead
-        of silently shrinking it — pass force=True to send it natively
+        of silently shrinking it; pass `force=True` to send it natively
         anyway, or crop to a smaller region when the goal is fitting the
-        budget without losing detail (browser_tree(at=...) does this).
+        budget without losing detail (`browser_tree(at=...)` does this).
         Budget is checked against the PNG's real pixel dimensions, not
-        Page.getLayoutMetrics' CSS-pixel viewport size — they diverge by
+        `Page.getLayoutMetrics`' CSS-pixel viewport size; they diverge by
         the device pixel ratio, and the vision API tokenizes on real pixels.
 
-        Fronts the tab first and holds the front lock for the whole capture
-        — Page.captureScreenshot on a backgrounded tab otherwise hangs for
+        Fronts the tab first and holds the front lock for the whole capture.
+        `Page.captureScreenshot` on a backgrounded tab otherwise hangs for
         the full CDP command timeout rather than erroring or no-opping, and
         without the lock another tab's concurrent front-then-act could steal
         focus between fronting and the actual capture, screenshotting the
@@ -2291,14 +2338,14 @@ class Tab(TabQueryMixin):
             result = await self._exec("Page.captureScreenshot", params)
             img_bytes = base64.b64decode(result.get("data", ""))
 
-        # Image.open() is lazy — .size reads only the header, not the full
-        # pixel buffer — so this is cheap enough to run on the loop.
+        # Image.open() is lazy (.size reads only the header, not the full
+        # pixel buffer), so this is cheap enough to run on the loop.
         w, h = _png_size(img_bytes)
         check_budget(w, h, force=force)
 
         if path:
             out = pathlib.Path(path)
-            # Caller picked the location — respect their umask.
+            # Caller picked the location; respect their umask.
             await asyncio.get_running_loop().run_in_executor(
                 None, out.write_bytes, img_bytes
             )
@@ -2381,13 +2428,14 @@ class Tab(TabQueryMixin):
         return result.get("cookies", [])
 
     async def http_client(self, *, base_url: str | None = None, **kwargs: Any) -> Any:
-        """Build an httpx.AsyncClient carrying this tab's current cookies.
+        """Build an `httpx.AsyncClient` carrying this tab's current cookies.
 
-        Requires the `http` extra. base_url defaults to this tab's origin, so
-        relative URLs behave the same as they did through tab.fetch(). Extra
-        kwargs pass through to httpx.AsyncClient. Return type is Any (not
-        httpx.AsyncClient) so this module never imports httpx unconditionally
-        — that would break every browser-only install that lacks the extra.
+        Requires the `http` extra. `base_url` defaults to this tab's origin,
+        so relative URLs behave the same as they did through `tab.fetch()`.
+        Extra kwargs pass through to `httpx.AsyncClient`. Return type is
+        `Any` (not `httpx.AsyncClient`) so this module never imports httpx
+        unconditionally; that would break every browser-only install that
+        lacks the extra.
         """
         try:
             import httpx
@@ -2445,5 +2493,6 @@ class Tab(TabQueryMixin):
         return sc
 
     def __repr__(self) -> str:
+        """Compact identifier: target ID, mode, URL, and ready status."""
         rc = " ready=confirmed" if self.ready_confirmed else ""
         return f"<Tab {self.target_id} {self.mode} {self.url!r}{rc}>"

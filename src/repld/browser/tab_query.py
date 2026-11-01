@@ -21,103 +21,37 @@ from .row import (
 
 
 class TabQueryMixin:
-    """DuckDB-backed query methods, mixed into browser.tab.Tab.
+    """DuckDB-backed query methods, mixed into `browser.tab.Tab`.
 
-    Assumes `self._session` (CDPSession) from Tab.__init__.
+    Assumes `self._session` (`CDPSession`) from `Tab.__init__`.
     """
 
     _session: CDPSession
 
     # ------------------------------------------------------------------
-    # `since=` — one time base across four methods
+    # `since=` : one time base across four methods
     # ------------------------------------------------------------------
     #
     # **`since=` is epoch seconds everywhere: pass `time.time()`.** It has to be
     # converted per view, because the CDP events behind them carry three
     # different clocks and the views store each one raw:
     #
-    #   network()   har_summary.last_activity  — epoch SECONDS, derived from
+    #   network()   har_summary.last_activity   epoch SECONDS, derived from
     #                                            `requestWillBeSent.wallTime`
-    #   console()   Runtime.Timestamp          — epoch MILLISECONDS
-    #   sse()       Network.MonotonicTime      — seconds since an arbitrary
-    #   lifecycle()                              origin, not an epoch at all
+    #   console()   Runtime.Timestamp            epoch MILLISECONDS
+    #   sse()       Network.MonotonicTime        seconds since an arbitrary
+    #   lifecycle()                               origin, not an epoch at all
     #
     # Comparing the caller's number against the raw column meant only
     # `network()` did what it looked like. `tab.console(since=time.time())`
-    # compared ~1.7e9 against ~1.7e12 and matched every row — the opposite of
-    # what was asked, silently — and `sse()`/`lifecycle()` compared it against
+    # compared ~1.7e9 against ~1.7e12 and matched every row (the opposite of
+    # what was asked, silently), and `sse()`/`lifecycle()` compared it against
     # a number that counts from browser start, so it matched nothing.
     # `docs/browser.md` carried this as an open question ("timestamp, row_id,
     # or sentinel?"); this is the answer, chosen because `time.time()` is what
     # a caller reaches for and the only base a caller can produce.
 
-    def _monotonic_offset(self) -> float | None:
-        """`wallTime - timestamp` for this tab, or None if nothing pins it.
-
-        Both numbers are on `Network.requestWillBeSent`, which is how
-        `har_summary.last_activity` converts monotonic durations to wall clock
-        already. Read fresh rather than cached: the monotonic origin is the
-        browser process's, so a cached offset outlives the thing it describes
-        across a Chrome restart, and this only runs when a caller actually
-        passes `since=`.
-        """
-        rows = self._session.query(
-            """
-            SELECT
-                CAST(json_extract_string(event, '$.params.wallTime') AS DOUBLE),
-                CAST(json_extract_string(event, '$.params.timestamp') AS DOUBLE)
-            FROM events
-            WHERE method = 'Network.requestWillBeSent'
-              AND json_extract(event, '$.params.wallTime') IS NOT NULL
-            ORDER BY rowid DESC LIMIT 1
-            """
-        )
-        if not rows or rows[0][0] is None or rows[0][1] is None:
-            return None
-        return float(rows[0][0]) - float(rows[0][1])
-
-    def _since_monotonic(self, since: float) -> float:
-        """Epoch-seconds *since* on this tab's monotonic clock.
-
-        With no request recorded there is nothing to anchor the conversion, so
-        this returns a bound nothing can satisfy — under-returning rather than
-        handing back the whole table, which is the direction the bug went. It
-        takes a store with zero network events to get there, i.e. a tab that
-        has only just attached.
-        """
-        offset = self._monotonic_offset()
-        return float("inf") if offset is None else since - offset
-
-    def _filtered_query(
-        self, source: str, conditions: list[str], bind_params: list[Any], tail: str
-    ) -> list[dict]:
-        """SELECT * FROM `source` with an optional WHERE built from conditions."""
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        sql = f"SELECT * FROM {source} {where} {tail}"
-        return self._session.query_dicts(sql, bind_params if bind_params else None)
-
-    # `*` is the only wildcard this filter offers, so LIKE's own metacharacters
-    # have to be escaped out of the literal text — `_` matches any single
-    # character, and it is common enough in URLs (`/api/user_profile`) that
-    # leaving it live made the filter quietly over-match. Paired with
-    # `_LIKE_ESCAPE` on every comparison built from this; a pattern with
-    # backslashes in it means nothing without the ESCAPE clause.
-    _LIKE_ESCAPE = " ESCAPE '\\'"
-
-    @staticmethod
-    def _like_pattern(url: str) -> str:
-        """Convert a `*`-glob URL filter to a SQL LIKE pattern.
-
-        Escaping runs before the `*` translation, or the `%` it produces would
-        be escaped along with the user's literal ones.
-        """
-        escaped = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = escaped.replace("*", "%")
-        if not pattern.startswith("%"):
-            pattern = "%" + pattern
-        if not pattern.endswith("%"):
-            pattern = pattern + "%"
-        return pattern
+    # -- query methods ----
 
     def network(
         self,
@@ -129,7 +63,7 @@ class TabQueryMixin:
         since: float | None = None,
         include_assets: bool = False,
     ) -> list[Row]:
-        """Query the HAR summary view with optional filters."""
+        """Return HAR summary rows, newest first, with optional filters."""
         conditions: list[str] = []
         bind_params: list[Any] = []
 
@@ -153,7 +87,7 @@ class TabQueryMixin:
         if not include_assets:
             conditions.append("is_asset = false")
 
-        rows = self._filtered_query(
+        rows = self._build_filtered_query(
             "har_summary", conditions, bind_params, "ORDER BY id DESC LIMIT 500"
         )
         return Rows(_row_from_har(r, self._session) for r in rows)
@@ -165,7 +99,7 @@ class TabQueryMixin:
         source: str | None = None,
         since: float | None = None,
     ) -> list[Row]:
-        """Query the console_entries view with optional filters."""
+        """Return console entries, newest first, with optional filters."""
         conditions: list[str] = []
         bind_params: list[Any] = []
 
@@ -180,20 +114,20 @@ class TabQueryMixin:
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
             bind_params.append(since * 1000.0)
 
-        rows = self._filtered_query(
+        rows = self._build_filtered_query(
             "console_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 200"
         )
         return Rows(_row_from_console(r, self._session) for r in rows)
 
     def control_observations(self) -> list[dict]:
-        """Parsed __controls__ observations from console.debug messages.
+        """Parsed `__controls__` observations from `console.debug` messages.
 
         Reads the base `events` table rather than `console_entries`: an
         observation is logged as `console.debug("__controls__", json)`, and
         the view's `text` column is only ever the *first* console argument,
-        so the payload isn't in it at all. Same two-argument shape the live
-        push path parses (`cdp._check_controls_observation`) — note the JSON
-        path indices are 0-based here, unlike the view's 1-based DuckDB list
+        so the payload is not in it at all. Same two-argument shape the live
+        push path parses (`cdp._check_controls_observation`). The JSON path
+        indices are 0-based here, unlike the view's 1-based DuckDB list
         subscripts.
         """
         rows = self._session.query(
@@ -225,7 +159,7 @@ class TabQueryMixin:
         event_name: str | None = None,
         since: float | None = None,
     ) -> list[Row]:
-        """Query SSE (EventSource) messages received on this tab."""
+        """Return SSE (EventSource) messages, newest first, with optional filters."""
         conditions: list[str] = []
         bind_params: list[Any] = []
 
@@ -239,14 +173,51 @@ class TabQueryMixin:
             conditions.append("event_name = ?")
             bind_params.append(event_name)
         if since is not None:
-            # Network.MonotonicTime — not an epoch. See `_since_monotonic`.
+            # Network.MonotonicTime, not an epoch. See `_resolve_since_monotonic`.
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
-            bind_params.append(self._since_monotonic(since))
+            bind_params.append(self._resolve_since_monotonic(since))
 
-        rows = self._filtered_query(
+        rows = self._build_filtered_query(
             "sse_entries", conditions, bind_params, "ORDER BY id DESC LIMIT 500"
         )
         return Rows(_row_from_sse(r, self._session) for r in rows)
+
+    def _resolve_since_monotonic(self, since: float) -> float:
+        """Convert epoch-seconds `since` to this tab's monotonic clock.
+
+        With no request recorded there is nothing to anchor the conversion, so
+        this returns a bound nothing can satisfy, under-returning rather than
+        handing back the whole table (which is the direction the bug went). It
+        takes a store with zero network events to get there, i.e. a tab that
+        has only just attached.
+        """
+        offset = self._resolve_monotonic_offset()
+        return float("inf") if offset is None else since - offset
+
+    def _resolve_monotonic_offset(self) -> float | None:
+        """`wallTime - timestamp` for this tab, or None if nothing pins it.
+
+        Both numbers are on `Network.requestWillBeSent`, which is how
+        `har_summary.last_activity` converts monotonic durations to wall clock
+        already. Read fresh rather than cached: the monotonic origin is the
+        browser process's, so a cached offset outlives the thing it describes
+        across a Chrome restart, and this only runs when a caller actually
+        passes `since=`.
+        """
+        rows = self._session.query(
+            """
+            SELECT
+                CAST(json_extract_string(event, '$.params.wallTime') AS DOUBLE),
+                CAST(json_extract_string(event, '$.params.timestamp') AS DOUBLE)
+            FROM events
+            WHERE method = 'Network.requestWillBeSent'
+              AND json_extract(event, '$.params.wallTime') IS NOT NULL
+            ORDER BY rowid DESC LIMIT 1
+            """
+        )
+        if not rows or rows[0][0] is None or rows[0][1] is None:
+            return None
+        return float(rows[0][0]) - float(rows[0][1])
 
     def lifecycle(
         self,
@@ -254,7 +225,7 @@ class TabQueryMixin:
         name: str | None = None,
         since: float | None = None,
     ) -> list[Row]:
-        """Query Page.lifecycleEvent events for this tab.
+        """Return `Page.lifecycleEvent` entries, newest first.
 
         Event names (from Chromium source):
           init, DOMContentLoaded, load, firstPaint, firstContentfulPaint,
@@ -268,11 +239,11 @@ class TabQueryMixin:
             conditions.append("name = ?")
             bind_params.append(name)
         if since is not None:
-            # Network.MonotonicTime, as for sse(). See `_since_monotonic`.
+            # Network.MonotonicTime, as for sse(). See `_resolve_since_monotonic`.
             conditions.append("CAST(timestamp AS DOUBLE) >= ?")
-            bind_params.append(self._since_monotonic(since))
+            bind_params.append(self._resolve_since_monotonic(since))
 
-        rows = self._filtered_query(
+        rows = self._build_filtered_query(
             "lifecycle_entries",
             conditions,
             bind_params,
@@ -281,18 +252,18 @@ class TabQueryMixin:
         return Rows(_row_from_lifecycle(r, self._session) for r in rows)
 
     def clear(self) -> None:
-        """Clear all captured events (network + console + SSE + lifecycle) for this tab."""
+        """Drop all captured events for this tab."""
         self._session.clear_events()
 
     def body(self, request_id: str | int) -> dict:
-        """Fetch the response body for a request_id."""
+        """Fetch the response body for a `request_id`."""
         return self._session.fetch_body(str(request_id))
 
     def request(self, request_id: str | int) -> dict:
-        """Return the full HAR entry for a request_id as a structured dict.
+        """Return the full HAR entry for a `request_id` as a structured dict.
 
-        Returns request/response headers, postData, auth scheme, timing —
-        everything except the response body (use .body() for that).
+        Includes request/response headers, postData, auth scheme and timing,
+        everything except the response body (use `.body()` for that).
         """
         rows = self._session.query_dicts(
             "SELECT * FROM har_entries WHERE request_id = ? ORDER BY id DESC LIMIT 1",
@@ -301,3 +272,36 @@ class TabQueryMixin:
         if not rows:
             raise RuntimeError(f"No request found for id: {request_id}")
         return _dict_from_har_entry(rows[0])
+
+    # -- shared helpers ----
+
+    def _build_filtered_query(
+        self, source: str, conditions: list[str], bind_params: list[Any], tail: str
+    ) -> list[dict]:
+        """Compose and run `SELECT * FROM source` with an optional WHERE clause."""
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM {source} {where} {tail}"
+        return self._session.query_dicts(sql, bind_params if bind_params else None)
+
+    # `*` is the only wildcard this filter offers, so LIKE's own metacharacters
+    # have to be escaped out of the literal text: `_` matches any single
+    # character, and it is common enough in URLs (`/api/user_profile`) that
+    # leaving it live made the filter quietly over-match. Paired with
+    # `_LIKE_ESCAPE` on every comparison built from this; a pattern with
+    # backslashes in it means nothing without the ESCAPE clause.
+    _LIKE_ESCAPE = " ESCAPE '\\'"
+
+    @staticmethod
+    def _like_pattern(url: str) -> str:
+        """Convert a `*`-glob URL filter to a SQL LIKE pattern.
+
+        Escaping runs before the `*` translation, or the `%` it produces would
+        be escaped along with the user's literal ones.
+        """
+        escaped = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = escaped.replace("*", "%")
+        if not pattern.startswith("%"):
+            pattern = "%" + pattern
+        if not pattern.endswith("%"):
+            pattern = pattern + "%"
+        return pattern

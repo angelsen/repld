@@ -41,7 +41,7 @@ __all__ = ["BrowserSession"]
 
 
 def _fetch_version_info(base: str, headers: dict[str, str] | None = None) -> dict:
-    """Blocking /json/version fetch — call via asyncio.to_thread."""
+    """Blocking /json/version fetch; call via `asyncio.to_thread`."""
     req = urllib.request.Request(f"{base}/json/version", headers=headers or {})
     with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read())
@@ -64,6 +64,7 @@ class CDPCommandError(RuntimeError):
     """A CDP command answered with an error; `code` is its JSON-RPC code (None if it had none)."""
 
     def __init__(self, message: str, code: int | None = None) -> None:
+        """Store the error message and its optional JSON-RPC `code`."""
         super().__init__(message)
         self.code = code
 
@@ -129,32 +130,36 @@ class BrowserSession:
         url: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        # `port` stays the identity everywhere (target IDs, registry); `url`, when
-        # set, is the address actually dialled and `port` is only its pool key.
+        """Prepare an unconnected session for one Chrome endpoint.
+
+        `port` stays the identity everywhere (target IDs, registry); `url`,
+        when set, is the address actually dialled and `port` is only its
+        pool key.
+        """
         self.port = port
         self.url = url
         self.headers = headers
         self._ws: Any = None  # websockets.ClientConnection
         self._recv_task: asyncio.Task | None = None
 
-        # msg_id → asyncio.Future (globally unique per WS)
+        # msg_id to asyncio.Future (globally unique per WS)
         self._next_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
         # msg_id -> (sessionId, method) for commands aimed at a tab, so a crash
         # can fail the ones its renderer will never answer.
         self._pending_tabs: dict[int, tuple[str, str]] = {}
 
-        # guid → (suggestedFilename, future of (owning tab, its route_to at WillBegin)):
+        # guid to (suggestedFilename, future of (owning tab, its route_to at WillBegin)):
         # the done push names the file and goes where the start went.
         self._downloads: dict[
             str, tuple[str, asyncio.Future[tuple[CDPSession | None, Session | None]]]
         ] = {}
-        # sessionId → CDPSession
+        # sessionId to CDPSession
         self._sessions: LoopOwned[str, CDPSession] = LoopOwned(
             "BrowserSession._sessions"
         )
 
-        # Watch patterns: glob pattern → set of target_ids matched
+        # Watch patterns: glob pattern to set of target_ids matched
         self._watched_patterns: dict[str, set[str]] = {}
         self._pattern_owners: dict[str, Session] = {}
 
@@ -174,7 +179,7 @@ class BrowserSession:
         self._stranded: dict[str, CDPSession] = {}
         self._reconnecting: bool = False
         self._reconnect_task: asyncio.Task | None = None
-        # old sessionId → new sessionId (valid for one reconnect cycle)
+        # old sessionId to new sessionId (valid for one reconnect cycle)
         self._session_remap: dict[str, str] = {}
 
     # ------------------------------------------------------------------
@@ -233,9 +238,12 @@ class BrowserSession:
         return dialable_ws_url(ws_url, self.port)
 
     async def _enable_download_events(self) -> None:
-        # behavior "default" leaves the human's Save-As and download folder alone;
-        # a non-default behavior is browser-context-wide, so it would also
-        # redirect tabs repld never attached.
+        """Subscribe to download lifecycle events without redirecting files.
+
+        `behavior` "default" leaves the human's Save-As and download folder
+        alone; a non-default behavior is browser-context-wide, so it would
+        also redirect tabs repld never attached.
+        """
         try:
             await self.execute(
                 "Browser.setDownloadBehavior",
@@ -247,8 +255,8 @@ class BrowserSession:
     async def _teardown_ws(self) -> None:
         """Stop the recv loop and close the WebSocket. Never raises.
 
-        Both ways out of a live connection go through here — `disconnect()`
-        and `_reconnect()`'s tear-down phase — and they differ only in what
+        Both ways out of a live connection go through here (`disconnect()`
+        and `_reconnect()`'s tear-down phase) and they differ only in what
         they do with `_pending` and `_sessions` afterwards. Keeping the socket
         half in one place is what stops a future step (a Chrome-side detach, a
         drain) from being added to only one of them.
@@ -309,7 +317,7 @@ class BrowserSession:
 
         if isinstance(exc, websockets.exceptions.ConnectionClosed):
             return True
-        # recv_loop died, or execute() ran before connect — futures get these.
+        # recv_loop died, or execute() ran before connect: futures get these.
         if isinstance(exc, RuntimeError) and (
             "recv loop ended" in str(exc) or "not connected" in str(exc)
         ):
@@ -322,7 +330,7 @@ class BrowserSession:
 
         CDPSession objects (and their DuckDB event stores) are preserved;
         only the Chrome sessionId is updated. Watch patterns survive.
-        Serialized by _reconnect_lock so concurrent callers don't race.
+        Serialized by `_reconnect_lock` so concurrent callers don't race.
         """
         async with self._reconnect_lock:
             if self._is_connected():
@@ -331,89 +339,95 @@ class BrowserSession:
             self._reconnecting = True
             self._reconnect_task = asyncio.current_task()
             try:
-                # Save CDPSessions keyed by Chrome targetId
-                old_cdps: dict[str, CDPSession] = dict(self._stranded)
-                self._stranded.clear()
-                for cdp in self._sessions.values():
-                    tid = cdp.chrome_target_id
-                    if tid:
-                        old_cdps[tid] = cdp
-
-                # Tear down old connection. Unlike disconnect(), pending
-                # futures are dropped rather than failed — the caller that is
-                # driving this reconnect is about to retry them.
-                await self._teardown_ws()
-                self._pending.clear()
-                self._sessions.clear()
-                self._session_remap.clear()
-
-                # New WebSocket (no target discovery yet — re-attach first).
-                # If Chrome is genuinely down this raises, and `old_cdps` is a
-                # local: without the cleanup every session's in-memory DuckDB
-                # would go out of scope still open, which is exactly the leak
-                # `disconnect()`'s docstring was written about, on the sibling
-                # path. The sessions are already out of `_sessions` above, so
-                # there is nothing left that could reach them.
-                try:
-                    await self.connect(discover=False)
-                except Exception as exc:
-                    if self.on_gone is None:
-                        for cdp in old_cdps.values():
-                            cdp.cleanup()
-                    else:
-                        # A provider that was only away hands the tabs back on the next redial;
-                        # keeping them reachable here is what keeps `disconnect()` able to close them.
-                        self._stranded = old_cdps
-                    self._note_redial_failed(exc)
-                    raise
-                self._unreachable_since = None
-
-                # Re-attach old targets, preserving CDPSession state
-                restored = 0
-                for target_id, cdp in old_cdps.items():
-                    try:
-                        await self._reattach_core(cdp)
-                        restored += 1
-                    except Exception as exc:
-                        logger.debug(
-                            "reconnect: re-attach %s failed: %s", target_id, exc
-                        )
-                        # Unregister before closing. `_reattach_core` puts the
-                        # session in `_sessions` *before* it enables domains,
-                        # re-adds the binding and restores Fetch — so a raise
-                        # from any of those leaves it registered and attached in
-                        # Chrome while `cleanup()` closes its event store. Every
-                        # later event for that tab then raises inside
-                        # `_handle_event` and is swallowed at debug level.
-                        self._sessions.pop(cdp._session_id, None)
-                        cdp.cleanup()
-
-                # Now enable target discovery (picks up new tabs)
-                await self.execute("Target.setDiscoverTargets", {"discover": True})
-                await self._enable_download_events()
-
-                lost = len(old_cdps) - restored
-                logger.info(
-                    "Reconnected to Chrome on port %d (%d of %d sessions restored)",
-                    self.port,
-                    restored,
-                    len(old_cdps),
-                )
-                # A full restore is silent on purpose: nothing for the agent to act on.
-                if lost:
-                    push_channel(
-                        f"[browser_reconnected] Chrome on port {self.port}: "
-                        f"{restored} of {len(old_cdps)} tab(s) restored, {lost} lost",
-                        {
-                            "kind": "browser_reconnected",
-                            "port": str(self.port),
-                            "restored": str(restored),
-                            "lost": str(lost),
-                        },
-                    )
+                await self._reconnect_inner()
             finally:
                 self._reconnecting = False
                 self._reconnect_task = None
+
+    async def _reconnect_inner(self) -> None:
+        """Core reconnect logic, called under `_reconnect_lock`.
+
+        Separated from `_reconnect` to keep the lock + try/finally wrapper
+        from pushing the body past nesting depth 4.
+        """
+        # Save CDPSessions keyed by Chrome targetId
+        old_cdps: dict[str, CDPSession] = dict(self._stranded)
+        self._stranded.clear()
+        for cdp in self._sessions.values():
+            tid = cdp.chrome_target_id
+            if tid:
+                old_cdps[tid] = cdp
+
+        # Tear down old connection. Unlike disconnect(), pending
+        # futures are dropped rather than failed: the caller that is
+        # driving this reconnect is about to retry them.
+        await self._teardown_ws()
+        self._pending.clear()
+        self._sessions.clear()
+        self._session_remap.clear()
+
+        # New WebSocket (no target discovery yet, re-attach first).
+        # If Chrome is genuinely down this raises, and `old_cdps` is a
+        # local: without the cleanup every session's in-memory DuckDB
+        # would go out of scope still open, which is exactly the leak
+        # `disconnect()`'s docstring was written about, on the sibling
+        # path. The sessions are already out of `_sessions` above, so
+        # there is nothing left that could reach them.
+        try:
+            await self.connect(discover=False)
+        except Exception as exc:
+            if self.on_gone is None:
+                for cdp in old_cdps.values():
+                    cdp.cleanup()
+            else:
+                # A provider that was only away hands the tabs back on the next redial;
+                # keeping them reachable here is what keeps `disconnect()` able to close them.
+                self._stranded = old_cdps
+            self._note_redial_failed(exc)
+            raise
+        self._unreachable_since = None
+
+        # Re-attach old targets, preserving CDPSession state
+        restored = 0
+        for target_id, cdp in old_cdps.items():
+            try:
+                await self._reattach_core(cdp)
+                restored += 1
+            except Exception as exc:
+                logger.debug("reconnect: re-attach %s failed: %s", target_id, exc)
+                # Unregister before closing. `_reattach_core` puts the
+                # session in `_sessions` *before* it enables domains,
+                # re-adds the binding and restores Fetch, so a raise
+                # from any of those leaves it registered and attached in
+                # Chrome while `cleanup()` closes its event store. Every
+                # later event for that tab then raises inside
+                # `_handle_event` and is swallowed at debug level.
+                self._sessions.pop(cdp._session_id, None)
+                cdp.cleanup()
+
+        # Now enable target discovery (picks up new tabs)
+        await self.execute("Target.setDiscoverTargets", {"discover": True})
+        await self._enable_download_events()
+
+        lost = len(old_cdps) - restored
+        logger.info(
+            "Reconnected to Chrome on port %d (%d of %d sessions restored)",
+            self.port,
+            restored,
+            len(old_cdps),
+        )
+        # A full restore is silent on purpose: nothing for the agent to act on.
+        if lost:
+            push_channel(
+                f"[browser_reconnected] Chrome on port {self.port}: "
+                f"{restored} of {len(old_cdps)} tab(s) restored, {lost} lost",
+                {
+                    "kind": "browser_reconnected",
+                    "port": str(self.port),
+                    "restored": str(restored),
+                    "lost": str(lost),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Command execution
@@ -445,7 +459,7 @@ class BrowserSession:
                 async with self._reconnect_lock:
                     pass
             else:
-                # Connection died — reconnect and retry
+                # Connection died. Reconnect and retry.
                 await self._reconnect()
             # Remap session_id if it changed during reconnect
             if session_id and session_id in self._session_remap:
@@ -491,8 +505,8 @@ class BrowserSession:
         except TimeoutError:
             self._pending.pop(msg_id, None)
             # `from None`: on 3.11+ `asyncio.TimeoutError` *is* `TimeoutError`,
-            # so chaining shows the same class twice — once bare, once with the
-            # message that says which command and for how long.
+            # so chaining shows the same class twice (once bare, once with the
+            # message that says which command and for how long).
             raise TimeoutError(
                 f"CDP command {method} timed out after {timeout}s"
             ) from None
@@ -551,12 +565,12 @@ class BrowserSession:
 
     async def find_frame_owner(self, frame_id: str) -> tuple[CDPSession, int] | None:
         """The (page-type CDPSession, backendNodeId) whose DOM contains
-        *frame_id* as an `<iframe>` element — or None if no attached page
+        *frame_id* as an `<iframe>` element, or None if no attached page
         owns it.
 
         Tries `DOM.getFrameOwner` against each attached page-type session
         rather than matching an iframe's `parentFrameId` against a
-        candidate's own `targetId` — confirmed live those two identifiers
+        candidate's own `targetId`. Confirmed live, those two identifiers
         are *not* reliably equal for an ordinary page target (a
         `Page.getFrameTree` call showed a real target's own main frame id
         differs from its Chrome target id), so a page whose target id
@@ -580,7 +594,7 @@ class BrowserSession:
     async def _reattach_core(self, cdp: CDPSession) -> None:
         """Attach cdp to its target under a new sessionId, preserving all state.
 
-        Unlocked core shared by _reconnect and reattach_session — the same
+        Unlocked core shared by `_reconnect` and `reattach_session`: the same
         CDPSession object (DuckDB history, capture/pin/label state) survives,
         only the session id changes.
         """
@@ -605,7 +619,7 @@ class BrowserSession:
             # from the page when the session that added it detaches, and nothing
             # else ever re-adds it. A reattach caused by *navigation* self-heals,
             # because the pill goes with the document and `_heartbeat_loop` sees
-            # 'reload' and re-injects — but a WebSocket `_reconnect` (sleep,
+            # 'reload' and re-injects. But a WebSocket `_reconnect` (sleep,
             # network blip, Chrome restart) reattaches every session while
             # leaving the pages untouched, so the heartbeat sees 'ok' and never
             # re-injects. The pill then looks live and its buttons call an
@@ -614,14 +628,14 @@ class BrowserSession:
             # surface that was showing it. Same shape as the Fetch restore below.
             await cdp.execute("Runtime.addBinding", {"name": BINDING_NAME})
         # The label registration is session-scoped in exactly the same way, and
-        # was the one piece of per-session state this didn't restore — see
+        # was the one piece of per-session state this didn't restore; see
         # `pin.reapply_label` for why it stayed hidden behind the binding bug.
         await reapply_label(cdp)
         await screencast.restore(cdp)
         # The injected-engine handle is session-scoped too, but as *cache*
         # rather than registration: the objectId minted under old_sid resolves
         # to nothing under new_sid, so drop it and let the next selector call
-        # re-instantiate — nothing to replay.
+        # re-instantiate. Nothing to replay.
         inject.invalidate(cdp)
         if had_fetch:
             # The unlocked core, never `enable_fetch`: we may be running
@@ -633,9 +647,9 @@ class BrowserSession:
     async def reattach_session(self, cdp: CDPSession) -> None:
         """Re-attach an invalidated session in place (HMR, navigation).
 
-        Locked wrapper for Tab._reattach; _reconnect calls the unlocked core
-        directly — execute() under a held lock can itself trigger _reconnect,
-        and asyncio.Lock is not reentrant.
+        Locked wrapper for `Tab._reattach`. `_reconnect` calls the unlocked core
+        directly because `execute()` under a held lock can itself trigger
+        `_reconnect`, and `asyncio.Lock` is not reentrant.
         """
         old_sid = cdp._session_id
         async with cdp._reattach_lock:
@@ -691,7 +705,7 @@ class BrowserSession:
                 browser_session=self,
             )
             self._sessions[session_id] = cdp
-            # bg.spawn, not a bare create_task — a task collected mid-flight
+            # bg.spawn, not a bare create_task: a task collected mid-flight
             # here leaves the tab attached but recording nothing at all. See
             # bg.py.
             bg.spawn(
@@ -733,7 +747,7 @@ class BrowserSession:
                 self._watched_patterns[pattern].add(cdp.target_info.get("targetId", ""))
 
     def _resolve_target(self, target_info: dict) -> str | None:
-        """Dual-key resolution: target_id → URL exact → opener → pattern.
+        """Dual-key resolution: target_id, URL exact, opener, pattern.
 
         Returns the Chrome targetId string if it should be auto-attached,
         or None if it doesn't match any watch. Workers are never auto-attached.
@@ -741,7 +755,7 @@ class BrowserSession:
         target_id = target_info.get("targetId", "")
         url = target_info.get("url", "")
 
-        # 0. Workers are infrastructure — never auto-attach via pattern.
+        # 0. Workers are infrastructure, never auto-attach via pattern.
         if target_info.get("type", "") in WORKER_TYPES:
             return None
 
@@ -756,7 +770,7 @@ class BrowserSession:
             if fnmatch(url, pattern):
                 return target_id
 
-        # 3. Opener match — OAuth popup or new tab from watched tab
+        # 3. Opener match (OAuth popup or new tab from watched tab)
         opener_id = target_info.get("openerId", "")
         if opener_id and self.find_by_target_id(opener_id) is not None:
             return target_id
@@ -782,8 +796,8 @@ class BrowserSession:
 
         Both ways this loop can end on its own fail `_pending`, and the tidier
         one used to be the one that didn't. A cancellation from `_teardown_ws`
-        lands in neither branch below — `CancelledError` is a `BaseException`,
-        so it propagates past `except Exception` and skips the `else` — which
+        lands in neither branch below (`CancelledError` is a `BaseException`,
+        so it propagates past `except Exception` and skips the `else`), which
         is deliberate: the two teardown callers handle `_pending` themselves
         (`disconnect` fails it with its own message, `_reconnect` drops it
         because the caller driving the reconnect is about to retry).
@@ -806,10 +820,10 @@ class BrowserSession:
             self._note_closed(getattr(rcvd, "code", None))
         else:
             # Fell out of the `async for` with nothing raised, which means a
-            # *clean* close (1000/1001 — a `Browser.close`, Chrome shutting the
+            # *clean* close (1000/1001, a `Browser.close`, Chrome shutting the
             # endpoint politely): websockets' `__aiter__` catches
             # ConnectionClosedOK and simply returns. Leaving `_pending` alone
-            # here was strictly worse than the unclean path — every in-flight
+            # here was strictly worse than the unclean path: every in-flight
             # execute() blocked its full 30 s `wait_for`, and `_is_recoverable`
             # excludes TimeoutError on purpose, so the reconnect-and-retry that
             # a dropped socket gets for free never ran. Same "recv loop ended"
@@ -854,93 +868,105 @@ class BrowserSession:
     async def _dispatch(self, data: dict) -> None:
         """Route a parsed CDP message to the right handler."""
         if "id" in data:
-            # Command response
-            msg_id = data["id"]
-            fut = self._pending.pop(msg_id, None)
-            if fut and not fut.done():
-                if "error" in data:
-                    err = data["error"]
-                    code = None
-                    if isinstance(err, dict):
-                        msg = err.get("message", str(err))
-                        if "data" in err:
-                            msg = f"{msg} ({err['data']})"
-                        code = err.get("code")
-                    else:
-                        msg = str(err)
-                    fut.set_exception(CDPCommandError(msg, code))
-                else:
-                    fut.set_result(data.get("result", {}))
+            self._dispatch_response(data)
+            return
 
-        elif "method" in data:
-            session_id = data.get("sessionId")
-            if session_id:
-                # Session-scoped event → route to CDPSession
-                cdp = self._sessions.get(session_id)
-                if cdp is not None:
-                    cdp._handle_event(data)
-            else:
-                # Browser-level event
-                try:
-                    self._handle_browser_event(data)
-                except Exception:
-                    logger.exception("_handle_browser_event error")
+        if "method" not in data:
+            return
+
+        session_id = data.get("sessionId")
+        if session_id:
+            # Session-scoped event: route to CDPSession
+            cdp = self._sessions.get(session_id)
+            if cdp is not None:
+                cdp._handle_event(data)
+        else:
+            # Browser-level event
+            try:
+                self._handle_browser_event(data)
+            except Exception:
+                logger.exception("_handle_browser_event error")
+
+    def _dispatch_response(self, data: dict) -> None:
+        """Settle the future for a command response, applying a CDP error if present."""
+        msg_id = data["id"]
+        fut = self._pending.pop(msg_id, None)
+        if not fut or fut.done():
+            return
+        if "error" not in data:
+            fut.set_result(data.get("result", {}))
+            return
+        err = data["error"]
+        if not isinstance(err, dict):
+            fut.set_exception(CDPCommandError(str(err)))
+            return
+        msg = err.get("message", str(err))
+        if "data" in err:
+            msg = f"{msg} ({err['data']})"
+        fut.set_exception(CDPCommandError(msg, err.get("code")))
 
     def _handle_browser_event(self, data: dict) -> None:
-        """Handle browser-level CDP events (target lifecycle)."""
+        """Dispatch a browser-level CDP event (downloads, target lifecycle)."""
         method = data.get("method")
         params = data.get("params", {})
 
         if method in ("Browser.downloadWillBegin", "Browser.downloadProgress"):
             self._announce_download(method, params)
-
         elif method == "Target.targetCreated":
-            target_info = params.get("targetInfo", {})
-            matched_id = self._resolve_target(target_info)
-            if matched_id and self._on_target_created:
-                bg.spawn(
-                    self._auto_attach(target_info, matched_id),
-                    name=f"repld-auto-attach-{matched_id[:8]}",
-                )
-
+            self._handle_target_created(params)
         elif method == "Target.targetDestroyed":
-            chrome_tid = params.get("targetId", "")
-            # Find and remove any session for this target
-            to_remove = [
-                sid
-                for sid, cdp in self._sessions.items()
-                if cdp.target_info.get("targetId") == chrome_tid
-            ]
-            for sid in to_remove:
-                cdp = self._sessions.pop(sid, None)
-                if cdp:
-                    self._announce_tab_closed(cdp)
-                    cdp.cleanup()
-            if to_remove and self._on_target_destroyed:
-                self._on_target_destroyed(chrome_tid)
-
+            self._handle_target_destroyed(params)
         elif method == "Target.targetInfoChanged":
-            target_info = params.get("targetInfo", {})
-            chrome_tid = target_info.get("targetId", "")
-            # Update target_info on existing session
-            cdp = self.find_by_target_id(chrome_tid)
-            if cdp is not None:
-                cdp.target_info = target_info
-                if cdp.owner_from_opener and (
-                    owner := self._pattern_owner(target_info.get("url", ""))
-                ):
+            self._handle_target_info_changed(params)
+
+    def _handle_target_created(self, params: dict) -> None:
+        """Auto-attach a newly-created target if it matches a watch pattern."""
+        target_info = params.get("targetInfo", {})
+        matched_id = self._resolve_target(target_info)
+        if matched_id and self._on_target_created:
+            bg.spawn(
+                self._auto_attach(target_info, matched_id),
+                name=f"repld-auto-attach-{matched_id[:8]}",
+            )
+
+    def _handle_target_destroyed(self, params: dict) -> None:
+        """Remove the destroyed target's session and push `tab_closed`."""
+        chrome_tid = params.get("targetId", "")
+        to_remove = [
+            sid
+            for sid, cdp in self._sessions.items()
+            if cdp.target_info.get("targetId") == chrome_tid
+        ]
+        for sid in to_remove:
+            cdp = self._sessions.pop(sid, None)
+            if cdp:
+                self._announce_tab_closed(cdp)
+                cdp.cleanup()
+        if to_remove and self._on_target_destroyed:
+            self._on_target_destroyed(chrome_tid)
+
+    def _handle_target_info_changed(self, params: dict) -> None:
+        """Update a tracked target's info, or auto-attach if it now matches a pattern."""
+        target_info = params.get("targetInfo", {})
+        chrome_tid = target_info.get("targetId", "")
+        cdp = self.find_by_target_id(chrome_tid)
+        if cdp is not None:
+            cdp.target_info = target_info
+            if cdp.owner_from_opener:
+                owner = self._pattern_owner(target_info.get("url", ""))
+                if owner is not None:
                     cdp.owner, cdp.owner_from_opener = owner, False
-                return
-            # Not attached yet — check if it now matches a pattern
-            matched_id = self._resolve_target(target_info)
-            if matched_id and self._on_target_created:
-                bg.spawn(
-                    self._auto_attach(target_info, matched_id),
-                    name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
-                )
+            return
+        # Not attached yet; check if it now matches a pattern
+        matched_id = self._resolve_target(target_info)
+        if matched_id and self._on_target_created:
+            bg.spawn(
+                self._auto_attach(target_info, matched_id),
+                name=f"repld-auto-attach-changed-{chrome_tid[:8]}",
+            )
 
     def _announce_tab_closed(self, cdp: CDPSession) -> None:
-        # Owner or live claim only: a tab nobody is driving has no one to tell.
+        """Push `tab_closed` to the tab's owner or live claim, if any."""
         session = cdp.route_to
         if cdp.closing or session is None:
             return
@@ -952,6 +978,7 @@ class BrowserSession:
         )
 
     def _announce_download(self, method: str, params: dict) -> None:
+        """Route a download lifecycle event to its owner via `_push_download`."""
         guid = params.get("guid", "")
         owner: asyncio.Future[tuple[CDPSession | None, Session | None]] | None
         if method == "Browser.downloadWillBegin":
@@ -1003,6 +1030,7 @@ class BrowserSession:
         owner: "asyncio.Future[tuple[CDPSession | None, Session | None]] | None",
         params: dict,
     ) -> None:
+        """Push a download channel message to the session that started it."""
         cdp: CDPSession | None = None
         session: Session | None = None
         if owner is not None:
@@ -1031,6 +1059,7 @@ class BrowserSession:
         )
 
     def _pattern_owner(self, url: str) -> "Session | None":
+        """Resolve `url` to the `Session` that registered its first matching watch pattern."""
         for pattern, owner in self._pattern_owners.items():
             if fnmatch(url, pattern):
                 return owner

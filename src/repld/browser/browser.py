@@ -1,4 +1,4 @@
-"""`Browser` — one Chrome instance: its WebSocket, its watch patterns, its tabs.
+"""`Browser`, one Chrome instance: its WebSocket, its watch patterns, its tabs.
 
 Carved out of the package `__init__` alongside `pool.py`, which stacks N of
 these behind one object. Everything here is scoped to a single debug port;
@@ -32,21 +32,21 @@ __all__ = ["Browser"]
 logger = logging.getLogger(__name__)
 
 _ATTACH_POLL_INTERVAL_S = 0.3  # retry cadence while waiting for a tab to appear/attach
-# Ceiling on waiting out a concurrent auto-attach for a target — see
+# Ceiling on waiting out a concurrent auto-attach for a target; see
 # `_attach_racing`. Generous: it only elapses if that attach never completes,
 # which is a real failure worth reporting rather than waiting on further.
 _ATTACH_TIMEOUT_S = 5.0
 
 # The *sync* methods below snapshot `_sessions` / `_browsers` with `list(...)`
 # before walking them, and that is load-bearing rather than stylistic. Both
-# dicts are written from the asyncio loop — attach, detach, and the recv loop's
+# dicts are written from the asyncio loop (attach, detach, and the recv loop's
 # Target.targetDestroyed handler all mutate `_sessions` on every tab that opens
-# or closes — while these methods run on whatever thread called them. Two such
+# or closes) while these methods run on whatever thread called them. Two such
 # threads exist and neither is exotic: `browser_dispatch` answers some tools on
 # the IPC reader thread, and `runtime._eval` runs every pure-sync exec cell in
 # `asyncio.to_thread`, so `browser.tabs` typed into a cell is already off-loop.
 # Iterating a live dict from there raises "dictionary changed size during
-# iteration" the moment a page opens a popup — reproducible, unattributable,
+# iteration" the moment a page opens a popup, reproducible, unattributable,
 # and dependent on the user's browsing rather than on anything repld did.
 # `list(d.values())` is atomic under the GIL (the copy happens in C, with no
 # bytecode boundary for a thread switch), so the snapshot closes it outright.
@@ -66,14 +66,14 @@ _ATTACH_TIMEOUT_S = 5.0
 #
 # Snapshotting fixes the crash, not the semantics: a browser connected midway
 # through a fan-out simply misses that sweep. That matches the sync siblings
-# and is fine — the alternative is holding a lock across N WebSocket round
+# and is fine. The alternative is holding a lock across N WebSocket round
 # trips.
 
 
 class Browser:
-    """Manages the BrowserSession + watch patterns + Tab resolution.
+    """One Chrome debug port: session lifecycle, watch patterns, tab resolution.
 
-    Injected into __main__ by the kernel after lazy initialization.
+    Injected into `__main__` by the kernel after lazy initialization.
     """
 
     def __init__(
@@ -83,6 +83,7 @@ class Browser:
         url: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
+        """Bind to a Chrome debug port, defaulting to `REPLD_CHROME_PORT` or 9222."""
         self.port = port or int(os.environ.get("REPLD_CHROME_PORT", "9222"))
         self._session: BrowserSession = BrowserSession(
             self.port, url=url, headers=headers
@@ -90,22 +91,24 @@ class Browser:
         self._connected: bool = False
         # Serializes the first connect. BrowserSession already guards the
         # *re*connect path with its own lock; this is the same shape one step
-        # earlier — see `_ensure_connected`.
+        # earlier (see `_ensure_connected`).
         self._connect_lock = asyncio.Lock()
 
+    # -- Connection lifecycle ------------------------------------------------
+
     async def _ensure_connected(self) -> None:
-        """Connect if we aren't, reconnect if the socket died. Idempotent.
+        """Connect if not connected, reconnect if the socket died. Idempotent.
 
         Locked because the check and the connect straddle an await, and
         `BrowserSession.connect` unconditionally rebinds `_ws` and `_recv_task`:
         N callers arriving together produced N WebSockets and N recv loops, with
         only the last reachable and the rest left open against Chrome forever.
         Two concurrent `browser_*` tool calls on a cold pool is enough to do it
-        — `connect()` yields for milliseconds inside `to_thread` fetching
-        /json/version — and so is any `gather()` in user code.
+        (`connect()` yields for milliseconds inside `to_thread` fetching
+        /json/version), and so is any `gather()` in user code.
 
         The fast path stays lock-free so the common case (already connected,
-        every call after the first) doesn't serialize on it.
+        every call after the first) does not serialize on it.
         """
         if self._connected and self._session._is_connected():
             return
@@ -120,8 +123,8 @@ class Browser:
                 self._connected and not self._session._is_connected()
             ):
                 # _reconnect takes _reconnect_lock, never _connect_lock, and
-                # nothing under it re-enters here — so holding this across it
-                # can't deadlock.
+                # nothing under it re-enters here, so holding this across it
+                # cannot deadlock.
                 try:
                     await self._session._reconnect()
                 except Exception:
@@ -143,25 +146,23 @@ class Browser:
                 logger.debug("BrowserSession connected on port %s", self.port)
 
     def _on_target_created(self, target_info: dict, target_id: str) -> None:
-        """Called when a new tab is auto-attached."""
+        """Emit a `BrowserTabAttached` event for a newly auto-attached tab."""
         url = target_info.get("url", "")
         title = target_info.get("title", "")
         emit(BrowserTabAttached(target_id, url, title))
 
     def _on_target_destroyed(self, target_id: str) -> None:
-        """Called when a tab is destroyed."""
+        """Emit a `BrowserTabDetached` event for a destroyed tab."""
         emit(BrowserTabDetached(target_id))
 
     def _iter_tabs(self) -> list[Tab]:
-        """Wrap all attached CDPSessions as Tab objects."""
+        """Wrap all attached `CDPSession` objects as `Tab` instances."""
         return [
             Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
             for cdp in self._session._sessions.values()
         ]
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # -- Tab resolution ------------------------------------------------------
 
     async def get(
         self,
@@ -171,21 +172,21 @@ class Browser:
         fresh: bool = False,
         ready: str | None = None,
     ) -> Tab:
-        """Find one tab by URL glob or target ID. Attach on demand.
+        """Return one tab by URL glob or target ID, attaching on demand.
 
-        **Glob** (e.g. ``"*github.com*"``): searches pages and iframes,
-        skips workers. ``timeout`` polls until a match appears. ``fresh``
+        **Glob** (e.g. `"*github.com*"`): searches pages and iframes,
+        skips workers. `timeout` polls until a match appears. `fresh`
         skips tabs that already matched at call time.
 
-        **Target ID** (e.g. ``"9222:a81998"``): resolves any type including
-        workers. Attaches if not already attached. ``fresh`` is ignored;
-        ``timeout`` bounds only the wait for a concurrent attach to land
-        (default ``_ATTACH_TIMEOUT_S``) — an unknown ID fails at once either
-        way, since polling for a target that isn't there buys nothing.
+        **Target ID** (e.g. `"9222:a81998"`): resolves any type including
+        workers. Attaches if not already attached. `fresh` is ignored;
+        `timeout` bounds only the wait for a concurrent attach to land
+        (default `_ATTACH_TIMEOUT_S`). An unknown ID fails at once either
+        way, since polling for a target that is not there buys nothing.
 
         **ready**: CSS selector or JS expression that must be truthy before
         the Tab is returned. Also used for auto-recovery on HMR/navigation.
-        Default (None) uses ``document.readyState === 'complete'``.
+        Default (None) uses `document.readyState === 'complete'`.
 
         Enables proactive Fetch body capture on freshly attached tabs.
         """
@@ -195,11 +196,38 @@ class Browser:
             target, timeout=timeout, fresh=fresh, ready=ready
         )
 
-    def _find_by_prefix(self, prefix: str) -> tuple[str | None, CDPSession | None, str]:
-        """Look up an already-attached session by 6-char lowercase target-ID prefix.
+    async def _get_by_id(
+        self, target: str, ready: str | None = None, timeout: float | None = None
+    ) -> Tab:
+        """Resolve a target ID, attaching on demand if needed.
 
-        Returns (session_id, cdp, full_chrome_id); session_id and cdp are
-        None on miss.
+        `timeout` bounds only the attach race. An ID that matches no target at
+        all still fails immediately, since there is nothing to wait for.
+        """
+        _, prefix = _split_target(target)
+        _sid, cdp, chrome_id = self._resolve_by_prefix(prefix)
+        if cdp is not None:
+            return Tab(cdp, chrome_id, self.port, ready=ready)
+
+        await self._ensure_connected()
+        for t in await self._session.list_targets():
+            tid = t.get("targetId", "")
+            if tid and tid[:6].lower() == prefix:
+                tab = await self._attach_racing(tid, t, ready=ready, budget=timeout)
+                if tab is not None:
+                    return tab
+
+        raise TabNotFoundError(
+            f"No tab '{target}'. Attached: {self._build_short_ids()}"
+        )
+
+    def _resolve_by_prefix(
+        self, prefix: str
+    ) -> tuple[str | None, CDPSession | None, str]:
+        """Resolve a 6-char lowercase target-ID prefix to an attached session.
+
+        Returns (`session_id`, `cdp`, `full_chrome_id`). On a miss both
+        `session_id` and `cdp` are None.
         """
         prefix = prefix.lower()
         for sid, cdp in self._session._sessions.items():
@@ -207,37 +235,6 @@ class Browser:
             if chrome_id[:6].lower() == prefix:
                 return sid, cdp, chrome_id
         return None, None, ""
-
-    async def _attach_and_wrap(
-        self,
-        tid: str,
-        t: dict | None = None,
-        *,
-        ready: str | None = None,
-        mode: str = "shared",
-    ) -> "Tab | None":
-        """Attach, enable Fetch body capture, and wrap the result in a Tab.
-
-        `mode="agent"` (open()) takes the tab over; the `shared` default leaves
-        native prompts to the human, since get() may attach a tab they are using.
-
-        Returns None if attach failed (e.g. a concurrent attach for the same
-        target is already in flight) — callers keep searching in that case.
-        """
-        cdp = await self._session.attach(tid, t)
-        if cdp is None:
-            return None
-        url = cdp.target_info.get("url", "")
-        if mode == "agent":
-            await cdp.set_mode("agent")
-        if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
-            await cdp.enable_fetch()
-        tab = Tab(cdp, tid, self.port, ready=ready)
-        # "Initial attach" per the ready= docstring: get()/open() on a target
-        # that's already attached skip this (the hot re-query path stays
-        # cheap) — only a target attached for the first time here waits.
-        await tab._wait_ready()
-        return tab
 
     async def _attach_racing(
         self,
@@ -254,9 +251,8 @@ class Browser:
         already in flight, and the way that happens is that we lose a race with
         ourselves: a watch pattern matching the URL makes `Target.targetCreated`
         fire an `_auto_attach` task that claims the target first. Both callers
-        hit exactly that — `open()` on a URL the caller also watches
-        (`watch("*myapp.com*")` then `open("https://myapp.com/x")`), and
-        `_get_by_id` on a target that has just started matching one — and both
+        hit exactly that (`open()` on a URL the caller also watches, and
+        `_get_by_id` on a target that has just started matching one), and both
         want the same recovery: wait for the in-flight attach to land, then take
         its session. Re-calling `attach()` is the whole of it, since it returns
         the existing session once one exists.
@@ -278,33 +274,38 @@ class Browser:
                 return None
             await asyncio.sleep(_ATTACH_POLL_INTERVAL_S)
 
-    async def _get_by_id(
-        self, target: str, ready: str | None = None, timeout: float | None = None
-    ) -> Tab:
-        """Resolve a target ID, attaching on demand if needed.
+    async def _attach_and_wrap(
+        self,
+        tid: str,
+        t: dict | None = None,
+        *,
+        ready: str | None = None,
+        mode: str = "shared",
+    ) -> "Tab | None":
+        """Attach to a target and return a ready `Tab`, or None on a lost race.
 
-        `timeout` bounds only the attach race — an ID that matches no target at
-        all still fails immediately, since there is nothing to wait for.
+        `mode="agent"` (`open()`) takes the tab over; the `shared` default
+        leaves native prompts to the human, since `get()` may attach a tab they
+        are using. Returns None when the attach failed (e.g. a concurrent
+        attach for the same target is already in flight); callers keep searching.
         """
-        _, prefix = _split_target(target)
-        _sid, cdp, chrome_id = self._find_by_prefix(prefix)
-        if cdp is not None:
-            return Tab(cdp, chrome_id, self.port, ready=ready)
+        cdp = await self._session.attach(tid, t)
+        if cdp is None:
+            return None
+        url = cdp.target_info.get("url", "")
+        if mode == "agent":
+            await cdp.set_mode("agent")
+        if not any(fnmatch(url, pat) for pat in _no_capture_patterns):
+            await cdp.enable_fetch()
+        tab = Tab(cdp, tid, self.port, ready=ready)
+        # "Initial attach" per the ready= docstring: get()/open() on a target
+        # that is already attached skip this (the hot re-query path stays
+        # cheap); only a target attached for the first time here waits.
+        await tab._wait_ready()
+        return tab
 
-        await self._ensure_connected()
-        for t in await self._session.list_targets():
-            tid = t.get("targetId", "")
-            if tid and tid[:6].lower() == prefix:
-                tab = await self._attach_racing(tid, t, ready=ready, budget=timeout)
-                if tab is not None:
-                    return tab
-
-        raise TabNotFoundError(
-            f"No tab '{target}'. Attached: {self._attached_short_ids()}"
-        )
-
-    def _attached_short_ids(self) -> list[str]:
-        """Short target IDs of all attached sessions, for error messages."""
+    def _build_short_ids(self) -> list[str]:
+        """Build the list of short target IDs for all attached sessions."""
         return [
             make_target(self.port, cdp.target_info.get("targetId", ""))
             for cdp in self._session._sessions.values()
@@ -318,7 +319,7 @@ class Browser:
         fresh: bool = False,
         ready: str | None = None,
     ) -> Tab:
-        """Find one tab matching a URL glob. Skips workers."""
+        """Find one tab matching a URL glob, skipping workers."""
         exclude: set[str] = set()
         if fresh:
             for cdp in self._session._sessions.values():
@@ -343,25 +344,26 @@ class Browser:
             await self._ensure_connected()
             for t in await self._session.list_targets():
                 tid = self._glob_target_id(t, pattern, exclude)
-                if tid:
-                    # `_attach_racing`, not `_attach_and_wrap`: a target that
-                    # matches this glob may equally match a *watch* pattern, in
-                    # which case our own `_auto_attach` holds it and `attach()`
-                    # answers None. Treating that as a miss made a glob `get()`
-                    # with the default timeout=None raise TabNotFoundError for
-                    # a tab that was seconds from being attached — the exact
-                    # race `_get_by_id` and `open()` already wait out. The
-                    # budget is the caller's own remaining deadline, so
-                    # `get(glob, timeout=1)` still means one second in total
-                    # rather than one second per matching target.
-                    budget = (
-                        max(0.0, deadline - asyncio.get_running_loop().time())
-                        if deadline is not None
-                        else None
-                    )
-                    tab = await self._attach_racing(tid, t, ready=ready, budget=budget)
-                    if tab is not None:
-                        return tab
+                if not tid:
+                    continue
+                # `_attach_racing`, not `_attach_and_wrap`: a target that
+                # matches this glob may equally match a *watch* pattern, in
+                # which case our own `_auto_attach` holds it and `attach()`
+                # answers None. Treating that as a miss made a glob `get()`
+                # with the default timeout=None raise TabNotFoundError for
+                # a tab that was seconds from being attached, the exact
+                # race `_get_by_id` and `open()` already wait out. The
+                # budget is the caller's own remaining deadline, so
+                # `get(glob, timeout=1)` still means one second in total
+                # rather than one second per matching target.
+                budget = (
+                    max(0.0, deadline - asyncio.get_running_loop().time())
+                    if deadline is not None
+                    else None
+                )
+                tab = await self._attach_racing(tid, t, ready=ready, budget=budget)
+                if tab is not None:
+                    return tab
 
             if deadline is None or asyncio.get_running_loop().time() >= deadline:
                 break
@@ -371,13 +373,15 @@ class Browser:
 
     @staticmethod
     def _glob_target_id(info: dict, pattern: str, exclude: set[str]) -> str | None:
-        """targetId if info matches: non-worker, url glob, not excluded; else None."""
+        """Return the targetId if `info` is a non-worker matching the glob, else None."""
         if info.get("type", "") in WORKER_TYPES:
             return None
         tid = info.get("targetId", "")
         if not tid or tid in exclude:
             return None
         return tid if fnmatch(info.get("url", ""), pattern) else None
+
+    # -- Watch ---------------------------------------------------------------
 
     async def watch(self, pattern: str) -> str:
         """Register a URL glob pattern and attach currently-matching tabs.
@@ -387,10 +391,9 @@ class Browser:
         """
         await self._ensure_connected()
 
-        # Add pattern (registers it in _watched_patterns)
         self._session.add_pattern(pattern)
 
-        # Attach any targets that match the pattern and aren't already attached
+        # Attach targets that match the pattern and are not already attached.
         targets = await self._session.list_targets()
         to_attach: list[tuple[str, dict]] = []
         for t in targets:
@@ -423,31 +426,34 @@ class Browser:
             f"Total attached: {total}."
         )
         if failures:
-            # Surface the reason directly — logger.debug alone is invisible
+            # Surface the reason directly: logger.debug alone is invisible
             # by default (no logging configured), which would make a failed
             # attach look identical to "nothing matched the pattern".
             detail = "; ".join(f"{tid[:6]}: {reason}" for tid, reason in failures)
             msg += f" {len(failures)} attach attempt(s) failed: {detail}"
         return msg
 
+    # -- Tab creation --------------------------------------------------------
+
     async def open(
         self, url: str, *, ready: str | None = None, new_window: bool = False
     ) -> "Tab":
-        """Create a new tab (in a window of its own with `new_window`) and attach to it.
+        """Create a new tab and attach to it, returning a ready `Tab`.
 
-        Target.createTarget → attach → enable Fetch → wait for ready → return Tab.
+        With `new_window`, the tab opens in a window of its own. The sequence
+        is Target.createTarget, attach, enable Fetch, wait for ready.
 
-        The attach goes through `_attach_racing` because we may lose a race with
-        ourselves when the new URL matches a watch pattern — see that method for
-        the mechanics; `_get_by_id` waits out the same race the same way. Note
-        it uses the session `attach()` returns directly rather than looking the
-        target up afterwards: the new session isn't always registered under its
-        targetId yet, so a sync lookup would race it.
+        The attach goes through `_attach_racing` because we may lose a race
+        with ourselves when the new URL matches a watch pattern (see that
+        method for the mechanics; `_get_by_id` waits out the same race the
+        same way). It uses the session `attach()` returns directly rather than
+        looking the target up afterwards: the new session is not always
+        registered under its targetId yet, so a sync lookup would race it.
 
-        ready: same as `get()` — a CSS selector or JS expression the page must
-        satisfy before this call returns. Default (None) waits for
-        document.readyState === 'complete' only, which fires well before a
-        client-rendered SPA has anything in the DOM worth reading.
+        `ready` works the same as in `get()`: a CSS selector or JS expression
+        the page must satisfy before this call returns. Default (None) waits
+        for `document.readyState === 'complete'` only, which fires well
+        before a client-rendered SPA has anything in the DOM worth reading.
         """
         await self._ensure_connected()
         try:
@@ -465,20 +471,20 @@ class Browser:
             raise RuntimeError(f"Failed to attach to new tab '{tid}'")
         return tab
 
+    # -- Detach / disconnect -------------------------------------------------
+
     async def detach(self, pattern: str | None = None) -> str:
-        """Detach tabs by pattern; detach all if pattern is None."""
+        """Detach tabs by pattern, or all tabs when `pattern` is None."""
         if not self._connected:
             return "No browser connection."
 
         if pattern is None:
-            # Detach everything
             sessions = list(self._session._sessions.items())
             for sid, cdp in sessions:
                 await self._unpin_and_detach(sid, cdp)
             self._session._watched_patterns.clear()
             return f"Detached {len(sessions)} tab(s). All patterns cleared."
 
-        # Detach sessions matching this pattern
         to_detach: list[tuple[str, CDPSession]] = []
         for sid, cdp in self._session._sessions.items():
             url = cdp.target_info.get("url", "")
@@ -488,37 +494,86 @@ class Browser:
         for sid, cdp in to_detach:
             await self._unpin_and_detach(sid, cdp)
 
-        # Remove pattern
         self._session._watched_patterns.pop(pattern, None)
         return f"Detached {len(to_detach)} tab(s) for pattern '{pattern}'."
 
+    async def _unpin_and_detach(self, sid: str, cdp: CDPSession) -> None:
+        """Unpin a tab (if pinned) and detach its session. Never raises."""
+        try:
+            await self._safe_unpin(
+                Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
+            )
+            await self._session.detach(sid)
+        except Exception as exc:
+            logger.debug("Detach %s: %s", sid, exc)
+
+    @staticmethod
+    async def _safe_unpin(tab: Tab) -> None:
+        """Unpin before detach/disconnect; a failed unpin must not block either."""
+        if tab._pinned:
+            try:
+                await tab.unpin()
+            except Exception:
+                pass
+
+    async def detach_target(self, target_id: str) -> str:
+        """Detach a single target by its short ID (e.g. `'9222:abc123'`).
+
+        Unpins first if the tab is pinned.
+        """
+        _, prefix = _split_target(target_id)
+        sid, cdp, _full_id = self._resolve_by_prefix(prefix)
+        if sid is not None and cdp is not None:
+            await self._unpin_and_detach(sid, cdp)
+            return f"Detached {target_id}."
+        return f"Target {target_id} not found."
+
+    async def disconnect(self) -> None:
+        """Disconnect from Chrome, unpinning all tabs first.
+
+        Removes each tab's pill, beforeunload guard, and heartbeat task before
+        dropping the socket. Also handles a failed `url=` redial that left tab
+        sessions stranded on an unconnected session.
+        """
+        if self._connected:
+            for tab in self._iter_tabs():
+                await self._safe_unpin(tab)
+        if self._connected or self._session._stranded:
+            try:
+                await self._session.disconnect()
+            except Exception:
+                pass
+            self._connected = False
+
+    # -- Properties and queries ----------------------------------------------
+
     @property
     def tabs(self) -> Rows:
-        """List currently attached Tab objects."""
+        """Currently attached `Tab` objects as a `Rows` collection."""
         return Rows(self._iter_tabs())
 
     async def pages(self) -> list[dict]:
-        """List all Chrome targets (attached or not)."""
+        """List all Chrome targets, attached or not."""
         await self._ensure_connected()
         return await self._session.list_targets()
 
     @property
     def patterns(self) -> list[str]:
-        """List active watch patterns."""
+        """Active watch patterns."""
         return list(self._session._watched_patterns.keys())
 
     def clear(self, target: str | None = None) -> str:
-        """Clear captured events. Specify target for one tab, or None for all."""
+        """Clear captured events for one tab (`target`) or all tabs (None)."""
         if target is not None:
             if not _is_target_id(target):
                 raise RuntimeError(
                     f"Invalid target ID '{target}'. Expected format: '9222:a1b2c3'"
                 )
             _, prefix = _split_target(target)
-            _sid, cdp, _chrome_id = self._find_by_prefix(prefix)
+            _sid, cdp, _chrome_id = self._resolve_by_prefix(prefix)
             if cdp is None:
                 raise RuntimeError(
-                    f"No attached tab '{target}'. Attached: {self._attached_short_ids()}"
+                    f"No attached tab '{target}'. Attached: {self._build_short_ids()}"
                 )
             cdp.clear_events()
             return f"Cleared events for {target}."
@@ -536,57 +591,14 @@ class Browser:
         body: "dict | str | None" = None,
         headers: "dict[str, str] | None" = None,
     ) -> dict:
-        """In-page fetch using any attached tab (inherits cookies/session)."""
+        """Execute an in-page fetch using any attached tab (inherits cookies/session)."""
         tabs = self._iter_tabs()
         if not tabs:
-            raise RuntimeError("No attached tabs — open or get a tab first")
+            raise RuntimeError("No attached tabs. Open or get a tab first.")
         return await tabs[0].fetch(url, method=method, body=body, headers=headers)
 
-    @staticmethod
-    async def _safe_unpin(tab: Tab) -> None:
-        """Unpin before detach/disconnect; a failed unpin must not block either."""
-        if tab._pinned:
-            try:
-                await tab.unpin()
-            except Exception:
-                pass
-
-    async def _unpin_and_detach(self, sid: str, cdp: CDPSession) -> None:
-        """Unpin a tab (if pinned) and detach its session. Never raises."""
-        try:
-            await self._safe_unpin(
-                Tab(cdp, cdp.target_info.get("targetId", ""), self.port)
-            )
-            await self._session.detach(sid)
-        except Exception as exc:
-            logger.debug("Detach %s: %s", sid, exc)
-
-    async def disconnect(self) -> None:
-        """Disconnect from Chrome. Unpins all tabs first (removes pill,
-        beforeunload guard, and heartbeat task before dropping the socket)."""
-        if self._connected:
-            for tab in self._iter_tabs():
-                await self._safe_unpin(tab)
-        # Also when a failed `url=` redial left tab sessions stranded on an unconnected session.
-        if self._connected or self._session._stranded:
-            try:
-                await self._session.disconnect()
-            except Exception:
-                pass
-            self._connected = False
-
-    async def detach_target(self, target_id: str) -> str:
-        """Detach a single target by its short ID (e.g. '9222:abc123').
-        Unpins first if the tab is pinned."""
-        _, prefix = _split_target(target_id)
-        sid, cdp, _full_id = self._find_by_prefix(prefix)
-        if sid is not None and cdp is not None:
-            await self._unpin_and_detach(sid, cdp)
-            return f"Detached {target_id}."
-        return f"Target {target_id} not found."
-
     def format_tabs_nested(self) -> str:
-        """Format attached tabs as nested text showing target hierarchy."""
+        """Render attached tabs as nested text showing the target hierarchy."""
         entries: list[dict] = []
         id_to_short: dict[str, str] = {}
         for tab in self._iter_tabs():
@@ -606,7 +618,6 @@ class Browser:
                 }
             )
 
-        # Separate top-level vs children
         children: dict[str, list[dict]] = {}
         top_level: list[dict] = []
 
@@ -618,7 +629,6 @@ class Browser:
             else:
                 top_level.append(e)
 
-        # Format output
         lines: list[str] = []
         for e in top_level:
             lines.append(f"{e['target']}  {e['type']}  {e['mode']}  {e['url']}")
@@ -633,7 +643,7 @@ class Browser:
             if parent_short not in shown:
                 for child in kids:
                     lines.append(
-                        f"{child['target']}  {child['type']} → {parent_short}"
+                        f"{child['target']}  {child['type']} ({parent_short})"
                         f"  {child['mode']}  {child['url']}"
                     )
 
@@ -644,5 +654,6 @@ class Browser:
         _print_browser_help()
 
     def __repr__(self) -> str:
+        """Short summary: port, tab count, active patterns."""
         n = len(self._session._sessions) if self._connected else 0
         return f"<Browser port={self.port} tabs={n} patterns={self.patterns}>"

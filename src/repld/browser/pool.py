@@ -1,9 +1,9 @@
-"""`BrowserPool` — N Chrome instances behind one object — and the lazy descriptor.
+"""`BrowserPool`, N Chrome instances behind one object, and the lazy descriptor.
 
 `BrowserPool` is what `browser` actually is in a cell: a facade that routes a
 target ID to the port named in it, and fans a glob out across every connected
-`Browser`. `LazyBrowser` sits in front of *that*, so importing repld — or
-merely touching `browser` — opens no WebSocket.
+`Browser`. `LazyBrowser` sits in front of that, so importing repld (or merely
+touching `browser`) opens no WebSocket.
 
 Not a forwarding layer, which is why it is a class rather than a set of module
 functions: each method here has real fan-out semantics of its own (one shared
@@ -12,7 +12,7 @@ deadline across browsers in `get`, first-connected-wins in `open`, join-and-drop
 
 **The snapshot rule applies here too, and the reason is different from the one
 in `browser.py`.** The methods below are mostly `async`, so the off-loop
-argument doesn't reach them — but an `await` inside `for b in
+argument does not reach them, but an `await` inside `for b in
 self._browsers.values()` hands control back to the loop, another task runs
 `connect()` or `disconnect()`, and resuming raises the same "dictionary changed
 size during iteration". Reading the rule as "sync methods snapshot" is exactly
@@ -65,8 +65,12 @@ _LEASE_PATH = re.compile(r"^(?P<root>.*)/cdp/(?P<lease>[\w-]+)$")
 
 
 def _lease_routes(url: str) -> tuple[str, Callable[[str], str]] | None:
-    """A lend consumer url `ws(s)://host[/prefix]/cdp/<lease>[?query]`. -> (its POST open route, the consumer url of
-    another lease on the same broker), the query (a dev-shell token) kept on both; None for any other url."""
+    """Parse a lend consumer URL into its POST open route and a factory for sibling lease URLs.
+
+    Expects `ws(s)://host[/prefix]/cdp/<lease>[?query]`; the query (a dev-shell
+    token) is kept on both the open route and the factory output. Returns `None`
+    for any URL that is not a lease.
+    """
     parts = urlsplit(url)
     m = _LEASE_PATH.match(parts.path)
     if parts.scheme not in ("ws", "wss") or m is None:
@@ -77,6 +81,7 @@ def _lease_routes(url: str) -> tuple[str, Callable[[str], str]] | None:
     )
 
     def cdp_url_for(lease: str) -> str:
+        """Build a consumer WebSocket URL for `lease` on the same broker."""
         return urlunsplit(
             (parts.scheme, parts.netloc, f"{m['root']}/cdp/{lease}", parts.query, "")
         )
@@ -85,13 +90,14 @@ def _lease_routes(url: str) -> tuple[str, Callable[[str], str]] | None:
 
 
 class BrowserPool:
-    """Manages multiple Browser instances across Chrome ports.
+    """Multi-port facade over one `Browser` per Chrome instance.
 
-    Delegates watch/get/tabs/pages across all connected instances.
-    Target IDs (e.g. ``42829:abc123``) route to the right Browser by port prefix.
+    Routes a target ID (e.g. `42829:abc123`) to its `Browser` by the port
+    prefix and fans globs and watches across every connected instance.
     """
 
     def __init__(self) -> None:
+        """Set up the empty pool with its registry, connect lock and key map."""
         self._browsers: LoopOwned[int, Browser] = LoopOwned("BrowserPool._browsers")
         # Guards the registry mutation in `connect`, which is the same
         # check-then-act-across-an-await as Browser._ensure_connected one level
@@ -104,6 +110,7 @@ class BrowserPool:
         self._remote_keys: dict[str, int] = {}
 
     def _remote_key(self, url: str) -> int:
+        """Return the stable registry key for `url`, allocating one if new."""
         key = self._remote_keys.get(url)
         if key is None:
             key = REMOTE_KEY_BASE + len(self._remote_keys)
@@ -123,6 +130,7 @@ class BrowserPool:
 
     @staticmethod
     def _save_hint() -> None:
+        """Persist the dashboard hint file with current browser state."""
         try:
             from ..dashboard import save_hint
 
@@ -138,18 +146,18 @@ class BrowserPool:
         url: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> Browser:
-        """Connect to a Chrome instance. Returns the Browser (new or existing).
+        """Connect to a Chrome instance, returning the `Browser` (new or existing).
 
-        Pass profile=<user-data-dir> to resolve the port from that profile's
-        DevToolsActivePort file — Chrome writes it when launched with
-        --remote-debugging-port (including port 0 for an ephemeral port).
+        Pass `profile=<user-data-dir>` to resolve the port from that profile's
+        DevToolsActivePort file. Chrome writes it when launched with
+        `--remote-debugging-port` (including port 0 for an ephemeral port).
 
-        Pass url= to attach to a browser that is not on a local port: an
-        http(s) base (``https://host:9222``, discovered through its
-        /json/version) or a browser-level ``ws(s)://`` URL as a provider hands
-        it out. headers= goes on both requests. The Browser's key (the "port" in
-        its target IDs) is >= 65536, stable per url, and never persisted: the url
-        may carry a token.
+        Pass `url=` to attach to a browser that is not on a local port: an
+        http(s) base (`https://host:9222`, discovered through its /json/version)
+        or a browser-level `ws(s)://` URL as a provider hands it out. `headers=`
+        goes on both requests. The Browser's key (the "port" in its target IDs)
+        is >= 65536, stable per url, and never persisted (the url may carry a
+        token).
         """
         if url is not None:
             if port is not None or profile is not None:
@@ -165,7 +173,7 @@ class BrowserPool:
                 port = int(port_file.read_text().splitlines()[0].strip())
             except (OSError, ValueError, IndexError) as exc:
                 raise RuntimeError(
-                    f"No DevToolsActivePort in {profile} — is Chrome running "
+                    f"No DevToolsActivePort in {profile}; is Chrome running "
                     "with --remote-debugging-port?"
                 ) from exc
         if port is None:
@@ -184,19 +192,20 @@ class BrowserPool:
                 else Browser(port=port, url=url, headers=headers)
             )
             if url is not None:
-                b._session.on_gone = partial(self._gone, port, b)
+                b._session.on_gone = partial(self._on_gone, port, b)
             await b._ensure_connected()
             self._browsers[port] = b
         self._save_hint()
         return b
 
-    def _gone(self, port: int, b: Browser, why: str = "ended its session") -> None:
+    def _on_gone(self, port: int, b: Browser, why: str = "ended its session") -> None:
+        """Handle a provider session ending by scheduling the browser's retirement."""
         bg.spawn(self._retire(port, b, why), name=f"repld-retire-{port}")
 
     async def _retire(
         self, port: int, b: Browser, why: str = "ended its session"
     ) -> None:
-        """Drop a url= browser whose provider session ended; a redial can never succeed."""
+        """Drop a `url=` browser whose provider session ended (a redial can never succeed)."""
         # Identity check: a later connect(url=) may already hold this key.
         if self._browsers.get(port) is not b:
             return
@@ -210,18 +219,21 @@ class BrowserPool:
         )
 
     async def release_owned_by(self, session: Any) -> int:
-        """Release every `taken` tab whose owner is *session*, whose connection
-        has closed: Chrome keeps the picker intercept until someone sends
-        False, and `route_to` already falls through a closed owner."""
+        """Release every `taken` tab whose owner is `session`.
+
+        Called when a connection closes: Chrome keeps the picker intercept until
+        someone sends False, and `route_to` already falls through a closed owner.
+        """
         released = 0
         for b in self._browsers.values():  # LoopOwned: a snapshot per walk
             for cdp in b._session._sessions.values():
-                if cdp.taken and cdp.owner is session:
-                    try:
-                        await cdp.set_mode("shared")
-                    except Exception as exc:
-                        logger.debug("release on close failed: %s", exc)
-                    released += 1
+                if not (cdp.taken and cdp.owner is session):
+                    continue
+                try:
+                    await cdp.set_mode("shared")
+                except Exception as exc:
+                    logger.debug("release on close failed: %s", exc)
+                released += 1
         return released
 
     async def disconnect(self, port: int | None = None) -> str:
@@ -236,7 +248,7 @@ class BrowserPool:
         # Snapshot, then remove by key rather than `clear()`. A `connect()`
         # landing on the loop mid-sweep is invisible to the snapshot, and a
         # blanket clear would drop that brand-new Browser from the registry
-        # with a live WebSocket and recv task nothing would ever close —
+        # with a live WebSocket and recv task nothing would ever close:
         # exactly the leak `connect`'s own lock exists to prevent. `count`
         # comes from the snapshot for the same reason: it has to report what
         # was actually disconnected.
@@ -252,7 +264,7 @@ class BrowserPool:
         return f"Disconnected {count} browser(s)."
 
     def browser_for(self, target: str) -> Browser:
-        """Resolve a target ID like '42829:abc123' to its Browser instance."""
+        """Resolve a target ID like `42829:abc123` to its `Browser` instance."""
         port_str, _ = _split_target(target)
         try:
             port = int(port_str)
@@ -260,7 +272,7 @@ class BrowserPool:
             # `from None`: the int() failure says "invalid literal for int()"
             # about a substring the caller never wrote, under a "during
             # handling of the above exception" banner. This message already
-            # names the whole target — the cause is noise in a traceback that
+            # names the whole target; the cause is noise in a traceback that
             # lands in an agent's exec output.
             raise RuntimeError(f"Invalid target ID: {target}") from None
         b = self._browsers.get(port)
@@ -271,7 +283,7 @@ class BrowserPool:
         return b
 
     def resolve_tab(self, target_id: str) -> "Tab":
-        """Find an attached Tab by its raw Chrome targetId, across all ports."""
+        """Find an attached `Tab` by its raw Chrome targetId, across all ports."""
         for port, b in self._browsers.items():
             if not b._connected:
                 continue
@@ -281,10 +293,10 @@ class BrowserPool:
         raise RuntimeError(f"tab not attached: {target_id}")
 
     async def snapshot(self) -> dict:
-        """Serializable state for the dashboard: connection + tab list.
+        """Serializable state for the dashboard: connection status and tab list.
 
         Probes each candidate with `_ensure_connected()` rather than trusting
-        `_connected` outright — same reasoning as `open()`: a Browser whose
+        `_connected` outright, same reasoning as `open()`: a Browser whose
         Chrome died without an explicit `disconnect()` keeps reading as
         connected forever, and would otherwise list stale tabs pointing a
         caller at a dead port. The probe's own self-correction of `_connected`
@@ -327,6 +339,7 @@ class BrowserPool:
 
     @property
     def ports(self) -> list[int]:
+        """All registered port keys, connected or not."""
         return list(self._browsers.keys())
 
     @property
@@ -407,10 +420,10 @@ class BrowserPool:
         """Skip Fetch interception entirely on tabs whose URL matches this glob.
 
         Covers two symptom classes: Chrome's Fetch-domain response replay
-        tripping CORB/ORB on same-origin resources, and a blank page + JS
-        error with no network-level signal at all — the interception pause
-        itself is enough latency to break a timing-sensitive page. See
-        cdp.py's `_no_capture_patterns` comment.
+        tripping CORB/ORB on same-origin resources, and a blank page plus JS
+        error with no network-level signal at all (the interception pause
+        itself is enough latency to break a timing-sensitive page). See
+        `cdp.py`'s `_no_capture_patterns` comment.
         """
         from .cdp import _no_capture_patterns
 
@@ -446,13 +459,13 @@ class BrowserPool:
             # Auto-connect here too, not only on the glob path below. A target
             # ID names the port it belongs to, so `browser.get("9222:abc123")`
             # on a cold pool used to fail with "No browser on port 9222.
-            # Connected: []" — a lazy pool refusing to do the one thing it is
+            # Connected: []", a lazy pool refusing to do the one thing it is
             # lazy in order to do, on the more specific of the two arguments.
             await self._ensure_any()
             b = self.browser_for(target)
             return await b.get(target, timeout=timeout, ready=ready)
         await self._ensure_any()
-        # One deadline shared across all browsers — otherwise each browser
+        # One deadline shared across all browsers, otherwise each browser
         # gets the full `timeout`, so N browsers can take up to N*timeout.
         deadline = (
             asyncio.get_running_loop().time() + timeout if timeout is not None else None
@@ -484,15 +497,17 @@ class BrowserPool:
     async def open(
         self, url: str, *, ready: str | None = None, new_window: bool = False
     ) -> Tab:
-        """Open a URL in the first *live* connected browser that can open tabs, else ask a lend lease's owner to.
+        """Open a URL in the first live connected browser that can open tabs, else ask a lend lease's owner to.
 
-        `new_window` puts the tab in a window of its own (a lease's owner decides that itself).
+        `new_window` puts the tab in a window of its own (a lease's owner
+        decides that itself).
 
-        A lease shares one tab and refuses Target.createTarget; only when every browser refused does this try
-        `_open_through_lease`, so a Chrome that can open a tab itself always wins.
+        A lease shares one tab and refuses `Target.createTarget`; only when
+        every browser refused does this try `_open_through_lease`, so a Chrome
+        that can open a tab itself always wins.
 
         `_connected` means "was reachable last time we checked", not "is
-        reachable now" — a Browser whose Chrome died without going through
+        reachable now": a Browser whose Chrome died without going through
         `disconnect()` keeps reading as connected forever. Probing with
         `_ensure_connected()` before committing to a candidate, instead of
         trusting the flag, is what stops a dead pool entry from shadowing a
@@ -539,9 +554,10 @@ class BrowserPool:
     async def _open_through_lease(
         self, b: Browser, url: str, ready: str | None
     ) -> Tab | None:
-        """POST the lease's open route; its owner lends `url` as a new lease, which is connected and its tab returned.
+        """Ask a lend lease's owner to open `url` as a new lease, connect it, and return its tab.
 
-        -> None when `b` is no lend lease or its owner cannot open tabs (404/405/501); RuntimeError on any other refusal.
+        Returns `None` when `b` is not a lend lease or its owner cannot open
+        tabs (404/405/501). Raises `RuntimeError` on any other refusal.
         """
         routes = _lease_routes(b._session.url or "")
         if routes is None:
@@ -550,6 +566,7 @@ class BrowserPool:
         headers = dict(b._session.headers or {})
 
         def post() -> dict:
+            """POST the lease's open route, returning the new lease descriptor."""
             req = urllib.request.Request(
                 open_url,
                 data=json.dumps({"url": url}).encode(),
@@ -592,9 +609,9 @@ class BrowserPool:
     ) -> Tab:
         """Find a tab matching `pattern`, or open one if none is open yet.
 
-        `open` is the URL to navigate to on a miss — defaults to `pattern`
+        `open` is the URL to navigate to on a miss (defaults to `pattern`
         itself, so `browser.acquire(url)` works when pattern and open-URL are
-        the same. Replaces the try-`get`/except-`open` dance every gist that
+        the same). Replaces the try-`get`/except-`open` dance every gist that
         talks to one recurring site ends up hand-rolling.
         """
         try:
@@ -617,9 +634,10 @@ class BrowserPool:
                 continue
             if b._iter_tabs():
                 return await b.fetch(url, method=method, body=body, headers=headers)
-        raise RuntimeError("No attached tabs — open or get a tab first")
+        raise RuntimeError("No attached tabs; open or get a tab first")
 
     def clear(self, target: str | None = None) -> str:
+        """Clear event stores, for one target or all connected browsers."""
         if target is not None:
             b = self.browser_for(target)
             return b.clear(target)
@@ -629,7 +647,7 @@ class BrowserPool:
         return "\n".join(results)
 
     async def format_tabs_nested(self) -> str:
-        """Same dead-entry probe as `snapshot()` — see its docstring."""
+        """Build a multi-browser tab listing, probing liveness like `snapshot()`."""
         parts = []
         unreachable: list[int] = []
         for port, b in self._browsers.items():
@@ -650,12 +668,15 @@ class BrowserPool:
 
     @property
     def _connected(self) -> bool:
+        """True when at least one browser in the pool is connected."""
         return any(b._connected for b in self._browsers.values())
 
     def help(self) -> None:
+        """Print the Python API reference (no Chrome connection needed)."""
         _print_browser_help()
 
     def __repr__(self) -> str:
+        """Port counts and watch patterns at a glance."""
         if not self._browsers:
             return "<BrowserPool (no connections)>"
         parts = []
@@ -666,18 +687,20 @@ class BrowserPool:
 
 
 class LazyBrowser:
-    """Lazy descriptor injected into __main__.
+    """Descriptor injected into `__main__` that defers pool construction.
 
-    First attribute access constructs an empty BrowserPool; nothing reaches
+    First attribute access constructs an empty `BrowserPool`; nothing reaches
     Chrome until an operation needs a browser, at which point `_ensure_any`
-    connects to the default port. That split is the point — importing repld,
+    connects to the default port. That split is the point: importing repld,
     or merely touching `browser`, must not open a WebSocket.
     """
 
     def __init__(self) -> None:
+        """Start with no pool; `_ensure_pool` creates one on first use."""
         self._real: BrowserPool | None = None
 
-    def _bootstrap(self) -> BrowserPool:
+    def _ensure_pool(self) -> BrowserPool:
+        """Return the underlying pool, constructing it on first call."""
         if self._real is None:
             self._real = BrowserPool()
         return self._real
@@ -691,12 +714,15 @@ class LazyBrowser:
         _print_browser_help()
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._bootstrap(), name)
+        """Delegate to the pool, constructing it on first access."""
+        return getattr(self._ensure_pool(), name)
 
     def __repr__(self) -> str:
+        """Show the pool's repr if bootstrapped, else a lazy placeholder."""
         if self._real is not None:
             return repr(self._real)
-        return "<Browser (lazy — call browser.connect() to connect)>"
+        return "<Browser (lazy; call browser.connect() to connect)>"
 
-    def __reduce__(self):  # type: ignore[override]
+    def __reduce__(self) -> None:  # type: ignore[override]
+        """Refuse pickling; a pool holds live connections and loop state."""
         raise TypeError("LazyBrowser is not serializable")

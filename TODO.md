@@ -363,6 +363,17 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   (agent-facing text, no caller parses it). Ratchet counts after slice one: D101-103 109 -> 81,
   PLR1702 at depth 4 14 -> 12. Next: browser slice (18 items, 2 at a time, `--only` cases per
   file), then CLI+gists (15), then the runtime remainder (22).
+  Slice two (browser, 18 items, 2 at a time, 37 agents, 3.5M tokens, 2 h 15 min): 15/18 landed,
+  phases 1-19 green. Rejected and re-run: inject (a helper placed before its first caller), row
+  (`...` for the ellipsis in a repr the judge read as drift; the judge now allows rule-10
+  punctuation in output text no test asserts on), screencast (a new depth-4 site). Found by
+  the workers' `--only` runs: 14 phase-6 cells used `asyncio` without importing it and only
+  passed because an earlier case had imported it into `__main__`; fixed in the test file.
+  The narration ratchet (`checks/narration.py`) caught three old comment narrations a worker
+  carried into docstrings in browser_dispatch; cut to the invariant, and the check is now a
+  worker gate and a judge confirmation. Wire-facing strings a test asserts on (observe's tree
+  diff arrows and multiplication signs, captcha's `describe`) keep their non-ASCII this pass,
+  listed per module; a later hand pass converts them with their tests.
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.
