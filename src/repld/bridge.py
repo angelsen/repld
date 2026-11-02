@@ -104,6 +104,10 @@ BRIDGE_INIT_ID = "repld-bridge-init"
 # intercept declines exactly the gist and browser URIs, which do need one.
 _NEEDS_KERNEL = frozenset({"tools/call", "resources/read"})
 
+# Docs whose reader is about to use tools the static list omits: reading one spawns
+# the kernel, whose `list_changed` then delivers them.
+_SPAWNING_DOCS = frozenset({"repld://docs/browser"})
+
 
 def _ephemeral_socket_path() -> Path:
     """A private, single-use socket path for `repld bridge --ephemeral`.
@@ -628,7 +632,7 @@ class Bridge:
 
         if method == "resources/read":
             uri = (msg.get("params") or {}).get("uri", "")
-            text = _static_docs().get(uri)
+            text = None if uri in _SPAWNING_DOCS else _static_docs().get(uri)
             if text is None:
                 return False  # gist/browser resource, needs a live kernel
             # mimeType from the same declaration both sides advertise in
@@ -667,15 +671,25 @@ class Bridge:
         if self._cache_loaded:
             return self._cache
         self._cache_loaded = True
-        try:
-            data = json.loads(paths.cache_for(self.socket_path).read_text())
-        except (OSError, json.JSONDecodeError):
-            data = None
+        data = self._read_cache_file(paths.cache_for(self.socket_path))
+        durable = paths.state_cache_for(self.socket_path)
+        if data is None and durable is not None:
+            data = self._read_cache_file(durable) or self._read_cache_file(
+                paths.GLOBAL_CACHE
+            )
         from . import __version__
 
         if isinstance(data, dict) and data.get("version") == __version__:
             self._cache = data
         return self._cache
+
+    @staticmethod
+    def _read_cache_file(path: Path) -> object:
+        """The parsed JSON at `path`, or None when it is missing or corrupt."""
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
 
     # -- kernel liveness -------------------------------------------------------
 
@@ -843,6 +857,16 @@ class Bridge:
             # sanctioned way to invalidate the client's cache.
             self._to_client(_notification("notifications/tools/list_changed"))
             self._to_client(_notification("notifications/resources/list_changed"))
+            if self._client_initialized:
+                self._to_client(
+                    _notification(
+                        "notifications/claude/channel",
+                        {
+                            "content": "[repld] kernel started, tool list updated",
+                            "meta": {"kind": "kernel_started"},
+                        },
+                    )
+                )
             _err("reconnected to a fresh kernel; handshake replayed")
 
     def _replay_handshake(self) -> None:

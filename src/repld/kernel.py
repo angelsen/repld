@@ -123,6 +123,35 @@ def _write_cache(socket_path: Path) -> None:
         print(f"repld: failed to build discovery cache: {e}", file=sys.stderr)
         return
     atomic_write_json(paths.cache_for(socket_path), cache, chmod=0o600)
+    durable = paths.state_cache_for(socket_path)
+    if durable is None:
+        return
+    try:
+        durable.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic_write_json(durable, cache, chmod=0o600)
+        atomic_write_json(paths.GLOBAL_CACHE, _strip_project_gists(cache), chmod=0o600)
+    except OSError as e:
+        print(f"repld: failed to persist discovery cache: {e}", file=sys.stderr)
+
+
+def _strip_project_gists(cache: dict) -> dict:
+    """`cache` without anything a different project could not have.
+
+    Gist tools and gist resources depend on the project's `./gists`, and the
+    instructions list them, so the static text stands in.
+    """
+    from . import gists
+    from .help import static_instructions
+
+    gist_tools = {t["name"] for t in gists.scan_tools()}
+    return {
+        **cache,
+        "instructions": static_instructions(),
+        "tools": [t for t in cache["tools"] if t["name"] not in gist_tools],
+        "resources": [
+            r for r in cache["resources"] if not r["uri"].startswith("repld://gists/")
+        ],
+    }
 
 
 # Set once the project bootstrap has run (or immediately, when there is none).

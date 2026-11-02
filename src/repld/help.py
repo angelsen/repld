@@ -1774,6 +1774,13 @@ def _deps_hint() -> str:
     )
 
 
+_COLD_START = (
+    "No kernel is running for this project, so the tool list is partial: gist "
+    "and browser_* tools appear only once one is up. Any exec call starts it "
+    "and the full list follows; do not treat the missing tools as broken."
+)
+
+
 def static_instructions() -> str:
     """`build_instructions` minus everything that needs a live kernel.
 
@@ -1793,7 +1800,15 @@ def static_instructions() -> str:
     """
     # The join-a-list shape deliberately mirrors build_instructions below.
     return "\n\n".join(  # noqa: FLY002
-        [_EXEC_MODEL, _GISTS_MODEL, _PEERS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
+        [
+            _COLD_START,
+            _EXEC_MODEL,
+            _GISTS_MODEL,
+            _PEERS_MODEL,
+            _deps_hint(),
+            _PLAYBOOK,
+            _reference(),
+        ]
     )
 
 

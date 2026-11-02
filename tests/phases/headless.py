@@ -345,16 +345,22 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
         )
         print("  ✓ ping + unknown method answered without spawning a kernel")
 
-        resp = b.exec("print('post-cache spawn')", call_timeout=40)
+        resp = b.call("resources/read", {"uri": "repld://docs/browser"}, timeout=40)
         assert_true(
-            "post-cache spawn" in content_text(resp),
-            "exec worked after the lazy spawn",
+            len(resp["result"]["contents"][0]["text"]) > 1000,
+            "browser doc served in full by the spawned kernel",
         )
         lock = _wait_lock(tmp)
         b.wait_notification("notifications/tools/list_changed", timeout=10)
         print(
-            f"  ✓ first real tools/call spawned a kernel (pid {lock['pid']}) "
+            f"  ✓ reading the browser guide spawned a kernel (pid {lock['pid']}) "
             "and fired list_changed"
+        )
+
+        resp = b.exec("print('post-cache spawn')", call_timeout=40)
+        assert_true(
+            "post-cache spawn" in content_text(resp),
+            "exec worked against the spawned kernel",
         )
     finally:
         b.close()
@@ -399,6 +405,77 @@ def _version_mismatch_cache_discarded(tmp: Path) -> None:
         _wait_lock(tmp)
     finally:
         b.close()
+
+
+def _cache_survives_reboot(tmp: Path) -> None:
+    """A wiped runtime dir (a reboot empties the tmpfs) still serves the full tool list.
+
+    The bridge falls back to the durable copy under `$XDG_STATE_HOME`, and
+    answering from it spawns nothing.
+    """
+    from repld import paths
+
+    _stop_kernel(tmp)
+    sock = paths.socket_path(tmp)
+    durable = paths.state_cache_for(sock)
+    assert_true(
+        durable is not None and durable.exists(), "kernel wrote a durable cache copy"
+    )
+    cached_names = {
+        t["name"] for t in json.loads(paths.cache_for(sock).read_text())["tools"]
+    }
+    shutil.rmtree(paths.project_path(tmp))
+
+    b = Bridge(tmp)
+    try:
+        _handshake(b)
+        listed = b.call("tools/list", {}, timeout=10)["result"]["tools"]
+        assert_eq(
+            {t["name"] for t in listed},
+            cached_names,
+            "tools/list served from the durable cache after the runtime dir was wiped",
+        )
+        assert_true(
+            not lock_path_for(tmp).exists(), "durable cache read did not spawn a kernel"
+        )
+        print("  ✓ wiped runtime dir: tools/list served from the durable cache")
+
+        # Leave a live kernel behind for later helpers.
+        b.exec("SENTINEL3 = 1", call_timeout=40)
+        _wait_lock(tmp)
+    finally:
+        b.close()
+
+
+def _new_project_uses_global_cache() -> None:
+    """A project that never ran a kernel lists the core tools from `GLOBAL_CACHE`, minus gist tools.
+
+    Spawns nothing.
+    """
+    from repld import paths
+
+    global_names = {
+        t["name"] for t in json.loads(paths.GLOBAL_CACHE.read_text())["tools"]
+    }
+    fresh = Path(tempfile.mkdtemp(prefix="repld-fresh-"))
+    b = Bridge(fresh)
+    try:
+        _handshake(b)
+        listed = b.call("tools/list", {}, timeout=10)["result"]["tools"]
+        names = {t["name"] for t in listed}
+        assert_eq(names, global_names, "new project served from the global cache")
+        assert_true(
+            {"exec", "get_task", "cancel"} <= names,
+            f"core tools listed: {sorted(names)}",
+        )
+        assert_true(
+            not lock_path_for(fresh).exists(),
+            "global cache read did not spawn a kernel",
+        )
+        print("  ✓ new project: tools/list served from the global cache, no spawn")
+    finally:
+        b.close()
+        shutil.rmtree(fresh, ignore_errors=True)
 
 
 def _bridge_tool_bypass_error(tmp: Path) -> None:
@@ -1661,6 +1738,8 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _bridge_served_tools(tmp)
         _lazy_discovery_from_cache(tmp)
         _version_mismatch_cache_discarded(tmp)
+        _cache_survives_reboot(tmp)
+        _new_project_uses_global_cache()
         _bridge_tool_bypass_error(tmp)
         _inflight_never_stranded(tmp)
         _targeted_push(tmp)

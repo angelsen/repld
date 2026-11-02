@@ -19,7 +19,12 @@ the socket wherever the caller pointed it.
     kernel.events     NDJSON event log
     kernel.cache      last-computed instructions/tools/resources (0600) —
                       lets the bridge answer MCP discovery without a live
-                      kernel; survives kernel death, superseded on next boot
+                      kernel; survives kernel death, superseded on next boot.
+                      A copy under $XDG_STATE_HOME (`state_cache_for`) also
+                      survives a reboot, the one thing that wipes the tmpfs.
+                      `GLOBAL_CACHE` is the project-free variant (no gist
+                      tools or resources) a project that never ran a kernel
+                      falls back to.
 
 Per-process scratch is the one exception: task spills, resource spills, and
 browser screenshots belong to the process rather than to any project, so they
@@ -54,6 +59,11 @@ from pathlib import Path
 _XDG = os.environ.get("XDG_RUNTIME_DIR")
 RUNTIME_DIR = Path(_XDG) / "repld" if _XDG else Path("/tmp") / f"repld-{os.getuid()}"
 PROJECTS_DIR = RUNTIME_DIR / "projects"
+STATE_PROJECTS_DIR = (
+    Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    / "repld"
+    / "projects"
+)
 
 _ensured = False
 
@@ -132,6 +142,20 @@ def eventlog_for(sock: Path) -> Path:
 
 def cache_for(sock: Path) -> Path:
     return sock.with_suffix(".cache")
+
+
+GLOBAL_CACHE = STATE_PROJECTS_DIR.parent / "last.cache"
+
+
+def state_cache_for(sock: Path) -> Path | None:
+    """Reboot-surviving copy of `cache_for(sock)`, or None for a socket outside `PROJECTS_DIR`.
+
+    An `--ephemeral` or `--socket` kernel keeps nothing durable: its directory
+    is reclaimed or caller-owned, and a slug taken from it would collide.
+    """
+    if sock.parent.parent != PROJECTS_DIR:
+        return None
+    return STATE_PROJECTS_DIR / sock.parent.name / "kernel.cache"
 
 
 def lock_path(cwd: Path | None = None) -> Path:

@@ -20,6 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # precede the phase imports: `gists._REGISTRY_PATH` is bound at import time,
 # and the in-process phases reach it through this very interpreter.
 os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="repld-smoketest-config-")
+# `paths.STATE_PROJECTS_DIR` is bound at import, so the durable discovery cache
+# of every test project lands here instead of the developer's ~/.local/state.
+os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp(prefix="repld-smoketest-state-")
 # Read once at `repld.loopguard` import, in this process and every kernel it spawns.
 os.environ.setdefault("REPLD_LOOP_GUARD", "raise")
 
@@ -371,6 +374,7 @@ def main() -> int:
         shutil.rmtree(runtime_dir_for(tmp), ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(os.environ["XDG_CONFIG_HOME"], ignore_errors=True)
+        shutil.rmtree(os.environ["XDG_STATE_HOME"], ignore_errors=True)
 
 
 if __name__ == "__main__":
