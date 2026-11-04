@@ -1,25 +1,26 @@
-"""Minimal best-practices linter for gist files -- AST-based, no dependencies.
+"""Minimal best-practices linter for gist files, AST-based, no dependencies.
 
 Checks:
   firstline  Module docstring's first line must stand alone as a complete
-             sentence -- it's what gets auto-extracted into tool listings,
-             resource descriptions, and MCP instructions (gists.scan() /
-             gists.introspect() both take doc.split("\\n")[0]). Skipped for
-             private (underscore-prefixed) files, whose docstring is never
-             extracted; the other three rules still apply to them.
+             sentence: it is what gets auto-extracted into tool listings,
+             resource descriptions, and MCP instructions (`gists.scan()` /
+             `gists.introspect()` both take `doc.split("\\n")[0]`). Skipped
+             for private (underscore-prefixed) files, whose docstring is
+             never extracted; the other three rules still apply to them.
   shape      Public functions/methods returning dict/list/Any should say
              what comes back on the docstring's first line, marked with an
-             `->` (the convention in repld://docs/guide is `-> {key, ...}`
-             or `-> [{key, ...}]`, but the check only requires the arrow --
-             prose like `-> the new record's id` is fine).
+             `->` (the convention in `repld://docs/guide` is
+             `-> {key, ...}` or `-> [{key, ...}]`, but the check only
+             requires the arrow; prose like `-> the new record's id` is
+             fine).
   deps       Every import of a non-stdlib, non-sibling-gist package should
-             be declared in __repld_deps__ so gist_deps.install_deps() can
-             offer to install it for a linked project that doesn't already
-             have it. Imports inside a try/except that catches ImportError
-             are skipped -- that's how a soft dependency is written, and
-             requiring a declaration would defeat the point.
-  legacy     A __repld_tools__ declaration list, which nothing reads.
-             Nothing warns about it either -- it is simply ignored, so a
+             be declared in `__repld_deps__` so `gist_deps.install_deps()`
+             can offer to install it for a linked project that doesn't
+             already have it. Imports inside a try/except that catches
+             `ImportError` are skipped: that is how a soft dependency is
+             written, and requiring a declaration would defeat the point.
+  legacy     A `__repld_tools__` declaration list, which nothing reads.
+             Nothing warns about it either: it is simply ignored, so a
              file still carrying one silently loses its tools (or exposes
              them with a bogus single `args` parameter inferred from a
              stale handler signature). This is the only thing that says so.
@@ -42,25 +43,32 @@ from pathlib import Path
 from . import gist_deps, gist_links, gists
 
 _IGNORE_RE = re.compile(r"#\s*gistlint:\s*ignore=([\w,]+)")
-# __main__ isn't in stdlib_module_names but every process has one — importing
-# it (the shared kernel namespace, per repld's own gist convention) is never
-# a pip dependency to declare.
+# `__main__` is not in `stdlib_module_names` but every process has one;
+# importing it (the shared kernel namespace, per repld's own gist convention)
+# is never a pip dependency to declare.
 _STDLIB = set(sys.stdlib_module_names) | {"__future__", "__main__"}
 _SHAPE_HINTS = frozenset({"dict", "list", "any"})
 
 
+# -- public API ---------------------------------------------------------------
+
+
 @dataclass
 class Finding:
+    """One lint diagnostic: file, line, rule name and a human message."""
+
     path: Path
     line: int
     rule: str
     message: str
 
     def __str__(self) -> str:
+        """Format as a single `path:line: [rule] message` string."""
         return f"{self.path}:{self.line}: [{self.rule}] {self.message}"
 
 
 def lint_paths(paths: list[Path]) -> list[Finding]:
+    """Run every rule against each path and return the merged findings."""
     findings: list[Finding] = []
     for p in paths:
         findings.extend(lint_file(p))
@@ -68,6 +76,11 @@ def lint_paths(paths: list[Path]) -> list[Finding]:
 
 
 def lint_file(path: Path) -> list[Finding]:
+    """Lint one gist file and return its findings.
+
+    A file that cannot be read or parsed yields a single `syntax` finding
+    rather than raising, so one bad file in a batch never takes down the run.
+    """
     try:
         source = path.read_text("utf-8")
     except (OSError, UnicodeDecodeError) as e:
@@ -83,9 +96,9 @@ def lint_file(path: Path) -> list[Finding]:
     ignores = _parse_ignores(source)
     findings: list[Finding] = []
     # firstline only matters for files whose docstring actually gets extracted.
-    # gists.scan() skips privates, so a private helper's first line is never
+    # `gists.scan()` skips privates, so a private helper's first line is never
     # surfaced anywhere and the rule has nothing to protect. The other three
-    # apply regardless — a private file is imported for real.
+    # rules apply regardless: a private file is imported for real.
     if gists.is_public_gist_file(path):
         findings.extend(_check_firstline(path, tree, ignores))
     findings.extend(_check_shape(path, tree, ignores))
@@ -94,8 +107,11 @@ def lint_file(path: Path) -> list[Finding]:
     return findings
 
 
+# -- suppression parsing ------------------------------------------------------
+
+
 def _parse_ignores(source: str) -> dict[int, set[str]]:
-    """line number -> set of rule names suppressed by a `# gistlint: ignore=` comment."""
+    """Map each line number to the set of rule names suppressed by a `# gistlint: ignore=` comment."""
     ignores: dict[int, set[str]] = {}
     try:
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
@@ -111,6 +127,7 @@ def _parse_ignores(source: str) -> dict[int, set[str]]:
 
 
 def _is_ignored(line: int, rule: str, ignores: dict[int, set[str]]) -> bool:
+    """Return whether `rule` is suppressed at `line` (or the line above it)."""
     for candidate in (line, line - 1):
         rules = ignores.get(candidate)
         if rules and (rule in rules or "all" in rules):
@@ -118,9 +135,13 @@ def _is_ignored(line: int, rule: str, ignores: dict[int, set[str]]) -> bool:
     return False
 
 
+# -- firstline rule -----------------------------------------------------------
+
+
 def _check_firstline(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
+    """Flag a module docstring whose first line is not sentence-terminated."""
     if any("firstline" in rules or "all" in rules for rules in ignores.values()):
         return []
     doc = ast.get_docstring(tree, clean=False)
@@ -144,7 +165,11 @@ def _check_firstline(
     ]
 
 
+# -- shape rule ---------------------------------------------------------------
+
+
 def _needs_shape_doc(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return whether `node` returns a type that needs a `->` shape hint."""
     if node.returns is None:
         return False
     if isinstance(node.returns, ast.Constant) and node.returns.value is None:
@@ -160,6 +185,7 @@ def _needs_shape_doc(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 def _check_shape(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
+    """Flag public functions whose return type needs a `->` shape hint they lack."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -187,20 +213,7 @@ def _check_shape(
     return findings
 
 
-def _root_module(dotted: str) -> str:
-    return dotted.split(".")[0]
-
-
-def _importable_stems(directory: Path) -> set[str]:
-    """Top-level module/package names importable from a path: dep directory."""
-    stems: set[str] = set()
-    for child in directory.iterdir():
-        if child.is_file() and child.suffix == ".py" and child.stem != "__init__":
-            stems.add(child.stem)
-        elif child.is_dir() and (child / "__init__.py").is_file():
-            stems.add(child.name)
-    return stems
-
+# -- deps rule ----------------------------------------------------------------
 
 # Distribution name -> import root, for packages whose two names are unrelated.
 # Deliberately short and deliberately *here* rather than in gist_deps: that
@@ -216,135 +229,19 @@ _IMPORT_ALIASES = {
     "opencv-python": ("cv2",),
 }
 
-
-def _normalize_dist(name: str) -> str:
-    """PEP 503 name normalization, so `Pillow` and `pillow` hit the same key."""
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def _import_names(dist: str) -> set[str]:
-    """Import roots a declared distribution can satisfy.
-
-    A declaration is a *distribution* name and an import is a *module* name;
-    the two are unrelated for a fair number of packages, so comparing them
-    directly flags correctly-declared gists. Three tiers, cheapest first:
-    the name normalized (resvg-py -> resvg_py), the installed distribution's
-    real top-level modules (the same map gist_deps._is_importable trusts),
-    and the static alias table for what's declared but not installed here.
-    """
-    names = {dist, dist.replace("-", "_")}
-    names.update(gist_deps._distribution_import_names(dist))
-    names.update(_IMPORT_ALIASES.get(_normalize_dist(dist), ()))
-    return names
-
-
-def _dot_dep_import_names(gist_path: Path) -> set[str]:
-    """Import roots the '.' self-dep provides -- the gist's own project.
-
-    Mirrors gist_deps._resolve_dot_dep: project root is the gist directory's
-    parent, name from [project] in its pyproject.toml, directory name as the
-    fallback. Unlike that function this stays quiet when there's no
-    pyproject -- a linter shouldn't manufacture a finding out of a missing
-    file. Shares its blind spot too: a project whose package name differs
-    from its distribution name won't match either way.
-    """
-    project_root = gist_path.parent.parent
-    pyproject = project_root / "pyproject.toml"
-    name = gist_deps._read_project_name(pyproject) if pyproject.is_file() else None
-    return _import_names(name or project_root.name)
-
-
-def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
-    """Import roots covered by __repld_deps__ -- import names, not dist names."""
-    # Forms come from `gist_deps.classify_deps` so the linter can't recognise a
-    # different set of them than the installer does. No `on_malformed`: a
-    # `__repld_deps__` that won't parse declares nothing, and the `legacy`
-    # rule is what reports the file itself.
-    declared: set[str] = set()
-    for form, value in gist_deps.classify_deps(tree, gist_path):
-        if form == gist_deps.DEP_DOT:
-            declared.update(_dot_dep_import_names(gist_path))
-        elif form == gist_deps.DEP_PATH:
-            target = gist_deps.resolve_path_target(value, gist_path)
-            if target.is_dir():
-                declared.update(_importable_stems(target))
-        else:
-            declared.update(_import_names(gist_deps._parse_pkg_name(value)))
-    return declared
-
-
-def _sibling_gist_names(path: Path) -> set[str]:
-    """Module names importable from the gist's own project: same-dir files
-    plus anything in its ./gists/.links manifest.
-
-    Same-dir names are deliberately *not* filtered through
-    gists.is_public_gist_file(): that predicate decides what gets listed and
-    exposed as a gist, not what resolves at import time -- the directory is
-    on sys.path either way, so `from _helpers import x` works and is never a
-    pip dep to declare. Linked names come from the manifest directly
-    (`gist_links.read_links`), not the live `_linked` overlay a kernel
-    populates at boot -- lint is a standalone CLI invocation with no kernel
-    behind it, so nothing has necessarily loaded this project's links yet.
-    Without this, `triage.py`'s `from mcpclient import MCP` (mcpclient.py
-    linked from a different project) read as an undeclared PyPI dependency:
-    _check_deps's `siblings` set never had a name only reachable through
-    .links, and `mcpclient` isn't in _STDLIB either. A corrupt manifest
-    degrades to "no known linked names" rather than raising -- that failure
-    already has its own loud diagnostic elsewhere (`add`, kernel boot), and
-    under-reporting one file's siblings is a smaller cost than an unrelated
-    lint run crashing on it.
-    """
-    names = {p.stem for p in path.parent.glob("*.py")}
-    try:
-        names.update(gist_links.read_links(path.parent))
-    except ValueError:
-        pass
-    return names
-
-
 # Anything in here catches an ImportError, so an import wrapped in it is a
 # soft dependency by construction. Exception/BaseException are included
-# because they genuinely do catch it -- the rule is "would this import raise
+# because they genuinely do catch it: the rule is "would this import raise
 # out of the module", not "did the author name the tidiest exception".
 _IMPORT_GUARDS = frozenset(
     {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
 )
 
 
-def _catches_import_error(handler: ast.ExceptHandler) -> bool:
-    if handler.type is None:
-        return True  # bare `except:` -- sloppy, but it does guard
-    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
-    return any(isinstance(t, ast.Name) and t.id in _IMPORT_GUARDS for t in types)
-
-
-def _guarded_imports(tree: ast.Module) -> set[ast.stmt]:
-    """Imports the author deliberately made optional.
-
-    ``try: import x / except ImportError: x = None`` is the standard way to
-    write a soft dependency, and the deps rule flagging it told people to
-    declare something they had gone out of their way not to require.
-
-    Only the ``try`` body counts. An import in a handler is the *fallback* and
-    is unguarded; one in ``else``/``finally`` isn't covered by the handlers
-    either.
-    """
-    guarded: set[ast.stmt] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
-            continue
-        if not any(_catches_import_error(h) for h in node.handlers):
-            continue
-        for stmt in node.body:
-            for child in ast.walk(stmt):
-                if isinstance(child, (ast.Import, ast.ImportFrom)):
-                    guarded.add(child)
-    return guarded
-
-
 def _check_deps(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
+    """Flag imports not covered by `__repld_deps__` or the sibling gist set."""
     declared = _declared_deps(tree, path)
     siblings = _sibling_gist_names(path)
     guarded = _guarded_imports(tree)
@@ -356,7 +253,7 @@ def _check_deps(
         if isinstance(node, ast.Import):
             names = [(alias.name, node.lineno) for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
-            if node.level > 0 or node.module is None:  # relative import
+            if node.level > 0 or node.module is None:
                 continue
             names = [(node.module, node.lineno)]
         else:
@@ -382,19 +279,155 @@ def _check_deps(
     return findings
 
 
+def _declared_deps(tree: ast.Module, gist_path: Path) -> set[str]:
+    """Resolve `__repld_deps__` to the set of import roots it covers."""
+    # Forms come from `gist_deps.classify_deps` so the linter can't recognise a
+    # different set of them than the installer does. No `on_malformed`: a
+    # `__repld_deps__` that won't parse declares nothing, and the `legacy`
+    # rule is what reports the file itself.
+    declared: set[str] = set()
+    for form, value in gist_deps.classify_deps(tree, gist_path):
+        if form == gist_deps.DEP_DOT:
+            declared.update(_resolve_dot_dep_imports(gist_path))
+        elif form == gist_deps.DEP_PATH:
+            target = gist_deps.resolve_path_target(value, gist_path)
+            if target.is_dir():
+                declared.update(_importable_stems(target))
+        else:
+            declared.update(_import_names(gist_deps._parse_pkg_name(value)))
+    return declared
+
+
+def _resolve_dot_dep_imports(gist_path: Path) -> set[str]:
+    """Resolve import roots the `'.'` self-dep provides (the gist's own project).
+
+    Mirrors `gist_deps._resolve_dot_dep`: project root is the gist directory's
+    parent, name from `[project]` in its `pyproject.toml`, directory name as
+    the fallback. Unlike that function this stays quiet when there is no
+    pyproject: a linter should not manufacture a finding out of a missing file.
+    Shares its blind spot too: a project whose package name differs from its
+    distribution name will not match either way.
+    """
+    project_root = gist_path.parent.parent
+    pyproject = project_root / "pyproject.toml"
+    name = gist_deps._read_project_name(pyproject) if pyproject.is_file() else None
+    return _import_names(name or project_root.name)
+
+
+def _import_names(dist: str) -> set[str]:
+    """Resolve a distribution name to the set of import roots it can satisfy.
+
+    A declaration is a *distribution* name and an import is a *module* name;
+    the two are unrelated for many packages, so comparing them directly flags
+    correctly-declared gists. Three tiers, cheapest first: the name normalized
+    (resvg-py -> resvg_py), the installed distribution's real top-level modules
+    (the same map `gist_deps._is_importable` trusts), and the static alias
+    table for what is declared but not installed here.
+    """
+    names = {dist, dist.replace("-", "_")}
+    names.update(gist_deps._distribution_import_names(dist))
+    names.update(_IMPORT_ALIASES.get(_normalize_dist(dist), ()))
+    return names
+
+
+def _normalize_dist(name: str) -> str:
+    """PEP 503 name normalization, so `Pillow` and `pillow` hit the same key."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _root_module(dotted: str) -> str:
+    """Extract the top-level module name from a dotted import path."""
+    return dotted.split(".")[0]
+
+
+def _importable_stems(directory: Path) -> set[str]:
+    """Return top-level module/package names importable from a path (dep directory)."""
+    stems: set[str] = set()
+    for child in directory.iterdir():
+        if child.is_file() and child.suffix == ".py" and child.stem != "__init__":
+            stems.add(child.stem)
+        elif child.is_dir() and (child / "__init__.py").is_file():
+            stems.add(child.name)
+    return stems
+
+
+def _sibling_gist_names(path: Path) -> set[str]:
+    """Return module names importable from the gist's own project.
+
+    Includes same-dir files plus anything in its `./gists/.links` manifest.
+    Same-dir names are deliberately *not* filtered through
+    `gists.is_public_gist_file()`: that predicate decides what gets listed and
+    exposed as a gist, not what resolves at import time (the directory is on
+    `sys.path` either way, so `from _helpers import x` works and is never a
+    pip dep to declare). Linked names come from the manifest directly
+    (`gist_links.read_links`), not the live `_linked` overlay a kernel
+    populates at boot: lint is a standalone CLI invocation with no kernel
+    behind it, so nothing has necessarily loaded this project's links yet.
+    Without this, `triage.py`'s `from mcpclient import MCP` (mcpclient.py
+    linked from a different project) read as an undeclared PyPI dependency:
+    `_check_deps`'s `siblings` set never had a name only reachable through
+    `.links`, and `mcpclient` is not in `_STDLIB` either. A corrupt manifest
+    degrades to "no known linked names" rather than raising: that failure
+    already has its own loud diagnostic elsewhere (`add`, kernel boot), and
+    under-reporting one file's siblings is a smaller cost than an unrelated
+    lint run crashing on it.
+    """
+    names = {p.stem for p in path.parent.glob("*.py")}
+    try:
+        names.update(gist_links.read_links(path.parent))
+    except ValueError:
+        pass
+    return names
+
+
+def _guarded_imports(tree: ast.Module) -> set[ast.stmt]:
+    """Collect imports the author deliberately made optional.
+
+    `try: import x / except ImportError: x = None` is the standard way to
+    write a soft dependency, and the deps rule flagging it told people to
+    declare something they had gone out of their way not to require.
+
+    Only the `try` body counts. An import in a handler is the *fallback* and
+    is unguarded; one in `else`/`finally` is not covered by the handlers
+    either.
+    """
+    guarded: set[ast.stmt] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        if not any(_catches_import_error(h) for h in node.handlers):
+            continue
+        for stmt in node.body:
+            for child in ast.walk(stmt):
+                if isinstance(child, (ast.Import, ast.ImportFrom)):
+                    guarded.add(child)
+    return guarded
+
+
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    """Return whether `handler` would catch an `ImportError`."""
+    if handler.type is None:
+        return True  # bare `except:` (sloppy, but it does guard)
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(isinstance(t, ast.Name) and t.id in _IMPORT_GUARDS for t in types)
+
+
+# -- legacy rule --------------------------------------------------------------
+
+
 def _check_legacy_tools(
     path: Path, tree: ast.Module, ignores: dict[int, set[str]]
 ) -> list[Finding]:
-    """A ``__repld_tools__`` declaration, which nothing reads.
+    """Flag a `__repld_tools__` declaration, which nothing reads.
 
-    Nothing warns at tool-call time either — it is simply ignored — so a file
-    still carrying one either loses its tools from ``tools/list``, or, if the
-    matching ``_tool_x(args: dict)`` handler is still there, exposes them with
-    a bogus single ``args`` object parameter inferred from that signature. Both
+    Nothing warns at tool-call time either; it is simply ignored, so a file
+    still carrying one either loses its tools from `tools/list`, or, if the
+    matching `_tool_x(args: dict)` handler is still there, exposes them with
+    a bogus single `args` object parameter inferred from that signature. Both
     are quiet wrong answers, and this is the only thing that names them.
 
     The handler signature itself is deliberately not flagged:
-    ``_tool_x(payload: dict)`` is an ordinary tool taking one object argument,
+    `_tool_x(payload: dict)` is an ordinary tool taking one object argument,
     so a check on it would fire on correct code.
     """
     node = gists._dunder_value(tree, "__repld_tools__")

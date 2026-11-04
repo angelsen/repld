@@ -13,7 +13,7 @@ import os
 import sys
 import types
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,10 +24,10 @@ from pathlib import Path
 from . import gist_deps, gist_links, paths
 from .channel import push_kind
 
-# Source introspection — AST in, API text out. `gist_api` imports nothing from
+# Source introspection: AST in, API text out. `gist_api` imports nothing from
 # repld, so unlike the siblings above it is not part of that cycle and a plain
 # `from` is safe. `gist_links`, `gist_deps`, `gist_lint` and `gist_cmd` reach
-# `_parse` / `_dunder_value` / `signature_for_path` as `gists.<name>` — the
+# `_parse` / `_dunder_value` / `signature_for_path` as `gists.<name>`, the
 # cycle contract described above, true whichever module defines them.
 from .gist_api import (
     _dunder_value,  # noqa: F401  (re-exported: gist_deps/gist_lint call gists._dunder_value)
@@ -59,14 +59,16 @@ __all__ = [
     "usage_for",
 ]
 
+# -- module state ----
+
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}    # fullname → source .py path
-_mtimes: dict[str, float] = {}    # fullname → last known mtime
+_managed: dict[str, Path] = {}    # fullname to source .py path
+_mtimes: dict[str, float] = {}    # fullname to last known mtime
 _installed_dirs: list[Path] = []  # set by install()
 
 # Subset of _managed sourced from a 'path:' dep directory rather than a real
 # gist dir or link. Still gets _check_reload's mtime-eviction, but is excluded
-# from _register()/introspect() — those assume gist authoring conventions
+# from _register()/introspect(), which assume gist authoring conventions
 # (docstring-as-description, registry entries) that don't apply to vendored
 # third-party code.
 _path_dep_modules: set[str] = set()
@@ -75,9 +77,9 @@ _path_dep_modules: set[str] = set()
 # failed imports) so boot warns once but subsequent tools/list scans stay quiet.
 _malformed_warned: set[str] = set()
 
-# Python type → JSON Schema type, for inferring tool input schemas from
+# Python type to JSON Schema type, for inferring tool input schemas from
 # _tool_* function signatures.
-_TYPE_MAP: dict[type, str] = {
+_TYPE_MAP: dict[object, str] = {
     str: "string",
     int: "integer",
     float: "number",
@@ -92,35 +94,42 @@ _REGISTRY_PATH = (
     / "gist-registry.json"
 )
 
+# (name, path) pairs already written to the registry this process, avoiding a
+# full read-parse-write of the registry JSON on every re-import.
+_registered: set[tuple[str, str]] = set()
+
+# Venvs this kernel has already declined to adopt, so the check isn't redone
+# on every failed import. Sound to cache: the only reason to decline is a
+# Python version mismatch, and this process's version cannot change.
+_unusable_venvs: set[Path] = set()
+
+# A top-level import that failed even after recovery, with the sys.path state
+# it failed against.
+_missing: dict[str, tuple[tuple, ModuleNotFoundError]] = {}
+
+# -- registry ----
+
 
 def _warn_once(key: str, msg: str) -> None:
-    """Print msg to stderr the first time key is seen; silent on repeats."""
+    """Print *msg* to stderr the first time *key* is seen; silent on repeats."""
     if key in _malformed_warned:
         return
     _malformed_warned.add(key)
     print(msg, file=sys.stderr)
 
 
-# (name, path) pairs already written to the registry this process — avoids a
-# full read-parse-write of the registry JSON on every re-import.
-_registered: set[tuple[str, str]] = set()
-
-
 def _read_registry() -> dict:
-    """Read the gist registry JSON, or {} on missing/corrupt file.
+    """Return the gist registry as a dict, or {} on missing or corrupt file.
 
-    "Corrupt" includes *valid JSON of the wrong shape*, which this used to
-    return verbatim. A registry whose root is a list or a string reached
-    `gist_cmd._gist_list`'s `.items()`, `gist_links.link_targets`'s
-    `.values()`, and `protocol.registry_summary()` — a traceback out of
-    `repld gist list` and a broken MCP resource, from a file no user edits by
-    hand and every kernel reads at boot. `gist_links.read_links` guards the
-    same case on the same kind of file; this is that guard, on the sibling.
+    A non-dict JSON root (list, string, number) is treated as corrupt: the
+    three callers that iterate the result (`gist_cmd._gist_list`,
+    `gist_links.link_targets`, `registry_summary`) all call `.items()` or
+    `.values()`, and `gist_links.read_links` guards the same shape on the
+    sibling manifest file.
 
-    `UnicodeDecodeError` is caught for the same reason: `read_text("utf-8")`
-    raises it, it is a ValueError rather than an OSError or a
-    JSONDecodeError, and a non-UTF-8 registry is exactly as corrupt as an
-    unparseable one.
+    `UnicodeDecodeError` is caught because `read_text("utf-8")` raises it
+    as a ValueError (not an OSError or JSONDecodeError), and a non-UTF-8
+    registry is exactly as corrupt as an unparseable one.
     """
     if not _REGISTRY_PATH.is_file():
         return {}
@@ -129,7 +138,7 @@ def _read_registry() -> dict:
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         _warn_once(
             "registry:corrupt",
-            f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}) — "
+            f"repld: gist registry {_REGISTRY_PATH} is corrupt ({exc}), "
             "treating as empty",
         )
         return {}
@@ -137,7 +146,7 @@ def _read_registry() -> dict:
         _warn_once(
             "registry:corrupt",
             f"repld: gist registry {_REGISTRY_PATH} is not a JSON object "
-            f"(got {type(data).__name__}) — treating as empty",
+            f"(got {type(data).__name__}), treating as empty",
         )
         return {}
     return data
@@ -167,12 +176,12 @@ def _register(name: str) -> None:
 
 
 def registry() -> dict:
-    """Read the gist registry. Returns {name: {path, description, project, last_used}}."""
+    """Return {name: {path, description, project, last_used}} from the gist registry."""
     return _read_registry()
 
 
 def remove_stale_registry_entries() -> list[str]:
-    """Drop every registry entry whose path is gone. Returns the removed names.
+    """Drop every registry entry whose path is gone. Return the removed names.
 
     Separate from `gist_links.remove_stale_links`: that prunes a project's own
     `./gists/.links` manifest, this prunes the cross-project registry (a
@@ -192,26 +201,24 @@ def remove_stale_registry_entries() -> list[str]:
 def registry_summary() -> str:
     """Render the cross-project registry as text, grouped by project (recent first).
 
-    A name already resolvable in *this* project — local, global, or already
-    linked — is marked ``(already here)`` rather than left to read as another
+    A name already resolvable in this project (local, global, or already
+    linked) is marked ``(already here)`` rather than left to read as another
     candidate for ``repld gist add``. `_iter_gist_files` is the same
     local-or-linked check `gist_cmd`'s ``linkable`` section filters by
-    (`gist_cmd.py`'s ``here = set(local) | set(links)``); this resource had no
-    equivalent, so a name seen importable elsewhere kept suggesting `add`
-    for a project that already had it, and the collision was surfaced only by
-    `add`'s own refusal — after the fact rather than before.
+    (`gist_cmd.py`'s ``here = set(local) | set(links)``); this resource uses
+    it so the collision is surfaced before `add`'s own refusal, not after.
     """
     reg = registry()
     if not reg:
-        return "(gist registry empty — import a gist in any project to populate it)"
+        return "(gist registry empty, import a gist in any project to populate it)"
     here = {p.stem for p in _iter_gist_files(include_private=True)}
     by_project: dict[str, list[tuple[str, dict]]] = {}
     for name, entry in reg.items():
         by_project.setdefault(entry.get("project", "?"), []).append((name, entry))
     lines = [
-        "Gist registry — every gist seen across projects.",
+        "Gist registry, every gist seen across projects.",
         "Link one into the current project: repld gist add <name>",
-        "(already here) means the name resolves in this project already — don't add it.",
+        "(already here) means the name resolves in this project already, don't add it.",
         "",
     ]
     for project, entries in sorted(
@@ -230,13 +237,54 @@ def registry_summary() -> str:
     return "\n".join(lines).rstrip()
 
 
-def _check_reload(fullname: str) -> None:
-    """If the gist file changed, evict from sys.modules so next import reloads it.
+def is_public_gist_file(p: Path) -> bool:
+    """True unless the file's name starts with an underscore."""
+    return not p.name.startswith("_")
 
-    Also re-checks __repld_deps__ for just this file and prompts for anything
-    newly declared — `scan_deps()` runs once at boot, so without this a
-    dependency added mid-session would sit unchecked until someone thought to
-    restart the whole process.
+
+def _iter_gist_files(*, include_private: bool = False):
+    """Yield .py gist paths: installed dirs first, then linked.
+
+    Deduped by stem so a local gist shadows a linked one of the same name, and
+    stale linked paths are skipped.
+
+    Private (underscore-prefixed) files are excluded by default: they are
+    importable (the directory is on sys.path) but deliberately not gists,
+    so they must stay out of the MCP instructions, tool discovery, and name
+    hints. ``include_private=True`` is for the consumers that care about every
+    file a kernel here can import, regardless of whether it is exposed as a
+    gist: dependency scanning and ``repld gist lint``.
+    """
+    seen: set[str] = set()
+    for d in _installed_dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.py")):
+            if (not include_private and not is_public_gist_file(p)) or p.stem in seen:
+                continue
+            seen.add(p.stem)
+            yield p
+    for name, p in gist_links.linked_items():
+        # link_targets() co-links siblings without a public/private check, so a
+        # private can land in the manifest; it gets the same treatment here as
+        # a local one. Imports are unaffected either way: _GistFinder resolves
+        # through the gist_links._linked overlay, not through this iterator.
+        if name in seen or (not include_private and not is_public_gist_file(p)):
+            continue
+        seen.add(name)
+        yield p
+
+
+# -- import machinery ----
+
+
+def _check_reload(fullname: str) -> None:
+    """Evict a stale gist from `sys.modules` so the next import reloads it.
+
+    Also re-checks `__repld_deps__` for just this file and prompts for anything
+    newly declared. `scan_deps()` runs once at boot, so without this a
+    dependency added mid-session would sit unchecked until the whole process
+    restarted.
     """
     src = _managed.get(fullname)
     if src is None or not src.is_file():
@@ -248,16 +296,16 @@ def _check_reload(fullname: str) -> None:
         missing = gist_deps.scan_deps(paths=[src])
         if missing:
             gist_deps.install_deps(missing)
-        # Don't update _mtimes here — let find_spec update it on reload
+        # Don't update _mtimes here; let find_spec update it on reload
 
 
 def _scan_new_deps(src: Path) -> None:
-    """First-sight __repld_deps__ scan for a module find_spec hasn't tracked yet.
+    """First-sight `__repld_deps__` scan for a module find_spec hasn't tracked yet.
 
-    Boot-time scan_deps() covers everything that exists when the kernel starts;
-    _check_reload's edit-triggered rescan covers every later change. Neither
-    covers a gist written and imported for the first time in the same session
-    -- this closes that gap at the one point a never-before-seen module is
+    Boot-time `scan_deps()` covers everything that exists when the kernel starts;
+    `_check_reload`'s edit-triggered rescan covers every later change. Neither
+    covers a gist written and imported for the first time in the same session.
+    This closes that gap at the one point a never-before-seen module is
     guaranteed to pass through.
     """
     missing = gist_deps.scan_deps(paths=[src])
@@ -268,16 +316,17 @@ def _scan_new_deps(src: Path) -> None:
 class _GistFinder(importlib.abc.MetaPathFinder):
     """Finder that checks gist directories and tracks mtimes for auto-reload.
 
-    Also checks 'path:' dep directories (see gist_deps._path_dep_dirs), so
-    vendored code gets the same reload tracking as gists — modules found
-    there are flagged in _path_dep_modules to skip gist-specific side
+    Also checks 'path:' dep directories (see `gist_deps._path_dep_dirs`), so
+    vendored code gets the same reload tracking as gists. Modules found
+    there are flagged in `_path_dep_modules` to skip gist-specific side
     effects on import.
 
-    Must be placed first in sys.meta_path so it's consulted before the standard
-    PathFinder can return the cached module.
+    Must be placed first in `sys.meta_path` so it is consulted before the
+    standard PathFinder can return the cached module.
     """
 
     def __init__(self, dirs: list[Path]) -> None:
+        """Bind the gist directories to search."""
         self._dirs = dirs
 
     @staticmethod
@@ -287,8 +336,8 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         """Record a hit for auto-reload and build its spec.
 
         The mtime bookkeeping is the whole point of this finder, so it lives in
-        one place rather than once per search root — the three scans below
-        differ only in *where* they look and what they do afterwards.
+        one place rather than once per search root. The three scans below
+        differ only in where they look and what they do afterwards.
         """
         if fullname not in _managed:
             _scan_new_deps(p)
@@ -303,7 +352,9 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         )
 
     @staticmethod
-    def _find_in(dirs, parts: list[str]) -> tuple[Path, Path] | None:
+    def _find_in(
+        dirs: Iterable[str | Path], parts: list[str]
+    ) -> tuple[Path, Path] | None:
         """First (file, package-root) match for a dotted name under *dirs*."""
         for d in dirs:
             candidate = Path(d).joinpath(*parts)
@@ -319,17 +370,18 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         path: object,
         target: object = None,
     ) -> importlib.machinery.ModuleSpec | None:
+        """Resolve *fullname* through gist dirs, linked gists, then path-dep dirs."""
         parts = fullname.split(".")
         hit = self._find_in(self._dirs, parts)
         if hit is not None:
             return self._track(fullname, hit[0], hit[1])
-        # Cross-project linked gist (exact name only — local dirs win above;
+        # Cross-project linked gist (exact name only; local dirs win above,
         # same precedence rule as _find_gist and _iter_gist_files).
         linked = gist_links.linked_path(fullname)
         if linked is not None:
             return self._track(fullname, linked, None)
-        # 'path:' dep directories (vendored code prepended to sys.path) —
-        # same mtime tracking as above, flagged in _path_dep_modules so the
+        # 'path:' dep directories (vendored code prepended to sys.path).
+        # Same mtime tracking as above, flagged in _path_dep_modules so the
         # import hook skips the gist-authoring side effects for it.
         hit = self._find_in(gist_deps._path_dep_dirs, parts)
         if hit is not None:
@@ -338,18 +390,12 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         return None
 
 
-# Venvs this kernel has already declined to adopt, so the check isn't redone
-# on every failed import. Sound to cache: the only reason to decline is a
-# Python version mismatch, and this process's version cannot change.
-_unusable_venvs: set[Path] = set()
-
-# A top-level import that failed even after recovery, with the sys.path state it failed against.
-_missing: dict[str, tuple[tuple, ModuleNotFoundError]] = {}
-
-
 def _path_state() -> tuple:
-    """sys.path with each entry's directory mtime, plus the project venv: installing a top-level package changes
-    its directory's mtime, and a `.venv` that appears after boot is adopted by `_recover_missing_import`."""
+    """Snapshot sys.path directory mtimes and the project venv path.
+
+    Installing a top-level package changes its directory's mtime, and a `.venv`
+    that appears after boot is adopted by `_recover_missing_import`.
+    """
     from . import bind
 
     state = []
@@ -361,12 +407,12 @@ def _path_state() -> tuple:
     return tuple(state), str(bind.project_venv())
 
 
-def _recover_missing_import(original, args):
+def _recover_missing_import(original: Callable, args: tuple) -> types.ModuleType:
     """Last chance for a failed import: adopt a late project venv, then retry.
 
-    Retries **the import**, never the caller's cell. Re-running a cell would
-    break the rule that ``exec`` runs arbitrary code exactly once — a cell that
-    POSTs and then hits a bad import would POST twice. An import is idempotent.
+    Retries the import, never the caller's cell. Re-running a cell would
+    break the rule that ``exec`` runs arbitrary code exactly once (a cell that
+    POSTs and then hits a bad import would POST twice). An import is idempotent.
 
     Two things get fixed here, both of which look identical to user code:
     a package installed into the bound venv since this kernel started (Python
@@ -377,10 +423,10 @@ def _recover_missing_import(original, args):
     has to be picked up. So a failed top-level name is remembered together
     with `_path_state()`, and the retry is skipped only while no sys.path
     directory has changed; installing a package changes its directory's mtime.
-    Guarded imports (`try: import x / except ImportError`) on a hot path are
-    why this matters: DuckDB tries `import pandas` on every query, and an
-    unconditional invalidate_caches + retry rescanned every sys.path entry each
-    time. The venv check stays per call and is memoized — see `_unusable_venvs`.
+    Guarded imports (``try: import x / except ImportError``) on a hot path are
+    why this matters: DuckDB tries ``import pandas`` on every query, and an
+    unconditional `invalidate_caches` + retry rescanned every sys.path entry each
+    time. The venv check stays per call and is memoized (see `_unusable_venvs`).
     """
     import importlib
 
@@ -394,16 +440,18 @@ def _recover_missing_import(original, args):
             _unusable_venvs.add(venv)
         else:
             adopted = True
-            push_kind(f"[repld] bound {venv} — its packages are now importable", "venv")
+            push_kind(f"[repld] bound {venv}, its packages are now importable", "venv")
     name, level = args[0], args[4]
-    # Only a top-level absolute name can be memoized: a submodule appearing inside an existing package changes
-    # that package's directory, which `_path_state` does not look at.
+    # Only a top-level absolute name can be memoized: a submodule appearing
+    # inside an existing package changes that package's directory, which
+    # `_path_state` does not look at.
     key = name if level == 0 and name and "." not in name else None
     state = _path_state() if key else None
     seen = _missing.get(key) if key else None
     if seen is not None and not adopted and seen[0] == state:
-        # Same failure against the same directories: invalidate_caches + retry would rescan every sys.path
-        # entry for nothing (a library's guarded `import pandas` on every call costs ~4 ms each).
+        # Same failure against the same directories: invalidate_caches + retry
+        # would rescan every sys.path entry for nothing (a library's guarded
+        # `import pandas` on every call costs ~4 ms each).
         prev = seen[1]
         raise ModuleNotFoundError(str(prev), name=prev.name, path=prev.path) from None
     importlib.invalidate_caches()
@@ -422,9 +470,9 @@ def _recover_missing_import(original, args):
 def _explain_missing(
     exc: ModuleNotFoundError, venv: Path | None
 ) -> ModuleNotFoundError:
-    """Name the interpreter mismatch when that's why an import failed.
+    """Enrich a `ModuleNotFoundError` when the package sits in a version-mismatched venv.
 
-    A bare ``No module named 'partbridge'`` is true but unhelpful when the
+    A bare "No module named 'partbridge'" is true but unhelpful when the
     package is sitting right there in a venv this interpreter can't use.
     """
     from . import bind
@@ -447,7 +495,7 @@ def _explain_missing(
     running = f"{sys.version_info[0]}.{sys.version_info[1]}"
     target = f"{want[0]}.{want[1]}" if want else "?"
     return ModuleNotFoundError(
-        f"{exc} — but '{missing}' is installed in {venv} (Python {target}), "
+        f"{exc}, but '{missing}' is installed in {venv} (Python {target}), "
         f"and this kernel is Python {running}. Its compiled packages can't be "
         f"loaded across versions; call the repld_restart tool (or `repld "
         f"restart`) to rebind the kernel to the project.",
@@ -457,12 +505,21 @@ def _explain_missing(
 
 
 class _GistImportHook:
-    """Wraps builtins.__import__ to check for stale gist modules before import."""
+    """Wraps `builtins.__import__` to check for stale gist modules before import."""
 
-    def __init__(self, original) -> None:
+    def __init__(self, original: Callable) -> None:
+        """Wrap *original* (normally `builtins.__import__`)."""
         self._original = original
 
-    def __call__(self, name, globals=None, locals=None, fromlist=(), level=0):
+    def __call__(
+        self,
+        name: str,
+        globals: dict | None = None,
+        locals: dict | None = None,
+        fromlist: tuple = (),
+        level: int = 0,
+    ) -> types.ModuleType:
+        """Check for stale gists, delegate to the real import, and register on success."""
         # Resolve the fully-qualified module name for relative imports
         if level > 0 and globals is not None:
             package = globals.get("__package__") or ""
@@ -474,7 +531,7 @@ class _GistImportHook:
             base = name
 
         # Check if this module (or its top-level) is a managed gist. Dedupe
-        # base/top when equal (the common flat-gist case) — _check_reload's
+        # base/top when equal (the common flat-gist case); _check_reload's
         # dep-scan prompt would otherwise fire twice for one reload, since
         # _mtimes isn't updated until find_spec runs, below.
         top = base.split(".")[0]
@@ -482,8 +539,9 @@ class _GistImportHook:
             _check_reload(candidate)
 
         if level == 0 and name in _missing:
-            # Checked before the import machinery runs: a remembered failure would otherwise still walk every
-            # finder (~140 µs) before `_recover_missing_import` could replay it.
+            # Checked before the import machinery runs: a remembered failure
+            # would otherwise still walk every finder (~140 us) before
+            # `_recover_missing_import` could replay it.
             state, prev = _missing[name]
             if state == _path_state():
                 raise ModuleNotFoundError(str(prev), name=prev.name, path=prev.path)
@@ -498,7 +556,7 @@ class _GistImportHook:
             )
 
         # Auto-inject API summary on gist import + register in central registry.
-        # Skipped for path: dep modules — they're vendored third-party code,
+        # Skipped for path: dep modules. They are vendored third-party code,
         # not gists, so gist-authoring conventions (docstring-as-description,
         # registry entries) don't apply.
         if top in _managed and top not in _path_dep_modules:
@@ -513,8 +571,11 @@ class _GistImportHook:
         return result
 
 
+# -- gist querying ----
+
+
 def hint_for_name(name: str) -> str | None:
-    """If `name` matches a gist variable or class name, return a usage hint."""
+    """If *name* matches a gist variable or class name, return a usage hint."""
     for p in _iter_gist_files():
         tree = _parse(p)
         if tree is None:
@@ -540,7 +601,7 @@ def hint_for_name(name: str) -> str | None:
 
 
 def scan() -> list[tuple[str, str]]:
-    """Scan gist files (local + linked) for .py modules. Returns [(name, doc), ...]."""
+    """Scan gist files (local + linked) for .py modules. Return [(name, doc), ...]."""
     results: list[tuple[str, str]] = []
     for p in _iter_gist_files():
         name = p.stem
@@ -557,7 +618,7 @@ def scan() -> list[tuple[str, str]]:
 
 
 def introspect(name: str) -> str:
-    """AST-introspect a gist module. Returns formatted API summary."""
+    """Return a formatted API summary for gist *name* via AST introspection."""
     path = _find_gist(name)
     if path is None:
         msg = f"No gist '{name}' found in {_installed_dirs}"
@@ -567,7 +628,7 @@ def introspect(name: str) -> str:
 
     tree = _parse(path)
     if tree is None:
-        # _parse swallows errors for the scan paths — re-parse to surface why.
+        # _parse swallows errors for the scan paths; re-parse to surface why.
         try:
             tree = ast.parse(path.read_text("utf-8"))
         except SyntaxError as e:
@@ -598,8 +659,8 @@ def introspect(name: str) -> str:
 def _find_gist(name: str) -> Path | None:
     """Resolve gist name to a single .py file for AST introspection.
 
-    Precedence rule (shared with _GistFinder.find_spec and _iter_gist_files):
-    installed dirs in order, then _linked — local always shadows linked.
+    Precedence rule (shared with `_GistFinder.find_spec` and `_iter_gist_files`):
+    installed dirs in order, then `_linked`. Local always shadows linked.
     """
     for d in _installed_dirs:
         p = d / f"{name}.py"
@@ -611,7 +672,7 @@ def _find_gist(name: str) -> Path | None:
 def signature(name: str) -> str:
     """Return 'ClassName(args)' for a gist's first public class, or ''.
 
-    Always AST-derived — ``__repld_usage__`` is handled separately via
+    Always AST-derived. ``__repld_usage__`` is handled separately via
     ``usage_for()`` as a display concern.
     Appends ``[async]`` when the class has async methods.
     """
@@ -620,7 +681,7 @@ def signature(name: str) -> str:
 
 
 def usage_for(name: str) -> str | None:
-    """AST-derived ``__repld_usage__`` override for a gist, or None.
+    """Return the AST-derived ``__repld_usage__`` override for a gist, or None.
 
     Works before the gist is imported (unlike a ``sys.modules`` lookup),
     so first-boot MCP instructions can show it.
@@ -635,13 +696,13 @@ def usage_for(name: str) -> str | None:
 
 
 def import_hint(name: str) -> str:
-    """Shortest correct 'how to bring this gist in' line, e.g.
+    """Build the shortest correct import line for gist *name*.
 
-    'from gigahost import Gigahost; gh = Gigahost.from_env()' or
-    'import gigahost' when there's no public class/usage to show.
+    Examples: 'from gigahost import Gigahost; gh = Gigahost.from_env()' or
+    'import gigahost' when there is no public class/usage to show.
 
-    Shared by build_instructions() and introspect() so the always-loaded
-    instructions and the on-demand repld://gists/{name} resource can't
+    Shared by `build_instructions()` and `introspect()` so the always-loaded
+    instructions and the on-demand `repld://gists/{name}` resource can't
     show different (or no) import advice for the same gist.
     """
     sig = signature(name)
@@ -656,50 +717,15 @@ def import_hint(name: str) -> str:
     return f"import {name}"
 
 
-def is_public_gist_file(p: Path) -> bool:
-    """A gist file is public unless its name starts with an underscore."""
-    return not p.name.startswith("_")
-
-
-def _iter_gist_files(*, include_private: bool = False):
-    """Yield .py gist paths: installed dirs first, then linked.
-
-    Deduped by stem so a local gist shadows a linked one of the same name, and
-    stale linked paths are skipped.
-
-    Private (underscore-prefixed) files are excluded by default: they're
-    importable — the directory is on sys.path — but deliberately not *gists*,
-    so they must stay out of the MCP instructions, tool discovery, and name
-    hints. ``include_private=True`` is for the consumers that care about every
-    file a kernel here can import, regardless of whether it's exposed as a
-    gist: dependency scanning and ``repld gist lint``.
-    """
-    seen: set[str] = set()
-    for d in _installed_dirs:
-        if not d.is_dir():
-            continue
-        for p in sorted(d.glob("*.py")):
-            if (not include_private and not is_public_gist_file(p)) or p.stem in seen:
-                continue
-            seen.add(p.stem)
-            yield p
-    for name, p in gist_links.linked_items():
-        # link_targets() co-links siblings without a public/private check, so a
-        # private can land in the manifest; it gets the same treatment here as
-        # a local one. Imports are unaffected either way — _GistFinder resolves
-        # through the gist_links._linked overlay, not through this iterator.
-        if name in seen or (not include_private and not is_public_gist_file(p)):
-            continue
-        seen.add(name)
-        yield p
+# -- tool schema inference ----
 
 
 def _declared_tools(p: Path) -> list[str] | None:
-    """AST-only (no import) list of tool names declared by gist *p*.
+    """Return tool names declared by gist *p* via AST (no import), or None on parse failure.
 
-    Names come from ``_tool_*`` function definitions with the prefix stripped;
-    None if the file doesn't parse. Kept AST-only so ``tools/list`` can be
-    answered without importing every gist in the project.
+    Names come from ``_tool_*`` function definitions with the prefix stripped.
+    Kept AST-only so ``tools/list`` can be answered without importing every
+    gist in the project.
     """
     tree = _parse(p)
     if tree is None:
@@ -712,7 +738,7 @@ def _declared_tools(p: Path) -> list[str] | None:
     ]
 
 
-def _annotation_parts(annotation) -> tuple[object, str | None]:
+def _annotation_parts(annotation: object) -> tuple[object, str | None]:
     """Split ``Annotated[T, "description"]`` into ``(T, description)``.
 
     Bare-string metadata rather than a ``Field``-style object: repld is stdlib
@@ -721,7 +747,7 @@ def _annotation_parts(annotation) -> tuple[object, str | None]:
     ignored rather than rejected, so an annotation carrying something else for
     another consumer still resolves its type here.
 
-    This is the only way a gist can describe a *parameter*: the docstring's
+    This is the only way a gist can describe a parameter: the docstring's
     first line becomes the tool description and there is nowhere else to say
     what a date format or an id refers to.
     """
@@ -731,26 +757,31 @@ def _annotation_parts(annotation) -> tuple[object, str | None]:
     return base, next((m for m in meta if isinstance(m, str)), None)
 
 
-def _unwrap(annotation):
-    """Strip ``Annotated[X, ...]`` and ``X | None`` / ``Optional[X]`` down to X,
-    in any nesting; a union with two non-None arms is returned as is."""
+def _unwrap(annotation: object) -> object:
+    """Strip ``Annotated[X, ...]`` and ``X | None`` / ``Optional[X]`` down to X.
+
+    Peels in any nesting order; a union with two non-None arms is returned as is.
+    """
     while True:
         origin = typing.get_origin(annotation)
         if origin is typing.Annotated:
             annotation = typing.get_args(annotation)[0]
-        elif origin is typing.Union or origin is types.UnionType:
-            args = [a for a in typing.get_args(annotation) if a is not type(None)]
-            if len(args) != 1:
-                return annotation
-            annotation = args[0]
-        else:
+            continue
+        if origin is not typing.Union and origin is not types.UnionType:
             return annotation
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) != 1:
+            return annotation
+        annotation = args[0]
 
 
-def _type_schema(annotation) -> dict | None:
-    """The JSON Schema for a parameter annotation: its ``type``, plus ``enum``
-    for a ``Literal`` and ``items`` for a ``list[T]`` whose T maps. None if
-    unmapped, including a ``Literal`` mixing JSON types."""
+def _type_schema(annotation: object) -> dict | None:
+    """Map a parameter annotation to its JSON Schema fragment.
+
+    Returns ``{"type": ...}`` plus ``"enum"`` for a ``Literal`` and ``"items"``
+    for a ``list[T]`` whose T maps. None if unmapped, including a ``Literal``
+    mixing JSON types.
+    """
     annotation = _unwrap(annotation)
     mapped = _TYPE_MAP.get(annotation)
     if mapped is not None:
@@ -774,7 +805,7 @@ def _type_schema(annotation) -> dict | None:
     return schema
 
 
-def _schema_from_signature(func, tool_name: str) -> dict:
+def _schema_from_signature(func: Callable, tool_name: str) -> dict:
     """Build an MCP tool schema dict from a function's signature + docstring."""
     sig = inspect.signature(func)
     doc = inspect.getdoc(func)
@@ -782,11 +813,11 @@ def _schema_from_signature(func, tool_name: str) -> dict:
 
     # Resolved hints, not the raw signature: under `from __future__ import
     # annotations` (PEP 563) every annotation is a *string*, so `int` stops
-    # mapping to "integer" and an `Annotated[...]` wrapper is invisible — a gist
+    # mapping to "integer" and an `Annotated[...]` wrapper is invisible. A gist
     # with that import silently got every param typed "string" with an
     # unmapped-type warning, and no parameter descriptions at all.
-    # `include_extras=True` is what keeps Annotated intact rather than
-    # stripping it to the bare type.
+    # `include_extras=True` keeps Annotated intact rather than stripping it to
+    # the bare type.
     try:
         hints = typing.get_type_hints(func, include_extras=True)
     except Exception:
@@ -804,7 +835,7 @@ def _schema_from_signature(func, tool_name: str) -> dict:
                 _warn_once(
                     f"{tool_name}:{pname}:type",
                     f"repld: tool '{tool_name}' param '{pname}' has unmapped "
-                    f"type {annotation!r} — treating as string",
+                    f"type {annotation!r}, treating as string",
                 )
             prop = {"type": "string"}
         if param_doc:
@@ -828,19 +859,19 @@ def _schema_from_signature(func, tool_name: str) -> dict:
     hints = dict(getattr(func, "__repld_tool__", None) or {})
     if "title" in hints:
         # Claude Code names a tool by `annotations.title`, not the top-level
-        # `title` the spec added in 2025-06-18, so send it in both places.
+        # `title` from the MCP spec, so send it in both places.
         schema["title"] = hints["title"]
     if hints:
         schema["annotations"] = hints
     return schema
 
 
-def _import_gist(p: Path):
+def _import_gist(p: Path) -> types.ModuleType:
     """Import (or reload) the gist module at *p*, returning the module object.
 
-    Registers the gist even though this bypasses builtins.__import__ (and
-    thus _GistImportHook) — tool-only gists are never `import`ed by user
-    code, so this is the only chokepoint where they'd otherwise be missed.
+    Registers the gist even though this bypasses `builtins.__import__` (and
+    thus `_GistImportHook`). Tool-only gists are never ``import``ed by user
+    code, so this is the only chokepoint where they would otherwise be missed.
     """
     mod_name = p.stem
     _check_reload(mod_name)
@@ -849,7 +880,7 @@ def _import_gist(p: Path):
     return mod
 
 
-def _try_import_gist(p: Path):
+def _try_import_gist(p: Path) -> types.ModuleType | None:
     """`_import_gist`, warning once and returning None instead of raising."""
     try:
         return _import_gist(p)
@@ -859,7 +890,7 @@ def _try_import_gist(p: Path):
 
 
 def scan_tools() -> list[dict]:
-    """Scan gist files for ``_tool_*`` functions. Returns inferred tool schemas.
+    """Discover ``_tool_*`` functions in gist files and return inferred tool schemas.
 
     Schemas come from ``inspect.signature`` plus the docstring's first line, so
     the owning gist has to be imported. A gist that fails to import or whose
@@ -917,13 +948,16 @@ def resolve_tool(name: str) -> Callable | None:
     return None
 
 
+# -- installation ----
+
+
 def install(dirs: list[Path], *, create: bool = True) -> None:
     """Add gist directories to sys.path and install the auto-reload finder.
 
     `create=False` for callers that only want name resolution. A booting
-    kernel wants the directories to exist — that's where `repld gist new`
-    writes and what the agent is told to look at — but `repld gist lint` in a
-    project with no gists would otherwise bring `./gists` and `~/.repld/gists`
+    kernel wants the directories to exist (that is where ``repld gist new``
+    writes and what the agent is told to look at), but ``repld gist lint`` in a
+    project with no gists would otherwise bring ``./gists`` and ``~/.repld/gists``
     into being and then report "no gists found", which is the side effect
     commit 6221f26a already took off the rejected-scaffold path.
     """
@@ -944,7 +978,7 @@ def install(dirs: list[Path], *, create: bool = True) -> None:
 
     # Install the finder at the front of sys.meta_path. On repeat calls
     # (different dirs), update the existing finder in place instead of
-    # skipping — otherwise real imports would keep resolving against the
+    # skipping; otherwise real imports would keep resolving against the
     # first call's dirs while _installed_dirs (and everything derived from
     # it, e.g. _find_gist/_iter_gist_files) reflects the latest call.
     existing_finder = next(
@@ -955,8 +989,8 @@ def install(dirs: list[Path], *, create: bool = True) -> None:
     else:
         sys.meta_path.insert(0, _GistFinder(dirs))
 
-    # Wrap builtins.__import__ to intercept stale-module eviction
-    # Guard against double-wrapping
+    # Wrap builtins.__import__ to intercept stale-module eviction.
+    # Guard against double-wrapping.
     if not isinstance(builtins.__import__, _GistImportHook):
         builtins.__import__ = _GistImportHook(builtins.__import__)
 
@@ -968,12 +1002,11 @@ def add_search_dir(d: Path) -> None:
     """Register one more directory of gist files, e.g. from `repld_init.py`.
 
     Appended after `install()`'s dirs (global, local), so a project gist still
-    shadows a same-named one here — the opposite of `install()`'s own
-    precedence, where global shadows local. `_installed_dirs` is the same list
-    object `_GistFinder` holds (`install()` never rebinds it after boot), so
-    appending here is visible to the finder without touching it directly.
+    shadows a same-named one here. `_installed_dirs` is the same list object
+    `_GistFinder` holds (`install()` never rebinds it after boot), so appending
+    here is visible to the finder without touching it directly.
 
-    Idempotent — `repld_init.py` runs on every boot, so a repeat call with the
+    Idempotent. `repld_init.py` runs on every boot, so a repeat call with the
     same path must not duplicate the `sys.path` entry or reorder precedence.
     A path that doesn't exist (plugin uninstalled or moved) warns to stderr
     and is skipped rather than raised: a bad gist search path from a project's
@@ -982,7 +1015,7 @@ def add_search_dir(d: Path) -> None:
     if d in _installed_dirs:
         return
     if not d.is_dir():
-        print(f"repld: gist search dir {d} does not exist — skipping", file=sys.stderr)
+        print(f"repld: gist search dir {d} does not exist, skipping", file=sys.stderr)
         return
     _installed_dirs.append(d)
     s = str(d)
@@ -991,10 +1024,10 @@ def add_search_dir(d: Path) -> None:
 
 
 def search_dirs() -> list[Path]:
-    """Active gist directories in resolution order — for debugging shadowing."""
+    """Active gist directories in resolution order, for debugging shadowing."""
     return list(_installed_dirs)
 
 
 def resolve(name: str) -> Path | None:
-    """Which file `import <name>` would load, or None. Public sibling of `_find_gist`."""
+    """Which file ``import <name>`` would load, or None. Public sibling of `_find_gist`."""
     return _find_gist(name)

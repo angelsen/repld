@@ -1,22 +1,18 @@
 """Argument validation shared by every `repld` subcommand.
 
-`cli.py` routes *between* subcommands; this validates the argv *within* one, so
-it sits beside the dispatcher rather than inside it — a command module
+`cli.py` routes between subcommands; this validates the argv within one,
+so it sits beside the dispatcher rather than inside it. A command module
 importing the thing that dispatches to it would be backwards.
 
-Both halves of the job were already solved, once, in `gist_cmd.py`: reject
-what the verb doesn't understand instead of silently doing something else
-(`gist new x --global` scaffolded locally while its sibling `fetch` honours
-that exact flag), and scan *every* argument for `-h`/`--help` rather than just
-the first (`gist rm foo --help` used to fall through and unlink foo). The other
-five commands — `stop`, `restart`, `status`, `dashboard`, `gate` — each
-open-coded the same two checks, correctly but separately, which is five places
-for the next flag to be forgotten in. Same job, one owner.
+Two checks belong together: reject what the verb doesn't understand (a flag
+it never declared silently does nothing otherwise), and scan every argument
+for `-h`/`--help` (a `--help` after a positional is still a help request,
+not a value). Same job, one owner; every subcommand goes through both.
 
 `log_cmd` deliberately doesn't use `check_args`: `-n N` takes a value, so its
 argv needs a real parser loop rather than a flag-set membership test, and
 squeezing that in here would cost more than the eight lines it saved. That
-carve-out is about `check_args` only — `wants_help` is argv-shape-agnostic, so
+carve-out is about `check_args` only; `wants_help` is argv-shape-agnostic, so
 `log_cmd` and `exec_cmd` (which has the same value-taking `--socket`) call it
 like everyone else rather than keeping a third and fourth spelling of it.
 """
@@ -27,14 +23,14 @@ import sys
 def wants_help(argv: list[str]) -> bool:
     """Whether any argument asks for usage.
 
-    Every argument, not just ``argv[0]``: a `--help` typed after a positional
+    Every argument, not just `argv[0]`: a `--help` typed after a positional
     is still a request for help, not a value.
     """
     return any(a in ("-h", "--help") for a in argv)
 
 
 def take_value(argv: list[str], flag: str) -> str | None:
-    """Remove ``flag VALUE`` from *argv* in place; return VALUE, or None if absent.
+    """Remove `flag VALUE` from *argv* in place; return VALUE, or None if absent.
 
     Raises ValueError when *flag* is the last argument. Call before `check_args`,
     which would otherwise refuse the flag as unknown.
@@ -59,14 +55,14 @@ def check_args(
 ) -> int | None:
     """Reject unknown flags and surplus positionals. Exit code, or None if fine.
 
-    *prog* is the full command label for the error line (``"repld stop"``,
-    ``"repld gist new"``). *flags* is every option the caller understands;
-    anything else starting with ``-`` is refused. ``positionals=None`` means
+    *prog* is the full command label for the error line (`"repld stop"`,
+    `"repld gist new"`). *flags* is every option the caller understands;
+    anything else starting with `-` is refused. `positionals=None` means
     the command takes any number of names.
 
-    Call it *after* `paths.resolve_socket_path`, which consumes the
-    ``--socket`` flag every client subcommand accepts — otherwise this refuses
-    it as unknown.
+    Call it after `paths.resolve_socket_path`, which consumes the
+    `--socket` flag every client subcommand accepts; without that call first,
+    this refuses it as unknown.
     """
     unknown = [a for a in argv if a.startswith("-") and a not in flags]
     if unknown:

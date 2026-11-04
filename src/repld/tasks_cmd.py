@@ -1,9 +1,9 @@
-"""`repld tasks` — per-item listing of in-flight kernel tasks and active tickers,
+"""`repld tasks` -- per-item listing of in-flight kernel tasks and active tickers,
 plus `wait`/`cancel` on one by id.
 
 `repld status` reduces the listing to a count; this is the detail behind it.
 Listing reuses the same dashboard HTTP round trip `repld status` already makes
-for its live counts — `lifecycle_cmd._live_state()` — rather than opening a
+for its live counts (`lifecycle_cmd._live_state()`) rather than opening a
 second IPC path. `wait`/`cancel` need the kernel itself (a `threading.Event`
 to block on, `cancel_task` to call), so they go over the same Unix-socket
 JSON-RPC path `repld gate` uses, via `exec_cmd._connect`/`_call`.
@@ -21,7 +21,7 @@ from .lifecycle_cmd import _uptime
 from .render import BOLD, DIM, GREEN, RED, RESET, YELLOW, short_task
 
 _USAGE = """\
-repld tasks — in-flight tasks and active tickers
+repld tasks -- in-flight tasks and active tickers
 
   repld tasks [--json] [--socket PATH]
   repld tasks wait <task_id> [--json] [--socket PATH]
@@ -32,18 +32,19 @@ _LABEL = "repld tasks"
 
 
 def _err(msg: str) -> None:
+    """Write a prefixed diagnostic to stderr."""
     print(f"{_LABEL}: {msg}", file=sys.stderr, flush=True)
 
 
 def _report_error(err: dict) -> int:
-    """Render a JSON-RPC error, naming version skew when that's what it is.
+    """Render a JSON-RPC error, naming version skew when that is what it is.
 
-    Mirrors `gate_cmd._report_error` — `wait`/`cancel` are as new to an old
+    Mirrors `gate_cmd._report_error`: `wait`/`cancel` are as new to an old
     kernel as `gates/list` once was, and get method-not-found the same way.
     """
     if err.get("code") == -32601:
         _err(
-            "this kernel predates `repld tasks wait`/`cancel` — restart it to "
+            "this kernel predates `repld tasks wait`/`cancel` -- restart it to "
             "pick the command up (`repld restart`)"
         )
         return 1
@@ -54,12 +55,12 @@ def _report_error(err: dict) -> int:
 def _fetch(lock: dict, hint_path: Path) -> dict | None:
     """Ask the dashboard for the per-task/per-ticker listing.
 
-    Same round trip as `lifecycle_cmd._live_state()`, a different RPC method —
+    Same round trip as `lifecycle_cmd._live_state()`, a different RPC method:
     kept off `"state"` so the dashboard page's frequent poll stays a count.
 
     Returns the raw JSON-RPC envelope, not just `result`: `POST /api` always
     answers HTTP 200 (`dashboard._handle_api`), so a kernel that predates this
-    method comes back as `{"error": {...}}`, not a transport failure — the
+    method comes back as `{"error": {...}}`, not a transport failure. The
     caller has to see that to tell "dashboard unreachable" from "kernel is
     just older than this command" apart, rather than reporting both alike.
     """
@@ -87,7 +88,7 @@ def _fetch(lock: dict, hint_path: Path) -> dict | None:
 
 
 def _peer_origin(caller: dict) -> str:
-    """`peer:<project>/<session8>` for a task a peer kernel's `peer/call` started."""
+    """`peer:<project>/<session8>` for a task a peer kernel started."""
     cwd = str((caller.get("kernel") or {}).get("cwd") or "")
     project = cwd.rstrip("/").rsplit("/", 1)[-1] or "?"
     session = str(caller.get("claude_session_id") or "-")[:8]
@@ -95,6 +96,7 @@ def _peer_origin(caller: dict) -> str:
 
 
 def _print_tasks(data: dict) -> None:
+    """Render the human-readable task and ticker listing to stdout."""
     active = [t for t in data.get("tasks", []) if not t["done"]]
     if active:
         print(f"{BOLD}tasks ({len(active)} active){RESET}")
@@ -125,6 +127,7 @@ def _print_tasks(data: dict) -> None:
 
 
 def _list(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    """Fetch the task listing from the dashboard and print it."""
     bad = cli_args.check_args(_LABEL, rest, _USAGE, positionals=0)
     if bad is not None:
         return bad
@@ -146,7 +149,7 @@ def _list(sock_path: Path, rest: list[str], as_json: bool) -> int:
         msg = body["error"].get("message", "unknown error")
         if "Unknown method" in msg:
             print(
-                f"{_LABEL}: this kernel predates `repld tasks` — restart it to "
+                f"{_LABEL}: this kernel predates `repld tasks` -- restart it to "
                 "pick the command up (`repld restart`)",
                 file=sys.stderr,
             )
@@ -166,6 +169,7 @@ def _list(sock_path: Path, rest: list[str], as_json: bool) -> int:
 
 
 def _print_wait_result(snap: dict) -> None:
+    """Render a completed task snapshot to stdout and stderr."""
     task_id = snap.get("task_id", "?")
     label = snap.get("label")
     header = f"task {short_task(task_id)}"
@@ -176,7 +180,7 @@ def _print_wait_result(snap: dict) -> None:
         print(f"{header}: {RED}{exc}{RESET}", file=sys.stderr)
     else:
         result = snap.get("result")
-        print(f"{header}: done" + (f" → {result}" if result is not None else ""))
+        print(f"{header}: done" + (f" = {result}" if result is not None else ""))
     text = snap.get("text", "").rstrip()
     if text:
         print(text)
@@ -185,6 +189,7 @@ def _print_wait_result(snap: dict) -> None:
 
 
 def _wait(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    """Block on a single task by id, print its result on completion."""
     bad = cli_args.check_args(f"{_LABEL} wait", rest, _USAGE, positionals=1)
     if bad is not None:
         return bad
@@ -215,13 +220,14 @@ def _wait(sock_path: Path, rest: list[str], as_json: bool) -> int:
             _print_wait_result(snap)
         return 1 if snap.get("exception") else 0
     except KeyboardInterrupt:
-        _err("interrupted — the task keeps running")
+        _err("interrupted, the task keeps running")
         return 130
     finally:
         sock.close()
 
 
 def _cancel(sock_path: Path, rest: list[str], as_json: bool) -> int:
+    """Send a cancel request for a single task by id."""
     bad = cli_args.check_args(f"{_LABEL} cancel", rest, _USAGE, positionals=1)
     if bad is not None:
         return bad
@@ -256,10 +262,10 @@ def _cancel(sock_path: Path, rest: list[str], as_json: bool) -> int:
 
 
 def _pop_verb(rest: list[str]) -> tuple[str | None, list[str]]:
-    """First non-flag positional, if it's a subverb — removed from *rest*.
+    """Extract the first `wait`/`cancel` positional, removing it from *rest*.
 
     Task ids are single hex tokens, so unlike `gate answer`'s free-text value
-    there's nothing here that needs protecting from flag parsing — the verb
+    there is nothing here that needs protecting from flag parsing: the verb
     can be found and stripped up front, before `check_args` runs.
     """
     for i, a in enumerate(rest):
@@ -272,6 +278,7 @@ def _pop_verb(rest: list[str]) -> tuple[str | None, list[str]]:
 
 
 def run_tasks(argv: list[str]) -> int:
+    """Entry point for `repld tasks [wait|cancel]`."""
     if cli_args.wants_help(argv):
         print(_USAGE)
         return 0

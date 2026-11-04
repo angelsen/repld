@@ -1,3 +1,11 @@
+"""CLI entry point and subcommand dispatch.
+
+Thirteen subcommands live in `_SUBCOMMANDS`, the single table driving both
+dispatch and the `--help` listing.  A bare `repld` (no subcommand) falls
+through to the kernel's argparse.  Handlers are lazy-imported on match,
+keeping `repld bridge` (spawned every session) a dict lookup plus one import.
+"""
+
 import argparse
 import os
 import subprocess
@@ -7,9 +15,8 @@ from pathlib import Path
 
 from . import paths
 
-# name → (module, func, one-line help). Single source for both dispatch and
-# the --help listing, so they can't drift. Handlers are lazy-imported on match,
-# keeping `repld bridge` (spawned every session) a dict lookup + one import.
+# name: (module, func, one-line help).  Single source for both dispatch and
+# the help listing, so they cannot drift.
 _SUBCOMMANDS = {
     "bridge": ("bridge", "run_bridge", "stdio MCP bridge (Claude Code spawns this)"),
     "exec": ("exec_cmd", "run_exec", "one-shot code or interactive REPL"),
@@ -52,12 +59,13 @@ _SUBCOMMANDS = {
 
 
 # Subcommands that end up running a kernel process, and so need to be under
-# the project's interpreter. A bare `repld` (no subcommand, or kernel flags)
-# counts too and is handled separately in main().
+# the project's interpreter.  A bare `repld` (no subcommand, or kernel flags)
+# counts too and is handled separately in `main`.
 BINDING_COMMANDS = frozenset({"bridge", "start", "restart"})
 
 
-def _subcommands_text() -> str:
+def _format_subcommands() -> str:
+    """Render the subcommand listing for `--help` and unknown-command output."""
     lines = ["subcommands:"]
     width = max(len(n) for n in _SUBCOMMANDS)
     for name, (_, _, desc) in _SUBCOMMANDS.items():
@@ -65,8 +73,11 @@ def _subcommands_text() -> str:
     return "\n".join(lines)
 
 
-def _main_worktree(cwd: Path) -> Path:
-    """The main checkout of the git repo containing `cwd` — `git worktree list`'s first entry."""
+def _resolve_main_worktree(cwd: Path) -> Path:
+    """Return the main checkout of the git repo containing `cwd`.
+
+    The main checkout is `git worktree list`'s first entry.
+    """
     try:
         out = subprocess.run(
             ["git", "-C", str(cwd), "worktree", "list", "--porcelain"],
@@ -85,11 +96,13 @@ def _main_worktree(cwd: Path) -> Path:
 
 
 def _apply_project(argv: list[str]) -> list[str]:
-    """Consume leading `--project DIR` / `--project-git` (or REPLD_PROJECT /
-    REPLD_PROJECT_GIT) and chdir there, returning the rest of argv.
+    """Consume leading `--project DIR` / `--project-git` and chdir there.
+
+    Also reads `REPLD_PROJECT` / `REPLD_PROJECT_GIT` from the environment.
+    Returns the remaining argv.
 
     Before the subcommand only, so no flag parser ever enters `gate answer`'s
-    verbatim region. The chdir is the whole mechanism: identity (`paths`),
+    verbatim region.  The chdir is the whole mechanism: identity (`paths`),
     binding (`bind`), spawn cwd, gists and `repld_init.py` all follow cwd.
     """
     project: str | None = None
@@ -100,12 +113,14 @@ def _apply_project(argv: list[str]) -> list[str]:
         flag = argv.pop(0)
         if flag == "--project-git":
             use_git = True
-        elif flag == "--project":
+            continue
+        if flag == "--project":
             if not argv:
                 raise SystemExit("repld: --project needs a directory")
             project = argv.pop(0)
-        else:
-            project = flag.split("=", 1)[1]
+            continue
+        project = flag.split("=", 1)[1]
+
     if project is None and not use_git:
         project = os.environ.get("REPLD_PROJECT") or None
         use_git = os.environ.get("REPLD_PROJECT_GIT", "") not in ("", "0")
@@ -115,12 +130,14 @@ def _apply_project(argv: list[str]) -> list[str]:
         raise SystemExit("repld: --project and --project-git are mutually exclusive")
     if os.environ.get("REPLD_SOCKET"):
         raise SystemExit(paths.PROJECT_SOCKET_CONFLICT)
+
     if project is None:
-        target = _main_worktree(Path.cwd())
+        target = _resolve_main_worktree(Path.cwd())
     else:
         target = Path(project).expanduser()
         if not target.is_dir():
             raise SystemExit(f"repld: --project: {target} is not a directory")
+
     os.chdir(target.resolve())
     paths.project_pinned = True
     # Applied once: the cwd now carries it to re-execs and spawned kernels,
@@ -130,9 +147,13 @@ def _apply_project(argv: list[str]) -> list[str]:
     return argv
 
 
-def _refuse_late_subcommand(argv: list[str]) -> None:
-    """`repld --socket S stop` would otherwise reach the kernel's argparse and
-    print its usage; only --project/--project-git may precede a subcommand."""
+def _check_subcommand_order(argv: list[str]) -> None:
+    """Refuse a subcommand buried after flags.
+
+    `repld --socket S stop` would otherwise reach the kernel's argparse and
+    print its usage; only `--project` / `--project-git` may precede a
+    subcommand.
+    """
     if not argv or not argv[0].startswith("-"):
         return
     for i, arg in enumerate(argv):
@@ -145,19 +166,20 @@ def _refuse_late_subcommand(argv: list[str]) -> None:
 
 
 def main() -> None:
+    """Parse argv, dispatch to a subcommand or fall through to the kernel."""
     argv = _apply_project(sys.argv[1:])
     if argv and argv[0] in ("--version", "-V"):
         from importlib.metadata import version
 
         print(f"repld-tool {version('repld-tool')}")
         return
-    _refuse_late_subcommand(argv)
+    _check_subcommand_order(argv)
 
     # Commands that *become* a kernel, or spawn one, may re-exec under the
-    # project's interpreter here and never return. Everything else is left
-    # alone: routing it through `uv run` costs ~250ms per invocation and buys
-    # nothing. Notably absent is `exec`, which only resolves a lock path and
-    # talks IPC — the code runs in the kernel, which is already bound.
+    # project's interpreter here and never return.  Everything else is left
+    # alone: routing it through `uv run` costs ~250 ms per invocation and buys
+    # nothing.  `exec` is notably absent; it only resolves a lock path and
+    # talks IPC, while the code runs in the kernel, which is already bound.
     if not argv or argv[0].startswith("-") or argv[0] in BINDING_COMMANDS:
         from . import bind
 
@@ -169,11 +191,11 @@ def main() -> None:
         handler = getattr(import_module(f".{mod}", __package__), func)
         raise SystemExit(handler(argv[1:]))
 
-    # A bare word that isn't a known subcommand (and isn't a kernel flag) — show
-    # the command list rather than letting argparse fall through to the kernel.
+    # A bare word that is not a known subcommand (and is not a kernel flag):
+    # show the command list rather than letting argparse fall through.
     if argv and not argv[0].startswith("-"):
         print(f"repld: unknown command '{argv[0]}'\n", file=sys.stderr)
-        print(_subcommands_text(), file=sys.stderr)
+        print(_format_subcommands(), file=sys.stderr)
         raise SystemExit(2)
 
     parser = argparse.ArgumentParser(
@@ -182,7 +204,7 @@ def main() -> None:
         "Run `repld help` for the substrate-level overview. Register with "
         "`claude mcp add repld -- repld bridge`. A `repld_init.py` in the cwd "
         "is executed into __main__ at boot, for every kernel in this project.",
-        epilog=_subcommands_text(),
+        epilog=_format_subcommands(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

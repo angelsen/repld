@@ -1,4 +1,4 @@
-"""`repld stop` / `restart` / `status` — lifecycle control for kernels nobody started.
+"""`repld stop` / `restart` / `status`: lifecycle control for kernels nobody started.
 
 Auto-spawn creates kernels the user never launched in a pane, so it has to ship
 with the means to see and stop them. `status` lists live siblings from the
@@ -31,7 +31,7 @@ from .render import (
 )
 
 _STOP_USAGE = """\
-repld stop — stop this project's kernel
+repld stop - stop this project's kernel
 
   repld stop [--all] [--socket PATH]
 
@@ -39,7 +39,7 @@ repld stop — stop this project's kernel
 """
 
 _START_USAGE = """\
-repld start — start this project's headless kernel if none is running
+repld start - start this project's headless kernel if none is running
 
   repld start [--socket PATH]
 
@@ -48,23 +48,24 @@ any MCP client could lazily spawn one; every other path stays lazy.
 """
 
 _RESTART_USAGE = """\
-repld restart — stop this project's kernel and start a fresh headless one
+repld restart - stop this project's kernel and start a fresh headless one
 
   repld restart [--socket PATH]
 """
 
 _STATUS_USAGE = """\
-repld status — this project's kernel plus live siblings
+repld status - this project's kernel plus live siblings
 
   repld status [--json] [--counts] [--socket PATH]
 
   --counts   fetch tasks_active/tickers for every sibling too (one dashboard
-             round trip each, ~50ms) — off by default since a plain `status`
-             shouldn't pay for kernels the caller didn't ask about
+             round trip each, ~50ms). Off by default since a plain `status`
+             should not pay for kernels the caller did not ask about.
 """
 
 
 def _uptime(started_at: float | None) -> str:
+    """Format seconds-since-epoch as a compact uptime string."""
     if not started_at:
         return "?"
     secs = int(time.time() - started_at)
@@ -78,9 +79,10 @@ def _uptime(started_at: float | None) -> str:
 def _wait_gone(
     pid: int, lock_path: Path, sock_path: Path, timeout: float = 10.0
 ) -> bool:
+    """Block until `pid` is dead, the lockfile is removed, and the systemd unit settles."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        # Cheap checks first: spawn.unit_settled shells out, and short-circuiting
+        # Cheap checks first: `spawn.unit_settled` shells out, and short-circuiting
         # means it only runs once the process is already believed dead.
         if (
             not state.pid_alive(pid)
@@ -93,6 +95,7 @@ def _wait_gone(
 
 
 def _stop_one(pid: int, lock_path: Path, sock_path: Path, label: str) -> bool:
+    """Send SIGTERM to `pid` and wait for it to exit."""
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -109,6 +112,7 @@ def _stop_one(pid: int, lock_path: Path, sock_path: Path, label: str) -> bool:
 
 
 def run_stop(argv: list[str]) -> int:
+    """Stop this project's kernel, or every live kernel with `--all`."""
     if cli_args.wants_help(argv):
         print(_STOP_USAGE)
         return 0
@@ -128,12 +132,12 @@ def run_stop(argv: list[str]) -> int:
         for s in live:
             pid = int(s["pid"])
             label = Path(s.get("cwd", "?")).name or str(pid)
-            # A session file with no socket_path can't be resolved to a
-            # lockfile — Path("").with_suffix() raises. Skip it rather than
+            # A session file with no socket_path cannot be resolved to a
+            # lockfile (Path("").with_suffix() raises). Skip it rather than
             # letting one malformed entry abort the whole sweep.
             sock = s.get("socket_path")
             if not sock:
-                print(f"{label}: session file has no socket_path — skipped")
+                print(f"{label}: session file has no socket_path, skipped")
                 ok = False
                 continue
             ok = _stop_one(pid, paths.lock_for(Path(sock)), Path(sock), label) and ok
@@ -143,6 +147,7 @@ def run_stop(argv: list[str]) -> int:
 
 
 def _stop_at(sock_path: Path) -> int:
+    """Read the lockfile and stop the kernel it names, or report nothing to stop."""
     lock_path = paths.lock_for(sock_path)
     lock = state.read_lock(lock_path)
     if isinstance(lock, str):
@@ -152,13 +157,14 @@ def _stop_at(sock_path: Path) -> int:
 
 
 def _spawn_headless(sock_path: Path) -> int:
+    """Start a headless kernel and poll until its lockfile appears."""
     # Only FAILED means nothing is coming. INCUMBENT is a racing boot that
-    # already owns the unit — poll for it exactly as for our own spawn, rather
+    # already owns the unit: poll for it exactly as for our own spawn, rather
     # than reporting a failure while a healthy kernel comes up.
     if spawn.spawn_headless(sock_path) == spawn.FAILED:
         print("repld: could not start a kernel", file=sys.stderr)
         return 1
-    # 10s, unlike the bridge's 5s: there's a human waiting at a terminal here,
+    # 10s, unlike the bridge's 5s: there is a human waiting at a terminal here,
     # not a tool call that would rather fail than hang.
     lock_path = paths.lock_for(sock_path)
     deadline = time.monotonic() + 10.0
@@ -171,6 +177,7 @@ def _spawn_headless(sock_path: Path) -> int:
 
 
 def run_start(argv: list[str]) -> int:
+    """Start this project's headless kernel if none is running (no-op otherwise)."""
     if cli_args.wants_help(argv):
         print(_START_USAGE)
         return 0
@@ -191,6 +198,7 @@ def run_start(argv: list[str]) -> int:
 
 
 def run_restart(argv: list[str]) -> int:
+    """Stop this project's kernel and start a fresh headless one."""
     if cli_args.wants_help(argv):
         print(_RESTART_USAGE)
         return 0
@@ -208,11 +216,14 @@ def run_restart(argv: list[str]) -> int:
     return rc
 
 
+# -- status ---------------------------------------------------------------
+
+
 def _live_state(lock: dict, hint_path: Path) -> dict | None:
-    """Ask the dashboard for task/ticker counts.
+    """Fetch task/ticker counts from the dashboard's JSON-RPC API.
 
     Reuses the existing `POST /api {"method": "state"}` with the token from the
-    0600 hint file — no new IPC surface for a read-only status line.
+    0600 hint file, so no new IPC surface is needed for a read-only status line.
     """
     port = lock.get("dashboard_port")
     if not port:
@@ -238,9 +249,9 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
 
 
 def _sibling_counts(sibling: dict) -> tuple[int, int] | None:
-    """(tasks_active, ticker count) for another project's kernel, or None if
-    unreachable — no dashboard, no readable token, or the request fails.
+    """Return (tasks_active, ticker count) for another project's kernel.
 
+    None when unreachable: no dashboard, no readable token, or the request fails.
     Same `_live_state` round trip `here` gets, aimed at a sibling's own
     socket/hint pair instead of the one `status` was invoked against.
     """
@@ -257,12 +268,12 @@ def _sibling_counts(sibling: dict) -> tuple[int, int] | None:
 
 
 def _fetch_sibling_counts(siblings: list[dict]) -> None:
-    """Fill in tasks_active/tickers on every sibling dict, concurrently.
+    """Fill in `tasks_active`/`tickers` on every sibling dict, concurrently.
 
-    `_sibling_counts` serially would cost up to N × 2s (`urlopen`'s own
-    timeout) for N siblings — a few wedged dashboards push the whole
+    `_sibling_counts` serially would cost up to N x 2s (`urlopen`'s own
+    timeout) for N siblings. A few wedged dashboards push the whole
     `--counts` round trip past a caller's own subprocess timeout, losing
-    the siblings that *did* answer along with the ones that didn't
+    the siblings that did answer along with the ones that did not
     (reported live against 24 siblings by claude_code_research-5c). Run
     them in a thread pool instead: wall time is bounded by the slowest
     single dashboard, not the sibling count. A sibling whose fetch never
@@ -281,10 +292,10 @@ def _fetch_sibling_counts(siblings: list[dict]) -> None:
 
 
 def _print_python(lock: dict) -> None:
-    """The kernel's interpreter, flagged when it can't import the project.
+    """Print the kernel's interpreter, flagged when it cannot import the project.
 
     Silent when the lockfile carries no `python` field, and for the common
-    case where there's no project venv to disagree with.
+    case where there is no project venv to disagree with.
     """
     running = lock.get("python")
     if not running:
@@ -293,20 +304,21 @@ def _print_python(lock: dict) -> None:
 
     # ambient=False: this asks about the *kernel's* project, which may not be
     # the directory `repld status` was run from. Letting $VIRTUAL_ENV answer
-    # would warn about the venv active in this shell — unrelated to that kernel.
+    # would warn about the venv active in this shell, unrelated to that kernel.
     venv = bind.project_venv(Path(lock.get("cwd") or "."), ambient=False)
     want = bind.venv_python_version(venv) if venv is not None else None
     if want is None or f"{want[0]}.{want[1]}" == ".".join(running.split(".")[:2]):
         print(f"  python:    {running}")
         return
     print(
-        f"  python:    {running}  {_YELLOW}⚠ project venv is "
-        f"{want[0]}.{want[1]} — project packages are not importable; "
+        f"  python:    {running}  {_YELLOW}! project venv is "
+        f"{want[0]}.{want[1]}, project packages are not importable; "
         f"`repld restart` to rebind{_RESET}"
     )
 
 
 def run_status(argv: list[str]) -> int:
+    """Print this project's kernel state and list live siblings."""
     if cli_args.wants_help(argv):
         print(_STATUS_USAGE)
         return 0
@@ -344,20 +356,19 @@ def run_status(argv: list[str]) -> int:
         print(lock if isinstance(lock, str) else "no kernel running for this project")
     else:
         print(
-            f"{_GREEN}●{_RESET} kernel pid={here['pid']}  up {_uptime(here.get('started_at'))}"
+            f"{_GREEN}*{_RESET} kernel pid={here['pid']}  up {_uptime(here.get('started_at'))}"
         )
         print(f"  socket:    {here.get('socket_path')}")
         print(f"  cwd:       {here.get('cwd')}")
         _print_python(here)
         if here.get("dashboard_port"):
-            # The port, not a URL — same reason the boot banner stopped
-            # printing one: `GET /` carries the API token and so requires one,
-            # and a bare http://127.0.0.1:<port>/ answers 401. `repld
-            # dashboard` reads the token from the 0600 hint file and opens the
-            # authenticated URL.
+            # The port, not a URL: `GET /` carries the API token and so
+            # requires one, and a bare http://127.0.0.1:<port>/ answers 401.
+            # `repld dashboard` reads the token from the 0600 hint file and
+            # opens the authenticated URL.
             print(
                 f"  dashboard: port {here['dashboard_port']}"
-                f"{_DIM} — open with `repld dashboard`{_RESET}"
+                f"{_DIM} (open with `repld dashboard`){_RESET}"
             )
         if here.get("tasks_active") is not None:
             print(
@@ -381,8 +392,8 @@ def run_status(argv: list[str]) -> int:
                 f"  pid={s['pid']:<7} {s.get('cwd', '?')}{_DIM}{dash}{counts}{_RESET}"
             )
         if any_dash:
-            # A sibling's dashboard needs *its* token, which lives in its own
-            # project's 0600 hint file — so the way in is that project's own
+            # A sibling's dashboard needs its own token, which lives in that
+            # project's 0600 hint file. The way in is that project's own
             # `repld dashboard`, not a URL printed here.
             print(f"{_DIM}  open one with: cd <its dir> && repld dashboard{_RESET}")
     return 0

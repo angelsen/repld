@@ -1,10 +1,10 @@
-"""repld exec — human-facing CLI for the running kernel.
+"""repld exec: human-facing CLI for the running kernel.
 
 One-shot:     repld exec 'await browser.watch("*gmail*")'
 Interactive:  repld exec
 
 Connects to the kernel via its unix socket (kernel.lock), sends JSON-RPC
-tools/call requests, and renders results. State persists in the kernel
+tools/call requests, and renders results.  State persists in the kernel
 across invocations.
 """
 
@@ -31,58 +31,16 @@ HISTORY_PATH = HISTORY_DIR / "history"
 _next_id = 0
 
 
-def _err(msg: str) -> None:
-    print(f"repld exec: {msg}", file=sys.stderr, flush=True)
-
-
-def _send(
-    wfile: IO[str], method: str, params: dict | None = None, *, notif: bool = False
-) -> int | None:
-    global _next_id
-    msg: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
-    if params is not None:
-        msg["params"] = params
-    if not notif:
-        _next_id += 1
-        msg["id"] = _next_id
-    wfile.write(json.dumps(msg) + "\n")
-    wfile.flush()
-    return msg.get("id")
-
-
-def _recv(rfile: IO[str]) -> dict | None:
-    line = rfile.readline()
-    if not line:
-        return None
-    line = line.strip()
-    if not line:
-        return None
-    return json.loads(line)
-
-
-def _handle_notification(data: dict, json_mode: bool) -> None:
-    """Render a channel notification to stderr."""
-    params = data.get("params", {})
-    if json_mode:
-        json.dump(params, sys.stderr)
-        sys.stderr.write("\n")
-    else:
-        content = params.get("content", "")
-        if content:
-            sys.stderr.write(content + "\n")
-    sys.stderr.flush()
-
-
 def _call(
     rfile: IO[str],
     wfile: IO[str],
     method: str,
-    params: dict | None = None,
+    params: dict[str, Any] | None = None,
     json_mode: bool = False,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Send a request and wait for the matching response.
 
-    Channel notifications received while waiting are rendered to stderr.
+    Channel notifications arriving while blocked are rendered to stderr.
     Returns the response dict, or None on disconnect.
     """
     rid = _send(wfile, method, params)
@@ -96,19 +54,63 @@ def _call(
             _handle_notification(data, json_mode)
 
 
+def _send(
+    wfile: IO[str],
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    notif: bool = False,
+) -> int | None:
+    """Write a JSON-RPC message and return the request id, None for a notification."""
+    global _next_id
+    msg: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+    if params is not None:
+        msg["params"] = params
+    if not notif:
+        _next_id += 1
+        msg["id"] = _next_id
+    wfile.write(json.dumps(msg) + "\n")
+    wfile.flush()
+    return msg.get("id")
+
+
+def _recv(rfile: IO[str]) -> dict[str, Any] | None:
+    """Read one JSON-RPC line, returning the parsed dict or None on EOF."""
+    line = rfile.readline()
+    if not line:
+        return None
+    line = line.strip()
+    if not line:
+        return None
+    return json.loads(line)
+
+
+def _handle_notification(data: dict[str, Any], json_mode: bool) -> None:
+    """Render a channel notification to stderr."""
+    params = data.get("params", {})
+    if json_mode:
+        json.dump(params, sys.stderr)
+        sys.stderr.write("\n")
+    else:
+        content = params.get("content", "")
+        if content:
+            sys.stderr.write(content + "\n")
+    sys.stderr.flush()
+
+
 def _connect(
     lock_path: Path, *, label: str = "repld exec"
-) -> tuple[socket.socket, IO[str], IO[str], dict] | None:
-    """Read lockfile, connect to kernel, perform MCP handshake.
+) -> tuple[socket.socket, IO[str], IO[str], dict[str, Any]] | None:
+    """Open a handshaken MCP session to the running kernel.
 
-    Returns (sock, rfile, wfile, lock_info) or None on failure. `label` names
-    the calling command in errors — `repld gate` shares this handshake rather
-    than keeping a second copy of it.
+    Returns (sock, rfile, wfile, lock_info) or None on failure.  `label`
+    names the calling command in error messages; `repld gate` shares this
+    function rather than keeping a second handshake copy.
     """
     result = connect_to_kernel(lock_path)
     if isinstance(result, str):
         print(
-            f"{label}: {result}\n  start one with `repld`, or open `claude` — "
+            f"{label}: {result}\n  start one with `repld`, or open `claude`; "
             "the MCP bridge starts a headless kernel on connect",
             file=sys.stderr,
             flush=True,
@@ -119,7 +121,6 @@ def _connect(
     rfile = sock.makefile("r", encoding="utf-8")
     wfile = sock.makefile("w", encoding="utf-8")
 
-    # MCP handshake
     from . import __version__
 
     resp = _call(
@@ -141,8 +142,61 @@ def _connect(
     return sock, rfile, wfile, lock
 
 
+def run_exec(argv: list[str]) -> int:
+    """Entrypoint for `repld exec`."""
+    args = list(argv)
+
+    if wants_help(args):
+        print("usage: repld exec [--json] [--socket PATH] [CODE]")
+        print()
+        print("  CODE given:  one-shot (run, print, exit)")
+        print("  no CODE:     interactive REPL")
+        print()
+        print("  --json         emit JSON to stdout (for scripting)")
+        print("  --socket PATH  connect to a kernel at a non-default socket path")
+        return 0
+
+    lock_path, args = resolve_lock_path(args)
+
+    json_mode = False
+    if "--json" in args:
+        json_mode = True
+        args.remove("--json")
+
+    # `--` consumed as a code separator
+    if args and args[0] == "--":
+        args = args[1:]
+
+    code_arg = " ".join(args) if args else None
+
+    conn = _connect(lock_path)
+    if conn is None:
+        return 1
+    sock, rfile, wfile, lock = conn
+
+    try:
+        if code_arg is not None:
+            return _exec_and_print(rfile, wfile, code_arg, json_mode)
+        _setup_readline()
+        pid = lock.get("pid", "?")
+        console = RemoteConsole(rfile, wfile, json_mode)
+        console.interact(
+            banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, defer, every, ask, confirm, choose, no_display",
+            exitmsg="",
+        )
+        return 0
+    except (BrokenPipeError, OSError) as e:
+        _err(f"connection lost: {e}")
+        return 1
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def _exec_and_print(rfile: IO[str], wfile: IO[str], src: str, json_mode: bool) -> int:
-    """Execute code and print the result. Returns exit code."""
+    """Execute code on the kernel and print the result, returning the exit code."""
     resp = _call(
         rfile,
         wfile,
@@ -176,7 +230,6 @@ def _exec_and_print(rfile: IO[str], wfile: IO[str], src: str, json_mode: bool) -
                 print(text, file=sys.stderr if is_error else sys.stdout)
         return 1 if is_error else 0
 
-    # Deferred — show preview, wait for task_done channel notification
     task_id = meta.get("task_id", "")
     if text and not json_mode:
         sys.stderr.write(text + "\n")
@@ -185,8 +238,13 @@ def _exec_and_print(rfile: IO[str], wfile: IO[str], src: str, json_mode: bool) -
     return _wait_task(rfile, wfile, task_id, json_mode)
 
 
+def _err(msg: str) -> None:
+    """Print a prefixed diagnostic to stderr."""
+    print(f"repld exec: {msg}", file=sys.stderr, flush=True)
+
+
 def _wait_task(rfile: IO[str], wfile: IO[str], task_id: str, json_mode: bool) -> int:
-    """Wait for task_done channel notification, then fetch final output."""
+    """Block on a deferred task's channel push, then fetch and print its output."""
     original_handler = signal.getsignal(signal.SIGINT)
     cancelled = False
 
@@ -209,53 +267,50 @@ def _wait_task(rfile: IO[str], wfile: IO[str], task_id: str, json_mode: bool) ->
                 _err("kernel disconnected while waiting for task")
                 return 1
 
-            if "method" in data:
-                params = data.get("params", {})
-                meta = params.get("meta", {})
-                if meta.get("kind") == "task_done" and meta.get("task_id") == task_id:
-                    # Task completed — get final snapshot
-                    resp = _call(
-                        rfile,
-                        wfile,
-                        "tools/call",
-                        {
-                            "name": "get_task",
-                            "arguments": {"task_id": task_id},
-                        },
-                        json_mode=json_mode,
-                    )
-                    if resp is None:
-                        # Every other _call site reports the disconnect; this
-                        # one used to exit 1 with an empty stderr, which is the
-                        # worst moment for silence — the task finished and its
-                        # output died with the kernel.
-                        _err("kernel disconnected while fetching task output")
-                        return 1
-                    if "error" in resp:
-                        # Same silence, different cause: an evicted task_id
-                        # answers -32602, and without this the empty result
-                        # became "{}" and exited 0 — a clean success for a
-                        # result we never got.
-                        _err(resp["error"].get("message", "unknown error"))
-                        return 1
-                    result = resp.get("result", {})
-                    snap_text = (
-                        result["content"][0]["text"] if result.get("content") else "{}"
-                    )
-                    snap = json.loads(snap_text)
-                    if json_mode:
-                        json.dump(snap, sys.stdout)
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                    else:
-                        text = snap.get("text", "").rstrip()
-                        if text:
-                            print(text)
-                        if snap.get("truncated"):
-                            _err(spill_marker(snap.get("spill_path")))
-                    return 1 if snap.get("exception") else 0
-                else:
-                    _handle_notification(data, json_mode)
+            if "method" not in data:
+                continue
+
+            params = data.get("params", {})
+            meta = params.get("meta", {})
+            if meta.get("kind") != "task_done" or meta.get("task_id") != task_id:
+                _handle_notification(data, json_mode)
+                continue
+
+            resp = _call(
+                rfile,
+                wfile,
+                "tools/call",
+                {
+                    "name": "get_task",
+                    "arguments": {"task_id": task_id},
+                },
+                json_mode=json_mode,
+            )
+            if resp is None:
+                # The task finished but its output dies with the kernel;
+                # a silent exit here is the worst moment for silence.
+                _err("kernel disconnected while fetching task output")
+                return 1
+            if "error" in resp:
+                # An evicted task_id answers -32602; the bare result
+                # would be an empty dict that exits 0, hiding that
+                # the output was never retrieved.
+                _err(resp["error"].get("message", "unknown error"))
+                return 1
+            result = resp.get("result", {})
+            snap_text = result["content"][0]["text"] if result.get("content") else "{}"
+            snap = json.loads(snap_text)
+            if json_mode:
+                json.dump(snap, sys.stdout)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            else:
+                text = snap.get("text", "").rstrip()
+                if text:
+                    print(text)
+                if snap.get("truncated"):
+                    _err(spill_marker(snap.get("spill_path")))
+            return 1 if snap.get("exception") else 0
     finally:
         signal.signal(signal.SIGINT, original_handler)
 
@@ -280,9 +335,10 @@ class RemoteConsole(code.InteractiveConsole):
     """Interactive console that dispatches to the kernel over IPC."""
 
     def __init__(self, rfile: IO[str], wfile: IO[str], json_mode: bool = False) -> None:
+        """Wire the console to the kernel's IPC streams with top-level await enabled."""
         super().__init__()
-        # Allow top-level await so `await browser.watch(...)` works —
-        # the kernel compiles with the same flag.
+        # The kernel compiles with `PyCF_ALLOW_TOP_LEVEL_AWAIT`;
+        # the local compiler must match so completeness checks agree.
         self.compile.compiler.flags |= ast.PyCF_ALLOW_TOP_LEVEL_AWAIT  # type: ignore[attr-defined]
         self.rfile = rfile
         self.wfile = wfile
@@ -291,14 +347,14 @@ class RemoteConsole(code.InteractiveConsole):
     def runsource(
         self, source: str, filename: str = "<input>", symbol: str = "single"
     ) -> bool:
-        # Check completeness (handles multi-line blocks + top-level await)
+        """Compile locally and dispatch complete source to the kernel."""
         try:
             compiled = self.compile(source, filename, symbol)
         except (OverflowError, SyntaxError, ValueError):
             self.showsyntaxerror(filename)
             return False
         if compiled is None:
-            return True  # incomplete — prompt for more
+            return True  # incomplete: prompt for more
 
         source = source.rstrip()
         if not source:
@@ -309,57 +365,3 @@ class RemoteConsole(code.InteractiveConsole):
         except KeyboardInterrupt:
             self.write("\nKeyboardInterrupt\n")
         return False
-
-
-def run_exec(argv: list[str]) -> int:
-    """Entrypoint for `repld exec`."""
-    args = list(argv)
-
-    if wants_help(args):
-        print("usage: repld exec [--json] [--socket PATH] [CODE]")
-        print()
-        print("  CODE given:  one-shot (run, print, exit)")
-        print("  no CODE:     interactive REPL")
-        print()
-        print("  --json         emit JSON to stdout (for scripting)")
-        print("  --socket PATH  connect to a kernel at a non-default socket path")
-        return 0
-
-    lock_path, args = resolve_lock_path(args)
-
-    json_mode = False
-    if "--json" in args:
-        json_mode = True
-        args.remove("--json")
-
-    # Support -- separator
-    if args and args[0] == "--":
-        args = args[1:]
-
-    code_arg = " ".join(args) if args else None
-
-    conn = _connect(lock_path)
-    if conn is None:
-        return 1
-    sock, rfile, wfile, lock = conn
-
-    try:
-        if code_arg is not None:
-            return _exec_and_print(rfile, wfile, code_arg, json_mode)
-        else:
-            _setup_readline()
-            pid = lock.get("pid", "?")
-            console = RemoteConsole(rfile, wfile, json_mode)
-            console.interact(
-                banner=f"repld (kernel pid={pid})\nbuiltins: browser, notify, defer, every, ask, confirm, choose, no_display",
-                exitmsg="",
-            )
-            return 0
-    except (BrokenPipeError, OSError) as e:
-        _err(f"connection lost: {e}")
-        return 1
-    finally:
-        try:
-            sock.close()
-        except OSError:
-            pass

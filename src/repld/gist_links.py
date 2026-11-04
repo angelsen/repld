@@ -1,12 +1,12 @@
-"""Cross-project gist links — ./gists/.links manifest + registry resolution.
+"""Cross-project gist links: `./gists/.links` manifest and registry resolution.
 
 `repld gist add <name>` resolves a registered gist (plus its same-dir sibling
-imports) to absolute paths and records them in a committed ./gists/.links
-manifest — no copying. At kernel boot, _load_links() populates the live
-`_linked` overlay consulted by gists.py's finder/iterators *after* local
+imports) to absolute paths and records them in a committed `./gists/.links`
+manifest, no copying. At kernel boot, `_load_links` populates the live
+`_linked` overlay consulted by `gists.py`'s finder and iterators *after* local
 dirs, so local gists always shadow linked ones.
 
-Shares the parse cache and registry with gists.py; the two modules import
+Shares the parse cache and registry with `gists.py`; the two modules import
 each other and access attributes at call time (never `from x import y`),
 which keeps the cycle safe and preserves test monkeypatching of
 `gists.registry`.
@@ -22,34 +22,34 @@ from pathlib import Path
 from . import gists, paths
 from .state import atomic_write_json
 
-# Cross-project linked gists: name → absolute source path. Populated from
+# Cross-project linked gists: name to absolute source path. Populated from
 # ./gists/.links at install() time; consulted by the finder + iterators after
 # local dirs (so local gists always shadow a linked one of the same name).
-# Never rebound — gists.py holds references via this module's namespace.
+# Never rebound; gists.py holds references via this module's namespace.
 _linked: dict[str, Path] = {}
 _LINKS_FILENAME = ".links"
 
 
 def linked_names() -> frozenset[str]:
-    """Names currently in the live _linked overlay."""
+    """Return the names currently in the live `_linked` overlay."""
     return frozenset(_linked)
 
 
 def linked_path(name: str) -> Path | None:
-    """Cross-project linked gist path for an exact name, if the file still exists."""
+    """Return the cross-project linked path for `name`, if the file still exists."""
     p = _linked.get(name)
     return p if p is not None and p.is_file() else None
 
 
 def linked_items() -> list[tuple[str, Path]]:
-    """(name, path) pairs for linked gists whose file still exists, name-sorted."""
+    """Return `(name, path)` pairs for linked gists whose file still exists, name-sorted."""
     return [(n, p) for n, p in sorted(_linked.items()) if p.is_file()]
 
 
 def read_links(gists_dir: Path) -> dict[str, str]:
-    """Read the link manifest. Returns {name: abspath}; {} if absent.
+    """Return the link manifest as `{name: abspath}`; `{}` if absent.
 
-    Raises ValueError if the manifest exists but won't parse — callers must
+    Raises `ValueError` if the manifest exists but will not parse. Callers must
     not guess: treating a corrupt manifest as empty would make `gist add`
     rewrite it and silently drop every other committed link.
     """
@@ -76,10 +76,10 @@ def write_links(gists_dir: Path, links: dict[str, str]) -> None:
 
 
 def _load_links(gists_dir: Path) -> None:
-    """Populate the live _linked overlay from the manifest.
+    """Populate the live `_linked` overlay from the manifest.
 
     Skips (with a stderr warning) any entry whose path no longer exists; never
-    rewrites the manifest — it is committed, and silently editing it would dirty
+    rewrites the manifest. It is committed, and silently editing it would dirty
     the working tree. Use `repld gist rm --stale` to drop dead links.
     """
     _linked.clear()
@@ -87,7 +87,7 @@ def _load_links(gists_dir: Path) -> None:
         links = read_links(gists_dir)
     except ValueError as e:
         print(
-            f"repld: {e} — linked gists unavailable (fix or delete the file)",
+            f"repld: {e}; linked gists unavailable (fix or delete the file)",
             file=sys.stderr,
         )
         return
@@ -103,9 +103,10 @@ def _load_links(gists_dir: Path) -> None:
 
 
 def _sibling_imports(path: Path) -> set[str]:
-    """Top-level names imported by `path` that exist as `<name>.py` beside it.
+    """Return top-level names imported by `path` that exist as `<name>.py` beside it.
 
-    Same-directory match = sibling gist; everything else is stdlib/third-party.
+    Same-directory match means sibling gist; everything else is stdlib or
+    third-party.
     """
     siblings: set[str] = set()
     tree = gists._parse(path)
@@ -125,10 +126,11 @@ def _sibling_imports(path: Path) -> set[str]:
 
 
 def link_targets(name: str) -> list[tuple[str, Path]]:
-    """Resolve `name` via the registry + transitive same-dir sibling imports.
+    """Resolve `name` via the registry plus transitive same-dir sibling imports.
 
-    Returns [(name, path), ...] — the full set that must be linked for `name` to
-    import. Raises LookupError (listing known projects) if `name` isn't registered.
+    Returns `[(name, path), ...]`, the full set that must be linked for `name`
+    to import. Raises `LookupError` (listing known projects) if `name` is not
+    registered.
     """
     reg = gists.registry()
     if name not in reg:
@@ -144,7 +146,7 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
         if cur in resolved:
             continue
         entry = reg.get(cur)
-        # Siblings may not be registered themselves — fall back to a path beside
+        # Siblings may not be registered themselves; fall back to a path beside
         # an already-resolved gist.
         if entry is not None:
             p = Path(entry["path"])
@@ -155,11 +157,11 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
             if cur == name:
                 raise LookupError(
                     f"gist '{name}' is registered at {p} but the file is gone"
-                    " — import it from its home project to re-register, or run"
+                    "; import it from its home project to re-register, or run"
                     " `repld gist rm --stale` to drop the dead registry entry"
                 )
             print(
-                f"repld: sibling gist '{cur}' could not be resolved — "
+                f"repld: sibling gist '{cur}' could not be resolved; "
                 f"'{name}' may not import without it",
                 file=sys.stderr,
             )
@@ -169,15 +171,15 @@ def link_targets(name: str) -> list[tuple[str, Path]]:
     return list(resolved.items())
 
 
-def _module_level_repld_import(path: Path) -> bool:
-    """Whether `path` imports repld at module top level (not inside a function).
+def _has_module_level_repld_import(path: Path) -> bool:
+    """Whether `path` imports `repld` at module top level (not inside a function).
 
     `import repld` in wiring is expected and harmless as long as it stays
-    inside the function that needs it; a module-level one makes the *whole
-    file* fail to import outside a kernel, since repld isn't a plain
-    installable package there — the file just written into someone else's
+    inside the function that needs it; a module-level one makes the whole
+    file fail to import outside a kernel, since `repld` is not a plain
+    installable package there. The file just written into someone else's
     project via `add_link` is exactly the moment that cost lands on a reader
-    who didn't put it there. Only `tree.body` (not `ast.walk`), so a guarded
+    who did not put it there. Only `tree.body` (not `ast.walk`), so a guarded
     or function-local import is correctly ignored.
     """
     tree = gists._parse(path)
@@ -192,15 +194,40 @@ def _module_level_repld_import(path: Path) -> bool:
 
 
 def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
-    """Link `name` (and its siblings) into gists_dir's manifest.
+    """Link `name` (and its siblings) into the manifest under `gists_dir`.
 
-    Refuses on collision — a target already present in ./gists or
-    ~/.repld/gists, already linked to a different file, or resolving to a path
-    inside this project. Returns the newly linked (name, path) pairs.
+    Refuses on collision: a target already present in `./gists` or
+    `~/.repld/gists`, already linked to a different file, or resolving to a
+    path inside this project. Returns the newly linked `(name, path)` pairs.
     """
     targets = link_targets(name)
     project_root = gists_dir.parent.resolve()
     links = read_links(gists_dir)
+
+    _check_collisions(targets, gists_dir, project_root, links)
+
+    for tname, tpath in targets:
+        links[tname] = str(tpath.resolve())
+    write_links(gists_dir, links)
+
+    for tname, tpath in targets:
+        if _has_module_level_repld_import(tpath):
+            print(
+                f"repld: '{tname}' imports repld at module level ({tpath}); "
+                "it only works inside a kernel; if this gist should also run "
+                "standalone, move the import into the function that needs it",
+                file=sys.stderr,
+            )
+    return targets
+
+
+def _check_collisions(
+    targets: list[tuple[str, Path]],
+    gists_dir: Path,
+    project_root: Path,
+    links: dict[str, str],
+) -> None:
+    """Refuse to link any target that collides with a local, global or existing entry."""
     for tname, tpath in targets:
         if (gists_dir / f"{tname}.py").is_file():
             raise FileExistsError(
@@ -212,7 +239,7 @@ def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
         if project_root in tpath.resolve().parents:
             raise FileExistsError(f"'{tname}' already lives in this project: {tpath}")
         # The manifest is a flat name->path map, so a co-linked sibling could
-        # silently repoint a name another linked gist already depends on —
+        # silently repoint a name another linked gist already depends on:
         # `add foo` stealing `helpers` out from under `bar`, reported as
         # nothing more than "+ siblings: helpers". `new` and `fetch` both
         # refuse this scope; the one that writes the manifest did not.
@@ -221,24 +248,12 @@ def add_link(name: str, gists_dir: Path) -> list[tuple[str, Path]]:
             raise FileExistsError(
                 f"'{tname}' is already linked to a different file: {existing}"
             )
-    for tname, tpath in targets:
-        links[tname] = str(tpath.resolve())
-    write_links(gists_dir, links)
-    for tname, tpath in targets:
-        if _module_level_repld_import(tpath):
-            print(
-                f"repld: '{tname}' imports repld at module level ({tpath}) — "
-                "it only works inside a kernel; if this gist should also run "
-                "standalone, move the import into the function that needs it",
-                file=sys.stderr,
-            )
-    return targets
 
 
 def remove_link(name: str, gists_dir: Path) -> bool:
-    """Drop `name` from the manifest (works on stale names). Returns True if removed.
+    """Drop `name` from the manifest (works on stale names). Return True if removed.
 
-    Leaves siblings in place — they may be shared with other linked gists.
+    Leaves siblings in place; they may be shared with other linked gists.
     """
     links = read_links(gists_dir)
     if name not in links:
@@ -249,7 +264,7 @@ def remove_link(name: str, gists_dir: Path) -> bool:
 
 
 def remove_stale_links(gists_dir: Path) -> list[str]:
-    """Drop every manifest entry whose path is gone. Returns the removed names."""
+    """Drop every manifest entry whose path is gone. Return the removed names."""
     links = read_links(gists_dir)
     stale = [n for n, p in links.items() if not Path(p).is_file()]
     if stale:

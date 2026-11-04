@@ -1,8 +1,9 @@
-"""The `repld gist` command group — scaffold, link, unlink, list.
+"""The `repld gist` command group: scaffold, fetch, stub, link, lint, list.
 
-`new` scaffolds a local gist file; `add`/`rm`/`list` manage cross-project links
-(registry resolution + the ./gists/.links manifest, see `gist_links.py`).
-Dispatched from `cli.py`'s _SUBCOMMANDS table.
+`new` scaffolds a local gist; `fetch` copies a GitHub gist; `stub` generates
+peer forwarding shims; `add`/`rm`/`list` manage cross-project links (see
+`gist_links.py`); `lint` checks gists against best practices. Dispatched from
+`cli.py`'s `_SUBCOMMANDS` table.
 """
 
 from pathlib import Path
@@ -11,13 +12,13 @@ from . import cli_args, paths
 from .core_schemas import PEER_LIST_METHOD
 
 _GIST_TEMPLATE = '''\
-"""{name} — TODO: one-line description."""
+"""{name}: TODO one-line description."""
 
 from typing import Annotated
 
 # __repld_deps__ = ["httpx>=0.27"]  # uncomment to auto-install at boot
 
-# --- core logic (portable — keeps on graduation) ---
+# --- core logic (portable; keeps on graduation) ---
 
 
 async def example(id: int) -> dict:
@@ -26,7 +27,7 @@ async def example(id: int) -> dict:
     return {{"id": id}}
 
 
-# --- repld wiring (shed on graduation — replace with @mcp.tool or @router.get) ---
+# --- repld wiring (shed on graduation; replace with @mcp.tool or @router.get) ---
 
 
 async def _tool_{name}_example(
@@ -36,16 +37,21 @@ async def _tool_{name}_example(
     return await example(id)
 '''
 
+_GIST_HOSTS = ("gist.github.com", "gist.githubusercontent.com")
+
+_FETCH_HEADER = (
+    "# source: {url}\n"
+    "# fetched: {date} by `repld gist fetch` (a snapshot, not a link).\n"
+    "# Edits here are yours; re-fetch with --force to take the gist's version back.\n"
+)
+
 
 def run_gist(argv: list[str]) -> int:
-    # The group's own help check goes through `cli_args.wants_help` like every
-    # verb below it. This was the last open-coded `argv[0] in ("-h", "--help")`
-    # in src/ — in the file `cli_args` was extracted *from* — and being
-    # `argv[0]`-only it sent `repld gist badverb --help` to "unknown command"
-    # instead of usage, the exact case `wants_help`'s scan-every-argument rule
-    # exists for. Checked before the verb lookup so it answers for an unknown
-    # verb too; a *known* verb's own `wants_help` never sees it, since the
-    # group's usage is the right answer when the verb doesn't resolve.
+    """Dispatch `repld gist <verb>` to the handler table."""
+    # Checked before the verb lookup so `--help` answers with group usage
+    # even for an unknown verb. A known verb's own `wants_help` never sees
+    # it, since the group's usage is the right answer when the verb itself
+    # has not resolved.
     if not argv:
         _print_gist_usage()
         return 2
@@ -62,47 +68,16 @@ def run_gist(argv: list[str]) -> int:
 
 
 def _print_gist_usage() -> None:
-    print("repld gist — manage tool gists")
+    """Print the `repld gist` top-level usage listing."""
+    print("repld gist: manage tool gists")
     print()
     width = max(len(spec) for _, spec, _, _ in _GIST_COMMANDS.values())
     for _, spec, desc, _ in _GIST_COMMANDS.values():
         print(f"  repld gist {spec:<{width}}    {desc}")
 
 
-def _usage(verb: str) -> str:
-    """A verb's usage text, composed from the one table that also lists it."""
-    _, spec, desc, detail = _GIST_COMMANDS[verb]
-    line = f"repld gist {spec} — {desc}"
-    return f"{line}\n{detail}" if detail else line
-
-
-def _shadow_conflict(
-    stem: str,
-    *,
-    to_global: bool,
-    local_dir: Path,
-    global_dir: Path,
-    links: dict[str, str],
-) -> str | None:
-    """Error text if *stem* would shadow a gist outside the destination dir.
-
-    A name that resolves in two places silently shadows one of them at import
-    time — `_GistFinder` consults local dirs before the linked overlay — so
-    every command that writes a fresh `.py` into a gists dir enforces this:
-    `new` and `fetch` alike, for the reason `add_link` already did. The
-    destination dir's *own* collision is left to the caller, because the two
-    disagree there: `fetch` overwrites under `--force`, `new` never does.
-    """
-    other = (local_dir if to_global else global_dir) / f"{stem}.py"
-    if other.is_file():
-        scope = "locally" if other.parent == local_dir else "globally"
-        return f"'{stem}' already exists {scope}: {other}"
-    if stem in links:
-        return f"'{stem}' is already linked from {links[stem]}"
-    return None
-
-
 def _gist_new(argv: list[str]) -> int:
+    """Scaffold a new gist file at `./gists/<name>.py`."""
     from . import gist_links
 
     usage = _usage("new")
@@ -145,20 +120,120 @@ def _gist_new(argv: list[str]) -> int:
     print(f"created: {path}")
     print()
     print("Next steps:")
-    print(f"  1. Edit {path} — rename the example tool, add your logic")
+    print(f"  1. Edit {path}: rename the example tool, add your logic")
     print("  2. Core functions at top (portable), repld wiring at bottom (shed later)")
     print("  3. Tools appear in tools/list automatically on next MCP call")
     print("  4. Read repld://docs/production when ready to graduate")
     return 0
 
 
-_GIST_HOSTS = ("gist.github.com", "gist.githubusercontent.com")
+def _usage(verb: str) -> str:
+    """A verb's usage text, composed from the one table that also lists it."""
+    _, spec, desc, detail = _GIST_COMMANDS[verb]
+    line = f"repld gist {spec}: {desc}"
+    return f"{line}\n{detail}" if detail else line
 
-_FETCH_HEADER = (
-    "# source: {url}\n"
-    "# fetched: {date} by `repld gist fetch` — a snapshot, not a link.\n"
-    "# Edits here are yours; re-fetch with --force to take the gist's version back.\n"
-)
+
+def _shadow_conflict(
+    stem: str,
+    *,
+    to_global: bool,
+    local_dir: Path,
+    global_dir: Path,
+    links: dict[str, str],
+) -> str | None:
+    """Error text if *stem* would shadow a gist outside the destination dir.
+
+    A name that resolves in two places silently shadows one of them at import
+    time (`_GistFinder` consults local dirs before the linked overlay), so
+    every command that writes a fresh `.py` into a gists dir enforces this,
+    `new` and `fetch` alike, for the reason `add_link` already did. The
+    destination dir's own collision is left to the caller, because the two
+    disagree there: `fetch` overwrites under `--force`, `new` never does.
+    """
+    other = (local_dir if to_global else global_dir) / f"{stem}.py"
+    if other.is_file():
+        scope = "locally" if other.parent == local_dir else "globally"
+        return f"'{stem}' already exists {scope}: {other}"
+    if stem in links:
+        return f"'{stem}' is already linked from {links[stem]}"
+    return None
+
+
+def _gist_fetch(argv: list[str]) -> int:
+    """Download a GitHub gist into the local or global gists dir."""
+    from . import gist_links
+
+    usage = _usage("fetch")
+    if cli_args.wants_help(argv):
+        print(usage)
+        return 0
+    to_global = "--global" in argv
+    force = "--force" in argv
+    rest = [a for a in argv if a not in ("--global", "--force")]
+    try:
+        rename = cli_args.take_value(rest, "--name")
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
+    # No `flags=`: every option this verb understands has already been
+    # stripped from `rest` above, so anything still starting with `-` is
+    # unknown by construction. Same ordering as `--socket` in other
+    # subcommands: consume value-taking flags first, then validate.
+    bad = cli_args.check_args("repld gist fetch", rest, usage, positionals=1)
+    if bad is not None:
+        return bad
+    if not rest:
+        print(usage)
+        return 2
+
+    try:
+        gist_id = _parse_gist_ref(rest[0])
+        description, files = _fetch_gist(gist_id)
+    except (ValueError, LookupError) as e:
+        print(f"error: {e}")
+        return 1
+    if not files:
+        print(f"error: gist {gist_id} contains no .py files")
+        return 1
+    if rename is not None:
+        if len(files) > 1:
+            print(
+                f"error: --name needs a single-file gist; this one has "
+                f"{len(files)}: {', '.join(sorted(files))}"
+            )
+            return 1
+        if not rename.isidentifier():
+            print(f"error: '{rename}' is not a valid Python identifier")
+            return 2
+        files = {f"{rename}.py": next(iter(files.values()))}
+
+    local_dir = paths.local_gists_dir()
+    global_dir = paths.global_gists_dir()
+    dest_dir = global_dir if to_global else local_dir
+    try:
+        links = gist_links.read_links(local_dir)
+    except ValueError as e:
+        # A corrupt manifest is an error to report, not a traceback. `add`,
+        # `rm` and `list` all treat it that way.
+        print(f"error: {e}")
+        return 1
+    collision = _fetch_collision(
+        files,
+        dest_dir=dest_dir,
+        to_global=to_global,
+        force=force,
+        local_dir=local_dir,
+        global_dir=global_dir,
+        links=links,
+    )
+    if collision:
+        print(f"error: {collision}")
+        return 1
+
+    written = _write_fetched(files, dest_dir, gist_id)
+    _report_fetched(description, written)
+    return 0
 
 
 def _parse_gist_ref(ref: str) -> str:
@@ -212,7 +287,7 @@ def _fetch_gist(gist_id: str, timeout: float = 20.0) -> tuple[str, dict[str, str
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise LookupError(
-                f"gist {gist_id} not found — deleted, or private to another "
+                f"gist {gist_id} not found; deleted, or private to another "
                 "account (repld does not send credentials)"
             ) from e
         raise LookupError(f"GitHub returned HTTP {e.code} for {api}") from e
@@ -268,7 +343,7 @@ def _fetch_collision(
 
 
 def _write_fetched(files: dict[str, str], dest_dir: Path, gist_id: str) -> list[Path]:
-    """Write each file under *dest_dir* with the provenance header; the paths written."""
+    """Write each file under *dest_dir* with the provenance header; return the paths."""
     import datetime
 
     url = f"https://gist.github.com/{gist_id}"
@@ -284,7 +359,7 @@ def _write_fetched(files: dict[str, str], dest_dir: Path, gist_id: str) -> list[
 
 
 def _report_fetched(description: str, written: list[Path]) -> None:
-    """Print what landed, the deps it declares but does not get, and next steps."""
+    """Print what landed, the deps it declares but does not install, and next steps."""
     from . import gist_deps
 
     if description:
@@ -303,135 +378,14 @@ def _report_fetched(description: str, written: list[Path]) -> None:
 
     print()
     print("Next steps:")
-    print(f"  1. Read {written[0]} — it runs in your kernel on the next boot")
-    print(f"  2. repld gist lint {written[0].stem} — check it over")
+    print(f"  1. Read {written[0]}; it runs in your kernel on the next boot")
+    print(f"  2. repld gist lint {written[0].stem}: check it over")
     deps_note = " (and to be prompted for its deps)" if declared else ""
     print(f"  3. Restart the kernel to load it{deps_note}")
 
 
-def _gist_fetch(argv: list[str]) -> int:
-    from . import gist_links
-
-    usage = _usage("fetch")
-    if cli_args.wants_help(argv):
-        print(usage)
-        return 0
-    to_global = "--global" in argv
-    force = "--force" in argv
-    rest = [a for a in argv if a not in ("--global", "--force")]
-    try:
-        rename = cli_args.take_value(rest, "--name")
-    except ValueError as e:
-        print(f"error: {e}")
-        return 2
-    # No `flags=`: every option this verb understands has already been
-    # stripped from `rest` above, so anything still starting with `-` is
-    # unknown by construction. Same ordering rule `check_args` documents for
-    # `--socket` — consume the value-taking flags first, then validate.
-    bad = cli_args.check_args("repld gist fetch", rest, usage, positionals=1)
-    if bad is not None:
-        return bad
-    if not rest:
-        print(usage)
-        return 2
-
-    try:
-        gist_id = _parse_gist_ref(rest[0])
-        description, files = _fetch_gist(gist_id)
-    except (ValueError, LookupError) as e:
-        print(f"error: {e}")
-        return 1
-    if not files:
-        print(f"error: gist {gist_id} contains no .py files")
-        return 1
-    if rename is not None:
-        if len(files) > 1:
-            print(
-                f"error: --name needs a single-file gist; this one has "
-                f"{len(files)}: {', '.join(sorted(files))}"
-            )
-            return 1
-        if not rename.isidentifier():
-            print(f"error: '{rename}' is not a valid Python identifier")
-            return 2
-        files = {f"{rename}.py": next(iter(files.values()))}
-
-    local_dir = paths.local_gists_dir()
-    global_dir = paths.global_gists_dir()
-    dest_dir = global_dir if to_global else local_dir
-    try:
-        links = gist_links.read_links(local_dir)
-    except ValueError as e:
-        # A corrupt manifest is an error to report, not a traceback — `add`,
-        # `rm` and `list` all treat it that way.
-        print(f"error: {e}")
-        return 1
-    collision = _fetch_collision(
-        files,
-        dest_dir=dest_dir,
-        to_global=to_global,
-        force=force,
-        local_dir=local_dir,
-        global_dir=global_dir,
-        links=links,
-    )
-    if collision:
-        print(f"error: {collision}")
-        return 1
-
-    written = _write_fetched(files, dest_dir, gist_id)
-    _report_fetched(description, written)
-    return 0
-
-
-def _live_surface(peer_cwd: str) -> dict | None:
-    """The `peer/list` body of the kernel running for *peer_cwd*, or None when
-    none is. Anything else wrong with the peer is raised as a PeerError."""
-    from . import peer, sessions
-
-    row = peer.pick_session(peer.resolve_cwd(peer_cwd, []), sessions.list_sessions())
-    if row is None:
-        return None
-    msg = peer.request_sync(str(row["socket_path"]), PEER_LIST_METHOD, {})
-    peer.raise_for_error(msg, Path(peer_cwd).name)
-    return msg["result"]
-
-
-def _gist_stub_check(names: list[str]) -> int:
-    from . import peer, peer_stub
-
-    stubs: list[Path] = []
-    for d in paths.gist_dirs():
-        if d.is_dir():
-            stubs += [p for p in sorted(d.glob("*.py")) if peer_stub.read_stub(p)]
-    if names:
-        wanted = set(names)
-        unknown = wanted - {p.stem for p in stubs}
-        if unknown:
-            print(f"error: not a peer stub: {', '.join(sorted(unknown))}")
-            return 1
-        stubs = [p for p in stubs if p.stem in wanted]
-    if not stubs:
-        print("no peer stubs here")
-        return 0
-    failed = 0
-    for path in stubs:
-        try:
-            status, details = peer_stub.check(path, _live_surface)
-        except peer.PeerError as e:
-            status, details = "unchecked", [str(e)]
-        if status != "ok":
-            failed += 1
-        suffix = f": {'; '.join(details)}" if details else ""
-        print(f"  {path.stem:<20} {status}{suffix}")
-    if failed:
-        print(
-            f"\n{failed} stub(s) need attention; regenerate with `repld gist stub ... --force`"
-        )
-    return 1 if failed else 0
-
-
 def _gist_stub(argv: list[str]) -> int:
+    """Generate or check typed async forwarding stubs for a peer's gist."""
     import datetime
 
     from . import gist_links, peer, peer_stub
@@ -530,7 +484,56 @@ def _gist_stub(argv: list[str]) -> int:
     return 0
 
 
+def _gist_stub_check(names: list[str]) -> int:
+    """Report peer stubs that have drifted from their live peer."""
+    from . import peer, peer_stub
+
+    stubs: list[Path] = []
+    for d in paths.gist_dirs():
+        if d.is_dir():
+            stubs += [p for p in sorted(d.glob("*.py")) if peer_stub.read_stub(p)]
+    if names:
+        wanted = set(names)
+        unknown = wanted - {p.stem for p in stubs}
+        if unknown:
+            print(f"error: not a peer stub: {', '.join(sorted(unknown))}")
+            return 1
+        stubs = [p for p in stubs if p.stem in wanted]
+    if not stubs:
+        print("no peer stubs here")
+        return 0
+    failed = 0
+    for path in stubs:
+        try:
+            status, details = peer_stub.check(path, _live_surface)
+        except peer.PeerError as e:
+            status, details = "unchecked", [str(e)]
+        if status != "ok":
+            failed += 1
+        suffix = f": {'; '.join(details)}" if details else ""
+        print(f"  {path.stem:<20} {status}{suffix}")
+    if failed:
+        print(
+            f"\n{failed} stub(s) need attention; regenerate with `repld gist stub ... --force`"
+        )
+    return 1 if failed else 0
+
+
+def _live_surface(peer_cwd: str) -> dict | None:
+    """The `peer/list` body of the kernel running for *peer_cwd*, or None when
+    none is reachable. Anything else wrong with the peer raises `PeerError`."""
+    from . import peer, sessions
+
+    row = peer.pick_session(peer.resolve_cwd(peer_cwd, []), sessions.list_sessions())
+    if row is None:
+        return None
+    msg = peer.request_sync(str(row["socket_path"]), PEER_LIST_METHOD, {})
+    peer.raise_for_error(msg, Path(peer_cwd).name)
+    return msg["result"]
+
+
 def _gist_add(argv: list[str]) -> int:
+    """Link a gist registered in another project into this one."""
     from . import gist_deps, gist_links
 
     usage = _usage("add")
@@ -568,6 +571,7 @@ def _gist_add(argv: list[str]) -> int:
 
 
 def _gist_rm(argv: list[str]) -> int:
+    """Unlink a named gist, or drop all stale links and registry entries."""
     from . import gist_links, gists
 
     usage = _usage("rm")
@@ -614,6 +618,7 @@ def _gist_rm(argv: list[str]) -> int:
 
 
 def _gist_lint(argv: list[str]) -> int:
+    """Lint gist files against best practices; exit 1 on findings."""
     from . import gist_lint
     from . import gists as _gists
 
@@ -629,11 +634,10 @@ def _gist_lint(argv: list[str]) -> int:
     local_only = "--local" in argv
     argv = [a for a in argv if a != "--local"]
     gists_dir = paths.local_gists_dir()
-    # `paths.gist_dirs` *is* the precedence a live kernel resolves against, so
-    # there is nothing to keep in sync any more. Needed even under --local:
-    # _find_gist resolves names against them. create=False — linting is a
-    # read-only question and must not conjure the directories it finds nothing
-    # in.
+    # `paths.gist_dirs` is the same precedence a live kernel resolves against.
+    # Needed even under `--local`: `_find_gist` resolves names against them.
+    # `create=False` because linting is read-only and must not conjure
+    # directories it finds nothing in.
     _gists.install(paths.gist_dirs(), create=False)
 
     if argv:
@@ -641,12 +645,10 @@ def _gist_lint(argv: list[str]) -> int:
         missing = []
         nonlocal_hits = []
         for name in argv:
-            # Under --local, look in ./gists first rather than asking
-            # _find_gist, which walks the kernel's precedence (global before
-            # local) and has no local_only notion: with both a global and a
-            # local `helpers`, it returned the global one and this rejected
-            # the name outright — while the no-name form linted that same
-            # local file happily.
+            # Under `--local`, look in ./gists directly. `_find_gist` walks
+            # the kernel's precedence (global before local) and has no
+            # local-only mode, so a name present in both dirs resolves to
+            # the global copy and is rejected as non-local.
             local_hit = gists_dir / f"{name}.py"
             p = (
                 local_hit
@@ -690,65 +692,8 @@ def _gist_lint(argv: list[str]) -> int:
     return 0
 
 
-def _print_local_section(gists_dir: Path) -> list[str]:
-    from . import gists as _gists
-    from . import peer_stub
-
-    # Local gists (./gists), excluding privates.
-    local = sorted(
-        p.stem for p in gists_dir.glob("*.py") if _gists.is_public_gist_file(p)
-    )
-    if not local:
-        return local
-    print("local (./gists):")
-    for name in local:
-        gist_path = gists_dir / f"{name}.py"
-        stub = peer_stub.read_stub(gist_path)
-        if stub is not None:
-            peer_name = Path(stub["peer"]).name
-            fns = ", ".join(stub["functions"])
-            print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
-            continue
-        sig = _gists.signature_for_path(gist_path)
-        print(f"  {name:<20} {sig}")
-    return local
-
-
-def _print_linked_section(links: dict[str, str]) -> None:
-    if not links:
-        return
-    print("linked:")
-    stale = 0
-    for name in sorted(links):
-        path = Path(links[name])
-        if path.is_file():
-            print(f"  {name:<20} {path}")
-        else:
-            stale += 1
-            print(f"  {name:<20} {path}  (stale)")
-    if stale:
-        print()
-        print(f"{stale} stale link(s) — repld gist rm --stale to drop")
-
-
-def _linkable_by_project(here: set[str]) -> dict[str, list[tuple[str, str]]]:
-    from . import gists as _gists
-
-    cwd = Path.cwd().resolve()
-    linkable: dict[str, list[tuple[str, str]]] = {}
-    for name, entry in _gists.registry().items():
-        if name in here or name.startswith("_"):
-            continue
-        path = Path(entry.get("path", ""))
-        if not path.is_file() or cwd in path.resolve().parents:
-            continue
-        linkable.setdefault(entry.get("project", "?"), []).append(
-            (name, entry.get("description", "") or "")
-        )
-    return linkable
-
-
 def _gist_list(argv: list[str]) -> int:
+    """Show local, linked, and linkable gists."""
     from . import gist_links
 
     usage = _usage("list")
@@ -779,7 +724,7 @@ def _gist_list(argv: list[str]) -> int:
     # MCP resource is agent-only).
     linkable = _linkable_by_project(set(local) | set(links))
     if linkable:
-        print("linkable (other projects — repld gist add <name>):")
+        print("linkable (other projects; repld gist add <name>):")
         for project in sorted(linkable):
             print(f"  {project}")
             for name, desc in sorted(linkable[project]):
@@ -790,16 +735,74 @@ def _gist_list(argv: list[str]) -> int:
     return 0
 
 
-# name → (handler, arg spec, one-line help, extra lines for `<verb> --help`).
+def _print_local_section(gists_dir: Path) -> list[str]:
+    """Print the local-gists portion of `repld gist list` and return their names."""
+    from . import gists as _gists
+    from . import peer_stub
+
+    # Local gists (./gists), excluding privates.
+    local = sorted(
+        p.stem for p in gists_dir.glob("*.py") if _gists.is_public_gist_file(p)
+    )
+    if not local:
+        return local
+    print("local (./gists):")
+    for name in local:
+        gist_path = gists_dir / f"{name}.py"
+        stub = peer_stub.read_stub(gist_path)
+        if stub is not None:
+            peer_name = Path(stub["peer"]).name
+            fns = ", ".join(stub["functions"])
+            print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
+            continue
+        sig = _gists.signature_for_path(gist_path)
+        print(f"  {name:<20} {sig}")
+    return local
+
+
+def _print_linked_section(links: dict[str, str]) -> None:
+    """Print the linked-gists portion of `repld gist list`, flagging stale entries."""
+    if not links:
+        return
+    print("linked:")
+    stale = 0
+    for name in sorted(links):
+        path = Path(links[name])
+        if path.is_file():
+            print(f"  {name:<20} {path}")
+        else:
+            stale += 1
+            print(f"  {name:<20} {path}  (stale)")
+    if stale:
+        print()
+        print(f"{stale} stale link(s); run repld gist rm --stale to drop")
+
+
+def _linkable_by_project(here: set[str]) -> dict[str, list[tuple[str, str]]]:
+    """Gists registered in other projects, grouped by project name."""
+    from . import gists as _gists
+
+    cwd = Path.cwd().resolve()
+    linkable: dict[str, list[tuple[str, str]]] = {}
+    for name, entry in _gists.registry().items():
+        if name in here or name.startswith("_"):
+            continue
+        path = Path(entry.get("path", ""))
+        if not path.is_file() or cwd in path.resolve().parents:
+            continue
+        linkable.setdefault(entry.get("project", "?"), []).append(
+            (name, entry.get("description", "") or "")
+        )
+    return linkable
+
+
+# Each entry: (handler, arg spec, one-line help, extra `<verb> --help` lines).
 #
-# The single source for dispatch, for the `repld gist --help` listing, *and*
-# for each verb's own usage line. The verbs used to keep a third copy apiece
-# and four of the six had drifted from this table — under a comment claiming
-# they couldn't, which is what a "single source" is worth when nothing reads
-# from it. `_usage()` is the thing that makes the claim true.
-#
-# Keep the spec short: `_print_gist_usage` pads every entry to the longest
-# one, so a flag list belongs in the detail lines, not here.
+# Single source for dispatch, the `repld gist --help` listing, and each
+# verb's own usage line. `_usage()` reads from this table, enforcing the
+# single-source property. Keep the spec short: `_print_gist_usage` pads
+# every entry to the longest one, so a flag list belongs in the detail
+# lines, not here.
 _GIST_COMMANDS = {
     "new": (_gist_new, "new <name>", "scaffold ./gists/<name>.py", ""),
     "fetch": (
@@ -836,7 +839,7 @@ _GIST_COMMANDS = {
         "lint [--local] [name...]",
         "check gist(s) against best practices",
         (
-            "Default scope is everything a kernel here would import — "
+            "Default scope is everything a kernel here would import: "
             "~/.repld/gists, ./gists, and linked.\n"
             "--local restricts to ./gists, so the exit code is usable as a gate "
             "for this project alone."

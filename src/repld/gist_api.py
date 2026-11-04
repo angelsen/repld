@@ -1,17 +1,15 @@
 """Gist source introspection: AST in, agent-facing API text out.
 
-Split out of `gists.py`, which owned two jobs — an import hook with mutable
-module state (`_managed`, `_mtimes`, `_installed_dirs`, the registry) and this,
-which renders a gist's public surface for `repld://gists/{name}`, the MCP
-`instructions`, and `repld gist list`. Nothing here touches any of that state:
-it takes a path or a parsed tree and returns a string.
+Takes a path or a parsed tree and returns a string or structured data.
+Imports nothing from repld, so it sits underneath the `gists`/`gist_deps`/
+`gist_links` import cycle and can be imported outright. `gists` re-exports
+`_parse` and `_dunder_value`; `gist_links`, `gist_deps` and `gist_lint`
+reach them as `gists._parse` / `gists._dunder_value` (the documented cycle
+contract).
 
-That is also why it imports nothing from repld. `gists.py` is deliberately in a
-two-way cycle with `gist_deps`/`gist_links`, resolved by call-time `module.attr`
-access — this module sits underneath all of it and can be imported outright.
-`gists` re-exports `_parse` and `_dunder_value`, which `gist_links`,
-`gist_deps` and `gist_lint` reach as `gists._parse` / `gists._dunder_value`;
-that is the documented cycle contract and it keeps working unchanged.
+Consumers: `repld://gists/{name}`, the MCP `instructions`, `repld gist list`,
+`peer/list` (via `functions_for_path`), `repld gist stub` (via `_parse` and
+`_dunder_value`).
 """
 
 from __future__ import annotations
@@ -23,11 +21,11 @@ _parse_cache: dict[str, tuple[float, ast.Module | None]] = {}
 
 
 def _parse(path: Path) -> ast.Module | None:
-    """ast.parse a gist file; None if unreadable or unparseable.
+    """Return the parsed AST of *path*, or None if unreadable or unparseable.
 
-    Memoized on (path, mtime) — a single MCP initialize touches each gist
-    file several times (scan / signature / usage / tools), and mtime-keyed
-    staleness matches the reload semantics of _check_reload.
+    Memoized on (path, mtime): a single MCP initialize touches each gist
+    file several times (scan, signature, usage, tools), and mtime-keyed
+    staleness matches the reload semantics of `_check_reload`.
     """
     try:
         key, mtime = str(path), path.stat().st_mtime
@@ -61,19 +59,19 @@ def _usage_value(tree: ast.Module) -> str | None:
 
 
 def _first_line(doc: str | None, limit: int | None = None) -> str:
-    """First line of a docstring, stripped; '' if no doc."""
+    """First line of *doc*, stripped and optionally clamped to *limit* chars."""
     return doc.split("\n")[0].strip()[:limit] if doc else ""
 
 
 def _extract_doc(path: Path) -> str:
-    """Extract first line of module docstring without importing."""
+    """First line of the module docstring at *path*, without importing."""
     tree = _parse(path)
     doc = ast.get_docstring(tree) if tree else None
     return _first_line(doc, limit=80)
 
 
 def _init_args(node: ast.ClassDef) -> str:
-    """Extract and format __init__'s argument list (excluding self)."""
+    """Formatted `__init__` argument list of *node*, excluding `self`."""
     for item in node.body:
         if isinstance(item, ast.FunctionDef) and item.name == "__init__":
             return _format_args(item.args, skip_self=True)
@@ -81,7 +79,7 @@ def _init_args(node: ast.ClassDef) -> str:
 
 
 def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
-    """Format a class: ClassName(init_args) + public methods."""
+    """Append `ClassName(init_args)` and its public methods to *lines*."""
     lines.append(f"{node.name}({_init_args(node)})")
 
     cls_doc = ast.get_docstring(node)
@@ -102,7 +100,7 @@ def _format_class(node: ast.ClassDef, lines: list[str]) -> None:
 
 
 def _decorator_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """Bare decorator names on a function/method (`@x` and `@x.y` → {'x', 'y'})."""
+    """Bare decorator names on *node* (`@x` and `@x.y` yield `{'x', 'y'}`)."""
     names: set[str] = set()
     for dec in node.decorator_list:
         target = dec.func if isinstance(dec, ast.Call) else dec
@@ -120,10 +118,10 @@ def _format_function(
     is_method: bool = False,
     is_property: bool = False,
 ) -> None:
-    """Format one function/method line.
+    """Append one function or method signature line to *lines*.
 
     Properties render as `.name -> ret` (no call parens, no args) since
-    they're accessed as attributes, not called.
+    they are accessed as attributes, not called.
     """
     async_prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
     prefix = "." if is_method else ""
@@ -145,7 +143,7 @@ def _format_function(
 
 
 def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
-    """Format function arguments as compact string ('=' marks a default)."""
+    """Compact argument string: names, annotations and `=` for defaults."""
     parts: list[str] = []
     pos_args = args.posonlyargs + args.args
     if skip_self:
@@ -180,9 +178,11 @@ def _format_args(args: ast.arguments, skip_self: bool = False) -> str:
 
 
 def _param_records(args: ast.arguments) -> list[dict]:
-    """Every parameter of *args* with its kind, annotation and default as source
-    text. `literal` says the default round-trips through `ast.literal_eval`, so a
-    stub can copy it; anything else (a call, a name) cannot be copied safely."""
+    """Every parameter of *args* with its kind, annotation and default as source text.
+
+    `literal` says the default round-trips through `ast.literal_eval`, so a
+    stub can copy it; anything else (a call, a name) cannot be copied safely.
+    """
     positional = args.posonlyargs + args.args
     first_default = len(positional) - len(args.defaults)
     rows: list[tuple[ast.arg, str, ast.expr | None]] = []
@@ -253,11 +253,11 @@ def functions_for_path(path: Path) -> list[dict]:
 
 
 def _is_exception_class(node: ast.ClassDef) -> bool:
-    """True if node looks like an exception type, not an entry-point class.
+    """True if *node* looks like an exception type, not an entry-point class.
 
-    Name- and base-suffix heuristic (e.g. GigahostError(RuntimeError)) — gists
-    commonly define a custom error type before their main class, and that
-    error type should never win "the" signature() pick.
+    Name- and base-suffix heuristic (e.g. `GigahostError(RuntimeError)`):
+    gists commonly define a custom error type before their main class, and
+    that error type should never win the `signature_for_path` pick.
     """
     if node.name.endswith(("Error", "Exception")):
         return True
@@ -269,7 +269,11 @@ def _is_exception_class(node: ast.ClassDef) -> bool:
 
 
 def signature_for_path(path: Path) -> str:
-    """Like signature(), but for a path already in hand (no _installed_dirs lookup)."""
+    """Constructor signature of the first public non-exception class at *path*.
+
+    Returns `ClassName(init_args)` with an ` [async]` suffix when the class
+    has async methods, or `""` when no qualifying class is found.
+    """
     tree = _parse(path)
     if tree is None:
         return ""

@@ -374,6 +374,13 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   worker gate and a judge confirmation. Wire-facing strings a test asserts on (observe's tree
   diff arrows and multiplication signs, captcha's `describe`) keep their non-ASCII this pass,
   listed per module; a later hand pass converts them with their tests.
+  Slice three (CLI + gists, 15 items, 30 agents, 2.4M tokens, 84 min): 12/15 landed, three
+  judge rejections were mechanical (gist_deps `-- skipped`, gist_lint 36 new double backticks,
+  relaunch blocked only by the worker's phase-16 crash) and were applied by hand from their
+  worktrees with the fix. D101-103 81 -> 46 and PLR1702 at depth 4 12 -> 4 (all peer.py), both
+  left only in the runtime remainder. Phase 16 aborted inside the worker's combined
+  `--phases` set (a `_FakeDist` without `version` after duckdb import) but passes alone; the
+  order dependence is not chased. Next: the runtime remainder (22 items).
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.

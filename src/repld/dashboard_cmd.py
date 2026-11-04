@@ -1,11 +1,11 @@
-"""`repld dashboard` — open the running kernel's control panel.
+"""`repld dashboard`: open the running kernel's control panel.
 
 The served page embeds the API token, so `GET /` is authenticated too and
 this command is what supplies the credential: it reads the token from the
-kernel's 0600 hint file and opens `/?token=…`. The page drops the query from
-the address bar once it loads, having been given a cookie for that port.
+kernel's 0600 hint file and opens `/?token=...`. The page drops the query
+from the address bar once it loads, having been given a cookie for that port.
 
-Which makes this the only convenient way in, deliberately — the token is what
+Which makes this the only convenient way in, deliberately: the token is what
 separates "the user who owns this kernel" from "any process on the box", and
 loopback is not a uid boundary.
 """
@@ -17,7 +17,7 @@ from urllib.parse import quote
 from . import cli_args, paths, state
 
 _USAGE = """\
-repld dashboard — open this project's kernel dashboard
+repld dashboard: open this project's kernel dashboard
 
   repld dashboard [--print] [--socket PATH]
 
@@ -26,6 +26,7 @@ repld dashboard — open this project's kernel dashboard
 
 
 def run_dashboard(argv: list[str]) -> int:
+    """Open this project's dashboard in a browser, or print the URL."""
     if cli_args.wants_help(argv):
         print(_USAGE)
         return 0
@@ -55,7 +56,7 @@ def run_dashboard(argv: list[str]) -> int:
     token = state.dashboard_token(paths.hint_for(sock_path))
     if not token:
         print(
-            "repld dashboard: no API token in the kernel's hint file — the "
+            "repld dashboard: no API token in the kernel's hint file; the "
             "dashboard will refuse to serve its page. Restart the kernel.",
             file=sys.stderr,
         )
@@ -67,9 +68,9 @@ def run_dashboard(argv: list[str]) -> int:
     if print_only or not webbrowser.open(url):
         print(url)
         return 0
-    # The port, not the URL — the same reason the boot banner and `repld status`
-    # print one. The URL carries the API token, and once the browser has it
-    # there is nothing left to gain by also leaving it in shell scrollback.
-    # `--print` is there for when you do want the credential.
+    # The port, not the URL, for the same reason the boot banner and
+    # `repld status` print one. The URL carries the API token, and once the
+    # browser has it there is nothing left to gain by also leaving it in shell
+    # scrollback. `--print` is there for when you do want the credential.
     print(f"opened the dashboard on port {port}")
     return 0
