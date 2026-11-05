@@ -6693,6 +6693,55 @@ def phase_6_seed_screenshot_offloop(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_teardown_clears_pending(kernel: Kernel) -> None:
+    """Closing a connection drops its tab's pending chooser; `cleanup()` cancels both watchers."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from repld.browser.cdp import CDPSession
+    from repld.browser.pool import BrowserPool
+
+    owner = object()
+    modes: list[str] = []
+
+    async def set_mode(mode: str) -> None:
+        modes.append(mode)
+
+    cdp = SimpleNamespace(
+        taken=True,
+        owner=owner,
+        _filechooser_pending={"backend_node_id": 1, "mode": "single"},
+        set_mode=set_mode,
+    )
+    pool = BrowserPool.__new__(BrowserPool)
+    pool._browsers = {
+        9222: SimpleNamespace(_session=SimpleNamespace(_sessions={"s1": cdp}))
+    }
+    released = asyncio.run(pool.release_owned_by(owner))
+    assert_eq(released, 1, "the owner's taken tab is released")
+    assert_eq(cdp._filechooser_pending, None, "the pending chooser is cleared")
+    assert_eq(modes, ["shared"], "the tab returns to shared")
+
+    async def cleanup_cancels() -> tuple[bool, bool]:
+        session = CDPSession(
+            send=None, session_id="s2", target_info={"targetId": "t2"}, port=9222
+        )
+        heartbeat = asyncio.create_task(asyncio.sleep(60))
+        watch = asyncio.create_task(asyncio.sleep(60))
+        session._heartbeat_task = heartbeat
+        session._captcha_watch = watch
+        session.cleanup()
+        await asyncio.sleep(0)
+        return heartbeat.cancelled(), watch.cancelled()
+
+    hb, cw = asyncio.run(cleanup_cancels())
+    assert_true(hb, "cleanup() cancels the heartbeat task")
+    assert_true(cw, "cleanup() cancels the captcha watcher")
+    print(
+        "  ✓ teardown: pending chooser cleared, heartbeat and captcha watcher cancelled"
+    )
+
+
 def phase_6_auth_log_bounded(kernel: Kernel) -> None:
     """A page that re-challenges in a loop cannot grow `CDPSession._auth_log` without limit."""
     from repld.browser.cdp import CDPSession
