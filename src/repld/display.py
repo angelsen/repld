@@ -1,7 +1,7 @@
-"""Display consumer — main-thread event renderer.
+"""Display consumer: main-thread event renderer.
 
 `run_display(stop)` blocks on the main thread, popping events from the queue
-and rendering them to sys.__stdout__. A companion stdin reader thread handles
+and rendering them to `sys.__stdout__`. A companion stdin reader thread handles
 human-gate input.
 
 Falls back to plain ANSI coloring when `rich` is not installed.
@@ -10,6 +10,7 @@ Falls back to plain ANSI coloring when `rich` is not installed.
 import queue
 import sys
 import threading
+from collections.abc import Callable
 from typing import TextIO, cast
 
 from . import render, tasks
@@ -44,7 +45,7 @@ except ImportError:
 # ANSI helpers (always available)
 # ---------------------------------------------------------------------------
 
-# Shared with `repld log` — the two surfaces render the same events and are
+# Shared with `repld log`: the two surfaces render the same events and are
 # meant to look identical. Formats live in render.py; only the couple of
 # strings unique to a live terminal are built here.
 _DIM = render.DIM
@@ -57,13 +58,14 @@ _RESET = render.RESET
 # must stay safe without a terminal, and the reason is the opposite of what
 # it looks like: a --no-display kernel imports it on every boot, via
 # eventlog's module-level `from .display import VIEWER_MAX_BYTES`. So
-# import-time work here runs in every bridge-spawned kernel — the
+# import-time work here runs in every bridge-spawned kernel, the
 # configuration nobody watches boot.
 _STDOUT = cast(TextIO, sys.__stdout__)
 _STDIN = cast(TextIO, sys.__stdin__)
 
 
 def _out(text: str) -> None:
+    """Write `text` to the terminal and flush immediately."""
     _STDOUT.write(text)
     _STDOUT.flush()
 
@@ -75,21 +77,21 @@ def _out(text: str) -> None:
 # task_id of the "foreground" cell (last started, not yet done).
 # Output from other tasks is prefixed.
 _foreground_task_id: str | None = None
-# Gates still awaiting an answer, oldest first: gate_id → (kind, prompt, options).
-# The prompt is kept because re-showing a gate has to re-ask the question — it
+# Gates still awaiting an answer, oldest first: gate_id to (kind, prompt, options).
+# The prompt is kept because re-showing a gate has to re-ask the question: it
 # is the only thing on screen telling the human what is still pending.
 # A dict rather than a single slot because `gates` has always supported any
 # number at once, and since `repld gate` an answer can arrive out-of-band for
-# any of them — the pane has to drop the one that was answered, not whichever
+# any of them, the pane has to drop the one that was answered, not whichever
 # it happened to be showing. Insertion-ordered, so stdin routes to the newest
 # open gate (the one whose prompt is on screen) and falls back to the previous
 # one when that is answered elsewhere.
 _open_gates: "dict[str, tuple[str, str, list[str] | None]]" = {}
 
-# Per-cell viewer cap. Pure bytes — single source of truth, no chunk-boundary
-# edge cases. ~4KB ≈ 50 short lines or ~20 wide ones. Full content is on disk
-# via the spill file; Read/Grep on that path is the escape hatch.
-# Independent of tasks.PREVIEW_MAX_BYTES (wire budget) — same value by
+# Per-cell viewer cap. Pure bytes, single source of truth, no chunk-boundary
+# edge cases. 4 KB is about 50 short lines or 20 wide ones. Full content is
+# on disk via the spill file; Read/Grep on that path is the escape hatch.
+# Independent of tasks.PREVIEW_MAX_BYTES (wire budget), same value by
 # coincidence, not by contract.
 VIEWER_MAX_BYTES = 4 * 1024
 # Per-task (bytes_written, last_char_was_newline).
@@ -101,6 +103,7 @@ _console: "_RichConsole | None" = None
 
 
 def _get_console() -> "_RichConsole":
+    """Return the shared `rich.Console`, creating it on first use."""
     global _console
     if _console is None:
         from rich.console import Console
@@ -115,6 +118,7 @@ def _get_console() -> "_RichConsole":
 
 
 def _render_cell_start(ev: CellStart) -> None:
+    """Render the cell header and syntax-highlighted source."""
     global _foreground_task_id
     _foreground_task_id = ev.task_id
     if _HAS_RICH:
@@ -122,7 +126,7 @@ def _render_cell_start(ev: CellStart) -> None:
 
         console = _get_console()
         # Same header text as render.cell_header, wrapped in rich's markup
-        # dialect instead of ANSI — console.print would emit raw escapes
+        # dialect instead of ANSI: console.print would emit raw escapes
         # literally. The text itself must keep coming from render.py.
         header = f"[dim]{render.cell_header_text(ev.task_id, ev.t)}[/dim]"
         console.print(header, markup=True)
@@ -147,11 +151,11 @@ def _render_cell_start(ev: CellStart) -> None:
 def _write_styled(
     text: str, task_id: str | None, *, is_stderr: bool, line_continues: bool = False
 ) -> None:
-    """Write `text` to the terminal with the right prefix/color.
+    """Write `text` to the terminal with the right prefix and color.
 
-    `line_continues=True` means the previous emit for this task didn't end
+    `line_continues=True` means the previous emit for this task did not end
     with a newline, so the first line of this chunk should NOT get a fresh
-    prefix (it's continuing an existing line). Subsequent lines after a
+    prefix (it continues an existing line). Subsequent lines after a
     newline within this chunk still get the prefix.
     """
     if not text:
@@ -177,19 +181,21 @@ def _write_styled(
 
 
 def _emit_elision_notice(task_id: str, last_was_nl: bool) -> None:
+    """Print the truncation notice with the spill-file path for recovery."""
     path = (tasks.get(task_id) or {}).get("spill_path") or f"task={task_id}"
     prefix = "" if last_was_nl else "\n"
     _out(
-        f"{prefix}{_DIM}… cell {render.short_task(task_id)} output elided "
+        f"{prefix}{_DIM}... cell {render.short_task(task_id)} output elided "
         f"({VIEWER_MAX_BYTES // 1024}KB cap); full: {path}{_RESET}\n"
     )
 
 
 def _render_chunk(text: str, task_id: str | None, *, is_stderr: bool) -> None:
+    """Apply the per-cell byte cap and emit the (possibly clipped) chunk."""
     if not text:
         return
     if task_id is None:
-        # Unattributed (startup banner, module-level) — no cap.
+        # Unattributed (startup banner, module-level), no cap.
         _write_styled(text, None, is_stderr=is_stderr)
         return
     if task_id in _truncated_tasks:
@@ -215,16 +221,19 @@ def _render_chunk(text: str, task_id: str | None, *, is_stderr: bool) -> None:
 
 
 def _render_stdout(ev: StdoutChunk) -> None:
+    """Render a stdout chunk, subject to the per-cell byte cap."""
     _render_chunk(ev.text, ev.task_id, is_stderr=False)
 
 
 def _render_stderr(ev: StderrChunk) -> None:
+    """Render a stderr chunk in red, subject to the per-cell byte cap."""
     _render_chunk(ev.text, ev.task_id, is_stderr=True)
 
 
 def _render_cell_done(ev: CellDone) -> None:
+    """Render the cell-done marker and clear the viewer state for this task."""
     global _foreground_task_id
-    # If the last output didn't end with a newline, pad so the done marker
+    # If the last output did not end with a newline, pad so the done marker
     # lands on its own line instead of gluing onto mid-line text.
     _, last_nl = _viewer_state.get(ev.task_id, (0, True))
     pad = "" if last_nl else "\n"
@@ -237,6 +246,7 @@ def _render_cell_done(ev: CellDone) -> None:
 
 
 def _render_channel_push(ev: ChannelPush) -> None:
+    """Render a channel notification as a bordered panel or plain block."""
     if _HAS_RICH:
         from rich.panel import Panel
         from rich.text import Text
@@ -255,8 +265,8 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
+    """Show the gate prompt. No trailing newline: the cursor stays for stdin."""
     _open_gates[ev.gate_id] = (ev.kind, ev.prompt, ev.options)
-    # No newline — the cursor stays on this line for the stdin reader.
     _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
 
 
@@ -266,7 +276,7 @@ def _close_gate(gate_id: str, line: str) -> None:
     Shared by the two ways a gate ends, because the pane's job is the same
     either way. Drops *this* gate by id rather than whichever is on screen: an
     answer can arrive from `repld gate` or a browser pill for an older one, and
-    a timeout fires against whichever gate set it — in both cases the newest is
+    a timeout fires against whichever gate set it. In both cases the newest is
     still open and must stay answerable from stdin.
     """
     if _open_gates.pop(gate_id, None) is None:
@@ -283,50 +293,53 @@ def _close_gate(gate_id: str, line: str) -> None:
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:
+    """Close the answered gate and re-show any remaining prompt."""
     _close_gate(ev.gate_id, render.prompt_response(ev.value))
 
 
 def _render_prompt_closed(ev: HumanPromptClosed) -> None:
-    """A gate that timed out or whose cell was cancelled.
+    """Close a gate that timed out or whose cell was cancelled.
 
     Without this the entry never leaves `_open_gates`: `HumanPromptResponse`
     only fires when a human actually answered, so a `timeout=` expiring left a
-    phantom that swallowed every subsequent stdin line — the reader routes to
+    phantom that swallowed every subsequent stdin line (the reader routes to
     the newest open gate, and resolving a gate the kernel has already dropped
-    is a silent no-op.
+    is a silent no-op).
     """
     _close_gate(ev.gate_id, render.prompt_closed(ev.reason))
 
 
 def _render_browser_attached(ev: BrowserTabAttached) -> None:
+    """Render the tab-attached notice."""
     _out(render.browser_attached(ev.target, ev.url, ev.title) + "\n")
 
 
 def _render_browser_detached(ev: BrowserTabDetached) -> None:
+    """Render the tab-detached notice."""
     _out(render.browser_detached(ev.target) + "\n")
 
 
+# Event type to handler, replacing the isinstance/elif chain so the dispatch
+# stays at depth 1.
+_EVENT_HANDLERS: dict[type[Event], Callable[..., None]] = {
+    CellStart: _render_cell_start,
+    StdoutChunk: _render_stdout,
+    StderrChunk: _render_stderr,
+    CellDone: _render_cell_done,
+    ChannelPush: _render_channel_push,
+    HumanPromptOpen: _render_prompt_open,
+    HumanPromptResponse: _render_prompt_response,
+    HumanPromptClosed: _render_prompt_closed,
+    BrowserTabAttached: _render_browser_attached,
+    BrowserTabDetached: _render_browser_detached,
+}
+
+
 def _render(ev: Event) -> None:
-    if isinstance(ev, CellStart):
-        _render_cell_start(ev)
-    elif isinstance(ev, StdoutChunk):
-        _render_stdout(ev)
-    elif isinstance(ev, StderrChunk):
-        _render_stderr(ev)
-    elif isinstance(ev, CellDone):
-        _render_cell_done(ev)
-    elif isinstance(ev, ChannelPush):
-        _render_channel_push(ev)
-    elif isinstance(ev, HumanPromptOpen):
-        _render_prompt_open(ev)
-    elif isinstance(ev, HumanPromptResponse):
-        _render_prompt_response(ev)
-    elif isinstance(ev, HumanPromptClosed):
-        _render_prompt_closed(ev)
-    elif isinstance(ev, BrowserTabAttached):
-        _render_browser_attached(ev)
-    elif isinstance(ev, BrowserTabDetached):
-        _render_browser_detached(ev)
+    """Dispatch one event to its handler, if registered."""
+    handler = _EVENT_HANDLERS.get(type(ev))
+    if handler is not None:
+        handler(ev)
 
 
 # ---------------------------------------------------------------------------
@@ -338,13 +351,13 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
     """Read lines from stdin and route them to the active gate.
 
     Coercion lives in `gates.parse_response`, shared with `repld gate answer`
-    so a pane and the CLI can't disagree about what "y" or "2" means. On a
-    rejected line we re-prompt and leave the gate open — the human is right
+    so a pane and the CLI cannot disagree about what "y" or "2" means. On a
+    rejected line we re-prompt and leave the gate open, the human is right
     here and can try again.
 
     Releases the stdin claim on the way out, whichever way it leaves. The flag
     was set True in `run_display` and never set back, so once this thread ended
-    — EOF on a redirected stdin, an OSError, the stop event — `gates.tty_prompt`
+    (EOF on a redirected stdin, an OSError, the stop event) `gates.tty_prompt`
     went on declining to ask for the rest of the process's life, and
     `gist_deps.install_deps` told the user the pane was reading gate answers
     and pointed them at `repld restart`, which would do the same thing again.
@@ -360,7 +373,7 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
             if not line:
                 break
             line = line.rstrip("\n")
-            # Newest open gate — the one whose prompt the cursor is parked on.
+            # Newest open gate: the one whose prompt the cursor is parked on.
             if not _open_gates:
                 continue
             gate_id, (kind, _prompt, options) = next(reversed(_open_gates.items()))
@@ -380,14 +393,14 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
 
 
 def run_display(stop: threading.Event) -> None:
-    """Main-thread display loop. Blocks until stop is set.
+    """Main-thread display loop. Blocks until `stop` is set.
 
     Pops events from the event queue and renders them. Also drives a
     companion stdin-reader thread for human gates.
     """
     if sys.__stdout__ is None or sys.__stdin__ is None:
         raise RuntimeError(
-            "display mode requires a terminal (stdio missing) — use --no-display"
+            "display mode requires a terminal (stdio missing): use --no-display"
         )
     q = get_queue()
 

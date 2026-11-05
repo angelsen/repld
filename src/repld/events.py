@@ -9,10 +9,10 @@
 The queue exists only for the TUI. A headless kernel (`--no-display`, which is
 how every auto-spawned kernel runs) has no consumer for it, so `run_kernel`
 calls `disable_queue()` instead of `init_event_queue()` and `emit()` returns
-after the sink. See `disable_queue` for why the queue can't simply be left
+after the sink. See `disable_queue` for why the queue cannot simply be left
 unread.
 
-`emit()` is safe to call before either — events are buffered in
+`emit()` is safe to call before either: events are buffered in
 `_pre_init_buf` and flushed on init, or dropped if the queue is disabled.
 """
 
@@ -30,6 +30,8 @@ from typing import Literal
 
 @dataclass(frozen=True, slots=True)
 class CellStart:
+    """An exec cell began running."""
+
     task_id: str
     source: str
     t: float
@@ -38,18 +40,24 @@ class CellStart:
 
 @dataclass(frozen=True, slots=True)
 class StdoutChunk:
+    """A fragment of captured stdout for a task (or ambient, when `task_id` is None)."""
+
     task_id: str | None  # None when outside any task context
     text: str
 
 
 @dataclass(frozen=True, slots=True)
 class StderrChunk:
+    """A fragment of captured stderr for a task (or ambient, when `task_id` is None)."""
+
     task_id: str | None
     text: str
 
 
 @dataclass(frozen=True, slots=True)
 class CellDone:
+    """An exec cell finished, with its wall time and optional error text."""
+
     task_id: str
     elapsed_ms: float
     error: str | None
@@ -57,12 +65,16 @@ class CellDone:
 
 @dataclass(frozen=True, slots=True)
 class ChannelPush:
+    """A channel notification delivered to one or all connected sessions."""
+
     content: str
     meta: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
 class HumanPromptOpen:
+    """A human gate opened and is waiting for an answer."""
+
     gate_id: str
     kind: Literal["ask", "confirm", "choose"]
     prompt: str
@@ -71,6 +83,8 @@ class HumanPromptOpen:
 
 @dataclass(frozen=True, slots=True)
 class HumanPromptResponse:
+    """A human gate received an answer."""
+
     gate_id: str
     value: str | bool
 
@@ -92,6 +106,8 @@ class HumanPromptClosed:
 
 @dataclass(frozen=True, slots=True)
 class BrowserTabAttached:
+    """A Chrome tab became tracked by the browser pool."""
+
     target: str
     url: str
     title: str
@@ -99,6 +115,8 @@ class BrowserTabAttached:
 
 @dataclass(frozen=True, slots=True)
 class BrowserTabDetached:
+    """A Chrome tab left the browser pool."""
+
     target: str
 
 
@@ -124,7 +142,7 @@ _queue: "queue.Queue[Event] | None" = None
 _pre_init_buf: list[Event] = []
 _pre_init_lock = threading.Lock()
 # Set once at boot by disable_queue(), never cleared. Distinguishes "no queue
-# because nothing will ever read one" from "no queue *yet*" — both have
+# because nothing will ever read one" from "no queue yet"; both have
 # _queue is None, but the first drops and the second buffers.
 _disabled = False
 
@@ -140,8 +158,10 @@ _DROP_WARN_INTERVAL = 10.0
 
 
 def init_event_queue(maxsize: int = _MAXSIZE) -> None:
-    """Create the module-level queue. Must be called before the kernel starts
-    accepting IPC connections. Flushes any pre-init buffered events."""
+    """Create the module-level queue and flush any pre-init buffered events.
+
+    Must be called before the kernel starts accepting IPC connections.
+    """
     global _queue, _pre_init_buf
     q: queue.Queue[Event] = queue.Queue(maxsize=maxsize)
     with _pre_init_lock:
@@ -153,17 +173,17 @@ def init_event_queue(maxsize: int = _MAXSIZE) -> None:
 
 
 def disable_queue() -> None:
-    """Run without a display queue: `emit()` stops after the sink.
+    """Disable the display queue permanently: `emit()` stops after the sink.
 
     Called instead of `init_event_queue()` when nothing will consume the
-    queue — i.e. `--no-display`, which is how every auto-spawned kernel runs.
-    One-way and boot-only; the queue can't be turned back on.
+    queue, i.e. `--no-display`, which is how every auto-spawned kernel runs.
+    One-way and boot-only; the queue cannot be turned back on.
 
-    The alternative — initializing a queue and draining it into nothing — is
-    what this replaces, and it is not something the drain thread was free to
-    stop doing: an unread queue pins at `_MAXSIZE`, after which every `emit()`
-    takes the drop-oldest path below, which is strictly more work per event
-    than draining. The queue is the redundant part, not the drain.
+    The alternative (initializing a queue and draining it into nothing) is
+    what this replaces, and the drain thread was not free to stop: an unread
+    queue pins at `_MAXSIZE`, after which every `emit()` takes the drop-oldest
+    path below, which is strictly more work per event than draining. The queue
+    is the redundant part, not the drain.
 
     Drops anything buffered pre-init: it was only ever headed for the TUI, and
     the sink has already written it to the event log.
@@ -175,7 +195,7 @@ def disable_queue() -> None:
 
 
 def get_queue() -> "queue.Queue[Event]":
-    """Return the live queue. Raises RuntimeError if not yet initialized."""
+    """Return the live queue, or raise `RuntimeError` if not yet initialized."""
     if _queue is None:
         raise RuntimeError("events.init_event_queue() has not been called")
     return _queue
@@ -188,14 +208,14 @@ def set_sink(fn: "Callable[[Event], None] | None") -> None:
 
 
 def emit(ev: Event) -> None:
-    """Emit an event. Non-blocking.
+    """Fan an event to the sink and the queue, non-blocking.
 
     Before `init_event_queue()` is called the event is buffered in-process
     and flushed when the queue is created. After init, if the queue is full
     the oldest event is dropped and a drop-count warning is scheduled. After
     `disable_queue()` the queue half is skipped entirely.
 
-    The registered sink (the event log) sees the event regardless — it is
+    The registered sink (the event log) sees the event regardless: it is
     not subject to the queue's drop-oldest policy, and runs first so that a
     kernel with no queue at all still has a complete history on disk.
     """
@@ -206,8 +226,8 @@ def emit(ev: Event) -> None:
         except Exception:
             pass  # a broken log must never break the kernel
 
-    # Unlocked read: _disabled only ever goes False → True, once, during boot.
-    # A stale False costs one lock acquisition and is caught below.
+    # Unlocked read: _disabled only transitions from False to True, once,
+    # during boot. A stale False costs one lock acquisition and is caught below.
     if _disabled:
         return
 
@@ -225,6 +245,7 @@ def emit(ev: Event) -> None:
 
 
 def _put_nonblocking(q: "queue.Queue[Event]", ev: Event) -> None:
+    """Enqueue `ev`, dropping the oldest entry if the queue is full."""
     global _drop_count, _last_drop_warn
     try:
         q.put_nowait(ev)

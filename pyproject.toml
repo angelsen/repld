@@ -55,6 +55,21 @@ typeCheckingMode = "standard"
 # it silently collapses hand-aligned trailing comments in README/docs/site
 # examples on every `ruff format` run. Exclude docs from its scope entirely.
 extend-exclude = ["*.md"]
+# `ruff format . gists` names gists explicitly; without this the exclude below is bypassed.
+force-exclude = true
+
+[tool.ruff.format]
+# Symlinked gists are another project's files (lend, 120 columns); formatting them here
+# rewrites that project's checkout. Lint still runs on them.
+exclude = [
+    "gists/browser_need.py",
+    "gists/lendexec.py",
+    "gists/liveview.py",
+    "gists/partslink24_tab.py",
+    "gists/proposal.py",
+    "gists/served.py",
+    "gists/teamviewer.py",
+]
 
 [tool.ruff.lint]
 # Track ruff's default rule selection; record only the deliberate exceptions.
@@ -63,13 +78,17 @@ extend-exclude = ["*.md"]
 ignore = ["BLE001", "S110", "S112"]
 # Complexity ratchet: the sites flagged when it was enabled carry a `noqa`
 # each and are the burn-down list; a new one is refused at lint time.
-extend-select = ["C901", "PLR0912", "PLR0915"]
+# D101-D103 hold the house style's docstring rule; depth 4 (PLR1702) is preview-only and
+# `preview = true` also switches on unrelated default rules, so it runs as its own command
+# (CLAUDE.md, Build & run).
+extend-select = ["C901", "PLR0912", "PLR0915", "D101", "D102", "D103"]
 
 [tool.ruff.lint.per-file-ignores]
 # A phase function is one subject's assertions in order; its length is the
 # subject's, and the ratchet is for the package.
-"tests/**" = ["C901", "PLR0912", "PLR0915"]
-"scripts/**" = ["C901", "PLR0912", "PLR0915"]
+"tests/**" = ["C901", "PLR0912", "PLR0915", "D101", "D102", "D103"]
+"scripts/**" = ["C901", "PLR0912", "PLR0915", "D101", "D102", "D103"]
+"checks/**" = ["D101", "D102", "D103"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15

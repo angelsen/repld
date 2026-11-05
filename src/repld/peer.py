@@ -68,6 +68,11 @@ _SPAWN_ENV_DROP = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
 class PeerError(Exception):
     """Base for everything `peers` raises about another kernel."""
 
@@ -75,7 +80,8 @@ class PeerError(Exception):
 class PeerNotFound(PeerError):
     """A name that matches no live kernel, or more than one."""
 
-    def __init__(self, message: str, candidates: list[str] | None = None):
+    def __init__(self, message: str, candidates: list[str] | None = None) -> None:
+        """Store the ambiguous or empty candidate list alongside the message."""
         super().__init__(message)
         self.candidates = candidates or []
 
@@ -90,7 +96,8 @@ class PeerRefused(PeerError):
 
     def __init__(
         self, message: str, *, reason: str, code: int | None = None, data: Any = None
-    ):
+    ) -> None:
+        """Carry the refusal `reason`, the JSON-RPC `code` and any `data`."""
         super().__init__(message)
         self.reason = reason
         self.code = code
@@ -113,7 +120,8 @@ class PeerCallError(PeerError):
         remote_traceback: str,
         output: str,
         spill_path: str | None,
-    ):
+    ) -> None:
+        """Capture the callee's exception type, message, traceback and output."""
         super().__init__(message)
         self.peer = peer
         self.target = target
@@ -130,7 +138,8 @@ class PeerDisconnected(PeerError):
     unknown, so nothing was retried. `clean` means the callee said goodbye
     first (an orderly stop or restart), not a crash."""
 
-    def __init__(self, message: str, *, clean: bool):
+    def __init__(self, message: str, *, clean: bool) -> None:
+        """Record whether the disconnection was a clean goodbye."""
         super().__init__(message)
         self.clean = clean
 
@@ -140,16 +149,18 @@ class PeerDisconnected(PeerError):
 # ---------------------------------------------------------------------------
 
 
-def _real(path: str) -> str:
+def _resolve_real(path: str) -> str:
+    """Expand user prefix and resolve symlinks to a canonical path."""
     return os.path.realpath(os.path.expanduser(path))
 
 
 def _is_path_like(target: str) -> bool:
+    """True when `target` looks like a filesystem path rather than a bare name."""
     return os.sep in target or target.startswith((".", "~"))
 
 
 def resolve_cwd(target: str, live: list[dict]) -> str:
-    """The project directory *target* names.
+    """The project directory `target` names.
 
     A path (anything with a separator, or starting `.`/`~`) is taken as given
     and need not be running. A bare name must be the basename of exactly one
@@ -158,14 +169,16 @@ def resolve_cwd(target: str, live: list[dict]) -> str:
     if not target:
         raise PeerNotFound("empty peer name")
     if _is_path_like(target):
-        return _real(target)
+        return _resolve_real(target)
     by_cwd: dict[str, dict] = {}
     for s in live:
-        cwd = _real(str(s.get("cwd", "")))
+        cwd = _resolve_real(str(s.get("cwd", "")))
         if os.path.basename(cwd) == target:
             by_cwd.setdefault(cwd, s)
     if not by_cwd:
-        known = sorted({os.path.basename(_real(str(s.get("cwd", "")))) for s in live})
+        known = sorted(
+            {os.path.basename(_resolve_real(str(s.get("cwd", "")))) for s in live}
+        )
         hint = f" Live kernels: {', '.join(known)}." if known else ""
         raise PeerNotFound(f"no live kernel named {target!r}.{hint}", known)
     if len(by_cwd) > 1:
@@ -179,9 +192,9 @@ def resolve_cwd(target: str, live: list[dict]) -> str:
 
 
 def pick_session(cwd: str, live: list[dict]) -> dict | None:
-    """The live session for project *cwd*, preferring the project's canonical
+    """The live session for project `cwd`, preferring the project's canonical
     socket when `--socket`/`--ephemeral` kernels share the directory."""
-    mine = [s for s in live if _real(str(s.get("cwd", ""))) == cwd]
+    mine = [s for s in live if _resolve_real(str(s.get("cwd", ""))) == cwd]
     if not mine:
         return None
     canonical = str(paths.socket_path(Path(cwd)))
@@ -192,7 +205,7 @@ def pick_session(cwd: str, live: list[dict]) -> dict | None:
 
 
 def build_caller() -> dict | None:
-    """Who is asking, for `_meta.caller`; None outside a kernel.
+    """The `_meta.caller` dict for outgoing calls, or None outside a kernel.
 
     The Claude fields describe the session that started the whole chain, so a
     call made from inside a peer call inherits them from the task's own caller
@@ -243,7 +256,7 @@ def stub_args(
     varargs: tuple = (),
     varkw: dict | None = None,
 ) -> tuple[list, dict]:
-    """Turn a generated stub's parameters into the ``(args, kwargs)`` to forward.
+    """Turn a generated stub's parameters into the `(args, kwargs)` to forward.
 
     `UNSET` values are dropped. Positional-only ones can only be dropped from the
     end, and with `*args` present every positional must be sent positionally,
@@ -269,8 +282,10 @@ def stub_args(
 
 
 def raise_for_error(msg: dict, name: str) -> None:
-    """Raise the typed exception for a JSON-RPC `error` reply. The target did
-    not run in any of these."""
+    """Raise the typed exception for a JSON-RPC `error` reply.
+
+    The target did not run in any of these.
+    """
     err = msg.get("error")
     if err is None:
         return
@@ -296,27 +311,27 @@ def raise_for_error(msg: dict, name: str) -> None:
 
 
 def map_call_result(msg: dict, name: str, target: str) -> Any:
-    """A `peer/call` reply as its value, or the typed exception it stands for."""
+    """Extract the return value from a `peer/call` reply, or raise the typed
+    exception it stands for."""
     raise_for_error(msg, name)
     result = msg.get("result") or {}
     err = result.get("error")
-    if err:
-        tb = str(err.get("traceback") or "")
-        tail = tb.strip().splitlines()[-1] if tb.strip() else ""
-        remote = f"{err.get('type')}: {err.get('message')}"
-        raise PeerCallError(
-            f"{target} on {name} raised {remote}"
-            + (f"\n{tb.rstrip()}" if tail else ""),
-            peer=name,
-            target=target,
-            task_id=result.get("task_id"),
-            remote_type=str(err.get("type")),
-            remote_message=str(err.get("message")),
-            remote_traceback=tb,
-            output=str(err.get("output") or ""),
-            spill_path=result.get("spill_path"),
-        )
-    return result.get("value")
+    if not err:
+        return result.get("value")
+    tb = str(err.get("traceback") or "")
+    tail = tb.strip().splitlines()[-1] if tb.strip() else ""
+    remote = f"{err.get('type')}: {err.get('message')}"
+    raise PeerCallError(
+        f"{target} on {name} raised {remote}" + (f"\n{tb.rstrip()}" if tail else ""),
+        peer=name,
+        target=target,
+        task_id=result.get("task_id"),
+        remote_type=str(err.get("type")),
+        remote_message=str(err.get("message")),
+        remote_traceback=tb,
+        output=str(err.get("output") or ""),
+        spill_path=result.get("spill_path"),
+    )
 
 
 def clean_env(environ: dict[str, str], dotenv_keys: set[str]) -> dict[str, str]:
@@ -328,11 +343,26 @@ def clean_env(environ: dict[str, str], dotenv_keys: set[str]) -> dict[str, str]:
     }
 
 
+def _parse_reply(rfile: object, request_id: int) -> dict:
+    """Read lines from `rfile` until one carries the expected JSON-RPC reply."""
+    for line in rfile:  # type: ignore[attr-defined]
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("id") == request_id:
+            return msg
+    return {}
+
+
 def request_sync(
     socket_path: str, method: str, params: dict, timeout: float = 10.0
 ) -> dict:
-    """One blocking round trip, for the CLI and tests. Returns the raw reply
-    message; raises `PeerUnavailable` / `PeerDisconnected` on transport failure."""
+    """One blocking round trip, for the CLI and tests.
+
+    Returns the raw reply message; raises `PeerUnavailable` or
+    `PeerDisconnected` on transport failure.
+    """
     sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
@@ -344,13 +374,9 @@ def request_sync(
         req = {"jsonrpc": "2.0", "id": _REQUEST_ID, "method": method, "params": params}
         sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
         with sock.makefile("r", encoding="utf-8") as rfile:
-            for line in rfile:
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                if msg.get("id") == _REQUEST_ID:
-                    return msg
+            msg = _parse_reply(rfile, _REQUEST_ID)
+            if msg:
+                return msg
     except OSError as exc:
         raise PeerDisconnected(f"{socket_path}: {exc}", clean=False) from exc
     finally:
@@ -364,7 +390,7 @@ def request_sync(
 
 
 class Peer:
-    """Another project's kernel. Get one with `peers.get(...)`.
+    """Another project's kernel, obtained via `peers.get(...)`.
 
     Every method is awaitable; nothing here pretends a remote call is a local
     attribute. A timeout is the caller's own `asyncio.timeout()`, and cancelling
@@ -375,7 +401,8 @@ class Peer:
     name: str
     start: bool
 
-    def __init__(self, cwd: str, *, start: bool = False):
+    def __init__(self, cwd: str, *, start: bool = False) -> None:
+        """Bind to a project directory, optionally auto-starting its kernel."""
         self.cwd = cwd
         self.name = os.path.basename(cwd)
         self.start = start
@@ -383,11 +410,15 @@ class Peer:
         self._start_lock: asyncio.Lock | None = None
 
     def __repr__(self) -> str:
+        """Show the name and project directory."""
         return f"<Peer {self.name} {self.cwd}>"
 
     def _socket_path(self) -> str | None:
-        """Where this project's kernel listens now, or None. Re-read on every
-        connect: a restarted kernel may have come back somewhere else."""
+        """Where this project's kernel listens now, or None.
+
+        Re-read on every connect: a restarted kernel may have come back
+        somewhere else.
+        """
         row = pick_session(self.cwd, sessions.list_sessions())
         if row is not None:
             return str(row["socket_path"])
@@ -395,6 +426,7 @@ class Peer:
         return str(canonical) if canonical.exists() else None
 
     async def _ensure_started(self) -> None:
+        """Spawn the peer's kernel if no socket is reachable yet."""
         if self._start_lock is None:
             self._start_lock = asyncio.Lock()
         async with self._start_lock:
@@ -430,6 +462,8 @@ class Peer:
     async def _connect(
         self,
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+        """Open a unix connection to the peer, spawning it on the first miss
+        when `start` is set."""
         for attempt in range(2):
             path = await asyncio.to_thread(self._socket_path)
             if path is not None:
@@ -447,10 +481,62 @@ class Peer:
             f"`repld --project {self.cwd} start`, or peers.get(..., start=True)"
         )
 
+    async def _read_reply(self, reader: asyncio.StreamReader) -> tuple[dict, bool]:
+        """Read lines until the reply arrives; return it with its goodbye flag.
+
+        The goodbye flag is True when the callee sent `BRIDGE_GOODBYE_METHOD`
+        before disconnecting (an orderly stop), False otherwise.
+        """
+        goodbye = False
+        while True:
+            raw = await reader.readline()
+            if not raw:
+                return {}, goodbye
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            if msg.get("id") == _REQUEST_ID:
+                return msg, goodbye
+            if msg.get("method") == BRIDGE_GOODBYE_METHOD:
+                goodbye = True
+
     async def _request(self, method: str, params: dict) -> dict:
         """One round trip on a connection of its own; returns the raw reply."""
         if self._semaphore is None:
             self._semaphore = asyncio.Semaphore(_MAX_IN_FLIGHT)
+        line = self._encode_request(method, params)
+        async with self._semaphore:
+            reader, writer, path = await self._connect()
+            if path == str(_own_socket()):
+                writer.close()
+                raise PeerRefused(
+                    "a kernel cannot call itself; use the function directly",
+                    reason="self",
+                )
+            try:
+                writer.write((line + "\n").encode("utf-8"))
+                await writer.drain()
+                msg, goodbye = await self._read_reply(reader)
+                if not msg:
+                    raise PeerDisconnected(
+                        f"{self.name} closed the connection before replying; "
+                        "whether the call ran is unknown, so it was not retried",
+                        clean=goodbye,
+                    )
+                return msg
+            except (ConnectionError, BrokenPipeError) as exc:
+                raise PeerDisconnected(
+                    f"{self.name}: {exc}; whether the call ran is unknown",
+                    clean=False,
+                ) from exc
+            finally:
+                # On cancellation this close is the hangup the callee's reader
+                # thread polls for to cancel the running target.
+                writer.close()
+
+    def _encode_request(self, method: str, params: dict) -> str:
+        """Serialize a JSON-RPC request and enforce the payload limit."""
         try:
             line = json.dumps(
                 {
@@ -470,44 +556,7 @@ class Peer:
                 f"peers: request is {len(line)} bytes of JSON, over the "
                 f"{PEER_MAX_PAYLOAD_BYTES} limit; write it to a file and pass the path"
             )
-        async with self._semaphore:
-            reader, writer, path = await self._connect()
-            if path == str(_own_socket()):
-                writer.close()
-                raise PeerRefused(
-                    "a kernel cannot call itself; use the function directly",
-                    reason="self",
-                )
-            goodbye = False
-            try:
-                try:
-                    writer.write((line + "\n").encode("utf-8"))
-                    await writer.drain()
-                    while True:
-                        raw = await reader.readline()
-                        if not raw:
-                            raise PeerDisconnected(
-                                f"{self.name} closed the connection before replying; "
-                                "whether the call ran is unknown, so it was not retried",
-                                clean=goodbye,
-                            )
-                        try:
-                            msg = json.loads(raw)
-                        except ValueError:
-                            continue
-                        if msg.get("id") == _REQUEST_ID:
-                            return msg
-                        if msg.get("method") == BRIDGE_GOODBYE_METHOD:
-                            goodbye = True
-                except (ConnectionError, BrokenPipeError) as exc:
-                    raise PeerDisconnected(
-                        f"{self.name}: {exc}; whether the call ran is unknown",
-                        clean=False,
-                    ) from exc
-            finally:
-                # On cancellation this close is the hangup the callee's reader
-                # thread polls for to cancel the running target.
-                writer.close()
+        return line
 
     async def call(self, target: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run the dotted `target` (e.g. "voice.transcribe", "os.getcwd") in the
@@ -542,10 +591,16 @@ class Peer:
 
 
 def _own_socket() -> str:
+    """This kernel's socket path, or empty outside a kernel."""
     try:
         return str(ipc.socket_path())
     except RuntimeError:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# The registry
+# ---------------------------------------------------------------------------
 
 
 class _Peers:
@@ -559,6 +614,7 @@ class _Peers:
     PeerDisconnected = PeerDisconnected
 
     def __init__(self) -> None:
+        """Set up the per-name handle cache and its lock."""
         self._handles: dict[str, Peer] = {}
         self._lock = threading.Lock()
 
@@ -567,7 +623,7 @@ class _Peers:
         started_at, and whether it is this one."""
         return [
             {
-                "name": os.path.basename(_real(str(s["cwd"]))),
+                "name": os.path.basename(_resolve_real(str(s["cwd"]))),
                 "cwd": s["cwd"],
                 "pid": s["pid"],
                 "socket_path": s["socket_path"],

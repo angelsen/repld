@@ -1,10 +1,10 @@
-"""Spawning a headless kernel — the one copy of the incantation.
+"""Spawning a headless kernel, the one copy of the incantation.
 
 Two callers need it and must not drift: `bridge.py`, when Claude Code connects
 and no kernel is running for the cwd, and `repld restart`. It lives in its own
 module rather than inside `lifecycle_cmd` because the bridge is spawned once
 per Claude Code session and `cli.py` keeps it to a dict lookup plus a single
-import — pulling in `lifecycle_cmd`'s urllib/signal/sessions would tax every
+import; pulling in `lifecycle_cmd`'s urllib/signal/sessions would tax every
 session for code the bridge never runs.
 
 Only the spawn is shared. Each caller keeps its own wait loop, because they
@@ -21,7 +21,7 @@ therefore stay a child of that bridge and share the terminal window's cgroup,
 accounting its multi-gigabyte state (model weights, a browser) to that window.
 
 Note what this does *not* buy: kill priority. `oom_score_adj` comes out the same
-either way — the user manager's `DefaultOOMScoreAdjust` is 200 on a stock Arch
+either way, the user manager's `DefaultOOMScoreAdjust` is 200 on a stock Arch
 session, which happens to match what a Claude Code client passes down. Under
 global OOM the killer picks by RSS regardless, so a kernel holding several
 gigabytes is still first in line. `REPLD_MEMORY_HIGH` and
@@ -32,7 +32,7 @@ So on systemd we hand the kernel to the user manager as a transient unit
 instead. A *service*, not a `--scope`: `--scope` runs the command in the
 caller's own context and would keep both the parentage and the inherited
 `oom_score_adj`, while a service forks from `systemd --user`, returns
-immediately, gets its own cgroup, and sends stdout/stderr to the journal — which
+immediately, gets its own cgroup, and sends stdout/stderr to the journal, which
 is the only place a bridge-spawned kernel's boot failure can be read, since it
 has no terminal.
 
@@ -57,6 +57,14 @@ _ENV_DENYLIST = frozenset(
 _ENV_DENY_PREFIXES = ("LISTEN_",)
 
 
+# -- Outcomes ----------------------------------------------------------------
+
+STARTED, INCUMBENT, FAILED = "started", "incumbent", "failed"
+
+
+# -- Unit naming and queries -------------------------------------------------
+
+
 def _systemd_unit_name(sock_path: Path) -> str:
     """`repld-<slug>-<hash>.service`, keyed off the *socket* path.
 
@@ -65,81 +73,19 @@ def _systemd_unit_name(sock_path: Path) -> str:
     explicit --socket/REPLD_SOCKET override "moves the whole set coherently"
     (paths.py). Naming the unit from cwd instead would let two kernels that
     share a cwd but were given different --socket overrides collide on one
-    unit name — the second spawn would read the first kernel's unit as its
+    unit name, the second spawn would read the first kernel's unit as its
     own incumbent and never actually start.
 
     The digest is over the resolved socket path itself, so two overrides
     that happen to share a parent directory basename still get distinct
-    units; the basename is kept only so the unit stays greppable — for the
-    common, un-overridden socket (under paths.project_dir) that basename is
-    already `paths.project_slug`.
+    units; the basename is kept only so the unit stays greppable (for the
+    common, un-overridden socket under paths.project_dir, that basename is
+    already `paths.project_slug`).
     """
     resolved = sock_path.resolve()
     digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
     base = resolved.parent.name or "repld"
     return f"repld-{base}-{digest}.service"
-
-
-def _systemd_run_argv(
-    cmd: list[str], sock_path: Path, cwd: Path, env: dict[str, str]
-) -> list[str]:
-    """Build the `systemd-run` invocation. Pure, so it can be asserted on.
-
-    `--collect` so a kernel that dies badly doesn't leave a `failed` unit
-    squatting the name; `--working-directory` because repld is per-cwd and a
-    unit would otherwise inherit the manager's.
-    """
-    argv = [
-        "systemd-run",
-        "--user",
-        "--quiet",
-        "--collect",
-        f"--unit={_systemd_unit_name(sock_path)}",
-        f"--working-directory={cwd}",
-        # Unlike the two opt-ins below this overrides no policy: the default,
-        # `stop`, tears the whole service down when the OOM killer takes one
-        # child (a check suite's eslint), losing every task and connection.
-        "-p",
-        "OOMPolicy=continue",
-    ]
-    # Both opt-in, and for the same reason: they override deliberate policy.
-    # A default memory ceiling would break the legitimate case of loading
-    # several gigabytes of model weights into a cell on purpose. And the
-    # manager's DefaultOOMScoreAdjust (200 on a stock Arch user session) is a
-    # considered statement that user apps are more expendable than system
-    # services — repld shouldn't quietly exempt itself from it, even though
-    # its kernels are usually the fattest process around and so die first.
-    # Floor is the manager's own oom_score_adj: lower needs CAP_SYS_RESOURCE,
-    # and systemd clamps rather than failing, so asking for 0 silently gets
-    # you 100.
-    limit = env.get("REPLD_MEMORY_HIGH")
-    if limit:
-        argv += ["-p", f"MemoryHigh={limit}"]
-    oom_adj = env.get("REPLD_OOM_SCORE_ADJUST")
-    if oom_adj:
-        argv += ["-p", f"OOMScoreAdjust={oom_adj}"]
-    for name, value in sorted(env.items()):
-        if name in _ENV_DENYLIST or name.startswith(_ENV_DENY_PREFIXES):
-            continue
-        argv += [f"--setenv={name}={value}"]
-    return argv + cmd
-
-
-def _kernel_argv(sock_path: Path) -> list[str]:
-    """`python -m repld` rather than the `repld` console script: the script may
-    not be on PATH in the environment a client hands us, but the interpreter
-    running us always has the package importable. `bind.repld_argv` swaps in a
-    `uv run` of its own when ours is a rebind overlay that dies with us.
-    """
-    cmd = bind.repld_argv(["--no-display"])
-    # Only forward --socket when it isn't the default this cwd would resolve to
-    # anyway; REPLD_SOCKET is inherited through the environment.
-    if sock_path != paths.socket_path():
-        cmd += ["--socket", str(sock_path)]
-    return cmd
-
-
-STARTED, INCUMBENT, FAILED = "started", "incumbent", "failed"
 
 
 def _systemd_available() -> bool:
@@ -175,14 +121,15 @@ def _unit_running(sock_path: Path) -> bool:
 
 
 def unit_settled(sock_path: Path) -> bool:
-    """Whether this socket's unit has fully torn down — not active, activating,
-    or deactivating.
+    """Whether this socket's unit has fully torn down.
+
+    Not active, activating, or deactivating.
 
     `lifecycle_cmd._wait_gone` polls this after a stopped kernel's pid and
     lockfile are both gone: systemd's own reap-and-collect can lag the exited
     process by close to a second under a heavy kernel, and `repld restart`
     spawning into the same deterministic unit name during that window sees
-    `_unit_running` still true — `_spawn_via_systemd` reads that as INCUMBENT
+    `_unit_running` still true. `_spawn_via_systemd` reads that as INCUMBENT
     (a healthy racing boot) rather than the kernel just killed, adopts a unit
     that is seconds from being collected, and then polls a lockfile that will
     never reappear. True (nothing to wait for) when systemd isn't in play.
@@ -192,18 +139,88 @@ def unit_settled(sock_path: Path) -> bool:
     return _unit_state(sock_path) not in ("active", "activating", "deactivating")
 
 
+# -- Diagnostics -------------------------------------------------------------
+
+
 def _note(msg: str, quiet: bool) -> None:
-    """Diagnostics that a retrying caller must be able to switch off.
+    """Write a stderr diagnostic that a retrying caller can silence.
 
     Every print below is on a path `bridge._reconnect` can re-enter once per
     poll tick while it waits out a dying kernel's flock, so a spawn that keeps
     failing would otherwise repeat its explanation dozens of times and bury the
     line that matters. `quiet` used to be the bridge's own flag and stopped at
-    its own stderr call — the prints that actually say *why* a spawn failed all
+    its own stderr call; the prints that actually say *why* a spawn failed all
     live here, and none of them were reachable from it.
     """
     if not quiet:
         print(msg, file=sys.stderr)
+
+
+# -- Argv construction -------------------------------------------------------
+
+
+def _kernel_argv(sock_path: Path) -> list[str]:
+    """`python -m repld` rather than the `repld` console script.
+
+    The script may not be on PATH in the environment a client hands us, but the
+    interpreter running us always has the package importable. `bind.repld_argv`
+    swaps in a `uv run` of its own when ours is a rebind overlay that dies
+    with us.
+    """
+    cmd = bind.repld_argv(["--no-display"])
+    # Only forward --socket when it isn't the default this cwd would resolve to
+    # anyway; REPLD_SOCKET is inherited through the environment.
+    if sock_path != paths.socket_path():
+        cmd += ["--socket", str(sock_path)]
+    return cmd
+
+
+def _systemd_run_argv(
+    cmd: list[str], sock_path: Path, cwd: Path, env: dict[str, str]
+) -> list[str]:
+    """Build the `systemd-run` invocation. Pure, so it can be asserted on.
+
+    `--collect` so a kernel that dies badly doesn't leave a `failed` unit
+    squatting the name; `--working-directory` because repld is per-cwd and a
+    unit would otherwise inherit the manager's.
+    """
+    argv = [
+        "systemd-run",
+        "--user",
+        "--quiet",
+        "--collect",
+        f"--unit={_systemd_unit_name(sock_path)}",
+        f"--working-directory={cwd}",
+        # Unlike the two opt-ins below this overrides no policy: the default,
+        # `stop`, tears the whole service down when the OOM killer takes one
+        # child (a check suite's eslint), losing every task and connection.
+        "-p",
+        "OOMPolicy=continue",
+    ]
+    # Both opt-in, and for the same reason: they override deliberate policy.
+    # A default memory ceiling would break the legitimate case of loading
+    # several gigabytes of model weights into a cell on purpose. And the
+    # manager's DefaultOOMScoreAdjust (200 on a stock Arch user session) is a
+    # considered statement that user apps are more expendable than system
+    # services; repld shouldn't quietly exempt itself from it, even though
+    # its kernels are usually the fattest process around and so die first.
+    # Floor is the manager's own oom_score_adj: lower needs CAP_SYS_RESOURCE,
+    # and systemd clamps rather than failing, so asking for 0 silently gets
+    # you 100.
+    limit = env.get("REPLD_MEMORY_HIGH")
+    if limit:
+        argv += ["-p", f"MemoryHigh={limit}"]
+    oom_adj = env.get("REPLD_OOM_SCORE_ADJUST")
+    if oom_adj:
+        argv += ["-p", f"OOMScoreAdjust={oom_adj}"]
+    for name, value in sorted(env.items()):
+        if name in _ENV_DENYLIST or name.startswith(_ENV_DENY_PREFIXES):
+            continue
+        argv += [f"--setenv={name}={value}"]
+    return argv + cmd
+
+
+# -- Spawn paths -------------------------------------------------------------
 
 
 def _spawn_via_systemd(
@@ -211,9 +228,9 @@ def _spawn_via_systemd(
 ) -> str:
     """Hand the kernel to the user manager.
 
-    STARTED, INCUMBENT (a racing boot got there first) or FAILED — three
-    outcomes the caller must tell apart, since only FAILED should fall through
-    to a bare process.
+    Returns STARTED, INCUMBENT (a racing boot got there first), or FAILED.
+    Three outcomes the caller must tell apart, since only FAILED should fall
+    through to a bare process.
     """
     argv = _systemd_run_argv(cmd, sock_path, cwd, dict(os.environ))
     try:
@@ -226,8 +243,8 @@ def _spawn_via_systemd(
     if r.returncode == 0:
         return STARTED
     # Ask the manager rather than reading the failure text. systemd words a
-    # taken unit name as "was already loaded or has a fragment file" — not
-    # "already exists" — and the wording is both version-specific and
+    # taken unit name as "was already loaded or has a fragment file" (not
+    # "already exists"), and the wording is both version-specific and
     # translatable, so matching on it is dead code waiting to happen.
     if _unit_running(sock_path):
         return INCUMBENT
@@ -240,6 +257,7 @@ def _spawn_via_systemd(
 
 
 def _spawn_directly(cmd: list[str], cwd: Path, *, quiet: bool = False) -> bool:
+    """Launch a detached child process as a fallback when systemd is unavailable."""
     try:
         subprocess.Popen(
             cmd,
@@ -253,6 +271,9 @@ def _spawn_directly(cmd: list[str], cwd: Path, *, quiet: bool = False) -> bool:
         _note(f"repld: could not spawn kernel: {e}", quiet)
         return False
     return True
+
+
+# -- Public entry point ------------------------------------------------------
 
 
 def spawn_headless(sock_path: Path, *, quiet: bool = False) -> str:
@@ -271,8 +292,8 @@ def spawn_headless(sock_path: Path, *, quiet: bool = False) -> str:
     STARTED means the *process* started, not that the kernel is up; poll either
     way.
 
-    `quiet` silences the stderr diagnostics for a caller that retries — see
-    `_note`. It never changes what is attempted, only what is said about it.
+    `quiet` silences the stderr diagnostics for a caller that retries (see
+    `_note`). It never changes what is attempted, only what is said about it.
     """
     cwd = Path(os.getcwd())
     cmd = _kernel_argv(sock_path)

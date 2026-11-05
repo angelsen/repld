@@ -9,8 +9,10 @@ _F = TypeVar("_F", bound=Callable)
 
 @dataclass(frozen=True, slots=True)
 class Image:
-    """An image for the caller to see in the tool result itself, as an MCP `image` content block (never spilled).
-    Return one, or a list mixing it with str/dict items: each item becomes its own content block, in order."""
+    """Inline MCP `image` content block, rendered in the tool result itself (never spilled).
+
+    Return one from a `_tool_*` handler, or a list mixing it with str/dict
+    items: each item becomes its own content block, in order."""
 
     data: bytes
     mime_type: str = "image/png"
@@ -24,9 +26,11 @@ def tool(
     idempotent: bool | None = None,
     open_world: bool | None = None,
 ) -> Callable[[_F], _F]:
-    """Describe a `_tool_*` handler to the MCP client: a display `title` and the spec's behavior hints.
-    Claude Code runs a `read_only` tool in parallel with others and treats it as read-only; a hint left None is not sent.
-    The `_tool_` prefix still registers the tool; this only marks the function, which is returned unwrapped."""
+    """Mark a `_tool_*` handler with a display `title` and MCP behavior hints the client sees at `tools/list`.
+
+    Claude Code runs a `read_only` tool in parallel with others and treats
+    it as read-only; a hint left None is not sent. The `_tool_` prefix still
+    registers the tool; this only marks the function, returned unwrapped."""
     hints = {
         key: value
         for key, value in (

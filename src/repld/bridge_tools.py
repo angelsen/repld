@@ -1,6 +1,6 @@
 """MCP tools answered by the bridge itself, never forwarded to the kernel.
 
-**The boundary — keep it narrow.** A tool belongs here only if it must work
+**The boundary: keep it narrow.** A tool belongs here only if it must work
 while the kernel is dead, or if it *kills* the kernel. Everything else goes in
 ``protocol.py``. A kernel cannot answer "restart yourself": the reply would
 still be in flight when the process goes away, so the client would receive
@@ -47,7 +47,7 @@ def _restart(bridge: Any, args: dict) -> dict:
                     "type": "text",
                     "text": (
                         f"stopped kernel pid {old_pid}, but a fresh one did not "
-                        "come up — see the bridge's stderr"
+                        "come up (see the bridge's stderr)"
                     ),
                 }
             ],
@@ -58,7 +58,7 @@ def _restart(bridge: Any, args: dict) -> dict:
             {
                 "type": "text",
                 "text": (
-                    f"kernel restarted: pid {old_pid} → {new_pid}. In-memory "
+                    f"kernel restarted: pid {old_pid} to {new_pid}. In-memory "
                     "state (variables, tickers, browser connections) is gone; "
                     "gists re-import on first use."
                 ),
@@ -76,7 +76,7 @@ BRIDGE_TOOLS: dict[str, dict] = {
             "description": (
                 "Restart this project's repld kernel, discarding its in-memory "
                 "state (variables, @every tickers, browser connections). The "
-                "MCP session survives — the bridge respawns the kernel and "
+                "MCP session survives: the bridge respawns the kernel and "
                 "replays the handshake, so tools keep working afterwards. This "
                 "kernel is shared: restarting it also interrupts every other "
                 "session attached to this project, not just yours. Use when "

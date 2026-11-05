@@ -16,6 +16,7 @@ uv run repld                                                                    
 uv build                                                                                                # wheel + sdist via uv_build
 uv run tests/smoketest.py --phase 12                                                                    # end-to-end smoketest
 ruff check --fix && ruff format . gists && python3 scripts/align-comments.py --fix-all && basedpyright  # lint / format / align / type-check
+ruff check --preview --select PLR1702 --config 'lint.pylint.max-nested-blocks=4' src                    # nesting depth 4 (preview-only, held at zero)
 make injected                                                                                           # regenerate src/repld/browser/injected_source.py
 ```
 
@@ -41,7 +42,7 @@ No CI configured yet. If you add any, update this file.
 
 ## House style
 
-The readability judge (`.claude/workflows/readability.js`) checks these; lint holds the two a tool can measure (`D101`/`D102`/`D103`, `PLR1702` at depth 4). `scripts/style-measure.py FILE` reports a module's densities, lengths, missing docstrings, nesting sites and helper verbs; `--bodies` hashes each function's code with its docstring stripped, so a diff of two runs names the functions whose behaviour could have changed.
+The readability judge (`.claude/workflows/readability.js`) checks these; lint holds the two a tool can measure (`D101`/`D102`/`D103` in `pyproject.toml`, `PLR1702` at depth 4 as its own command under Build & run). `scripts/style-measure.py FILE` reports a module's densities, lengths, missing docstrings, nesting sites and helper verbs; `--bodies` hashes each function's code with its docstring stripped, so a diff of two runs names the functions whose behaviour could have changed.
 
 1. Signatures are fully typed, parameters and return. A docstring never restates them. Adding a missing annotation is housekeeping, not a signature change.
 2. Every function, class and method has a prose docstring whose first line states the contract (what the caller gets, or what must hold), not the name rephrased; a closure takes its enclosing function's. No `Args:`/`Returns:` sections. Code in prose is single-backticked. A module that lacked docstrings gains them; what is judged is each docstring, never the count.

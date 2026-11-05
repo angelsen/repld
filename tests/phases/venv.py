@@ -540,6 +540,8 @@ def phase_16_venv_binding(_kernel: Kernel) -> None:
             # Chrome-backed phase 6 does, and without it otherwise, so only
             # its agreement with an actual import is assertable here.
             bind.has_browser_extra = orig_has_extra
+            # duckdb's `_version` reads `importlib.metadata.distribution` at import.
+            importlib.metadata.distribution = orig_dist
             importable = True
             try:
                 # I001: align-comments.py column-aligns these noqa comments,

@@ -1,12 +1,12 @@
-"""NDJSON event log — what makes a headless kernel observable.
+"""NDJSON event log, the observability surface for a headless kernel.
 
 A `--no-display` kernel has no TUI, and therefore no consumer for the event
-queue — `events.disable_queue()` turns that half off, leaving this module's
+queue. `events.disable_queue()` turns that half off, leaving this module's
 sink as the only thing an auto-spawned kernel's events reach. It tees
 `events.emit()` to one line-per-event file next to the socket, which
 `repld log` reads back (and follows).
 
-The tee is installed by the kernel, not imported by `events` — `events` stays
+The tee is installed by the kernel, not imported by `events`: `events` stays
 dependency-free so this module can import `display` for its chunk cap without
 creating a cycle.
 
@@ -58,12 +58,14 @@ def install(path: Path) -> None:
 
 
 def close() -> None:
+    """Detach the sink and release the log file."""
     events.set_sink(None)
     with _lock:
         _close_locked()
 
 
 def _close_locked() -> None:
+    """Close `_fp` if open, swallowing OS errors. Caller holds `_lock`."""
     global _fp
     if _fp is not None:
         try:
@@ -73,35 +75,6 @@ def _close_locked() -> None:
         _fp = None
 
 
-def _record(ev: "events.Event") -> dict | None:
-    """One JSON-safe dict per event, or None to skip it.
-
-    Caller holds the lock — the per-task chunk budget is mutated here.
-    """
-    rec: dict = {"t": time.time(), "type": type(ev).__name__}
-    for f in dataclasses.fields(ev):
-        rec[f.name] = getattr(ev, f.name)
-
-    if isinstance(ev, events.CellDone):
-        _chunk_bytes.pop(ev.task_id, None)
-        _chunk_capped.discard(ev.task_id)
-        return rec
-
-    if isinstance(ev, (events.StdoutChunk, events.StderrChunk)) and ev.task_id:
-        tid = ev.task_id
-        if tid in _chunk_capped:
-            return None
-        used = _chunk_bytes.get(tid, 0)
-        room = CHUNK_CAP_BYTES - used
-        head = ev.text[:room]
-        _chunk_bytes[tid] = used + len(head)
-        rec["text"] = head
-        if len(ev.text) > room:
-            _chunk_capped.add(tid)
-            rec["truncated"] = True
-    return rec
-
-
 def write(ev: "events.Event") -> None:
     """Append one NDJSON record. Never raises into emit()."""
     global _written
@@ -109,7 +82,7 @@ def write(ev: "events.Event") -> None:
         with _lock:
             if _fp is None:
                 return
-            rec = _record(ev)
+            rec = _build_record(ev)
             if rec is None:
                 return
             line = json.dumps(rec, default=str) + "\n"
@@ -139,26 +112,37 @@ def write(ev: "events.Event") -> None:
         pass
 
 
-def _parse_record(line: str) -> dict | None:
-    """One NDJSON line as a record, or None to skip it.
+def _build_record(ev: "events.Event") -> dict | None:
+    """Compose one JSON-safe dict per event, or None to skip it.
 
-    Blank lines and a torn final write are both normal: the log is appended to
-    by a live kernel and read concurrently, so the last line can be half-there.
-    Shared by `read_records` and `follow` so a replay and a tail can't disagree
-    about what counts as a record.
+    Caller holds the lock; the per-task chunk budget is mutated here.
     """
-    line = line.strip()
-    if not line:
-        return None
-    try:
-        rec = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    return rec if isinstance(rec, dict) else None
+    rec: dict = {"t": time.time(), "type": type(ev).__name__}
+    for f in dataclasses.fields(ev):
+        rec[f.name] = getattr(ev, f.name)
+
+    if isinstance(ev, events.CellDone):
+        _chunk_bytes.pop(ev.task_id, None)
+        _chunk_capped.discard(ev.task_id)
+        return rec
+
+    if isinstance(ev, (events.StdoutChunk, events.StderrChunk)) and ev.task_id:
+        tid = ev.task_id
+        if tid in _chunk_capped:
+            return None
+        used = _chunk_bytes.get(tid, 0)
+        room = CHUNK_CAP_BYTES - used
+        head = ev.text[:room]
+        _chunk_bytes[tid] = used + len(head)
+        rec["text"] = head
+        if len(ev.text) > room:
+            _chunk_capped.add(tid)
+            rec["truncated"] = True
+    return rec
 
 
 def read_records(path: Path, *, tail: int | None = None) -> list[dict]:
-    """Parse the log. Unparseable lines (a torn final write) are skipped."""
+    """Return parsed records from the log, optionally only the last `tail`."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -169,6 +153,24 @@ def read_records(path: Path, *, tail: int | None = None) -> list[dict]:
         if rec is not None:
             out.append(rec)
     return out[-tail:] if tail else out
+
+
+def _parse_record(line: str) -> dict | None:
+    """Parse one NDJSON line, or None to skip it.
+
+    Blank lines and a torn final write are both normal: the log is appended to
+    by a live kernel and read concurrently, so the last line can be half-there.
+    Shared by `read_records` and `follow` so a replay and a tail cannot disagree
+    about what counts as a record.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return rec if isinstance(rec, dict) else None
 
 
 def follow(path: Path) -> Iterator[dict]:

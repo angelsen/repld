@@ -26,7 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The standard sweep for --fix-all: the tracked codebase, ./gists (gitignored,
 # so ruff only visits them when named) + doc surfaces with embedded Python
 # examples. Excludes CHANGELOG/TODO/LICENSE files (no code-comment groups
-# worth aligning).
+# worth aligning). A symlinked gist belongs to the project it links to, whose
+# own formatter settings apply, so the sweep skips it.
 _SWEEP_GLOBS = [
     "src/**/*.py",
     "tests/**/*.py",
@@ -44,7 +45,7 @@ def _sweep_targets() -> list[Path]:
     seen: set[Path] = set()
     for pattern in _SWEEP_GLOBS:
         for path in REPO_ROOT.glob(pattern):
-            if "__pycache__" in path.parts:
+            if "__pycache__" in path.parts or path.is_symlink():
                 continue
             seen.add(path)
     return sorted(seen)

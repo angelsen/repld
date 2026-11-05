@@ -1,4 +1,4 @@
-"""Compile + eval for user cells.
+"""Compile and eval for user cells.
 
 Supports top-level await, last-expression display (whether the cell is one
 expression or has a trailing expression after statements), and returns the
@@ -13,60 +13,66 @@ import sys
 import traceback
 from typing import Any
 
-# Tagged compile result. One of:
-#   ("eval", code)                        — pure expression
-#   ("exec_eval", head, tail, names)      — exec head, then eval+display tail
-#   ("exec", code, names)                 — pure exec, no display
+# Tagged compile result.  One of:
+#   ("eval", code)                        pure expression
+#   ("exec_eval", head, tail, names)      exec head, then eval+display tail
+#   ("exec", code, names)                 pure exec, no display
+#
 # `names` is the set of top-level simple-assignment targets (`x = ...`,
-# `x: T = ...`, chained `x = y = ...`), which is what lets a `_NoDisplay` a
-# callee assigned directly be unwrapped: assignment doesn't go through the
-# display path where unwrapping normally happens.
+# `x: T = ...`, chained `x = y = ...`), which lets a `_NoDisplay` a callee
+# assigned directly be unwrapped: assignment does not go through the display
+# path where unwrapping normally happens.
 
 
 class _NoDisplay:
-    """Marker wrapper: suppress auto-display of an otherwise-displayable
-    result while still returning the real value for programmatic use,
-    direct assignment, and `_`/`_N` history binding. Constructed via
-    `no_display()`, unwrapped in `run_cell()` and `defer()`. A caller that
-    gets the wrapper itself (a function returning `no_display(x)`) sees x's
-    `str()`, `repr()`, `==` and `hash()`; nothing else is proxied.
+    """Suppress auto-display of an otherwise-displayable result while still
+    returning the real value for programmatic use, direct assignment, and
+    `_`/`_N` history binding.  Constructed via `no_display()`, unwrapped in
+    `run_cell()` and `defer()`.  A caller that gets the wrapper itself (a
+    function returning `no_display(x)`) sees x's `str()`, `repr()`, `==`
+    and `hash()`; nothing else is proxied.
     """
 
     __slots__ = ("value",)
 
     def __init__(self, value: Any) -> None:
+        """Store the wrapped value."""
         self.value = value
 
     def __str__(self) -> str:
+        """Delegate to the wrapped value's `str`."""
         return str(self.value)
 
     def __repr__(self) -> str:
+        """Delegate to the wrapped value's `repr`."""
         return repr(self.value)
 
     def __eq__(self, other: object) -> bool:
+        """Compare by the wrapped value, unwrapping the other side too."""
         if isinstance(other, _NoDisplay):
             other = other.value
         return self.value == other
 
     def __hash__(self) -> int:
+        """Hash by the wrapped value so equality and hashing agree."""
         return hash(self.value)
 
 
 def no_display(value: Any) -> Any:
-    """Wrap `value` so the cell-display hook won't print it — whether the
+    """Wrap `value` so the cell-display hook will not print it, whether the
     call is a cell's bare last expression or the right-hand side of a
-    top-level assignment (`x = await foo()`) — while still returning the
-    real value for programmatic use and `_`/`_N` history binding. Injected
-    into `__main__` and the `repld` module — call as `no_display(x)` or
+    top-level assignment (`x = await foo()`), while still returning the
+    real value for programmatic use and `_`/`_N` history binding.  Injected
+    into `__main__` and the `repld` module; call as `no_display(x)` or
     `repld.no_display(x)`.
     """
     return _NoDisplay(value)
 
 
 def unwrap_display(result: Any) -> tuple[Any, bool]:
-    """Unwrap a `no_display()` wrapper, if `result` is one. Returns (value, quiet).
+    """Unwrap a `no_display()` wrapper, if `result` is one.  Returns (value, quiet).
 
-    The one sanctioned way to inspect `_NoDisplay` from outside this module —
+    The one sanctioned way to inspect `_NoDisplay` from outside this module:
     `defer()`'s deferred tasks have the same suppress-print-but-not-recovery
     need as a cell's trailing expression, with no cell number to route
     through `run_cell` for.
@@ -84,30 +90,34 @@ def print_display(result: Any) -> None:
         print(repr(result))
 
 
-def _assign_target_names(stmts: list) -> set:
+def _assign_target_names(stmts: list[ast.stmt]) -> set[str]:
     """Collect top-level simple-assignment target names from a statement list.
 
     Covers `x = expr`, chained `x = y = expr`, and annotated `x: T = expr`.
     Deliberately does not cover tuple/list/starred unpacking, attribute or
     subscript targets, or walrus (`:=`) expressions nested inside larger
-    expressions — those are rarer in single-cell REPL usage and the
-    _NoDisplay unwrap isn't reachable there without a full-tree walk.
+    expressions; those are rarer in single-cell REPL usage and the
+    `_NoDisplay` unwrap is not reachable there without a full-tree walk.
     """
-    names = set()
+    names: set[str] = set()
     for stmt in stmts:
         if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
+            names.update(t.id for t in stmt.targets if isinstance(t, ast.Name))
         elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
             names.add(stmt.target.id)
     return names
 
 
 def compile_cell(src: str, task_id: str) -> tuple:
+    """Parse and compile a cell into a tagged tuple ready for `run_cell`.
+
+    Returns one of the three tagged forms (eval, exec_eval, exec) with
+    compiled code objects and, for the exec variants, the set of top-level
+    assignment target names.
+    """
     flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
     fname = f"<repld:{task_id}>"
-    # Try eval-mode first — handles single-expression cells like `1 + 1`.
+    # Try eval-mode first: handles single-expression cells like `1 + 1`.
     try:
         code = compile(src, fname, "eval", flags=flags)
         return ("eval", code)
@@ -129,13 +139,13 @@ def compile_cell(src: str, task_id: str) -> tuple:
 _CO_COROUTINE = inspect.CO_COROUTINE
 
 
-async def _eval(code, ns: dict) -> Any:
-    """Eval a code object. Threads sync code to keep the event loop responsive.
+async def _eval(code: Any, ns: dict[str, Any]) -> Any:
+    """Eval a code object, threading sync code to keep the event loop responsive.
 
-    Cells compiled with PyCF_ALLOW_TOP_LEVEL_AWAIT that contain ``await``
-    have the CO_COROUTINE flag set — those must run on the event loop.
-    Pure-sync cells run in a thread via ``asyncio.to_thread`` so they
-    don't block the loop (e.g. sync HTTP, time.sleep, heavy computation).
+    Cells compiled with `PyCF_ALLOW_TOP_LEVEL_AWAIT` that contain `await`
+    have the `CO_COROUTINE` flag set; those must run on the event loop.
+    Pure-sync cells run in a thread via `asyncio.to_thread` so they
+    do not block the loop (e.g. sync HTTP, `time.sleep`, heavy computation).
     """
     if code.co_flags & _CO_COROUTINE:
         return await eval(code, ns)
@@ -145,21 +155,21 @@ async def _eval(code, ns: dict) -> Any:
     return raw
 
 
-def _unwrap_assigned(ns: dict, names: set) -> None:
-    """Unwrap `_NoDisplay` off any of `names` that got bound in `ns`.
+def _unwrap_assigned(ns: dict[str, Any], names: set[str]) -> None:
+    """Strip `_NoDisplay` wrappers off any of `names` that got bound in `ns`.
 
-    Assignment (`x = await foo()`) never goes through the display path —
-    only a cell's bare last expression does — so without this, a
-    no_display()-returning callee would leak the internal wrapper object
+    Assignment (`x = await foo()`) never goes through the display path
+    (only a cell's bare last expression does), so without this a
+    `no_display()`-returning callee would leak the internal wrapper object
     to `x` instead of the real value.
 
     Runs once, after every statement preceding the cell's own trailing
-    expression (if any) has executed — not incrementally after each
-    assignment. A statement *within the same cell* that reads `x` before
+    expression (if any) has executed, not incrementally after each
+    assignment.  A statement within the same cell that reads `x` before
     that point still sees the wrapper; reading `x` in a later cell, or in
-    the current cell's own trailing expression, sees the real value. In
+    the current cell's own trailing expression, sees the real value.  In
     practice this only matters for the rare "assign, use it mid-cell, then
-    do something unrelated" shape — the common "assign then use" and
+    do something unrelated" shape; the common "assign then use" and
     "assign in one cell, use in the next" patterns are both covered.
     """
     for name in names:
@@ -168,14 +178,14 @@ def _unwrap_assigned(ns: dict, names: set) -> None:
             ns[name] = val.value
 
 
-async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
-    """Execute a compiled cell. Returns the last-expression value (or None).
+async def run_cell(compiled: tuple, ns: dict[str, Any], n: int) -> Any:
+    """Execute a compiled cell and return the last-expression value (or None).
 
     On success, binds `_` and `_{n}` in `ns` to the returned result (when
-    not None). Coroutines from PyCF_ALLOW_TOP_LEVEL_AWAIT are awaited.
+    not None).  Coroutines from `PyCF_ALLOW_TOP_LEVEL_AWAIT` are awaited.
     Sync cells run in a background thread to keep the event loop responsive.
     Exceptions are formatted to stderr and re-raised so the caller can
-    record CellDone.error.
+    record `CellDone.error`.
     """
     try:
         tag = compiled[0]
@@ -196,27 +206,27 @@ async def run_cell(compiled: tuple, ns: dict, n: int) -> Any:
             result, quiet = unwrap_display(result)
             if not quiet:
                 print_display(result)
-            # Shift history: _ → __, __ → ___. Matches IPython convention.
+            # Shift history: _ -> __, __ -> ___.  Matches IPython convention.
             ns["___"] = ns.get("__")
             ns["__"] = ns.get("_")
             ns["_"] = result
             ns[f"_{n}"] = result
         return result
     except asyncio.CancelledError:
-        # Expected control flow via the cancel tool — don't traceback-spam.
+        # Expected control flow via the cancel tool; no traceback spam.
         raise
     except BaseException as exc:
         sys.stderr.write(_format_user_traceback(exc))
         raise
     finally:
-        # Gen-0 only. The point is to flush "coroutine was never awaited"
-        # warnings into *this* cell's output, and an abandoned coroutine is by
-        # definition young — the non-cyclic case never needed a collection at
-        # all (refcount drops at cell exit and __del__ fires), and the cyclic
+        # Gen-0 only.  The point is to flush "coroutine was never awaited"
+        # warnings into this cell's output, and an abandoned coroutine is by
+        # definition young: the non-cyclic case never needed a collection at
+        # all (refcount drops at cell exit and `__del__` fires), and the cyclic
         # one is a traceback holding the frame that made it, allocated moments
-        # ago. A full collect() walks the whole heap for the same result: 164ms
-        # on an 800k-object heap, per cell, in a kernel whose entire premise is
-        # holding large state for weeks. Gen-0 is ~0.005ms.
+        # ago.  A full `collect()` walks the whole heap for the same result:
+        # 164 ms on an 800k-object heap, per cell, in a kernel whose entire
+        # premise is holding large state for weeks.  Gen-0 is ~0.005 ms.
         gc.collect(0)
 
 
@@ -224,7 +234,7 @@ def _format_user_traceback(exc: BaseException) -> str:
     """Format a traceback with repld-internal frames trimmed off the top.
 
     Walks the tb until the first frame whose filename is `<repld:...>`
-    (user cell code) and formats from there. Falls back to the full
+    (user cell code) and formats from there.  Falls back to the full
     traceback if no user frame is present.
     """
     tb = exc.__traceback__
@@ -254,7 +264,7 @@ def _format_user_traceback(exc: BaseException) -> str:
             formatted += (
                 "\nHint: this cell ran in a background thread (no top-level "
                 "'await' in the cell), so asyncio.gather()/create_task()/"
-                "ensure_future() had no loop to attach to — they reach for "
+                "ensure_future() had no loop to attach to; they reach for "
                 "one at construction, not just to await it. Build it inside "
                 "an async def instead:\n"
                 "  async def _run():\n"

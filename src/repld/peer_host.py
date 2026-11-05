@@ -35,7 +35,8 @@ _MAIN_ENTRY_LIMIT = 500
 class TargetError(Exception):
     """A call that never ran: carries the JSON-RPC code and optional data."""
 
-    def __init__(self, code: int, message: str, data: dict | None = None):
+    def __init__(self, code: int, message: str, data: dict | None = None) -> None:
+        """Attach the JSON-RPC error code and optional error data to the exception."""
         super().__init__(message)
         self.code = code
         self.data = data
@@ -56,7 +57,7 @@ def target_of(params: dict) -> str:
 
 
 def parse_target(target: object) -> list[str]:
-    """`"gist.fn"` -> ["gist", "fn"]; every segment must be an identifier."""
+    """`"gist.fn"` -> `["gist", "fn"]`; every segment must be an identifier."""
     if not isinstance(target, str) or not target:
         raise ValueError("target must be a non-empty dotted name")
     parts = target.split(".")
@@ -64,11 +65,6 @@ def parse_target(target: object) -> list[str]:
         if not part.isidentifier():
             raise ValueError(f"not a dotted name: {target!r}")
     return parts
-
-
-def _unresolved(message: str, exc: BaseException | None = None) -> TargetError:
-    data = {"traceback": traceback.format_exc()[-4000:]} if exc is not None else None
-    return TargetError(PEER_ERR_UNRESOLVED, message, data)
 
 
 def resolve_target(target: str) -> Callable:
@@ -92,31 +88,41 @@ def resolve_target(target: str) -> Callable:
         try:
             obj = builtins.__import__(first)
         except Exception as exc:
-            raise _unresolved(f"cannot resolve {first!r}: {exc!r}", exc) from exc
+            raise _build_unresolved(f"cannot resolve {first!r}: {exc!r}", exc) from exc
     walked = first
     for seg in parts[1:]:
         try:
             obj = getattr(obj, seg)
         except AttributeError:
             if not isinstance(obj, types.ModuleType):
-                raise _unresolved(f"{walked!r} has no attribute {seg!r}") from None
+                raise _build_unresolved(
+                    f"{walked!r} has no attribute {seg!r}"
+                ) from None
             try:
                 obj = importlib.import_module(f"{obj.__name__}.{seg}")
             except Exception as exc:
-                raise _unresolved(
+                raise _build_unresolved(
                     f"module {walked!r} has no attribute or submodule {seg!r}", exc
                 ) from exc
         except Exception as exc:
-            raise _unresolved(f"reading {walked}.{seg} raised {exc!r}", exc) from exc
+            raise _build_unresolved(
+                f"reading {walked}.{seg} raised {exc!r}", exc
+            ) from exc
         walked = f"{walked}.{seg}"
     if not callable(obj):
-        raise _unresolved(f"not callable: {walked} is a {type(obj).__name__}")
+        raise _build_unresolved(f"not callable: {walked} is a {type(obj).__name__}")
     return obj
 
 
+def _build_unresolved(message: str, exc: BaseException | None = None) -> TargetError:
+    """Build a `TargetError` for a name that could not be resolved."""
+    data = {"traceback": traceback.format_exc()[-4000:]} if exc is not None else None
+    return TargetError(PEER_ERR_UNRESOLVED, message, data)
+
+
 def check_chain(caller: dict | None, own_socket: str) -> str | None:
-    """ "cycle" if this kernel is already in the call chain, "depth" if the chain
-    is too long to extend, else None. A refused call never runs."""
+    """`"cycle"` if this kernel is already in the call chain, `"depth"` if the
+    chain is too long to extend, else `None`. A refused call never runs."""
     caller = caller or {}
     chain = [e for e in (caller.get("chain") or []) if isinstance(e, dict)]
     sockets = {str(e.get("socket")) for e in chain}
@@ -131,6 +137,7 @@ def check_chain(caller: dict | None, own_socket: str) -> str | None:
 
 
 def refusal(reason: str, caller: dict | None) -> TargetError:
+    """Build a `TargetError` for a call the chain check refused."""
     chain = (caller or {}).get("chain") or []
     if reason == "cycle":
         msg = "cycle: this kernel is already in the call chain"
@@ -140,7 +147,7 @@ def refusal(reason: str, caller: dict | None) -> TargetError:
 
 
 def bind_check(func: Callable, args: list, kwargs: dict) -> None:
-    """Fail a call whose arguments can't bind before it is scheduled, so a typo
+    """Fail a call whose arguments cannot bind before it is scheduled, so a typo
     reads as never-ran. Objects with no introspectable signature skip the check."""
     try:
         sig = inspect.signature(func)
@@ -150,35 +157,6 @@ def bind_check(func: Callable, args: list, kwargs: dict) -> None:
         sig.bind(*args, **kwargs)
     except TypeError as exc:
         raise TargetError(_INVALID_PARAMS, f"bad arguments: {exc}") from exc
-
-
-def _kernel_info() -> dict:
-    started_at = None
-    for entry in sessions.list_sessions():
-        if int(entry["pid"]) == os.getpid():
-            started_at = entry.get("started_at")
-    venv = sys.prefix if sys.prefix != sys.base_prefix else None
-    return {
-        "cwd": os.getcwd(),
-        "pid": os.getpid(),
-        "socket": str(ipc.socket_path()),
-        "started_at": started_at,
-        "python": sys.version.split()[0],
-        "venv": venv,
-    }
-
-
-def _describe_main(name: str, obj: Callable) -> dict:
-    try:
-        signature = str(inspect.signature(obj))
-    except (ValueError, TypeError):
-        signature = "(...)"
-    return {
-        "name": name,
-        "signature": signature,
-        "async": inspect.iscoroutinefunction(obj),
-        "doc": gist_api._first_line(inspect.getdoc(obj)),
-    }
 
 
 def describe_surface() -> dict:
@@ -202,14 +180,45 @@ def describe_surface() -> dict:
             continue
         if getattr(val, "__module__", None) != "__main__":
             continue
-        main_rows.append(_describe_main(name, val))
+        main_rows.append(_build_main_entry(name, val))
         if len(main_rows) >= _MAIN_ENTRY_LIMIT:
             break
     return {
         "peer_protocol": PEER_PROTOCOL,
-        "kernel": _kernel_info(),
+        "kernel": _build_kernel_info(),
         "gists": gist_rows,
         "main": main_rows,
+    }
+
+
+def _build_kernel_info() -> dict:
+    """Build the `kernel` section of a `peer/list` response."""
+    started_at = None
+    for entry in sessions.list_sessions():
+        if int(entry["pid"]) == os.getpid():
+            started_at = entry.get("started_at")
+    venv = sys.prefix if sys.prefix != sys.base_prefix else None
+    return {
+        "cwd": os.getcwd(),
+        "pid": os.getpid(),
+        "socket": str(ipc.socket_path()),
+        "started_at": started_at,
+        "python": sys.version.split()[0],
+        "venv": venv,
+    }
+
+
+def _build_main_entry(name: str, obj: Callable) -> dict:
+    """Build a descriptor for one callable defined in `__main__`."""
+    try:
+        signature = str(inspect.signature(obj))
+    except (ValueError, TypeError):
+        signature = "(...)"
+    return {
+        "name": name,
+        "signature": signature,
+        "async": inspect.iscoroutinefunction(obj),
+        "doc": gist_api._first_line(inspect.getdoc(obj)),
     }
 
 

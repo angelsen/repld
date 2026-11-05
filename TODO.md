@@ -381,6 +381,15 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   left only in the runtime remainder. Phase 16 aborted inside the worker's combined
   `--phases` set (a `_FakeDist` without `version` after duckdb import) but passes alone; the
   order dependence is not chased. Next: the runtime remainder (22 items).
+  Correction and slice four (runtime remainder, 22 items, 45 agents, 3.3M tokens, 63 min): the
+  phase-16 abort was a test bug, not an order dependence: `phase_16_venv_binding` left
+  `importlib.metadata.distribution` patched while importing duckdb, whose `_version` reads it;
+  fixed in `tests/phases/venv.py`. It had made the integrator drop all 22 accepted items (its
+  gate includes 16); they were copied from the worktrees by hand. Judges flagged two nits
+  (`_own_socket` before its caller, a docstring restating params), fixed by hand. Ratchets at
+  zero: D101-D103 in `extend-select` (tests, scripts, checks exempt); PLR1702 stays a
+  separate command because `preview = true` also turns on seven unrelated default rules
+  (D301, PLC0207, FURB110, PLW0108, ASYNC240, PERF102, RUF100: 17 sites in the repo).
 - [ ] **hypothesis over `route_to` only.** `pure.py`'s `_tab_owner_routing` already fakes
   `CDPSession`; the precedence (owner > action > claim > tail > None) is one `@given`. Dev-group
   dep. Stop there.

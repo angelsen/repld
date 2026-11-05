@@ -13,18 +13,20 @@ on the entry keeps adding a fifth doc to one edit instead of three across three
 modules. It is stripped before the dict goes on the wire (`wire()`).
 """
 
+# -- Protocol version --------------------------------------------------------
+
 # The MCP revisions repld speaks. Here rather than in `protocol.py` because
 # three parties answer `initialize` and only one can import it: the kernel
 # (`protocol._initialize`), the bridge when no kernel has ever run in this
 # project (`bridge._try_bridge_intercept`), and `repld exec`, which handshakes
 # over the socket itself. Importing `protocol.py` from the other two would drag
 # in browser_dispatch/help/kernel_context/tasks for one string, so the
-# alternative is a hand-synced copy in each — a drift no test can see, since
+# alternative is a hand-synced copy in each, a drift no test can see since
 # every side would still be internally consistent.
 #
 # 2025-06-18 is the ceiling on purpose: 2025-11-25 adds nothing repld serves
 # (icons, URL elicitation, experimental tasks), and 2026-07-28 removes the
-# `initialize` handshake outright — adopting it is a bridge rearchitecture,
+# `initialize` handshake outright. Adopting it is a bridge rearchitecture,
 # not a version bump. Everything repld uses from 2025-06-18 (tool annotations,
 # structuredContent/outputSchema, resource templates) is additive, which is
 # what makes serving the older revisions from the same code correct.
@@ -32,18 +34,21 @@ PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
 
 
-def negotiate_version(requested) -> str:
-    """The spec's negotiation rule (lifecycle.mdx): echo the client's requested
-    version when we support it, otherwise answer our latest and let the client
-    decide whether to proceed. Never echo an *unknown* string back — that would
-    promise a revision nobody implements."""
+def negotiate_version(requested: object) -> str:
+    """Echo `requested` when we support it, else answer our latest.
+
+    The spec's negotiation rule (lifecycle.mdx): never echo an unknown string
+    back, that would promise a revision nobody implements.
+    """
     return requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
 
+
+# -- Bridge identity keys ----------------------------------------------------
 
 # Bridge-identity fields the bridge rides on its `initialize` forward (see
 # bridge._stamp_identity) so the kernel can register the session for
 # notify(session=)/claude_sessions(). Internal wire only, never advertised
-# to the MCP client — `_`-prefixed to signal that alongside the spec's own
+# to the MCP client; `_`-prefixed to signal that alongside the spec's own
 # params.
 BRIDGE_SESSION_ID_KEY = "_claude_session_id"
 BRIDGE_PROJECT_DIR_KEY = "_claude_project_dir"
@@ -57,16 +62,19 @@ BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
 # delivers `bg` sessions' pushes through it (`ipc.Session._write_inbox`).
 BRIDGE_INBOX_SOCKET_KEY = "_claude_inbox_socket"
 CHANNEL_METHOD = "notifications/claude/channel"
-# Kernel → bridge only, consumed by the bridge and never relayed to the client:
-# `ipc.rebind_claude_session` telling it the id to stamp from now on.
+# Kernel to bridge only, consumed by the bridge and never relayed to the
+# client: `ipc.rebind_claude_session` telling it the id to stamp from now on.
 BRIDGE_REBIND_METHOD = "notifications/repld/session_rebound"
-# Kernel → bridge only: the last frame of a clean shutdown. A socket EOF with no
-# goodbye before it is a crash, and the bridge says so to its own client.
+# Kernel to bridge only: the last frame of a clean shutdown. A socket EOF with
+# no goodbye before it is a crash, and the bridge says so to its own client.
 BRIDGE_GOODBYE_METHOD = "notifications/repld/goodbye"
 
-# Kernel-to-kernel calls (`peer.py` client, `peer_host.py` + protocol.py callee).
-# Bare JSON-RPC methods on the kernel socket, never MCP tools: no client is told
-# they exist, and a peer connection sends no `initialize`.
+
+# -- Peer protocol -----------------------------------------------------------
+
+# Kernel-to-kernel calls (`peer.py` client, `peer_host.py` + protocol.py
+# callee). Bare JSON-RPC methods on the kernel socket, never MCP tools: no
+# client is told they exist, and a peer connection sends no `initialize`.
 PEER_LIST_METHOD = "peer/list"
 PEER_INSPECT_METHOD = "peer/inspect"
 PEER_CALL_METHOD = "peer/call"
@@ -79,16 +87,18 @@ PEER_ERR_UNRESOLVED = -32010
 PEER_ERR_REFUSED = -32011
 
 
+# -- Capabilities ------------------------------------------------------------
+
 # What `initialize` negotiates, from either side of the socket. Shared for the
 # same reason the tool schemas are: the bridge answers `initialize` itself when
 # no kernel has ever run here, so a capability declared only in `protocol.py`
-# would be silently missing from exactly the sessions that start cold — and
+# would be silently missing from exactly the sessions that start cold, and
 # `build_discovery_cache()` does not carry capabilities, so not even a warm
 # `kernel.cache` could correct for it. Both parties may only use what was
 # negotiated, so a drifted copy disables the feature rather than degrading it:
 # `listChanged` is what lets the bridge invalidate the client's tool list after
 # respawning a kernel.
-CAPABILITIES = {
+CAPABILITIES: dict = {
     "tools": {"listChanged": True},
     "resources": {"listChanged": True},
     "experimental": {
@@ -97,7 +107,10 @@ CAPABILITIES = {
     },
 }
 
-CORE_TOOLS = [
+
+# -- Core tools --------------------------------------------------------------
+
+CORE_TOOLS: list[dict] = [
     {
         "name": "exec",
         "description": (
@@ -121,7 +134,7 @@ CORE_TOOLS = [
             "Fetch current status and a head+tail preview of a task's output. "
             "Use Read on the returned `spill_path` for full content. Poll this "
             "yourself, in a loop, before ending your turn if you need the "
-            "result — a session that ends its turn never sees a later channel "
+            "result: a session that ends its turn never sees a later channel "
             "push (confirmed for `claude --bg`)."
         ),
         "inputSchema": {
@@ -130,7 +143,7 @@ CORE_TOOLS = [
             "required": ["task_id"],
         },
         # Declaring outputSchema commits `_get_task` to sending
-        # structuredContent conforming to it on every success — the shape is
+        # structuredContent conforming to it on every success; the shape is
         # tasks.snapshot(), so a field added there must be added here.
         "outputSchema": {
             "type": "object",
@@ -213,8 +226,8 @@ CORE_TOOLS = [
         "name": "cancel",
         "description": (
             "Attempt to cancel a running task. Returns whether cancellation "
-            "was accepted. Cannot preempt tight sync loops (`while True: pass`) "
-            "— only await-yielding code is cancellable."
+            "was accepted. Cannot preempt tight sync loops (`while True: pass`), "
+            "only await-yielding code is cancellable."
         ),
         "inputSchema": {
             "type": "object",
@@ -225,7 +238,10 @@ CORE_TOOLS = [
     },
 ]
 
-DOC_RESOURCES = [
+
+# -- Doc resources -----------------------------------------------------------
+
+DOC_RESOURCES: list[dict] = [
     {
         "uri": "repld://docs/guide",
         "name": "repld-guide",
@@ -243,7 +259,10 @@ DOC_RESOURCES = [
     {
         "uri": "repld://docs/playbook",
         "name": "repld-playbook",
-        "description": "Workflow methodology: prototype interactive → extract gists → wire triggers → production. Read before designing automation.",
+        "description": (
+            "Workflow methodology: prototype interactive, extract gists,"
+            " wire triggers, production. Read before designing automation."
+        ),
         "mimeType": "text/plain",
         "_help_attr": "PLAYBOOK",
     },
@@ -263,20 +282,20 @@ DOC_RESOURCES = [
     },
 ]
 
-# URI → name of the `help.py` module attribute holding that doc's text. Both
+# URI to name of the `help.py` module attribute holding that doc's text. Both
 # the kernel (`protocol._read_resource`) and the bridge (`bridge._static_docs`)
 # getattr through this; neither imports the constants eagerly, since a bridge
-# that never serves a doc shouldn't pay to parse help.py.
-DOC_HELP_ATTRS = {r["uri"]: r["_help_attr"] for r in DOC_RESOURCES}
+# that never serves a doc should not pay to parse help.py.
+DOC_HELP_ATTRS: dict[str, str] = {r["uri"]: r["_help_attr"] for r in DOC_RESOURCES}
 
 # The cross-project gist registry. Advertised unconditionally by both sides,
 # but *not* a doc: there is no help.py attribute behind it (the kernel renders
 # it from the registry file), so it sits beside DOC_RESOURCES rather than in
 # it, which would put a bogus entry in DOC_HELP_ATTRS. It belongs in this
-# module for the reason everything else here does — `resources/list` has two
+# module for the reason everything else here does: `resources/list` has two
 # authors, and this was declared only in `protocol.py`, so a session starting
 # with no kernel and no cache was never told the resource existed.
-REGISTRY_RESOURCE = {
+REGISTRY_RESOURCE: dict = {
     "uri": "repld://gists/_registry",
     "name": "gist-registry",
     "description": "Every gist seen across projects; link one in with `repld gist add`.",
@@ -285,13 +304,13 @@ REGISTRY_RESOURCE = {
 
 # Every resource both sides advertise unconditionally. What the bridge serves
 # as its cold fallback, and what the kernel builds its live list on top of.
-STATIC_RESOURCES = [*DOC_RESOURCES, REGISTRY_RESOURCE]
+STATIC_RESOURCES: list[dict] = [*DOC_RESOURCES, REGISTRY_RESOURCE]
 
 # `resources/templates/list` has the same two authors as everything else here.
 # Loaded gists are still enumerated concretely in `resources/list` (a client
 # that never expands templates keeps working); the template is what tells a
 # cold session the URI *shape* exists before any kernel has listed a gist.
-RESOURCE_TEMPLATES = [
+RESOURCE_TEMPLATES: list[dict] = [
     {
         "uriTemplate": "repld://gists/{name}",
         "name": "gist-api",
@@ -304,12 +323,17 @@ RESOURCE_TEMPLATES = [
 ]
 
 
-def unknown_arguments(schema: dict, args: dict) -> str | None:
-    """The tool error for `tools/call` arguments `schema` does not declare. -> None when there are none
+# -- Argument validation -----------------------------------------------------
 
-    A handler that reads `args.get(...)` would otherwise drop a misspelled or invented argument
-    silently, and the call would look like it ran as asked. Callers answer with `tool_error`, not
-    `error`: a model that never sees the refusal cannot correct the call (SEP-1303)."""
+
+def unknown_arguments(schema: dict, args: dict) -> str | None:
+    """Return the tool error for `tools/call` arguments `schema` does not declare, or None.
+
+    A handler that reads `args.get(...)` would otherwise drop a misspelled or
+    invented argument silently, and the call would look like it ran as asked.
+    Callers answer with `tool_error`, not `error`: a model that never sees the
+    refusal cannot correct the call (SEP-1303).
+    """
     declared = schema.get("inputSchema", {}).get("properties", {})
     extra = sorted(set(args) - set(declared))
     if not extra:
@@ -323,36 +347,45 @@ def wire(resources: list[dict]) -> list[dict]:
     return [{k: v for k, v in r.items() if not k.startswith("_")} for r in resources]
 
 
+# -- JSON-RPC envelopes ------------------------------------------------------
+
 # The JSON-RPC envelope, for the same reason everything else here is shared:
 # more than one module writes these. `protocol.py` re-exports both (the kernel
-# and `dashboard._handle_api` import them from there), and `bridge.py` — which
-# deliberately cannot import `protocol`, since that drags in
-# browser_dispatch/help/kernel_context/tasks for a two-line dict — hand-built
-# them at ten sites, four of those full error bodies. This module is the one
+# and `dashboard._handle_api` import them from there), and `bridge.py`, which
+# deliberately cannot import `protocol` since that drags in
+# browser_dispatch/help/kernel_context/tasks for a two-line dict, hand-built
+# them at ten sites (four of those full error bodies). This module is the one
 # both sides may read.
 
 
-def response(rid, result: dict) -> dict:
+def response(rid: object, result: dict) -> dict:
+    """Build a JSON-RPC success envelope for `rid`."""
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
 
-def error(rid, code: int, message: str, data: dict | None = None) -> dict:
+def error(rid: object, code: int, message: str, data: dict | None = None) -> dict:
+    """Build a JSON-RPC error envelope for `rid`."""
     err: dict = {"code": code, "message": message}
     if data is not None:
         err["data"] = data
     return {"jsonrpc": "2.0", "id": rid, "error": err}
 
 
-def tool_error(rid, text: str) -> dict:
-    """A tool *execution* failure: an `isError` result the model can read and
-    retry on. Protocol errors (`error`) are for malformed requests and unknown
-    tools; clients may never show those to the model."""
+def tool_error(rid: object, text: str) -> dict:
+    """Build an `isError` result the model can read and retry on.
+
+    Protocol errors (`error`) are for malformed requests and unknown
+    tools; clients may never show those to the model.
+    """
     return response(rid, {"content": [{"type": "text", "text": text}], "isError": True})
 
 
 def notification(method: str, params: dict | None = None) -> dict:
-    """An id-less JSON-RPC notification. `params` omitted when None, because
-    MCP clients distinguish an absent `params` from an empty one."""
+    """Build an id-less JSON-RPC notification.
+
+    `params` omitted when None, because MCP clients distinguish an absent
+    `params` from an empty one.
+    """
     msg: dict = {"jsonrpc": "2.0", "method": method}
     if params is not None:
         msg["params"] = params

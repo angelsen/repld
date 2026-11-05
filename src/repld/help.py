@@ -2867,6 +2867,7 @@ def _usage() -> str:
 
 
 def run_help(argv: list[str]) -> int:
+    """Print the overview or one topic for `repld help`; the exit code."""
     # Via cli_args like every other subcommand, rather than the `argv[0] in
     # (-h, --help)` this open-coded: that only ever looked at the first
     # argument, so `repld help gists --help` printed the gists topic instead of

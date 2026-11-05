@@ -1,9 +1,9 @@
-"""Session registry — user-scoped directory of live repld instances.
+"""Session registry: user-scoped directory of live repld instances.
 
 Each running kernel writes `$XDG_RUNTIME_DIR/repld/sessions/<pid>.json` on
 boot and removes it on shutdown. Unlike the per-project lockfile
-(`projects/<slug>/kernel.lock`), this index doesn't depend on knowing the
-project cwd — any repld instance (or its dashboard) can enumerate all live
+(`projects/<slug>/kernel.lock`), this index does not depend on knowing the
+project cwd; any repld instance (or its dashboard) can enumerate all live
 siblings by reading this directory.
 
 Stale entries (dead PIDs, corrupt files) are pruned lazily whenever the
@@ -24,13 +24,16 @@ SESSIONS_DIR = RUNTIME_DIR / "sessions"
 
 
 def _session_path() -> Path:
-    """This process's own session file. Reading someone else's goes through
-    `list_sessions`, which has to prune stale entries as it walks anyway."""
+    """Return this process's own session file.
+
+    Other processes are read through `list_sessions`, which prunes stale
+    entries as it walks.
+    """
     return SESSIONS_DIR / f"{os.getpid()}.json"
 
 
 def register(cwd: str, socket_path: str, dashboard_port: int | None) -> None:
-    """Write this process's session file (0600 — it names every project cwd)."""
+    """Write this process's session file (0600, since it names every project cwd)."""
     ensure_runtime_dir()
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     info: dict[str, object] = {
@@ -67,12 +70,12 @@ def list_sessions() -> list[dict]:
             pid = int(info["pid"])
         except (OSError, KeyError, ValueError, TypeError):
             # Corrupt, unreadable, or not the shape we write. Judge liveness by
-            # the filename pid so a live kernel's file isn't deleted out from
-            # under it — but drop the payload rather than returning it. Every
+            # the filename pid so a live kernel's file is not deleted out from
+            # under it, but drop the payload rather than returning it. Every
             # consumer indexes `pid` unguarded (`repld status`, `repld stop
             # --all`, the dashboard sidebar), and an entry reaches here
-            # *because* its pid didn't parse, so handing it back turns one bad
-            # file into a crashed command.
+            # *because* its pid did not parse, so handing it back turns one
+            # bad file into a crashed command.
             info = None
             try:
                 pid = int(f.stem)

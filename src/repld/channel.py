@@ -1,9 +1,9 @@
-"""Channel push — the one way anything in repld speaks to the agent.
+"""Channel push, the one way anything in repld speaks to the agent.
 
-Every `<channel>` injection the agent sees originates here: task completions,
-`@every` output, console errors, human gates, dashboard actions, bare
-`notify()`. Sending one means two things at once — a JSON-RPC notification out
-over IPC, and a local event so the pane and `repld log` mirror what was sent —
+Every ``<channel>`` injection the agent sees originates here: task completions,
+``@every`` output, console errors, human gates, dashboard actions, bare
+`notify()`. Sending one means two things at once (a JSON-RPC notification out
+over IPC, and a local event so the pane and `repld log` mirror what was sent),
 and doing only the first is a bug that is invisible until someone goes looking
 for history that was never written.
 
@@ -13,7 +13,7 @@ builders, while `kernel` pulls in the
 asyncio loop, the dispatcher, gists and the display. Six modules across the
 kernel and the browser stack push to channel, and keeping it here is what lets
 each of them import it at module level rather than reaching for a
-function-local `from .kernel import push_channel` to dodge a cycle.
+function-local ``from .kernel import push_channel`` to dodge a cycle.
 """
 
 import time
@@ -36,19 +36,13 @@ _meta_augmenter: "Callable[[], dict[str, str]] | None" = None
 def set_meta_augmenter(fn: "Callable[[], dict[str, str]] | None") -> None:
     """Register (or clear) a callback whose returned dict merges into every push's meta.
 
-    Must be synchronous and cheap -- push_channel runs on whatever thread or
+    Must be synchronous and cheap: push_channel runs on whatever thread or
     loop called it, including the kernel's shared asyncio loop. Exceptions
     are swallowed so a broken augmenter drops its own contribution instead
     of taking every push in the kernel down with it.
     """
     global _meta_augmenter
     _meta_augmenter = fn
-
-
-def _clip(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"… ({len(text)} chars total)"
 
 
 def push_channel(
@@ -60,13 +54,13 @@ def push_channel(
     exclude: "ipc.Session | None" = None,
     on_parked_flush: "Callable[[bool], None] | None" = None,
 ) -> bool | None:
-    """Send a notifications/claude/channel notification AND emit a local
-    ChannelPush event so the pane and the event log mirror what the MCP agent
+    """Send a `notifications/claude/channel` notification and emit a local
+    `ChannelPush` event so the pane and the event log mirror what the MCP agent
     receives. Single source of truth for every channel push.
 
-    `session=None` broadcasts — that's the right thing for genuinely ambient
-    output (@every errors, browser connect/disconnect, bare `notify()` from
-    shared user code) in repld's shared-__main__ model. Passing a session
+    `session=None` broadcasts; that is the right thing for genuinely ambient
+    output (``@every`` errors, browser connect/disconnect, bare `notify()` from
+    shared user code) in repld's shared-`__main__` model. Passing a session
     targets the one that asked for the work. If that session has since
     disconnected the push is *dropped*, never downgraded to a broadcast:
     leaking one session's output into every other one is worse than silence,
@@ -74,8 +68,8 @@ def push_channel(
     `push_owed` instead, which waits for the id to come back.
 
     `exclude` only applies to the broadcast path (`session=None`): skip one
-    session — the caller's own — that already has this update some other way
-    (a self-report's synchronous return value) and doesn't need it echoed
+    session (the caller's own) that already has this update some other way
+    (a self-report's synchronous return value) and does not need it echoed
     back. Ignored when `session` is set, since targeting one session and
     excluding another are different requests.
 
@@ -88,25 +82,25 @@ def push_channel(
     other session for it is the leak the targeted path exists to prevent.
 
     `content` is a backstop for callers that pass through external or user
-    data unbounded (`notify()`'s content, `@every`'s stringified result, a
+    data unbounded (`notify()`'s content, ``@every``'s stringified result, a
     controls observation's state): it goes through `tasks.spill_text`, the
     same head+tail preview and spill-to-disk exec output uses, so a huge push
-    loses nothing — the full text stays reachable at the `[full output: ...]`
+    loses nothing; the full text stays reachable at the ``[full output: ...]``
     path instead of being cut off. `meta` values only get the flat
-    `_META_VALUE_LIMIT` clip — they're XML-attribute-shaped (`kind`,
+    `_META_VALUE_LIMIT` clip (they are XML-attribute-shaped: `kind`,
     `control`, `target`, ...), never a payload worth a spill file of its own.
     A caller with a domain-specific preview shape (e.g.
     `cdp._check_controls_observation`) should still clip its own way first;
-    this only catches what isn't.
+    this only catches what is not.
 
     Returns whether a targeted push reached `session` (False when dropped or
-    downgraded to a broadcast), None for a broadcast — OR, for a targeted
+    downgraded to a broadcast), None for a broadcast, or, for a targeted
     push, None when `session` is currently parked (`ipc.park_pushes`):
     queued, not yet on the wire, and not a drop, so `fallback_broadcast`
     does not fire for it. `on_parked_flush`, ignored unless `session` is
     set, reports the eventual outcome once the park releases.
     """
-    msg = _channel_msg(content, meta)
+    msg = _build_channel_msg(content, meta)
     delivered = None
     if session is None:
         ipc.broadcast_channel(msg, exclude=exclude)
@@ -126,12 +120,12 @@ def push_owed(
     owed_s: float,
     on_flush: "Callable[[bool], None] | None" = None,
 ) -> "ipc.Post":
-    """A targeted push owed to `session`'s claude_session_id for `owed_s`
+    """A targeted push owed to `session`'s `claude_session_id` for `owed_s`
     seconds rather than to the connection (`ipc.Server.deliver`): a task
     result whose session re-registers from a new host still gets it, once.
     Never a broadcast. `on_flush` reports an outcome `HELD`/`QUEUED` left open.
     """
-    msg = _channel_msg(content, meta)
+    msg = _build_channel_msg(content, meta)
     outcome = ipc.deliver(
         session, msg, on_flush=on_flush, owed_until=time.monotonic() + owed_s
     )
@@ -139,7 +133,33 @@ def push_owed(
     return outcome
 
 
-def _channel_msg(content: str, meta: dict | None) -> dict:
+def push_kind(
+    content: str, kind: str, *, session: "ipc.Session | None" = None, **meta: str
+) -> None:
+    """`push_channel` with the ubiquitous ``{"kind": ...}`` meta shape spelled out once.
+
+    Every push whose meta keys are known at the call site goes through here.
+    Three deliberately do not, and they are the ones that build their meta
+    conditionally: `gates._gate` (`options` only for a `choose`),
+    `kernel._maybe_push_done` (`label` only when the task has one),
+    `cdp._check_controls_observation` (`stateBefore`/`stateAfter` only when the
+    control reported them). Forcing those through ``**meta`` would mean building
+    the dict anyway and splatting it, which is the literal dict with extra
+    steps.
+
+    `tests/phases/channels.py::phase_4_push_kind_args` guards the argument
+    order across every call site, including callers that import this under
+    another name: `kernel.py` takes it as `_push`, which is where seven of
+    them are.
+    """
+    push_channel(content, {"kind": kind, **meta}, session=session)
+
+
+# -- helpers ----
+
+
+def _build_channel_msg(content: str, meta: dict | None) -> dict:
+    """Compose the JSON-RPC notification dict from `content` and `meta`."""
     if _meta_augmenter is not None:
         try:
             meta = {**_meta_augmenter(), **(meta or {})}
@@ -157,26 +177,14 @@ def _channel_msg(content: str, meta: dict | None) -> dict:
     )
 
 
+def _clip(text: str, limit: int) -> str:
+    """Truncate `text` to `limit` characters, appending a length notice when cut."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... ({len(text)} chars total)"
+
+
 def _emit_local(msg: dict) -> None:
+    """Write a `ChannelPush` event so the pane and `repld log` mirror the push."""
     params = msg["params"]
     events.emit(ChannelPush(params["content"], params["meta"]))
-
-
-def push_kind(content: str, kind: str, *, session=None, **meta: str) -> None:
-    """push_channel with the ubiquitous {"kind": ...} meta shape spelled out once.
-
-    Every push whose meta keys are known at the call site goes through here.
-    Three deliberately don't, and they are the ones that build their meta
-    conditionally — `gates._gate` (`options` only for a `choose`),
-    `kernel._maybe_push_done` (`label` only when the task has one),
-    `cdp._check_controls_observation` (`stateBefore`/`stateAfter` only when the
-    control reported them). Forcing those through `**meta` would mean building
-    the dict anyway and splatting it, which is the literal dict with extra
-    steps.
-
-    `tests/phases/channels.py::phase_4_push_kind_args` guards the argument
-    order across every call site, including callers that import this under
-    another name — `kernel.py` takes it as `_push`, which is where seven of
-    them are.
-    """
-    push_channel(content, {"kind": kind, **meta}, session=session)

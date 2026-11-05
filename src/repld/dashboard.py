@@ -1,8 +1,8 @@
-"""Dashboard: browser control panel + kernel status served over HTTP.
+"""Dashboard: browser control panel and kernel status served over HTTP.
 
 Pure-stdlib async HTTP server on an ephemeral port.  Two routes:
-  GET /      → inline HTML page (`dashboard_html.PAGE`)
-  POST /api  → JSON-RPC commands (state, browser.connect, browser.watch, etc.)
+  GET /       inline HTML page (`dashboard_html.PAGE`)
+  POST /api   JSON-RPC commands (state, browser.connect, browser.watch, etc.)
 
 The markup lives in `dashboard_html.py`. This module is the server: routing,
 the auth ladder, and the JSON-RPC dispatch.
@@ -31,7 +31,7 @@ _hint_path: Path | None = None
 _token: str = ""
 
 # Ceiling on a `POST /api` body. Every real request is a small JSON-RPC
-# envelope — the largest is a `browser.connect` params dict — so this is three
+# envelope (the largest is a `browser.connect` params dict), so this is three
 # orders of magnitude of headroom. It exists because `Content-Length` feeds
 # `readexactly()` directly: without a bound, one header claiming 10 GB has the
 # kernel allocate toward it, and the 5 s read timeout is no defence when the
@@ -40,7 +40,7 @@ _token: str = ""
 _MAX_BODY_BYTES = 1 << 20
 
 # Ceiling on the request's header block. The same argument as `_MAX_BODY_BYTES`
-# — an unbounded read on loopback is an OOM the token was supposed to prevent —
+# (an unbounded read on loopback is an OOM the token was supposed to prevent)
 # except this one is worse, because the header loop runs *before* the Host
 # check and before either auth path, so it was the one thing an unauthenticated
 # caller could make the kernel do. `StreamReader.readline` caps each line at
@@ -51,6 +51,11 @@ _MAX_BODY_BYTES = 1 << 20
 _MAX_HEADER_LINES = 100
 
 
+# ---------------------------------------------------------------------------
+# State collection
+# ---------------------------------------------------------------------------
+
+
 def _bound_port() -> int | None:
     """The dashboard's listening port, or None before/without a bound server."""
     if _server and _server.sockets:
@@ -58,12 +63,8 @@ def _bound_port() -> int | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# State collection
-# ---------------------------------------------------------------------------
-
-
 async def _collect_state() -> dict:
+    """Build the lightweight state snapshot the dashboard page polls."""
     active = sum(1 for _tid, t in tasks.items() if not t["done_event"].is_set())
     from .kernel import every_snapshot
 
@@ -100,8 +101,10 @@ async def _collect_state() -> dict:
 
 
 async def _collect_tasks() -> dict:
-    """Per-item task/ticker listing behind `repld tasks` — `_collect_state`
-    above stays a lightweight count since the dashboard page polls it."""
+    """Return per-item task and ticker rows for `repld tasks`.
+
+    `_collect_state` stays a lightweight count since the dashboard page polls it.
+    """
     from .kernel import every_snapshot
 
     task_rows = []
@@ -138,18 +141,18 @@ def _resolve_tab(browser, target_id: str):
 
 
 def save_hint() -> None:
-    """Persist dashboard port + API token + browser state to the hint file.
+    """Persist dashboard port, API token and browser state to the hint file.
 
-    Written once as soon as the server binds — `repld status` reads the token
+    Written once as soon as the server binds (`repld status` reads the token
     from here to ask for task/ticker counts, and a restart reads the port back
-    to reclaim it — and again whenever browser state changes.
+    to reclaim it) and again whenever browser state changes.
 
     Merges rather than replaces, and only rewrites the browser keys when a pool
-    actually exists. Every browser-initiated call has one (they're BrowserPool
+    actually exists. Every browser-initiated call has one (they are BrowserPool
     methods); the startup call does not, and blanking `chrome_ports` /
     `patterns` there would discard the previous kernel's restorable session
-    before `_restore_browser_state` has read it — silently, on a headless
-    kernel, which never prompts to restore.
+    before `_restore_browser_state` has read it (silently, on a headless
+    kernel, which never prompts to restore).
     """
     if _hint_path is None:
         return
@@ -192,6 +195,7 @@ def save_hint() -> None:
 
 
 async def _rpc_browser_disconnect(browser, params: dict) -> Any:
+    """Disconnect one target, one port, or the entire browser pool."""
     from .browser_dispatch import route_detach
 
     result = await route_detach(browser, params.get("target"), params.get("port"))
@@ -202,6 +206,7 @@ async def _rpc_browser_disconnect(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_connect(browser, params: dict) -> Any:
+    """Attach to a Chrome instance on the given port."""
     port = params.get("port", 9222)
     b = await browser.connect(port)
     targets = await b.pages()
@@ -211,7 +216,7 @@ async def _rpc_browser_connect(browser, params: dict) -> Any:
         if t.get("type") == "page"
     ]
     summary = (
-        f"[dashboard] connected to Chrome on port {port} — {len(page_lines)} page(s)"
+        f"[dashboard] connected to Chrome on port {port}, {len(page_lines)} page(s)"
     )
     if page_lines:
         summary += "\n" + "\n".join(page_lines[:10])
@@ -220,6 +225,7 @@ async def _rpc_browser_connect(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_targets(browser, params: dict) -> Any:
+    """List non-worker targets across all connected ports."""
     pool = browser.peek()
     if pool is None or not pool.connected_ports:
         raise RuntimeError("Not connected to Chrome")
@@ -237,6 +243,7 @@ async def _rpc_browser_targets(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_watch(browser, params: dict) -> Any:
+    """Start watching tabs matching `pattern`."""
     pattern = params.get("pattern", "")
     if not pattern:
         raise RuntimeError("pattern is required")
@@ -252,6 +259,7 @@ async def _rpc_browser_watch(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_unwatch(browser, params: dict) -> Any:
+    """Stop watching tabs matching `pattern`."""
     pattern = params.get("pattern", "")
     if not pattern:
         raise RuntimeError("pattern is required")
@@ -265,12 +273,15 @@ async def _rpc_browser_unwatch(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_console(browser, params: dict) -> Any:
+    """Return the last 50 console entries for a target.
+
+    Off the loop: `console_entries`/`har_summary` re-evaluate a CTE chain that
+    `observe.py` measured at 39-56 ms per tab, and this server shares the
+    kernel's loop, so a Refresh click would stall every cell, ticker and
+    observation for as long as the scan takes. `query_dicts` opens a per-call
+    cursor precisely so another thread can read while the loop writes.
+    """
     tab = _resolve_tab(browser, params.get("target_id", ""))
-    # Off the loop: console_entries/har_summary re-evaluate a CTE chain that
-    # observe.py measured at 39-56 ms per tab, and this server shares the
-    # kernel's loop — so a Refresh click would stall every cell, ticker and
-    # observation for as long as the scan takes. query_dicts opens a per-call
-    # cursor precisely so another thread can read while the loop writes.
     rows = await asyncio.to_thread(tab.console)
     return [
         {
@@ -284,10 +295,12 @@ async def _rpc_browser_console(browser, params: dict) -> Any:
 
 
 async def _rpc_browser_network(browser, params: dict) -> Any:
+    """Return the last 50 network entries for a target.
+
+    Off the loop for the same reason as `_rpc_browser_console`.
+    """
     tab = _resolve_tab(browser, params.get("target_id", ""))
-    rows = await asyncio.to_thread(
-        tab.network
-    )  # off the loop — see _rpc_browser_console
+    rows = await asyncio.to_thread(tab.network)
     return [
         {
             "method": r.method,
@@ -301,7 +314,7 @@ async def _rpc_browser_network(browser, params: dict) -> Any:
     ]
 
 
-# Browser RPCs: handler(browser, params) — dispatch injects the validated
+# Browser RPCs: handler(browser, params). Dispatch injects the validated
 # browser object. "state" and "sessions" are handled inline (no browser).
 _BROWSER_RPCS = {
     "browser.disconnect": _rpc_browser_disconnect,
@@ -318,13 +331,13 @@ def _sessions_with_tokens() -> list[dict]:
     """Live sessions, each carrying its own dashboard token.
 
     The sidebar links to sibling projects' dashboards, and those now refuse an
-    unauthenticated `GET /` like this one does — so the links need each peer's
+    unauthenticated `GET /` like this one does, so the links need each peer's
     token. Read here rather than in `sessions.register`: a token belongs to a
     dashboard, not to the session registry, and `repld status` / `stop --all`
     read that registry with no business carrying credentials around.
 
     Every hint file is 0600 and owned by this uid, so this reveals nothing to
-    the caller it couldn't already read — but only *because* the caller is
+    the caller it could not already read, but only *because* the caller is
     already holding this kernel's token, which is the point of the gate.
     """
     from . import paths, sessions, state
@@ -346,6 +359,7 @@ def _sessions_with_tokens() -> list[dict]:
 
 
 async def _rpc_dispatch(method: str, params: dict) -> Any:
+    """Route a JSON-RPC method to its handler and return the result."""
     if method == "state":
         return await _collect_state()
 
@@ -400,8 +414,8 @@ def _cors_header(origin: str | None) -> str:
 def _cookie_name() -> str:
     """Per-port cookie name.
 
-    Cookies ignore the port — every dashboard on 127.0.0.1 shares one cookie
-    jar — so a fixed name would have each project's kernel overwrite the last
+    Cookies ignore the port: every dashboard on 127.0.0.1 shares one cookie
+    jar, so a fixed name would have each project's kernel overwrite the last
     one's cookie and log you out of every sibling tab. Nothing leaks either
     way (a cookie carrying project A's token simply fails B's compare_digest),
     but the suffix keeps each dashboard reading only its own.
@@ -410,6 +424,7 @@ def _cookie_name() -> str:
 
 
 def _parse_cookies(header: str) -> dict[str, str]:
+    """Parse a `Cookie` header into a name-value dict."""
     out: dict[str, str] = {}
     for part in header.split(";"):
         key, sep, value = part.strip().partition("=")
@@ -419,15 +434,16 @@ def _parse_cookies(header: str) -> dict[str, str]:
 
 
 def _token_ok(candidate: str | None) -> bool:
+    """True when `candidate` matches the dashboard token in constant time."""
     return bool(candidate) and secrets.compare_digest(candidate or "", _token)
 
 
 def _page_auth(query: str, headers: dict[str, str]) -> tuple[bool, bool]:
     """`(authorized, came_from_query)` for a `GET /`.
 
-    `GET /` is authenticated because it *carries* the token — the page needs
+    `GET /` is authenticated because it *carries* the token: the page needs
     it inlined to call `POST /api`. Serving it to anyone who asks made the
-    token gate nothing at all: any process on the box could read the page,
+    token gate nothing at all; any process on the box could read the page,
     grep the token out, and then enumerate every project cwd via `sessions`
     or attach to the user's Chrome. Loopback is not a uid boundary, and every
     other file holding this data is written 0600.
@@ -435,7 +451,7 @@ def _page_auth(query: str, headers: dict[str, str]) -> tuple[bool, bool]:
     Two accepted sources. `?token=` is what `repld dashboard` opens with,
     reading it from the 0600 hint file; the cookie is what makes a refresh
     work after the page strips that query out of the address bar. The cookie
-    is never accepted for `POST /api` — that stays Bearer-only, so a request
+    is never accepted for `POST /api`: that stays Bearer-only, so a request
     a browser was tricked into making cannot carry credentials by itself.
     """
     from urllib.parse import parse_qs
@@ -451,13 +467,13 @@ def _host_allowed(host: str | None) -> bool:
     """Reject DNS rebinding: the Host header must name this loopback server.
 
     A rebound page (evil.com resolving to 127.0.0.1) is same-origin in the
-    browser's eyes — no Origin header, so CORS can't stop it from reading
+    browser's eyes, with no Origin header, so CORS cannot stop it from reading
     GET / (and the embedded token). Its requests carry Host: evil.com:<port>.
     """
     port = _bound_port()
     if not host or port is None:
         return False
-    # IPv4 loopback only — _start() binds "127.0.0.1", never "::1".
+    # IPv4 loopback only: `_start` binds "127.0.0.1", never "::1".
     return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
 
@@ -469,6 +485,7 @@ async def _send_response(
     origin: str | None = None,
     extra_headers: str = "",
 ) -> None:
+    """Write a complete HTTP/1.1 response and drain."""
     reason = {
         200: "OK",
         401: "Unauthorized",
@@ -484,7 +501,7 @@ async def _send_response(
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
         # `_handle_connection` serves exactly one request and then closes in
-        # its `finally`, but HTTP/1.1 is keep-alive by default — so without
+        # its `finally`, but HTTP/1.1 is keep-alive by default, so without
         # this the client pools a socket the server has already FIN'd and the
         # next request races the close. Chrome's socket-reuse retry hides it;
         # saying what we actually do is cheaper than relying on that.
@@ -503,6 +520,7 @@ async def _send_response(
 
 
 async def _handle_api(body: bytes) -> bytes:
+    """Dispatch one JSON-RPC request and return the encoded response."""
     from .protocol import _error, _response
 
     try:
@@ -535,6 +553,7 @@ async def _read_headers(reader: asyncio.StreamReader, headers: dict[str, str]) -
 
 
 async def _send_preflight(writer: asyncio.StreamWriter, origin: str | None) -> None:
+    """Answer a CORS preflight with the allowed methods and headers."""
     cors = (
         "HTTP/1.1 204 No Content\r\n"
         f"{_cors_header(origin)}"
@@ -553,6 +572,7 @@ async def _serve_page(
     headers: dict[str, str],
     origin: str | None,
 ) -> None:
+    """Serve the authenticated dashboard HTML page."""
     authorized, from_query = _page_auth(query, headers)
     if not authorized:
         await _send_response(
@@ -592,12 +612,13 @@ async def _serve_api(
     content_length: int,
     origin: str | None,
 ) -> None:
+    """Authenticate via Bearer and dispatch the JSON-RPC body."""
     auth = headers.get("authorization", "")
     if not secrets.compare_digest(auth, f"Bearer {_token}"):
         await _send_response(writer, 401, b'{"error":"unauthorized"}', origin=origin)
         return
     # Checked after the Bearer compare, so an unauthenticated caller
-    # learns nothing about the limit — and before the read, which is
+    # learns nothing about the limit, and before the read, which is
     # the whole point: `readexactly` allocates toward whatever the
     # header claimed.
     if content_length > _MAX_BODY_BYTES:
@@ -622,6 +643,7 @@ async def _serve_request(
     writer: asyncio.StreamWriter,
     headers: dict[str, str],
 ) -> None:
+    """Parse the request line and route to the matching handler."""
     request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
     if not request_line:
         return
@@ -663,6 +685,7 @@ async def _serve_request(
 async def _handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
+    """Serve one HTTP request, then close the connection."""
     headers: dict[str, str] = {}
     try:
         await _serve_request(reader, writer, headers)
@@ -698,6 +721,7 @@ async def _start(
     start_time: float,
     preferred_port: int,
 ) -> int:
+    """Bind the HTTP server and return the port it landed on."""
     global _start_time, _socket_path, _server, _token
     _start_time = start_time
     _socket_path = socket_path
@@ -735,6 +759,7 @@ def start_dashboard(
 
 
 def stop_dashboard() -> None:
+    """Close the HTTP server socket."""
     global _server
     if _server is not None:
         _server.close()
