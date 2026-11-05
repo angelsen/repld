@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.18.0] - 2026-11-05
+
+### Added
+
 - Captcha detection, never solving: every observation and `browser_tree` ends with a `captcha:` line per widget (reCAPTCHA v2/v3, hCaptcha, Turnstile, Arkose) with its state (`unsolved`, `challenge` open, `solved`, `invisible` for a scored v3), read from the page's own document by vendor fingerprint. `tab.captchas()` is the one-shot read, `tab.wait_captcha(timeout=)` polls until a human has solved it, and a `[captcha] <vendor> solved` push goes to the tab's live claim when the token lands.
 - `tab.js(timeout=)` bounds the wait for the page. A page-served command (`Runtime.*`, `Input.*`, `Page.navigate`, a screenshot, a DOM read) that times out while the browser process still answers raises `RendererBusyError`, a `TimeoutError` that names the page's main thread as the cause rather than the connection, with the tab id.
 
