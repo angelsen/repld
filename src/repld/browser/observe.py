@@ -12,6 +12,7 @@ import asyncio
 import base64
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -891,21 +892,66 @@ async def _seed_screenshot(
 
     async with capture_tab._ensure_front():
         cap = await capture_tab._exec("Page.captureScreenshot", {"format": "png"})
-    img_bytes = base64.b64decode(cap["data"])
+
+    # Pillow decode, crop, resize and metadata embed are pure CPU work
+    # (measured 50-170 ms at 2x DPR); run off the loop.
+    cropped, cw, ch = await asyncio.to_thread(
+        _process_seed_capture,
+        cap["data"],
+        css_w,
+        cap_l,
+        cap_t,
+        cap_r,
+        cap_b,
+        offset_x,
+        offset_y,
+        _png_size,
+        _crop_png,
+        _resize_png,
+        _model_dims,
+        embed_crop_metadata,
+    )
+
+    out = await save_capture("seed", tab.target_id, cropped)
+
+    return {"path": str(out), "width": cw, "height": ch}
+
+
+def _process_seed_capture(
+    b64_data: str,
+    css_w: float,
+    cap_l: float,
+    cap_t: float,
+    cap_r: float,
+    cap_b: float,
+    offset_x: float,
+    offset_y: float,
+    png_size: Callable[[bytes], tuple[int, int]],
+    crop_png: Callable[[bytes, tuple[float, float, float, float]], bytes],
+    resize_png: Callable[[bytes, int, int], bytes],
+    model_dims: Callable[[int, int], tuple[int, int]],
+    embed_meta: Callable[..., bytes],
+) -> tuple[bytes, int, int]:
+    """Decode, crop, resize and embed metadata for a seed screenshot.
+
+    Pure CPU work (Pillow): called via `asyncio.to_thread` so the loop
+    stays free during the 50-170 ms this takes at 2x DPR.
+    """
+    img_bytes = base64.b64decode(b64_data)
     # captureScreenshot's bytes are device pixels; the box model above is
     # CSS pixels. They diverge by the device pixel ratio (confirmed live,
     # 1.25x on the prototype target), so the crop box needs scaling before
     # it can slice the actual captured image.
-    dpr = _png_size(img_bytes)[0] / css_w if css_w else 1.0
+    dpr = png_size(img_bytes)[0] / css_w if css_w else 1.0
 
-    cropped = _crop_png(img_bytes, (cap_l * dpr, cap_t * dpr, cap_r * dpr, cap_b * dpr))
-    cw, ch = _png_size(cropped)
+    cropped = crop_png(img_bytes, (cap_l * dpr, cap_t * dpr, cap_r * dpr, cap_b * dpr))
+    cw, ch = png_size(cropped)
     # Belt-and-suspenders, not a routinely-hit branch. The clamp above
     # keeps a crop well under the vision token budget in practice
     # (confirmed live: both a 163x70 and a 500x275 clamped crop passed).
-    tgt_w, tgt_h = _model_dims(cw, ch)
+    tgt_w, tgt_h = model_dims(cw, ch)
     if (tgt_w, tgt_h) != (cw, ch):
-        cropped = _resize_png(cropped, tgt_w, tgt_h)
+        cropped = resize_png(cropped, tgt_w, tgt_h)
         cw, ch = tgt_w, tgt_h
 
     # Delivered-pixel-to-page-CSS-pixel factor. Folds in both the DPR
@@ -920,13 +966,10 @@ async def _seed_screenshot(
     # captured region; this is what keeps that shift honest.
     crop_css_w = cap_r - cap_l
     scale = round(cw / crop_css_w, 4) if crop_css_w else 1.0
-    cropped = embed_crop_metadata(
+    cropped = embed_meta(
         cropped, origin_x=cap_l - offset_x, origin_y=cap_t - offset_y, scale=scale
     )
-
-    out = await save_capture("seed", tab.target_id, cropped)
-
-    return {"path": str(out), "width": cw, "height": ch}
+    return cropped, cw, ch
 
 
 def format_seeded_tree(result: dict, x: float, y: float, tab: Tab) -> list[str]:

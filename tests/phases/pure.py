@@ -919,6 +919,8 @@ def _tab_owner_routing() -> None:
             self.last_caller_task = None
             self._action_depth = 0
             self._action_origin = None
+            self._action_stack: list[tuple[object, Any]] = []
+            self._action_toggled = False
             self._action_until = 0.0
             self.__dict__.update(kw)
 
@@ -994,6 +996,7 @@ def _tab_owner_routing() -> None:
     # span re-reads `intercepting` so a take() during it holds the picker.
     class _Acting(_Fake):
         action = CDPSession.action
+        set_mode = CDPSession.set_mode
         intercepting = CDPSession.intercepting
 
         def __init__(self, **kw: Any) -> None:
@@ -1046,10 +1049,50 @@ def _tab_owner_routing() -> None:
 
     asyncio.run(_overlap())
 
-    watcher, opener_owner = NS(who="watcher"), NS(who="opener")
+    # Out-of-order exit: the outer span exits while the inner still runs.
+    # The inner span's origin must survive, and the interceptor must be
+    # toggled off when the last span exits at depth 0.
+    async def _ooo_exit() -> None:
+        sess_a, sess_b = NS(closed=False, who="a"), NS(closed=False, who="b")
+        tab = acting(mode="agent")
+        tasks._tool_caller.set(sess_a)
+        cm_outer = tab.action()
+        await cm_outer.__aenter__()
+        assert_eq(route(tab), sess_a, "ooo: outer span's origin routes")
+        tasks._tool_caller.set(sess_b)
+        cm_inner = tab.action()
+        await cm_inner.__aenter__()
+        assert_eq(route(tab), sess_b, "ooo: inner span's origin is current")
+        await cm_outer.__aexit__(None, None, None)
+        assert_eq(
+            route(tab), sess_b, "ooo: inner span's origin survives the outer's exit"
+        )
+        await cm_inner.__aexit__(None, None, None)
+        assert_eq(
+            tab.sent,
+            [True, False],
+            "ooo: the interceptor toggles off even when the toggling span exited first",
+        )
+
+    asyncio.run(_ooo_exit())
+
+    # set_mode("agent") with no origin clears the owner rather than keeping
+    # a stale value from a previous session.
+    async def _set_mode_no_origin() -> None:
+        tab = acting(mode="shared")
+        tab.owner = NS(closed=False, who="stale")
+        tasks._tool_caller.set(None)
+        tasks._current_task.set(None)
+        await tab.set_mode("agent", explicit=True)
+        assert_eq(tab.owner, None, "set_mode clears owner when origin is None")
+        assert_eq(tab.taken, True, "explicit=True sets taken regardless of origin")
+
+    asyncio.run(_set_mode_no_origin())
+
+    watcher, opener_owner = NS(who="watcher", closed=False), NS(who="opener")
     parent = NS(owner=opener_owner)
     fake = NS(
-        _pattern_owners={"*app.test*": watcher},
+        _pattern_owners={"*app.test*": [watcher]},
         find_by_target_id=lambda tid: parent if tid == "P" else None,
     )
     fake._pattern_owner = lambda url: BrowserSession._pattern_owner(fake, url)  # type: ignore[attr-defined]
@@ -1075,6 +1118,7 @@ def _tab_owner_routing() -> None:
 
     asyncio.run(_probe())
     assert_true(seen == [sess], "a tool call's caller is visible as current_origin")
+
     print(
         "  ✓ tab owner: route_to precedence, watch/opener inheritance, tool-call origin"
     )

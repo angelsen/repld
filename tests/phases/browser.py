@@ -6310,3 +6310,401 @@ def phase_6_auth_live(kernel: Kernel) -> None:
             a.exec("await _at.close()")
         srv.shutdown()
         a.close()
+
+
+# ------------------------------------------------------------------
+# Transport-layer fixes (session.py)
+# ------------------------------------------------------------------
+
+
+def phase_6_is_recoverable_cdp_error(_kernel: Kernel) -> None:
+    """CDPCommandError is never treated as a transport failure, and
+    is_scope_refusal accepts only CDPCommandError.
+
+    Pure function: no kernel, no Chrome.
+    """
+    from repld.browser.session import (
+        SCOPE_REFUSAL_MARKER,
+        BrowserSession,
+        CDPCommandError,
+        is_scope_refusal,
+    )
+
+    # CDPCommandError with "not connected" must NOT be recoverable.
+    cdp_err = CDPCommandError("Target not connected to a renderer")
+    assert_eq(
+        BrowserSession._is_recoverable(cdp_err),
+        False,
+        "CDPCommandError('not connected') is not recoverable",
+    )
+
+    # A plain RuntimeError with "not connected" is still recoverable.
+    rt_err = RuntimeError("BrowserSession not connected")
+    assert_eq(
+        BrowserSession._is_recoverable(rt_err),
+        True,
+        "RuntimeError('not connected') stays recoverable",
+    )
+
+    # is_scope_refusal: CDPCommandError with the marker passes.
+    assert_eq(
+        is_scope_refusal(CDPCommandError(f"Runtime.evaluate {SCOPE_REFUSAL_MARKER}")),
+        True,
+        "CDPCommandError with the scope marker is a scope refusal",
+    )
+
+    # is_scope_refusal: RuntimeError with the marker does NOT pass.
+    assert_eq(
+        is_scope_refusal(RuntimeError(f"something {SCOPE_REFUSAL_MARKER} else")),
+        False,
+        "plain RuntimeError with the marker is not a scope refusal",
+    )
+
+    # is_scope_refusal: a plain BaseException does NOT pass.
+    assert_eq(
+        is_scope_refusal(Exception(SCOPE_REFUSAL_MARKER)),
+        False,
+        "Exception with the marker is not a scope refusal",
+    )
+    print(
+        "  ✓ _is_recoverable excludes CDPCommandError; "
+        "is_scope_refusal restricted to CDPCommandError"
+    )
+
+
+def phase_6_pending_clear_reconnect(_kernel: Kernel) -> None:
+    """Non-driver callers' futures are failed (not orphaned) during reconnect.
+
+    Uses a real websockets server: the BrowserSession reconnect path runs
+    against a live socket. Orphan futures injected into `_pending` before the
+    reconnect represent the concurrent callers whose send already completed
+    and whose futures the recv_loop's cancel left unresolved.
+    """
+    from repld.browser.session import BrowserSession
+
+    async def _run() -> tuple[bool, bool, bool]:
+        import websockets  # type: ignore[import-untyped]
+
+        async def handler(ws: object) -> None:
+            """Answer every CDP message with an empty result."""
+            async for raw in ws:
+                msg = json.loads(raw)
+                await ws.send(json.dumps({"id": msg["id"], "result": {}}))
+
+        async with websockets.serve(handler, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}"
+
+            session = BrowserSession(url=url)
+            await session.connect(discover=False)
+
+            # Simulate the state _teardown_ws leaves when it cancels the
+            # recv_task before the recv_loop's own _fail_pending runs:
+            # pending futures from concurrent callers remain in _pending.
+            session._recv_task.cancel()
+            try:
+                await session._recv_task
+            except asyncio.CancelledError:
+                pass
+
+            loop = asyncio.get_running_loop()
+            orphan_a = loop.create_future()
+            orphan_b = loop.create_future()
+            session._pending[9998] = orphan_a
+            session._pending[9999] = orphan_b
+
+            # _is_connected() is False (recv_task done), so _reconnect proceeds.
+            await session._reconnect()
+
+            # Both orphans must be done with recoverable errors.
+            done_a = orphan_a.done()
+            done_b = orphan_b.done()
+            recoverable = True
+            for f in (orphan_a, orphan_b):
+                if f.done():
+                    try:
+                        f.result()
+                        recoverable = False
+                    except Exception as exc:
+                        if not session._is_recoverable(exc):
+                            recoverable = False
+
+            await session.disconnect()
+            return done_a, done_b, recoverable
+
+    done_a, done_b, recoverable = asyncio.run(_run())
+    assert_true(done_a, "orphan A is done (not silently dropped)")
+    assert_true(done_b, "orphan B is done (not silently dropped)")
+    assert_true(recoverable, "orphan errors are recoverable (triggers retry)")
+    print("  ✓ reconnect fails pending futures with a recoverable error")
+
+
+def phase_6_reattach_no_duplicate_session(_kernel: Kernel) -> None:
+    """A reconnect during _reattach_core does not leak a duplicate Chrome session.
+
+    Pure asyncio: no Chrome. _reattach_core's execute() may trigger a
+    reconnect that reattaches the same cdp. The retry then creates a second
+    Chrome session for the same target. After the fix, the redundant session
+    is detached and _sessions holds exactly one entry.
+    """
+    from repld.browser.session import BrowserSession
+
+    class _Cdp:
+        """Minimal CDPSession stand-in for _reattach_core."""
+
+        def __init__(self) -> None:
+            self._session_id = "A"
+            self.chrome_target_id = "target-1"
+            self._inflight: dict = {}
+            self._fetch_enabled = False
+            self._binding_handler = None
+            self._label_text = None
+            self._label_color = None
+            self._label_script_id = None
+            self._injected: dict = {}
+            self._screencast = None
+            self.sent: list[str] = []
+
+        async def _enable_domains(self) -> None:
+            self.sent.append("_enable_domains")
+
+        async def execute(
+            self, method: str, params: dict | None = None, timeout: float = 30
+        ) -> dict:
+            self.sent.append(method)
+            return {}
+
+    async def _run() -> tuple[int, list[str]]:
+        session = BrowserSession(port=9999)
+        cdp = _Cdp()
+        session._sessions["A"] = cdp  # type: ignore[assignment]
+
+        attach_count = [0]
+        detached: list[str] = []
+
+        async def fake_execute(
+            method: str,
+            params: dict | None = None,
+            session_id: str | None = None,
+            timeout: float = 30,
+        ) -> dict:
+            if method == "Target.attachToTarget":
+                attach_count[0] += 1
+                new_sid = f"S{attach_count[0]}"
+                if attach_count[0] == 1:
+                    # Simulate what _reconnect_inner does: clear _sessions,
+                    # then reattach this cdp under a new session id.
+                    session._sessions.clear()
+                    cdp._session_id = "B-reconnected"
+                    session._sessions["B-reconnected"] = cdp  # type: ignore[assignment]
+                return {"sessionId": new_sid}
+            if method == "Target.detachFromTarget":
+                detached.append(params["sessionId"] if params else "?")
+                return {}
+            return {}
+
+        session.execute = fake_execute     # type: ignore[assignment]
+        await session._reattach_core(cdp)  # type: ignore[arg-type]
+
+        # Count _sessions entries pointing at this cdp.
+        entries = [sid for sid, c in session._sessions.items() if c is cdp]
+        return len(entries), detached
+
+    entry_count, detached = asyncio.run(_run())
+    assert_eq(entry_count, 1, "exactly one _sessions entry per cdp after reattach")
+    assert_true(
+        len(detached) == 1 and detached[0] == "S1",
+        f"the redundant session (S1) was detached ({detached!r})",
+    )
+    print("  ✓ reattach during reconnect: redundant session detached, no duplicate")
+
+
+def phase_6_pattern_owner_liveness(_kernel: Kernel) -> None:
+    """The most recent live session is returned when earlier registrants close.
+
+    Pure: no kernel, no Chrome. Two sessions register the same pattern; the
+    second closes; `_pattern_owner` returns the first, still alive.
+    """
+    from repld.browser.session import BrowserSession
+
+    class _FakeSession:
+        """Minimal Session stand-in with a `closed` flag."""
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self._closed = False
+
+        @property
+        def closed(self) -> bool:
+            return self._closed
+
+    session = BrowserSession(port=9999)
+    s1 = _FakeSession("first")
+    s2 = _FakeSession("second")
+
+    # Register both owners for the same pattern (bypass tasks.current_origin).
+    session._watched_patterns["https://x.test/*"] = set()
+    session._pattern_owners["https://x.test/*"] = [s1, s2]  # type: ignore[list-item]
+
+    # Both alive: most recent (s2) wins.
+    owner = session._pattern_owner("https://x.test/page")
+    assert_true(
+        owner is s2,
+        f"both alive: most recent wins (got {getattr(owner, 'name', owner)!r})",
+    )
+
+    # Second closes: first takes over.
+    s2._closed = True
+    owner = session._pattern_owner("https://x.test/page")
+    assert_true(
+        owner is s1,
+        f"second closed: first takes over (got {getattr(owner, 'name', owner)!r})",
+    )
+
+    # Both closed: nobody.
+    s1._closed = True
+    owner = session._pattern_owner("https://x.test/page")
+    assert_eq(owner, None, "both closed: no owner")
+
+    print("  ✓ pattern_owner returns the most recent live registrant")
+
+
+def phase_6_type_round_trips(kernel: Kernel) -> None:
+    """_type_chars batches keyDown+keyUp per character, reducing round trips.
+
+    Without a per-key delay the entire string goes in one gather (one round
+    trip), not 2N sequential ones. Measured with the same socket-hold
+    technique as phase_6_click_round_trips so a fast local Chrome cannot
+    split a pipelined pair.
+    """
+    if not _chrome_ready("phase 6 type round trips"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        tid = h.open_tab("<input id=inp autofocus>")
+        text = "hello"
+        n_chars = len(text)
+        out = h.exec(
+            "import asyncio\n"
+            f"_t = await browser.get({tid!r})\n"
+            "_bs = _t._session.browser_session\n"
+            "await _t.click('#inp')  # warm engine\n"
+            "_batches = []\n"
+            "_orig_once = _bs._execute_once\n"
+            "async def _counting(method, params=None, session_id=None, timeout=30):\n"
+            "    if not _bs._pending: _batches.append([])\n"
+            "    _batches[-1].append(method)\n"
+            "    return await _orig_once(method, params, session_id, timeout)\n"
+            "_orig_send = _bs._ws.send\n"
+            "async def _slow_send(payload):\n"
+            "    await asyncio.sleep(0.02); await _orig_send(payload)\n"
+            "_bs._execute_once = _counting\n"
+            "_bs._ws.send = _slow_send\n"
+            "try:\n"
+            f"    await _t._type_chars({text!r})\n"
+            "finally:\n"
+            "    _bs._execute_once = _orig_once\n"
+            "    del _bs._ws.send\n"
+            f"_val = await _t.js(\"document.getElementById('inp').value\")\n"
+            "print('VALUE', _val)\n"
+            "print('BATCHES', len(_batches), _batches)\n"
+        )
+        assert_true(
+            f"VALUE {text}" in out,
+            f"typed text landed in the input (got {out!r})",
+        )
+        m = re.search(r"BATCHES (\d+) (\[.*\])", out)
+        assert_true(m is not None, f"the exec reported its batches (got {out!r})")
+        assert m is not None
+        n = int(m.group(1))
+        # Without the fix: 2*n_chars batches (one per keyDown, one per keyUp).
+        # With the fix (all in one gather): ideally 1 batch, at most a few
+        # if the front settle or a send yield splits them.
+        assert_true(
+            n <= n_chars,
+            f"typing {n_chars} chars takes at most {n_chars} round trips, "
+            f"not 2*{n_chars} (got {n})",
+        )
+        print(f"  ✓ _type_chars: {n_chars} chars in {n} round trip(s), text verified")
+    finally:
+        h.close()
+
+
+def phase_6_seed_screenshot_offloop(kernel: Kernel) -> None:
+    """The PIL work in _seed_screenshot runs off the loop via to_thread.
+
+    Wraps `_process_seed_capture` to record which thread it executes on,
+    then verifies that thread is not the event-loop thread. A synchronous
+    call would run on the loop thread; `asyncio.to_thread` dispatches it
+    to a thread-pool worker.
+    """
+    if not _chrome_ready("phase 6 seed screenshot offloop"):
+        return
+    h = _BridgeHarness(kernel)
+    try:
+        page = (
+            "<body style='margin:0'>"
+            "<button id=btn style='position:absolute;left:50px;top:30px;"
+            "width:120px;height:40px'>Submit</button>"
+        )
+        tid = h.open_tab(page)
+        out = h.exec(
+            "import threading\n"
+            "from repld.browser import observe as _obs\n"
+            f"_t = await browser.get({tid!r})\n"
+            "_loop_thread = threading.current_thread().name\n"
+            "_capture_thread = None\n"
+            "_orig = _obs._process_seed_capture\n"
+            "def _instrumented(*a, **kw):\n"
+            "    global _capture_thread\n"
+            "    _capture_thread = threading.current_thread().name\n"
+            "    return _orig(*a, **kw)\n"
+            "_obs._process_seed_capture = _instrumented\n"
+            "try:\n"
+            "    result = await _t.tree(at='110,50')\n"
+            "finally:\n"
+            "    _obs._process_seed_capture = _orig\n"
+            "print('LOOP', _loop_thread)\n"
+            "print('CAPTURE', _capture_thread)\n"
+            "print('OK' if 'screenshot:' in str(result) else 'MISSING')\n",
+            timeout=30,
+        )
+        assert_true(
+            "OK" in out, f"seeded_tree still produces a screenshot (got {out!r})"
+        )
+        m_loop = re.search(r"LOOP (\S+)", out)
+        m_cap = re.search(r"CAPTURE (\S+)", out)
+        assert_true(
+            m_loop is not None and m_cap is not None,
+            f"both thread names reported (got {out!r})",
+        )
+        assert m_loop is not None and m_cap is not None
+        loop_thread = m_loop.group(1)
+        capture_thread = m_cap.group(1)
+        assert_true(
+            capture_thread != loop_thread,
+            f"PIL work runs on a pool thread ({capture_thread!r}), "
+            f"not the loop thread ({loop_thread!r}) (got {out!r})",
+        )
+        print(
+            f"  ✓ seed_screenshot: PIL on {capture_thread!r}, loop on {loop_thread!r}"
+        )
+    finally:
+        h.close()
+
+
+def phase_6_auth_log_bounded(kernel: Kernel) -> None:
+    """A page that re-challenges in a loop cannot grow `CDPSession._auth_log` without limit."""
+    from repld.browser.cdp import CDPSession
+
+    session = CDPSession(
+        send=None, session_id="s1", target_info={"targetId": "t1"}, port=9222
+    )
+    try:
+        for i in range(250):
+            session._auth_log.append({"i": i})
+        assert_eq(len(session._auth_log), 100, "_auth_log is capped at 100 entries")
+        assert_eq(session._auth_log[0]["i"], 150, "the oldest entries are evicted")
+    finally:
+        session.cleanup()
+    print("  ✓ _auth_log: bounded at 100, oldest evicted")

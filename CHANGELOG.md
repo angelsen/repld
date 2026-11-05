@@ -22,6 +22,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `take()` from a ticker or a peer call no longer leaves the tab owned by whichever session held it before (or by nobody, which dropped every push for it): the owner is set from the caller, and `None` when there is none.
+- Overlapping browser actions from different sessions that finish out of order no longer lose the later one's routing or leave the file-picker intercept on.
+- Releasing a tab whose owner disconnected also clears a file chooser Chrome had already intercepted, and a destroyed tab stops its pin heartbeat and captcha watcher at once. HTTP auth challenges are kept in a bounded log.
+- A dropped connection to a `url=` browser no longer strands the other callers in flight: they get the recoverable error and retry after the reconnect, instead of waiting out a 30 s timeout. A socket that dies mid-reattach no longer leaves a duplicate Chrome session feeding the tab's event store twice.
+- A CDP error whose text mentions a connection no longer triggers a reconnect, and a page-controlled error message can no longer be read as a lease scope refusal.
+- Tabs matched by a shared `watch` pattern route to a live watcher when the most recent one has disconnected.
+- `type()` sends a character's key events together instead of one awaited pair at a time, so a long string no longer holds the input lock for seconds over a slow link; the screenshot seed's image work runs off the shared loop.
 - A project whose `.venv` runs a Python below repld's floor no longer kills the bridge at startup: the rebind used to exec into `uv run`, which refuses to resolve repld for that interpreter, with nothing left to fall back to, so Claude Code's MCP server failed to start in that project. The kernel now runs unbound there with a note naming the floor; exec, browser and gists work, and only the project's own packages are missing until the venv is recreated.
 - The `element.click()` fallback an occluded click takes runs under a CDP user gesture, so a `window.open` in the handler opens instead of being popup-blocked as an untrusted click's is. The receipt still names the path.
 - A warm `tab.click(selector)` is six awaited round trips instead of eight: the front probe and the child-frame tree ride the same hop as the top frame's resolve. Every input method and `screenshot()` collects the probe before the first command a hidden tab would drop or throttle.

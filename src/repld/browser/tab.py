@@ -12,7 +12,7 @@ import json
 import pathlib
 import re
 import urllib.parse
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -1619,18 +1619,42 @@ class Tab(TabQueryMixin):
 
     async def _type_chars(self, text: str, *, delay_ms: int = 0) -> None:
         """Key events into whatever holds focus (shared core of `type_text`
-        and `select_option`'s type-to-filter)."""
-        for char in text:
-            for event_type in ("keyDown", "keyUp"):
-                await self._exec(
-                    "Input.dispatchKeyEvent",
-                    {
-                        "type": event_type,
-                        "text": char if event_type == "keyDown" else "",
-                    },
+        and `select_option`'s type-to-filter).
+
+        Chrome answers a session's commands in order, so keyDown and keyUp
+        sent together still execute press-before-release and cost one round
+        trip instead of two. Without a per-key delay the entire string is
+        dispatched in a single gather (one round trip total).
+        """
+        if delay_ms > 0:
+            for char in text:
+                await asyncio.gather(
+                    self._exec(
+                        "Input.dispatchKeyEvent",
+                        {"type": "keyDown", "text": char},
+                    ),
+                    self._exec(
+                        "Input.dispatchKeyEvent",
+                        {"type": "keyUp", "text": ""},
+                    ),
                 )
-            if delay_ms > 0:
                 await asyncio.sleep(delay_ms / 1000)
+        elif text:
+            coros: list[Coroutine[Any, Any, dict]] = []
+            for char in text:
+                coros.append(
+                    self._exec(
+                        "Input.dispatchKeyEvent",
+                        {"type": "keyDown", "text": char},
+                    ),
+                )
+                coros.append(
+                    self._exec(
+                        "Input.dispatchKeyEvent",
+                        {"type": "keyUp", "text": ""},
+                    ),
+                )
+            await asyncio.gather(*coros)
 
     async def select_option(self, selector: str, option: str) -> Receipt:
         """Select *option* in a dropdown, native `<select>` or custom listbox.

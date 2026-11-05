@@ -12,6 +12,7 @@ mode, command execution, event handling, query interface, cleanup).
 """
 
 import asyncio
+import collections
 import contextlib
 import json
 import logging
@@ -843,9 +844,15 @@ class CDPSession:
         self.last_caller_task: str | None = None
         # Action window: depth of Tab input methods in flight (`action()`),
         # the session that opened it, and the monotonic end of its grace tail.
-        self._action_depth: int = 0
-        self._action_origin: Session | None = None
-        self._action_until: float = 0.0
+        # `_action_stack` holds one `(sentinel, origin)` per live span so that
+        # an out-of-order exit (navigate/reload/invoke take no front flock)
+        # removes only its own entry, and the current origin is always the
+        # topmost live span. `_action_toggled` tracks whether any span in the
+        # nesting turned the file-chooser intercept on, so the last span to
+        # reach depth 0 re-evaluates it regardless of which span toggled.
+        self._action_depth, self._action_origin = 0, None  # type: ignore[assignment]
+        self._action_stack: list[tuple[object, Session | None]] = []
+        self._action_toggled, self._action_until = False, 0.0
         # Session that claimed the tab: `open()`, `take()`, a `watch()` pattern
         # (inherited by tabs it auto-attaches), cleared by `release()`.
         self.owner: Session | None = None
@@ -972,7 +979,10 @@ class CDPSession:
         # `Fetch.authRequired`.
         self._auth_policy: dict | None = None
         # Every challenge `_handle_auth` answered; no observation reads it.
-        self._auth_log: list[dict] = []
+        # Bounded so a page that re-challenges in a loop cannot grow the log
+        # without limit (unlike `_dialog_log`/`_filechooser_log`, which are
+        # cleared each observation by `pre_observe`).
+        self._auth_log: collections.deque[dict] = collections.deque(maxlen=100)
 
         # Pin + label state lives here (not on Tab) because Tab wrappers are
         # ephemeral (a fresh Tab is constructed on every `_iter_tabs()`/
@@ -1071,27 +1081,42 @@ class CDPSession:
     async def action(self):
         """An agent action on this tab: routes its events to the caller and,
         on an `open()` tab, holds the picker intercept for its span only, so
-        the human gets native prompts between actions."""
-        toggle = self.mode == "agent" and not self.taken and self._action_depth == 0
-        # navigate/reload/invoke take no front flock, so another session's span
-        # can nest inside this one: its origin is restored when the inner exits.
-        outer = self._action_origin
+        the human gets native prompts between actions.
+
+        Spans can overlap (navigate/reload/invoke take no front flock), and
+        exit order is not guaranteed. A stack of `(sentinel, origin)` entries
+        tracks each live span so that any exit removes only its own entry and
+        the topmost live entry determines `_action_origin`. The intercept
+        toggle is tracked once for the whole nesting and re-evaluated when all
+        spans have exited.
+        """
+        should_toggle = (
+            self.mode == "agent" and not self.taken and self._action_depth == 0
+        )
+        origin = tasks.current_origin()
+        sentinel = object()
+        self._action_stack.append((sentinel, origin))
         self._action_depth += 1
-        self._action_origin = origin = tasks.current_origin()
+        self._action_origin = origin
+        if should_toggle:
+            self._action_toggled = True
         # Only a task claims past its span: a tool call has no task, and
         # ambient code (tickers, peers) has no origin.
         if origin is not None and (tid := tasks.current_task_id()) is not None:
             self.last_caller, self.last_caller_task = origin, tid
         try:
-            if toggle:
+            if should_toggle:
                 await self.intercept_file_chooser(True)
             yield
         finally:
             self._action_depth -= 1
             self._action_until = time.monotonic() + ACTION_GRACE_S
-            if self._action_depth > 0:
-                self._action_origin = outer
-            elif toggle:
+            self._action_stack = [e for e in self._action_stack if e[0] is not sentinel]
+            if self._action_stack:
+                self._action_origin = self._action_stack[-1][1]
+            # else: keep _action_origin for the grace tail
+            if self._action_depth == 0 and self._action_toggled:
+                self._action_toggled = False
                 # `intercepting`, not False: a take() during the span holds it.
                 await self.intercept_file_chooser(self.intercepting)
 
@@ -1100,15 +1125,18 @@ class CDPSession:
 
         `agent` answers native prompts inside an action window; `explicit`
         (`Tab.take()`) holds that between actions too. `shared` leaves them
-        to the human, who may be using the tab.
+        to the human, who may be using the tab. Owner is always rewritten:
+        a caller with no origin (a ticker, a peer) clears it rather than
+        leaving a stale session that `route_to` would fall through and
+        `release_owned_by` could never match.
         """
         self.mode = mode
         self.taken = explicit and mode == "agent"
         self.owner_from_opener = False
-        if mode != "agent":
+        if mode == "agent":
+            self.owner = tasks.current_origin()
+        else:
             self.owner = None
-        elif (origin := tasks.current_origin()) is not None:
-            self.owner = origin
         await self.intercept_file_chooser(self.intercepting)
 
     async def intercept_file_chooser(self, enabled: bool) -> None:
@@ -1690,7 +1718,7 @@ class CDPSession:
             self._loop.call_soon_threadsafe(self._reset_counters)
 
     def cleanup(self) -> None:
-        """Close the DuckDB connection.
+        """Close the DuckDB connection and cancel lingering async tasks.
 
         Under `_db_lock`, so it waits out any off-loop reader holding a cursor
         rather than closing the connection beneath it, and marks the store
@@ -1698,11 +1726,21 @@ class CDPSession:
         instead of a raw DuckDB one. Idempotent: every teardown path
         (`disconnect`, a failed `_reconnect`, `Target.targetDestroyed`) can
         reach it, and two of them can reach it for the same session.
+
+        The heartbeat and captcha watcher are cancelled here rather than
+        relying on their own exit conditions, which poll `tab.js()` against
+        a session Chrome has already torn down.
         """
         with self._db_lock:
             if self._db_closed:
                 return
             self._db_closed = True
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                self._heartbeat_task = None
+            if self._captcha_watch is not None:
+                self._captcha_watch.cancel()
+                self._captcha_watch = None
             self._screencast = None
             try:
                 self.db.close()

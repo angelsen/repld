@@ -74,8 +74,12 @@ METHOD_NOT_FOUND = -32601
 
 
 def is_scope_refusal(exc: BaseException) -> bool:
-    """True if a CDP call failed because the lease's scope does not allow the method."""
-    return SCOPE_REFUSAL_MARKER in str(exc)
+    """True if a CDP call failed because the lease's scope does not allow the method.
+
+    Restricted to `CDPCommandError` so that page-controlled text inside a
+    `Runtime.evaluate` exception cannot trip the scope-refusal path.
+    """
+    return isinstance(exc, CDPCommandError) and SCOPE_REFUSAL_MARKER in str(exc)
 
 
 # A `url=` browser that has failed every redial for this long is retired. Short of that it stays
@@ -161,7 +165,7 @@ class BrowserSession:
 
         # Watch patterns: glob pattern to set of target_ids matched
         self._watched_patterns: dict[str, set[str]] = {}
-        self._pattern_owners: dict[str, Session] = {}
+        self._pattern_owners: dict[str, list[Session]] = {}
 
         # target_ids currently being attached (guards against concurrent duplicates)
         self._attaching: set[str] = set()
@@ -309,9 +313,13 @@ class BrowserSession:
 
     @staticmethod
     def _is_recoverable(exc: Exception) -> bool:
-        """True if exc indicates a dead WebSocket (not a CDP-level error)."""
-        # TimeoutError inherits from OSError but is a CDP command timeout, not a socket death.
-        if isinstance(exc, TimeoutError):
+        """True if `exc` indicates a dead WebSocket, not a CDP-level error.
+
+        `CDPCommandError` is excluded outright: it is Chrome answering a
+        command, not the transport failing, even when its message happens to
+        contain "not connected".
+        """
+        if isinstance(exc, (TimeoutError, CDPCommandError)):
             return False
         import websockets.exceptions  # type: ignore[import-untyped]
 
@@ -358,11 +366,13 @@ class BrowserSession:
             if tid:
                 old_cdps[tid] = cdp
 
-        # Tear down old connection. Unlike disconnect(), pending
-        # futures are dropped rather than failed: the caller that is
-        # driving this reconnect is about to retry them.
+        # Tear down old connection. Pending futures are failed with a
+        # recoverable error so that non-driver callers (concurrent execute()
+        # calls that are still awaiting their futures) see a transport failure,
+        # wait for the reconnect lock, and retry, rather than sitting on an
+        # orphaned future until their full timeout.
         await self._teardown_ws()
-        self._pending.clear()
+        self._fail_pending("WS recv loop ended: reconnecting")
         self._sessions.clear()
         self._session_remap.clear()
 
@@ -604,6 +614,15 @@ class BrowserSession:
             {"targetId": cdp.chrome_target_id, "flatten": True},
         )
         new_sid = result["sessionId"]
+        # A reconnect during the execute above may have already reattached
+        # this cdp under a different session id, making the attach we just
+        # issued redundant. Detach it so Chrome stops routing events to it.
+        if cdp._session_id != old_sid:
+            try:
+                await self.execute("Target.detachFromTarget", {"sessionId": new_sid})
+            except Exception:
+                pass
+            return
         self._sessions.pop(old_sid, None)
         cdp._session_id = new_sid
         self._sessions[new_sid] = cdp
@@ -740,7 +759,9 @@ class BrowserSession:
         if pattern not in self._watched_patterns:
             self._watched_patterns[pattern] = set()
         if (origin := tasks.current_origin()) is not None:
-            self._pattern_owners[pattern] = origin
+            owners = self._pattern_owners.setdefault(pattern, [])
+            if origin not in owners:
+                owners.append(origin)
         for cdp in self._sessions.values():
             url = cdp.target_info.get("url", "")
             if fnmatch(url, pattern):
@@ -799,8 +820,8 @@ class BrowserSession:
         lands in neither branch below (`CancelledError` is a `BaseException`,
         so it propagates past `except Exception` and skips the `else`), which
         is deliberate: the two teardown callers handle `_pending` themselves
-        (`disconnect` fails it with its own message, `_reconnect` drops it
-        because the caller driving the reconnect is about to retry).
+        (`disconnect` and `_reconnect` fail it, the latter with a recoverable
+        error so a concurrent caller retries after the reconnect).
         """
         count = 0
         try:
@@ -1059,10 +1080,12 @@ class BrowserSession:
         )
 
     def _pattern_owner(self, url: str) -> "Session | None":
-        """Resolve `url` to the `Session` that registered its first matching watch pattern."""
-        for pattern, owner in self._pattern_owners.items():
+        """The most recent live session that registered a pattern matching `url`."""
+        for pattern, owners in self._pattern_owners.items():
             if fnmatch(url, pattern):
-                return owner
+                for owner in reversed(owners):
+                    if not owner.closed:
+                        return owner
         return None
 
     def _inherited_owner(self, target_info: dict) -> "Session | None":

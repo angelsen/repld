@@ -223,16 +223,17 @@ class BrowserPool:
 
         Called when a connection closes: Chrome keeps the picker intercept until
         someone sends False, and `route_to` already falls through a closed owner.
+        A pending file chooser Chrome already intercepted is cleared so the
+        page's file input is not stuck waiting for a `set_files` that will
+        never come.
         """
         released = 0
         for b in self._browsers.values():  # LoopOwned: a snapshot per walk
             for cdp in b._session._sessions.values():
                 if not (cdp.taken and cdp.owner is session):
                     continue
-                try:
-                    await cdp.set_mode("shared")
-                except Exception as exc:
-                    logger.debug("release on close failed: %s", exc)
+                cdp._filechooser_pending = None
+                await cdp.set_mode("shared")
                 released += 1
         return released
 
