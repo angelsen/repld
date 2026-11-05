@@ -945,6 +945,56 @@ def _rebind_prefers_nearest_bridge(tmp: Path) -> None:
         nested.close()
 
 
+def _rebind_stops_at_own_claude(tmp: Path) -> None:
+    """A hook under a `claude` with no connection must not take the connection
+    of another pane sharing a higher ancestor (here, this process)."""
+    other = Bridge(
+        tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "other-pane"}
+    )
+    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
+    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    hook = None
+    sleeper = 0
+    try:
+        _handshake(other)
+        hook = subprocess.Popen(
+            [str(fake), "-c", "sleep 30 & echo $!; wait"],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert hook.stdout is not None
+        sleeper = int(hook.stdout.readline())
+        out = content_text(
+            other.exec(
+                "from repld import ipc\n"
+                "try:\n"
+                f"    ipc.rebind_claude_session('stolen', {sleeper})\n"
+                "    print('rebound')\n"
+                "except LookupError as e:\n"
+                "    print('LookupError', e)\n"
+                "print(sorted(s for s, _, _ in claude_sessions()))",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "LookupError" in out, f"no connection under the pane's claude (got {out!r})"
+        )
+        assert_true(
+            "other-pane" in out and "stolen" not in out.split("]")[0],
+            f"other pane keeps its id (got {out!r})",
+        )
+        print(
+            "  ✓ rebind stops at the hook's own claude, never a shared ancestor's bridge"
+        )
+    finally:
+        if hook is not None:
+            hook.kill()
+            if sleeper:
+                os.kill(sleeper, signal.SIGKILL)
+        shutil.rmtree(fake.parent, ignore_errors=True)
+        other.close()
+
+
 def _bg_inbox_fallback(tmp: Path) -> None:
     """A `bg` session's pushes go to its inbox socket, not the channel; a
     non-`bg` session, or a `bg` one with a non-inbox path, stays on the channel."""
@@ -1752,6 +1802,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _start_cmd(tmp)
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _rebind_prefers_nearest_bridge(tmp)
+        _rebind_stops_at_own_claude(tmp)
         _bg_inbox_fallback(tmp)
         _push_state_broadcast()
         _log_renderer_covers_every_event()

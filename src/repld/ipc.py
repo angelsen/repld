@@ -101,6 +101,14 @@ def _resolve_ancestry(pid: int) -> list[int]:
     return chain
 
 
+def _is_claude_process(pid: int) -> bool:
+    """True if `pid` is a Claude Code process (`comm` is `claude`); False if unreadable."""
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip() == "claude"
+    except OSError:
+        return False
+
+
 def _check_inbox_socket(path: object) -> str | None:
     """Validate a bridge-supplied inbox path.
 
@@ -593,8 +601,9 @@ class Server:
         rebind delivered to the successor (0 when nothing was held, or when the
         park timeout had already delivered them). The match is the connected
         session whose bridge shares the nearest ancestor with `pid`, the one
-        closest to that ancestor if several do; raises LookupError on no match
-        and ValueError when two are equally close.
+        closest to that ancestor if several do; the walk never passes `pid`'s
+        own `claude` process. Raises LookupError on no match and ValueError
+        when two are equally close.
         """
         with self.sessions_lock:
             candidates = [
@@ -622,6 +631,12 @@ class Server:
                 )
             if hits:
                 break
+            # Past the pane's own `claude` the only ancestors left are shared
+            # (tmux, the login session): another pane's bridge would match.
+            if _is_claude_process(ancestor):
+                raise LookupError(
+                    f"no connected Claude Code session under pid {pid}'s own claude ({ancestor})"
+                )
         else:
             raise LookupError(
                 f"no connected Claude Code session shares a process tree with pid {pid}"
