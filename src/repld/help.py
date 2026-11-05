@@ -610,7 +610,8 @@ on an already-attached tab still reports the original attach's value.
       user_gesture=True makes isTrusted=true on events.
       timeout= bounds the wait; a page whose main thread is busy or frozen raises
       RendererBusyError (a TimeoutError) saying so, since the browser still answers.
-      Raises BrowserJSError on JS exceptions (with preserved stack trace).
+      Raises BrowserJSError on JS exceptions (with preserved stack trace) and
+      NavigatedError (a RuntimeError) when the page navigates mid-evaluate.
 
   tab.click(selector, *, button='left', click_count=1)       → Receipt
       selector may be an (x, y) / 'x,y' viewport point (CSS px): nothing is resolved or
@@ -1982,7 +1983,7 @@ Channel kinds:
 """,
     "browser": """\
 Tab (async unless noted):
-  tab.js(expr, await_promise=, user_gesture=, timeout=) → any (RendererBusyError, a TimeoutError, when the page's main thread is stuck and the browser still answers)
+  tab.js(expr, await_promise=, user_gesture=, timeout=) → any (RendererBusyError, a TimeoutError, when the page's main thread is stuck and the browser still answers; NavigatedError when the page navigates mid-evaluate)
   tab.tree(mode="aria", at=None, in_crop=None)  → list[str] (aria: [ref=eN] snapshot, JS-engine based, can't cross a cross-origin same-process iframe; "ax": raw CDP tree, recurses into same-process iframes at any depth, no refs; at="x,y": elided [ref=eN] tree + cropped screenshot, hit-tested at a point; in_crop=path: at= is a pixel within that earlier crop, no scale math needed)
   tab.captchas()                                → list[Captcha] (vendor, state unsolved|challenge|solved|invisible, visible, iframe, sitekey; detection only)
   tab.wait_captcha(timeout=600)                 → list[Captcha] (polls until no captcha needs a human; TimeoutError naming what is still unsolved)

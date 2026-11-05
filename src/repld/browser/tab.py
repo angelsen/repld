@@ -41,7 +41,14 @@ from .session import is_scope_refusal
 from .tab_query import TabQueryMixin
 from .target import make_target
 
-__all__ = ["Action", "ActionDeclined", "BrowserJSError", "Receipt", "Tab"]
+__all__ = [
+    "Action",
+    "ActionDeclined",
+    "BrowserJSError",
+    "NavigatedError",
+    "Receipt",
+    "Tab",
+]
 
 # Pin/pill heartbeat cadence. The JS-side pill self-removes if it hasn't
 # heard from Python in _HEARTBEAT_STALE_MS, kept in lockstep with the
@@ -220,6 +227,10 @@ class BrowserJSError(Exception):
         self.url = url
         self.line = line
         super().__init__(text)
+
+
+class NavigatedError(RuntimeError):
+    """The page navigated while a `js()` evaluation was in flight."""
 
 
 @dataclass
@@ -947,8 +958,22 @@ class Tab(TabQueryMixin):
         `user_gesture` simulates a user gesture (`isTrusted=true`).
         `timeout` bounds the wait; a page whose main thread is busy or frozen
         raises `RendererBusyError` (a `TimeoutError`) once the browser has
-        answered a probe. Raises `BrowserJSError` when the JS throws.
+        answered a probe. Raises `BrowserJSError` when the JS throws and
+        `NavigatedError` when the page navigates mid-evaluate (the expression
+        was for the old page, so there is nothing to retry).
         """
+        try:
+            return await self._evaluate(expr, await_promise, user_gesture, timeout)
+        except RuntimeError as exc:
+            if not inject._is_stale(exc):
+                raise
+            preview = expr if len(expr) <= 80 else expr[:80] + "..."
+            raise NavigatedError(f"page navigated during js({preview!r})") from exc
+
+    async def _evaluate(
+        self, expr: str, await_promise: bool, user_gesture: bool, timeout: float
+    ) -> Any:
+        """Run one `Runtime.evaluate` and serialize its result by value."""
         result = await self._exec(
             "Runtime.evaluate",
             {

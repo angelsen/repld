@@ -1036,11 +1036,14 @@ class CDPSession:
 
     @property
     def route_to(self) -> "Session | None":
-        """Where this tab's pushes go: its live owner, else the action in
-        flight, else the task that last acted on it while that task runs,
-        else the last action's grace tail, else nobody."""
+        """Where this tab's pushes go: a `taken` tab's live owner, else the
+        action in flight, else the owner, else the task that last acted on it
+        while that task runs, else the last action's grace tail, else nobody."""
         o = self.owner
-        if o is not None and not o.closed:
+        owner_alive = o is not None and not o.closed
+        # Only take() is an explicit claim. An open()/watch() owner is whoever
+        # got there first, so a session acting on the tab outranks it.
+        if owner_alive and (self.taken or self._action_depth == 0):
             return o
         # An action in flight outranks a running task that acted earlier: the
         # events are the current caller's. Its tail does not, so a cell still
@@ -1049,6 +1052,8 @@ class CDPSession:
         live_action = a is not None and not a.closed
         if self._action_depth > 0 and live_action:
             return a
+        if owner_alive:
+            return o
         if (s := self._task_claim()) is not None:
             return s
         if live_action and self.in_action:

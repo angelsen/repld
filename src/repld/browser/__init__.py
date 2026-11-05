@@ -31,6 +31,14 @@ were split off the same way.
 
 from .browser import Browser
 from .pool import BrowserPool, LazyBrowser
+from .tab import NavigatedError
 from .target import TabNotFoundError, make_target
 
-__all__ = ["Browser", "BrowserPool", "LazyBrowser", "TabNotFoundError", "make_target"]
+__all__ = [
+    "Browser",
+    "BrowserPool",
+    "LazyBrowser",
+    "NavigatedError",
+    "TabNotFoundError",
+    "make_target",
+]

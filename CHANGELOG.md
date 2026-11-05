@@ -8,7 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tab.js()` raises `NavigatedError` (a `RuntimeError`) when the page navigates mid-evaluate, instead of the raw CDP text "Cannot find context with specified id". Callers that catch `RuntimeError` still work; a caller that must tell "the page moved" from "the script threw" catches the subclass. The expression was for the old page, so nothing is retried.
+
 ### Changed
+
+- On a tab opened with `browser_open` (or `watch`), per-tab pushes while another session's action is in flight go to that session instead of the session that opened the tab; outside an action the opener still gets them. A tab held by `browser_take` is unchanged: its owner always wins. This is what stops a `[controls]` push, a dialog or a console error reaching the opener when a second session is the one driving.
 
 ### Fixed
 

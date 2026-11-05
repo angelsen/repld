@@ -915,6 +915,7 @@ def _tab_owner_routing() -> None:
 
         def __init__(self, **kw: Any) -> None:
             self.owner = None
+            self.taken = False
             self.last_caller = None
             self.last_caller_task = None
             self._action_depth = 0
@@ -933,6 +934,28 @@ def _tab_owner_routing() -> None:
             route(cdp(owner=owner, last_caller=caller, last_caller_task=tid)),
             owner,
             "owner beats a live task claim",
+        )
+        driver = NS(closed=False, who="driver")
+        assert_eq(
+            route(cdp(owner=owner, _action_depth=1, _action_origin=driver)),
+            driver,
+            "an action in flight outranks an open()/watch() owner",
+        )
+        assert_eq(
+            route(cdp(owner=owner, taken=True, _action_depth=1, _action_origin=driver)),
+            owner,
+            "a taken tab's owner outranks the action in flight",
+        )
+        assert_eq(
+            route(
+                cdp(
+                    owner=owner,
+                    _action_origin=driver,
+                    _action_until=time.monotonic() + 5,
+                )
+            ),
+            owner,
+            "outside an action the owner keeps the tab, tail included",
         )
         owner.closed = True
         assert_eq(

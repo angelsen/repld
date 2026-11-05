@@ -1104,6 +1104,55 @@ def phase_6_stale_context_retry(_kernel: Kernel) -> None:
     print("  ✓ stale-context calls re-ensure the engine and retry exactly once")
 
 
+def phase_6_navigated_error(_kernel: Kernel) -> None:
+    """`tab.js()` names a mid-navigation evaluate; other CDP errors pass through.
+
+    No Chrome. A `RuntimeError` subclass, so `except RuntimeError` callers keep working.
+    """
+    from repld.browser import NavigatedError
+    from repld.browser.session import CDPCommandError
+    from repld.browser.tab import Tab
+
+    class _Failing(_EngineFakeSession):
+        message = ""
+
+        async def execute(
+            self, method: str, params: dict | None = None, timeout: float = 30
+        ) -> dict:
+            raise CDPCommandError(self.message)
+
+    session = _Failing()
+    tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
+
+    for text in (
+        "Cannot find context with specified id",
+        "Execution context was destroyed, most likely because of a navigation",
+    ):
+        session.message = text
+        try:
+            asyncio.run(tab.js("document.title"))
+            raise AssertionError("a stale context must raise")
+        except NavigatedError as exc:
+            assert_true("document.title" in str(exc), f"names the expression ({exc})")
+            assert_true(isinstance(exc, RuntimeError), "still a RuntimeError")
+            assert_true(
+                exc.__cause__ is not None and text in str(exc.__cause__),
+                "chains the CDP error",
+            )
+
+    session.message = "Some other CDP failure"
+    try:
+        asyncio.run(tab.js("1"))
+        raise AssertionError("other errors must propagate")
+    except NavigatedError:
+        raise AssertionError("a non-stale error must not read as navigation")
+    except CDPCommandError as exc:
+        assert_true("Some other CDP failure" in str(exc), "verbatim propagation")
+    print(
+        "  ✓ js(): a mid-navigation evaluate raises NavigatedError, others pass through"
+    )
+
+
 def phase_6_selector_translation(_kernel: Kernel) -> None:
     """translate_fallbacks(): repld grammar → engine selectors.
 
@@ -2315,6 +2364,55 @@ def phase_6_claim_routing(kernel: Kernel) -> None:
         )
         b.exec("await _c2.set_files([])")
         print("  ✓ claim routing: a taken tab is released when its session closes")
+    finally:
+        a.close()
+        b.b.close()
+
+
+def phase_6_owned_tab_action_routing(kernel: Kernel) -> None:
+    """On an open() tab a session acting on it outranks the opener for pushes.
+
+    Outside an action the opener still gets them; browser_take makes the owner
+    an explicit claim that outranks any action.
+    """
+    if not _chrome_ready("phase 6 owned-tab action routing"):
+        return
+    a = _BridgeHarness(kernel)
+    b = _BridgeHarness(kernel)
+    try:
+        tid = a.open_tab(
+            "<button id=now onclick=\"console.error('MARK-now')\">now</button>"
+            "<button id=later onclick=\"setTimeout(()=>console.error('MARK-later'),2500)\">later</button>"
+            "<button id=taken onclick=\"console.error('MARK-taken')\">taken</button>"
+        )
+
+        def _got(h: _BridgeHarness, text: str, timeout: float) -> bool:
+            try:
+                h.b.wait_notification(
+                    "notifications/claude/channel",
+                    kind="console_error",
+                    where=lambda m: text in m["params"]["content"],
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                return False
+            return True
+
+        b.exec(f"_ct = await browser.get('{tid}')\nawait _ct.click('#now')")
+        assert_true(_got(b, "MARK-now", 5), "the acting session gets the push")
+        assert_true(not _got(a, "MARK-now", 1), "and not the session that opened the tab")
+
+        b.exec("await _ct.click('#later')")
+        assert_true(
+            _got(a, "MARK-later", 8) and not _got(b, "MARK-later", 1),
+            "past the action and its tail the opener keeps the tab",
+        )
+
+        a.tool("browser_take", {"target": tid})
+        b.exec("await _ct.click('#taken')")
+        assert_true(_got(a, "MARK-taken", 5), "a taken tab's owner outranks the action")
+        assert_true(not _got(b, "MARK-taken", 1), "and the acting session gets nothing")
+        print("  ✓ owned tab: an action outranks the opener, take() outranks the action")
     finally:
         a.close()
         b.b.close()
