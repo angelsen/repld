@@ -43,8 +43,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A tab held by `browser_take` is released when the session that took it disconnects: it stopped routing pushes already, but kept answering the human's dialogs and suppressing their file picker.
 - An HTTP Basic/Digest challenge on a `get()`/`open()` tab with no agent claim (no action in flight, not taken) is returned to Chrome's own credentials prompt instead of cancelled: a human's login on such a tab was a silent 401. Inside an agent action or on a taken tab it is still cancelled and reported, and `tab.expect_auth` still answers the next one wherever it lands.
 
-### Removed
-
 ## [0.17.3] - 2026-10-23
 
 ### Fixed
