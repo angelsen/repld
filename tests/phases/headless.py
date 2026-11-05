@@ -995,6 +995,83 @@ def _rebind_stops_at_own_claude(tmp: Path) -> None:
         other.close()
 
 
+def _deferred_rebind(tmp: Path) -> None:
+    """A rebind that finds no connection under the pane's `claude` is kept, and
+    the bridge that registers under that `claude` takes its id, not the stale one."""
+    a = Bridge(
+        tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "driver"}
+    )
+    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
+    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    hook = None
+    sleeper = 0
+    try:
+        _handshake(a)
+        hook = subprocess.Popen(
+            [str(fake), "-c", "sleep 30 & echo $!; wait"],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert hook.stdout is not None
+        sleeper = int(hook.stdout.readline())
+        out = content_text(
+            a.exec(
+                "from repld import ipc\n"
+                "try:\n"
+                f"    ipc.rebind_claude_session('deferred-id', {sleeper})\n"
+                "except LookupError:\n"
+                "    print('LookupError')\n"
+                "print({k: v.new_id for k, v in ipc._server._pending_rebinds.items()})",
+                call_timeout=40,
+            )
+        )
+        assert_true("LookupError" in out, f"the rebind still refuses (got {out!r})")
+        assert_true(
+            f"{hook.pid}: 'deferred-id'" in out,
+            f"the refused id is kept, keyed on the fake claude (got {out!r})",
+        )
+        print("  ✓ a rebind with no connection under the pane's claude is remembered")
+
+        # Registering stamps the stale id; the pending one under the bridge's
+        # `peer_pid` must win and be pushed back so the bridge stamps it next time.
+        reg = (
+            "import time\n"
+            "from repld import ipc\n"
+            "srv = ipc._server\n"
+            "s = next(x for x in srv.sessions if x.claude_session_id == {have!r})\n"
+            "srv._pending_rebinds[s.peer_pid] = ipc._PendingRebind({want!r}, time.monotonic() + 30)\n"
+            "ipc.register_claude_session(s, {stale!r}, None)\n"
+            "srv._claude_sessions.pop({stale!r}, None)\n"
+            "print(s.claude_session_id, s.peer_pid not in srv._pending_rebinds, current_session_id())"
+        )
+        out = content_text(
+            a.exec(
+                reg.format(have="driver", want="applied-id", stale="stale-id"),
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "applied-id True applied-id" in out,
+            f"the pending id wins on register and is consumed (got {out!r})",
+        )
+        # The bridge's cached id is only moved by the pushed BRIDGE_REBIND_METHOD.
+        os.kill(int(_lock(tmp)["pid"]), signal.SIGKILL)
+        time.sleep(0.5)
+        out = content_text(a.exec("print(current_session_id())", call_timeout=40))
+        assert_true(
+            "applied-id" in out,
+            f"the respawned kernel sees the pending id (got {out!r})",
+        )
+        print("  ✓ a registering bridge takes the pending id over its stale one")
+    finally:
+        if hook is not None:
+            hook.kill()
+            if sleeper:
+                os.kill(sleeper, signal.SIGKILL)
+        shutil.rmtree(fake.parent, ignore_errors=True)
+        a.close()
+
+
 def _bg_inbox_fallback(tmp: Path) -> None:
     """A `bg` session's pushes go to its inbox socket, not the channel; a
     non-`bg` session, or a `bg` one with a non-inbox path, stays on the channel."""
@@ -1803,6 +1880,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _session_rebind(tmp)  # SIGKILLs the kernel the cases above read back
         _rebind_prefers_nearest_bridge(tmp)
         _rebind_stops_at_own_claude(tmp)
+        _deferred_rebind(tmp)
         _bg_inbox_fallback(tmp)
         _push_state_broadcast()
         _log_renderer_covers_every_event()

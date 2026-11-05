@@ -19,6 +19,7 @@ import json
 import os
 import socket
 import struct
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -31,6 +32,9 @@ from .core_schemas import notification as _notification
 from .state import read_lock
 
 Handler = Callable[[dict, "Session"], dict | None]
+
+# How long a rebind that found no connection waits for its bridge to register.
+_PENDING_REBIND_TTL = 300.0
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +148,13 @@ class Rebind(NamedTuple):
 
     old_id: str | None
     flushed: int  # parked or outbox pushes this rebind delivered to the successor
+
+
+class _PendingRebind(NamedTuple):
+    """An id a hook asked for before its pane's bridge had connected."""
+
+    new_id: str
+    until: float  # monotonic deadline
 
 
 class _Owed(NamedTuple):
@@ -469,6 +480,8 @@ class Server:
         # carries that id, oldest first. Same lock as `_claude_sessions`, so
         # a register and an enqueue cannot miss each other.
         self._outbox: dict[str, list[_Owed]] = {}
+        # pane `claude` pid -> id its bridge takes when it registers; same lock.
+        self._pending_rebinds: dict[int, _PendingRebind] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
         # reply the shutdown drain just unblocked (a cancelled peer call) reach the wire
@@ -579,14 +592,36 @@ class Server:
         it first. A reconnecting bridge (kernel restart) presents the same
         id on a fresh Session, and the old one is already gone or going.
         Whatever the outbox holds for the id is delivered here.
+
+        A rebind that found no connection under this bridge's `claude`
+        (`rebind_claude_session`) wins over `session_id`, the stale id the
+        bridge stamps from its env, and the bridge is told to stamp it from now on.
         """
+        pending_id = self._take_pending_rebind(session)
+        if pending_id is not None:
+            session_id = pending_id
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
         session.claude_session_kind = session_kind
         session.inbox_socket = _check_inbox_socket(inbox_socket)
         with self.sessions_lock:
+            holder = self._claude_sessions.get(session_id)
+            if (
+                holder is not None
+                and holder is not session
+                and holder in self.sessions
+                and not holder.closed
+            ):
+                sys.stderr.write(
+                    f"[repld] session id {session_id!r} taken by pid {session.peer_pid}"
+                    f" from live pid {holder.peer_pid}, which loses targeted pushes\n"
+                )
             self._claude_sessions[session_id] = session
         self._drain_outbox(session_id, session)
+        if pending_id is not None:
+            session.post_channel(
+                _notification(BRIDGE_REBIND_METHOD, {"session_id": pending_id})
+            )
 
     def rebind_claude_session(
         self, new_id: str, pid: int, old_id: str | None = None
@@ -634,6 +669,10 @@ class Server:
             # Past the pane's own `claude` the only ancestors left are shared
             # (tmux, the login session): another pane's bridge would match.
             if _is_claude_process(ancestor):
+                with self.sessions_lock:
+                    self._pending_rebinds[ancestor] = _PendingRebind(
+                        new_id, time.monotonic() + _PENDING_REBIND_TTL
+                    )
                 raise LookupError(
                     f"no connected Claude Code session under pid {pid}'s own claude ({ancestor})"
                 )
@@ -664,6 +703,18 @@ class Server:
         with self.sessions_lock:
             return self._claude_sessions.get(session_id)
 
+    def _take_pending_rebind(self, session: Session) -> str | None:
+        """Pop the unexpired pending rebind keyed on an ancestor of `session`'s bridge."""
+        if session.peer_pid is None:
+            return None
+        now = time.monotonic()
+        with self.sessions_lock:
+            for ancestor in _resolve_ancestry(session.peer_pid):
+                pending = self._pending_rebinds.pop(ancestor, None)
+                if pending is not None and pending.until > now:
+                    return pending.new_id
+        return None
+
     def list_claude_sessions(self) -> list[tuple[str | None, str | None, str | None]]:
         """All connected non-peer sessions as (session_id, project_dir, kind) tuples."""
         with self.sessions_lock:
@@ -675,7 +726,7 @@ class Server:
         ]
 
     def expire_outbox(self) -> int:
-        """Drop owed pushes past their deadline, reporting each `False`."""
+        """Drop owed pushes and pending rebinds past their deadline; count the pushes, reporting each `False`."""
         now = time.monotonic()
         callbacks: list[tuple[Callable[[bool], None], bool]] = []
         with self.sessions_lock:
@@ -691,6 +742,8 @@ class Server:
                     self._outbox[sid] = keep
                 else:
                     del self._outbox[sid]
+            for pid in [p for p, r in self._pending_rebinds.items() if r.until <= now]:
+                del self._pending_rebinds[pid]
         _run_callbacks(callbacks)
         return len(callbacks)
 
@@ -711,6 +764,7 @@ class Server:
             self.sessions.clear()
             self._claude_sessions.clear()
             self._outbox.clear()
+            self._pending_rebinds.clear()
         for s in sessions:
             s.say_goodbye()
             s.close()
