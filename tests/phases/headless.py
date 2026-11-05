@@ -1072,6 +1072,47 @@ def _deferred_rebind(tmp: Path) -> None:
         a.close()
 
 
+def _id_collision_warning(tmp: Path) -> None:
+    """Registering under an id a live connection holds warns on stderr; the
+    holder re-registering its own id does not."""
+    a = Bridge(
+        tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "holder-id"}
+    )
+    b = Bridge(
+        tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "taker-id"}
+    )
+    try:
+        _handshake(a)
+        _handshake(b)
+        out = content_text(
+            a.exec(
+                "import contextlib, io\n"
+                "from repld import ipc\n"
+                "srv = ipc._server\n"
+                "held = next(x for x in srv.sessions if x.claude_session_id == 'holder-id')\n"
+                "taker = next(x for x in srv.sessions if x.claude_session_id == 'taker-id')\n"
+                "buf = io.StringIO()\n"
+                "with contextlib.redirect_stderr(buf):\n"
+                "    ipc.register_claude_session(held, 'holder-id', None)\n"
+                "    quiet = buf.getvalue()\n"
+                "    ipc.register_claude_session(taker, 'holder-id', None)\n"
+                "loud = buf.getvalue()\n"
+                "ipc.register_claude_session(held, 'holder-id', None)\n"
+                "ipc.register_claude_session(taker, 'taker-id', None)\n"
+                "print(repr(quiet), 'taken by' in loud, 'holder-id' in loud)",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "'' True True" in out,
+            f"only the takeover warns, naming the id (got {out!r})",
+        )
+        print("  ✓ taking an id a live connection holds warns; re-registering does not")
+    finally:
+        b.close()
+        a.close()
+
+
 def _bg_inbox_fallback(tmp: Path) -> None:
     """A `bg` session's pushes go to its inbox socket, not the channel; a
     non-`bg` session, or a `bg` one with a non-inbox path, stays on the channel."""
@@ -1881,6 +1922,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _rebind_prefers_nearest_bridge(tmp)
         _rebind_stops_at_own_claude(tmp)
         _deferred_rebind(tmp)
+        _id_collision_warning(tmp)
         _bg_inbox_fallback(tmp)
         _push_state_broadcast()
         _log_renderer_covers_every_event()
