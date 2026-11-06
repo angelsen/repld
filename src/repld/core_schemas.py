@@ -134,8 +134,9 @@ CORE_TOOLS: list[dict] = [
             "Fetch current status and a head+tail preview of a task's output. "
             "Use Read on the returned `spill_path` for full content. Poll this "
             "yourself, in a loop, before ending your turn if you need the "
-            "result: a session that ends its turn never sees a later channel "
-            "push (confirmed for `claude --bg`)."
+            "result: a one-shot client (`claude -p`) never sees a later channel "
+            "push, and an idle `claude --bg` worker is woken only without "
+            "bypassPermissions and before the host retires the idle job."
         ),
         "inputSchema": {
             "type": "object",

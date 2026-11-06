@@ -143,6 +143,6 @@ The snapshot's `push_delivered` is `true`/`false` once a completion push was sen
 
 `cancel` only works on `await`-yielding code — tight sync loops (`while True: pass`) can't be preempted.
 
-A session that ends its turn never sees a later channel push — confirmed for `claude --bg` workers, and true by construction for any one-shot client. If you need a deferred task's result, poll `get_task(task_id)` yourself in a loop before ending your turn rather than trusting the push to bring you back.
+A session that ends its turn does not reliably see a later channel push: a one-shot client (`claude -p`) never does, and an idle `claude --bg` worker is woken only without `bypassPermissions` and before the host retires the idle job. If you need a deferred task's result, poll `get_task(task_id)` yourself in a loop before ending your turn rather than trusting the push to bring you back.
 
 From a terminal instead of the agent, `repld tasks wait <task_id>` blocks on the same task and exits 0 on success or 1 on an exception or unknown id; `repld tasks cancel <task_id>` is the CLI face of `cancel`, exiting 0 if accepted. `repld tasks` alone lists every in-flight task and ticker.
