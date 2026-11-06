@@ -134,6 +134,7 @@ from phases.gates import phase_17_gates
 from phases.gist_tools import phase_9_gist_tools
 from phases.headless import phase_15_ephemeral_bridge, phase_15_headless
 from phases.links import phase_12_gist_links
+from phases.live_claude import phase_20_live_claude
 from phases.lockfile import (
     phase_5,
     phase_5_boot_failure,
@@ -289,6 +290,7 @@ PHASES = {
     17: phase_17_gates,
     18: phase_18_tasks_cli,
     19: phase_19_peers,
+    20: phase_20_live_claude,
 }
 
 
@@ -310,7 +312,10 @@ def parse_phases(spec: str) -> set[int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", type=int, default=3, help="highest phase to run (ceiling: 19)"
+        "--phase",
+        type=int,
+        default=3,
+        help="highest phase to run (ceiling: 20; 20 spends API money, so it runs only when named or when --phase reaches it)",
     )
     ap.add_argument(
         "--phases",

@@ -487,7 +487,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   Also: `ask(secret=True)` via URL mode to the token-gated dashboard (form mode forbids secrets).
 - [x] Live check of the built wiring, 2026-11-06 (e8dc045a, Claude Code 2.1.316 TUI): confirm/choose/ask/form
   render and answer, Decline is `False`/`GateDeclined`, a CLI answer closes the modal, Esc leaves the gate open.
-- [ ] Set up repeatable tests for `claude -p` and `--bg` (live pass with the schema-first wiring still owed; expected: no modal, the `awaiting_human`
+- [x] (built: phase 20, `tests/phases/live_claude.py`, opt-in) Set up repeatable tests for `claude -p` and `--bg` (expected: no modal, the `awaiting_human`
   push is the only route; `claude -p` auto-cancels a request, so confirm the gate then stays open for the CLI,
   not that it ends). Phase 17 covers only the harness (no capability, `bg` kind).
 - [x] (built: every gate carries its schema; `_one_field`, `parse_elicit_result(schema, field, result)`) Schema-first refactor: make `form` the one primitive and `confirm`/`ask`/`choose` thin wrappers over a
