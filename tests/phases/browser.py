@@ -5230,7 +5230,7 @@ def phase_6_tab_mode(kernel: Kernel) -> None:
         h.b.wait_notification(
             "notifications/claude/channel",
             kind="filechooser",
-            where=lambda m: "on a shared tab" in m["params"]["content"],
+            where=lambda m: "not intercepted" in m["params"]["content"],
             timeout=10,
         )
         print("  ✓ tab mode: shared tab leaves the picker open, pushes a notice")

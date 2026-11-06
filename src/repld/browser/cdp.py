@@ -583,9 +583,14 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
         # The human's picker is open; an agent click here isn't left unresolved.
         _push_tab(
             cdp,
-            f"[filechooser] {short_id}: opened (mode={mode}) on a shared tab, "
+            f"[filechooser] {short_id}: opened (mode={mode}), not intercepted: "
             "the native picker is showing; tab.set_files(paths) still works",
-            {"kind": "filechooser", "target": short_id, "mode": mode, "shared": True},
+            {
+                "kind": "filechooser",
+                "target": short_id,
+                "mode": mode,
+                "intercepted": False,
+            },
         )
         return
     cdp._filechooser_log.append(

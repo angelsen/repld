@@ -16,6 +16,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The `[filechooser]` push for a picker repld did not intercept said "on a shared tab" even on an idle `browser_open` tab, whose mode is `agent`. It now reads "not intercepted", and its meta key `shared: true` is `intercepted: false`.
+
 ### Removed
 
 ## [0.18.0] - 2026-11-05

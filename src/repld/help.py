@@ -1236,8 +1236,10 @@ File choosers (clicking a real <input type=file>-backed control):
   Page.setInterceptFileChooserDialog stops the real OS picker from opening;
   Chrome reports Page.fileChooserOpened instead, so the triggering click
   returns normally. `shared` tabs are left to the human: the picker still
-  opens and the agent only gets a `[filechooser] ... shared tab` push (and
-  can still set_files). expect_file_chooser on a shared tab intercepts that
+  opens and the agent only gets a `[filechooser] ... not intercepted` push
+  (and can still set_files). The same push reaches an owner whose `agent` tab
+  is idle: the intercept is on only during the agent's own action or after
+  `take()`. expect_file_chooser on a shared tab intercepts that
   one chooser only. A picker-API chooser (showOpenFilePicker) has no
   input node, so it is reported human-only and set_files cannot answer it.
   There's no safe file selection to guess, so with no pre-arm the chooser
