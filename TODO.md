@@ -279,6 +279,19 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   reason visible today is an editable repld checkout running its own code rather than the
   installed tool's. Fredrik's call; measure first: wall clock of the exact argv Claude Code
   launches, split shim / uv / import / first reply.
+  Measured 2026-11-06 (Python 3.14.2, repld-tool 0.18.0 tool install, `repld bridge` in a scratch
+  project with an empty `.venv`, no kernel, time to the first `initialize` reply, median of 15):
+  unbound (`REPLD_BOUND=1`) 39 ms; bound 82 ms with the real `uv`, 115 ms through Fredrik's
+  `~/.local/bin/wrappers/uv` (a shell, `sys-python` and a python hop, ~35 ms before `/usr/bin/uv`
+  runs). So binding costs ~40 ms, ~75 ms with the wrapper. Split of the bound 82 ms: ~36 ms in
+  the tool interpreter before the exec (bare interpreter 9 ms; `from repld import main` 32 ms,
+  of which `repld.content` 10 ms and `repld.cli` 9 ms by `-X importtime`), ~24 ms `uv run`
+  (resolve + overlay + start), ~29 ms importing `repld.bridge` again. The cheapest cut is not
+  dropping the bind. Tried and rejected: making `Image`/`tool` lazy in `repld/__init__` cut the
+  first stage's imports 22.6 -> 12.6 ms (`-X importtime`) but A/B end to end (checkout's own
+  `repld bridge`, 15 runs x2) moved nothing: bound 78-79 ms against 79-80, unbound 38 against
+  40-41, since the second stage needs those modules anyway. Whether to drop the bind remains
+  Fredrik's call; the figure to weigh is ~40 ms per session.
 - [x] **Concurrency sweep in phase 3** (done, c9333ec6: `phase_3_task_spawns`, the three sites named), modelled on `phase_3_patch_targets`. Two rules from
   `bg.py`'s docstring: an unassigned `create_task`/`ensure_future` outside `bg.py` fails (asyncio
   holds tasks weakly); a repld-internal task with no `repld-` name fails (`_watch_block` spares
