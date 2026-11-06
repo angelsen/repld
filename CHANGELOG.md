@@ -15,6 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Python 3.14 or newer is required** (was 3.12). The kernel runs on the project venv's interpreter, so a project venv on an older Python now starts repld unbound with a stderr note naming the floor, as one below 3.12 did before; recreate it with `uv venv --python 3.14 && uv sync`. The agent-facing text about a `claude --bg` worker and later pushes now matches what was measured: an idle worker is woken by the inbox push unless it runs with `bypassPermissions` or the host retires the idle job, and a one-shot `claude -p` never sees it.
 - On a tab opened with `browser_open` (or `watch`), per-tab pushes while another session's action is in flight go to that session instead of the session that opened the tab; outside an action the opener still gets them. A tab held by `browser_take` is unchanged: its owner always wins. This is what stops a `[controls]` push, a dialog or a console error reaching the opener when a second session is the one driving.
 
 ### Fixed

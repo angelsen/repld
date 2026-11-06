@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Fredrik Angelsen", email = "fredrikangelsen@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 classifiers = [

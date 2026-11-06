@@ -41,7 +41,7 @@ SENTINEL = "REPLD_BOUND"
 # A constant rather than importlib.metadata so the bridge's import stays
 # cheap, and checked *before* the re-exec: `uv run` refuses to resolve repld
 # for an interpreter below it, and an exec has no return to fall back to.
-PYTHON_FLOOR = (3, 12)
+PYTHON_FLOOR = (3, 14)
 
 
 def project_venv(cwd: Path | None = None, *, ambient: bool = True) -> Path | None:
@@ -91,7 +91,7 @@ def venv_python_version(venv: Path) -> tuple[int, int] | None:
             parts = value.strip().split(".")
             if len(parts) >= 2:
                 return int(parts[0]), int(parts[1])
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass
     for d in sorted(venv.glob("lib/python3.*")):
         try:
@@ -192,7 +192,7 @@ def has_browser_extra() -> bool:
         try:
             if find_spec(mod) is None:
                 return False
-        except (ImportError, ValueError):
+        except ImportError, ValueError:
             return False
     return True
 

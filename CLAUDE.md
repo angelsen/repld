@@ -8,7 +8,7 @@ Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), h
 
 ## Build & run
 
-Python 3.12+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
+Python 3.14+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
 
 ```bash
 uv sync                                                                                                 # install deps into .venv
