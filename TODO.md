@@ -479,12 +479,26 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   nothing pending, renders and answers the same way, so candidate (2) works and (1) is not
   needed; `notifications/cancelled` for an open request closed the modal with no response sent.
   `claude -p`: a nested request is auto-cancelled the same second, no human surface, so a
-  headless client must get the `awaiting_human` push. Not probed: `--bg`, a pinned-tab gate,
-  URL mode, and two clients racing one gate.
+  headless client must get the `awaiting_human` push. Later probes (2026-11-06, same client):
+  `--bg` is phase 20; a pinned-tab gate renders with the tab URL leading and races the pill both
+  ways (below); the dashboard's `gate_answer` closes the modal and answers the cell. "Two clients
+  racing one gate" cannot happen: a gate has one origin session, so only it is elicited, and the
+  other routes (CLI, pill, dashboard) were each raced against the modal. URL mode: see the item below.
   Pinned-tab gates: elicit AND keep the pill (first answer wins via `resolve_gate`); the message
   leads with the tab's URL/title, and `tab.auto_front` brings it forward. Elicitation also gives
   `ask` on a pinned tab its first surface (the pill has no text input).
   Also: `ask(secret=True)` via URL mode to the token-gated dashboard (form mode forbids secrets).
+- [ ] A pinned tab's pill outlives a gate answered anywhere else. `pin.py`'s `__repld_gate` queue entry is removed only
+  by clicking its button; there is no JS to withdraw a gate by id, so an answer from the modal, CLI, pane, dashboard or
+  a `timeout=` leaves "Yes/No" on the page (probed: modal Accept left both buttons; a later click is a harmless
+  `resolve_gate` False but looks live). Wire `HumanPromptClosed`/`HumanPromptResponse` to a `__repld_gate_close(gate_id)`
+  on the tab that owns the gate, and make `_gate`'s finally the one place that calls it.
+- [ ] URL-mode elicitation for `ask(secret=True)`: probed 2026-11-06 against Claude Code 2.1.316 through the bridge. A raw
+  `elicitation/create` `{mode: "url", message, url, elicitationId}` renders "MCP server wants to open a URL" with
+  message, URL and Accept/Decline, and Decline returns `{action: "decline"}` to the kernel (`gates/elicit_result`
+  round trip works unchanged). Not probed: Accept (it opens the URL in the desktop browser; reply expected to be
+  `{action: "accept"}` with no content) and `notifications/elicitation/complete`. Unbuilt: `ipc.can_elicit` reads
+  form capability only, `Session` records no `url` capability, and nothing builds the token-gated dashboard URL.
 - [x] Live check of the built wiring, 2026-11-06 (e8dc045a, Claude Code 2.1.316 TUI): confirm/choose/ask/form
   render and answer, Decline is `False`/`GateDeclined`, a CLI answer closes the modal, Esc leaves the gate open.
 - [x] (built: phase 20, `tests/phases/live_claude.py`, opt-in) Set up repeatable tests for `claude -p` and `--bg` (expected: no modal, the `awaiting_human`
