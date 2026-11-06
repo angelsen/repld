@@ -471,6 +471,16 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   probe also checks `notifications/cancelled` dismissing the modal when another surface wins
   the `resolve_gate` race, and `--bg`/`-p` behavior. 2026-07-28 drops server-initiated
   requests (`InputRequiredResult` + retry), so this feature expires with the 2025-06-18 ceiling.
+  Probe run 2026-11-06 against Claude Code 2.1.316 (a stdlib stdio server, `elicitation/create`
+  with a one-string form): the client declares `elicitation: {form, url}`; it tries
+  `server/discover` (2026-07-28) before `initialize` and initializes at 2025-11-25. In the TUI a
+  nested request (inside a pending `tools/call`) renders and its Accept returns
+  `{action: accept, content}`; an un-nested request sent 2 s after the tool had returned, with
+  nothing pending, renders and answers the same way, so candidate (2) works and (1) is not
+  needed; `notifications/cancelled` for an open request closed the modal with no response sent.
+  `claude -p`: a nested request is auto-cancelled the same second, no human surface, so a
+  headless client must get the `awaiting_human` push. Not probed: `--bg`, a pinned-tab gate,
+  URL mode, and two clients racing one gate.
   Pinned-tab gates: elicit AND keep the pill (first answer wins via `resolve_gate`); the message
   leads with the tab's URL/title, and `tab.auto_front` brings it forward. Elicitation also gives
   `ask` on a pinned tab its first surface (the pill has no text input).
