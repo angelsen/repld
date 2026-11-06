@@ -244,7 +244,7 @@ class Browser:
         ready: str | None = None,
         budget: float | None = None,
         mode: str = "shared",
-    ) -> "Tab | None":
+    ) -> Tab | None:
         """Attach to `tid`, waiting out a concurrent attach for the same target.
 
         `session.attach` returns None while another attach for this target is
@@ -281,7 +281,7 @@ class Browser:
         *,
         ready: str | None = None,
         mode: str = "shared",
-    ) -> "Tab | None":
+    ) -> Tab | None:
         """Attach to a target and return a ready `Tab`, or None on a lost race.
 
         `mode="agent"` (`open()`) takes the tab over; the `shared` default
@@ -437,7 +437,7 @@ class Browser:
 
     async def open(
         self, url: str, *, ready: str | None = None, new_window: bool = False
-    ) -> "Tab":
+    ) -> Tab:
         """Create a new tab and attach to it, returning a ready `Tab`.
 
         With `new_window`, the tab opens in a window of its own. The sequence
@@ -588,8 +588,8 @@ class Browser:
         url: str,
         *,
         method: str = "GET",
-        body: "dict | str | None" = None,
-        headers: "dict[str, str] | None" = None,
+        body: dict | str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict:
         """Execute an in-page fetch using any attached tab (inherits cookies/session)."""
         tabs = self._iter_tabs()

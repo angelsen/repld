@@ -80,7 +80,7 @@ class ResolvedElement:
     frame_id: str | None = None
 
 
-async def ensure_engine(tab: "Tab", frame_id: str | None = None) -> EngineHandle:
+async def ensure_engine(tab: Tab, frame_id: str | None = None) -> EngineHandle:
     """Ensure an engine instance is injected into `frame_id` (None: top frame).
 
     A child frame only gets the isolated-world tier: main-world fallback
@@ -177,7 +177,7 @@ def invalidate(cdp: Any) -> None:
 
 
 async def call_engine(
-    tab: "Tab",
+    tab: Tab,
     fn_decl: str,
     args: list[dict],
     *,
@@ -258,7 +258,7 @@ function(selectors) {
 
 
 async def resolve_element(
-    tab: "Tab",
+    tab: Tab,
     selector: str,
     *,
     timeout: float = _RESOLVE_TIMEOUT_S,
@@ -280,7 +280,7 @@ async def resolve_element(
 
 
 async def resolve_engine_selectors(
-    tab: "Tab",
+    tab: Tab,
     selectors: list[str],
     describe: str,
     *,
@@ -352,7 +352,7 @@ async def resolve_engine_selectors(
         await asyncio.sleep(_POLL_S)
 
 
-async def _child_frame_ids(tab: "Tab") -> list[str]:
+async def _child_frame_ids(tab: Tab) -> list[str]:
     """Every non-top frameId in this target's own frame tree, top-down.
 
     Includes an OOPIF's frameId too.  `Page.getFrameTree` lists it, but
@@ -377,7 +377,7 @@ async def _child_frame_ids(tab: "Tab") -> list[str]:
 
 
 async def _match_in_frame(
-    tab: "Tab",
+    tab: Tab,
     sel: str,
     frame_id: str | None,
     describe: str,
@@ -456,7 +456,7 @@ function(sels) { const injected = this;
 """
 
 
-async def selector_exists(tab: "Tab", selector: str) -> bool:
+async def selector_exists(tab: Tab, selector: str) -> bool:
     """One-shot existence check, no strictness, no visibility, no waiting.
 
     What `ready=` and `wait_for` poll on: "has it appeared", never "is it
@@ -494,7 +494,7 @@ async function(node, states) {
 
 
 async def check_actionable(
-    tab: "Tab",
+    tab: Tab,
     el: ResolvedElement,
     states: tuple[str, ...],
     *,
@@ -542,7 +542,7 @@ async def check_actionable(
 
 
 async def resolve_actionable(
-    tab: "Tab",
+    tab: Tab,
     selector: str,
     states: tuple[str, ...],
     *,
@@ -578,7 +578,7 @@ function(target, x, y) {
 """
 
 
-async def hit_receipt(tab: "Tab", el: ResolvedElement, x: float, y: float) -> dict:
+async def hit_receipt(tab: Tab, el: ResolvedElement, x: float, y: float) -> dict:
     """`{related, target: {preview, sel}, hit: {preview, sel}|None}` for (x, y).
 
     (x, y) come from `DOM.getContentQuads` and are top-frame-viewport-relative;
@@ -640,7 +640,7 @@ def _to_repld_selector(sel: str) -> str:
     return " >> ".join(parts)
 
 
-async def aria_snapshot(tab: "Tab") -> str:
+async def aria_snapshot(tab: Tab) -> str:
     """Playwright `ariaSnapshot` in 'ai' mode: YAML with `[ref=...]` handles."""
     result = await call_engine(
         tab,
@@ -654,7 +654,7 @@ async def aria_snapshot(tab: "Tab") -> str:
     return result.get("result", {}).get("value") or ""
 
 
-async def scoped_aria_snapshot(tab: "Tab", backend_node_id: int) -> str:
+async def scoped_aria_snapshot(tab: Tab, backend_node_id: int) -> str:
     """ariaSnapshot rooted at one DOM node instead of the whole document.
 
     For turning a `DOM.getNodeForLocation` hit into a real, click-able
@@ -685,7 +685,7 @@ async def scoped_aria_snapshot(tab: "Tab", backend_node_id: int) -> str:
     return result.get("result", {}).get("value") or ""
 
 
-async def read_value(tab: "Tab", el: ResolvedElement) -> str:
+async def read_value(tab: Tab, el: ResolvedElement) -> str:
     """Read the current `value` (inputs) or `textContent` (everything else)."""
     result = await call_engine(
         tab,
@@ -723,7 +723,7 @@ function(el, text) {
 """
 
 
-async def set_value_native(tab: "Tab", el: ResolvedElement, text: str) -> None:
+async def set_value_native(tab: Tab, el: ResolvedElement, text: str) -> None:
     """Set the element's value through the pristine prototype setter, bypassing frameworks."""
     await call_engine(
         tab,
@@ -752,7 +752,7 @@ function(el, option) {
 """
 
 
-async def select_native(tab: "Tab", el: ResolvedElement, option: str) -> dict:
+async def select_native(tab: Tab, el: ResolvedElement, option: str) -> dict:
     """Set a native `<select>` by option label (else value). `{ok}` or `{ok: False, options}`."""
     result = await call_engine(
         tab,
@@ -764,7 +764,7 @@ async def select_native(tab: "Tab", el: ResolvedElement, option: str) -> dict:
 
 
 async def list_option_names(
-    tab: "Tab", limit: int = 20, *, frame_id: str | None = None
+    tab: Tab, limit: int = 20, *, frame_id: str | None = None
 ) -> list[str]:
     """Accessible names of the visible `role=option` elements.
 
@@ -830,7 +830,7 @@ function() {
 """
 
 
-async def start_dom_watch(tab: "Tab") -> bool:
+async def start_dom_watch(tab: Tab) -> bool:
     """Arm the observation DOM watch.  False when the engine can't inject."""
     try:
         result = await call_engine(tab, _DOM_WATCH_START, [])
@@ -839,7 +839,7 @@ async def start_dom_watch(tab: "Tab") -> bool:
     return "exceptionDetails" not in result
 
 
-async def read_dom_watch(tab: "Tab") -> dict | None:
+async def read_dom_watch(tab: Tab) -> dict | None:
     """`{added, removed, samples}` recorded since `start_dom_watch`, or None."""
     try:
         result = await call_engine(tab, _DOM_WATCH_READ, [])
@@ -849,7 +849,7 @@ async def read_dom_watch(tab: "Tab") -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-async def describe_element(tab: "Tab", el: ResolvedElement) -> tuple[str, str]:
+async def describe_element(tab: Tab, el: ResolvedElement) -> tuple[str, str]:
     """(preview, generated selector) for receipts and error digests."""
     result = await call_engine(
         tab,

@@ -52,7 +52,7 @@ def spawn(
     *,
     name: str | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
-) -> "asyncio.Task | None":
+) -> asyncio.Task | None:
     """Schedule *coro* and keep a strong reference until it finishes.
 
     Pass *loop* when the caller is not itself running on it. `Tab`'s sync

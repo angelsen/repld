@@ -139,7 +139,7 @@ Event = (
 # ---------------------------------------------------------------------------
 
 _MAXSIZE = 10_000
-_queue: "queue.Queue[Event] | None" = None
+_queue: queue.Queue[Event] | None = None
 _pre_init_buf: list[Event] = []
 _pre_init_lock = threading.Lock()
 # Set once at boot by disable_queue(), never cleared. Distinguishes "no queue
@@ -150,7 +150,7 @@ _disabled = False
 # Optional second consumer, independent of whoever drains the queue.
 # eventlog.install() registers itself here; keeping it a registered callback
 # (rather than importing eventlog) is what lets eventlog import display.
-_sink: "Callable[[Event], None] | None" = None
+_sink: Callable[[Event], None] | None = None
 
 # Drop counter + warning throttle
 _drop_count = 0
@@ -195,14 +195,14 @@ def disable_queue() -> None:
         _pre_init_buf.clear()
 
 
-def get_queue() -> "queue.Queue[Event]":
+def get_queue() -> queue.Queue[Event]:
     """Return the live queue, or raise `RuntimeError` if not yet initialized."""
     if _queue is None:
         raise RuntimeError("events.init_event_queue() has not been called")
     return _queue
 
 
-def set_sink(fn: "Callable[[Event], None] | None") -> None:
+def set_sink(fn: Callable[[Event], None] | None) -> None:
     """Register (or clear) a tee that sees every event as it is emitted."""
     global _sink
     _sink = fn
@@ -245,7 +245,7 @@ def emit(ev: Event) -> None:
     _put_nonblocking(q, ev)
 
 
-def _put_nonblocking(q: "queue.Queue[Event]", ev: Event) -> None:
+def _put_nonblocking(q: queue.Queue[Event], ev: Event) -> None:
     """Enqueue `ev`, dropping the oldest entry if the queue is full."""
     global _drop_count, _last_drop_warn
     try:

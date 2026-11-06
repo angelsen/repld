@@ -350,7 +350,7 @@ class RemoteConsole(code.InteractiveConsole):
         """Compile locally and dispatch complete source to the kernel."""
         try:
             compiled = self.compile(source, filename, symbol)
-        except (OverflowError, SyntaxError, ValueError):
+        except OverflowError, SyntaxError, ValueError:
             self.showsyntaxerror(filename)
             return False
         if compiled is None:

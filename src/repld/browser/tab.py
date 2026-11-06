@@ -173,7 +173,7 @@ class Action:
     description: str
     point: tuple[float, float]
     warning: bool
-    tab: "Tab" = field(repr=False, compare=False)
+    tab: Tab = field(repr=False, compare=False)
     dispatch: Callable[[], Awaitable[Receipt]] = field(repr=False, compare=False)
 
     async def run(self) -> Receipt:
@@ -240,7 +240,7 @@ class _FrontProbe:
     together; the second must not overtake the first while it waits)."""
 
     probe: asyncio.Task
-    target: "Tab"
+    target: Tab
     settle: asyncio.Task | None = None
 
 
@@ -718,7 +718,7 @@ class Tab(TabQueryMixin):
                 ) from reattach_exc
             return await self._session.execute(method, params, timeout)
 
-    async def _front_target(self) -> "Tab":
+    async def _front_target(self) -> Tab:
         """The Tab whose window should actually be raised: self, unless self
         is an iframe. `Page.bringToFront` only accepts top-level targets
         (confirmed live: `browser_hover` on an iframe target raised
@@ -855,7 +855,7 @@ class Tab(TabQueryMixin):
 
             os.close(fd)
 
-    async def _probe_hidden(self, front_target: "Tab") -> bool:
+    async def _probe_hidden(self, front_target: Tab) -> bool:
         """Whether `front_target`'s window must be raised before input lands."""
         try:
             result = await front_target._exec(
@@ -892,7 +892,7 @@ class Tab(TabQueryMixin):
             self._front_pending = None
 
     @staticmethod
-    async def _front_settle(pending: "_FrontProbe") -> None:
+    async def _front_settle(pending: _FrontProbe) -> None:
         """Await the probe and front the target if it read hidden."""
         if await pending.probe:
             await pending.target._exec("Page.bringToFront")
@@ -1232,7 +1232,7 @@ class Tab(TabQueryMixin):
 
     async def click(
         self,
-        selector: "str | tuple[float, float]",
+        selector: str | tuple[float, float],
         *,
         button: str = "left",
         click_count: int = 1,
@@ -1259,7 +1259,7 @@ class Tab(TabQueryMixin):
 
     async def plan_click(
         self,
-        selector: "str | tuple[float, float]",
+        selector: str | tuple[float, float],
         *,
         button: str = "left",
         click_count: int = 1,
@@ -1277,7 +1277,7 @@ class Tab(TabQueryMixin):
 
     async def _plan_click(
         self,
-        selector: "str | tuple[float, float]",
+        selector: str | tuple[float, float],
         *,
         button: str,
         click_count: int,
@@ -1352,7 +1352,7 @@ class Tab(TabQueryMixin):
             )
         return Receipt(line=f"wheel: ({x:.0f},{y:.0f}) dx={dx:g} dy={dy:g}")
 
-    async def hover(self, selector: "str | tuple[float, float]") -> Receipt:
+    async def hover(self, selector: str | tuple[float, float]) -> Receipt:
         """Move the mouse over an element (or an (x, y) / 'x,y' point) and
         leave it there.
 
@@ -1393,7 +1393,7 @@ class Tab(TabQueryMixin):
 
     async def _resolve_drag_point(
         self, spec: Any, *, timeout: float | None = None
-    ) -> tuple[float, float, "inject.ResolvedElement | None", str]:
+    ) -> tuple[float, float, inject.ResolvedElement | None, str]:
         """(x, y, element-or-None, description) for a drag endpoint."""
         pt = self._parse_point(spec)
         if pt is not None:
@@ -1408,8 +1408,8 @@ class Tab(TabQueryMixin):
 
     async def drag(
         self,
-        source: "str | tuple[float, float]",
-        to: "str | tuple[float, float]",
+        source: str | tuple[float, float],
+        to: str | tuple[float, float],
         *,
         steps: int = 12,
         duration_ms: int = 400,
@@ -1531,10 +1531,10 @@ class Tab(TabQueryMixin):
         y1: float,
         x2: float,
         y2: float,
-        tgt_el: "inject.ResolvedElement | None",
+        tgt_el: inject.ResolvedElement | None,
         tgt_desc: str,
-        to: "str | tuple[float, float]",
-    ) -> tuple[float, float, "inject.ResolvedElement | None", str]:
+        to: str | tuple[float, float],
+    ) -> tuple[float, float, inject.ResolvedElement | None, str]:
         """Threshold and micro-step moves at the start of a drag gesture.
 
         For a deferred target, crosses the dragstart threshold and resolves the
@@ -1980,7 +1980,7 @@ class Tab(TabQueryMixin):
         self,
         mode: str = "aria",
         *,
-        at: "str | tuple[float, float] | None" = None,
+        at: str | tuple[float, float] | None = None,
         in_crop: str | None = None,
     ) -> list[str]:
         """Accessibility snapshot as text lines. Standalone read, no settle.
@@ -2047,8 +2047,8 @@ class Tab(TabQueryMixin):
         url: str,
         *,
         method: str = "GET",
-        body: "dict | str | None" = None,
-        headers: "dict[str, str] | None" = None,
+        body: dict | str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict:
         """In-page JS fetch with Python-ergonomic args.
 

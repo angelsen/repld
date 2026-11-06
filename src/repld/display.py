@@ -86,7 +86,7 @@ _foreground_task_id: str | None = None
 # it happened to be showing. Insertion-ordered, so stdin routes to the newest
 # open gate (the one whose prompt is on screen) and falls back to the previous
 # one when that is answered elsewhere.
-_open_gates: "dict[str, tuple[str, str, list[str] | None, dict | None]]" = {}
+_open_gates: dict[str, tuple[str, str, list[str] | None, dict | None]] = {}
 
 # Per-cell viewer cap. Pure bytes, single source of truth, no chunk-boundary
 # edge cases. 4 KB is about 50 short lines or 20 wide ones. Full content is
@@ -99,10 +99,10 @@ _viewer_state: dict[str, tuple[int, bool]] = {}
 _truncated_tasks: set[str] = set()
 
 # rich Console (lazily created)
-_console: "_RichConsole | None" = None
+_console: _RichConsole | None = None
 
 
-def _get_console() -> "_RichConsole":
+def _get_console() -> _RichConsole:
     """Return the shared `rich.Console`, creating it on first use."""
     global _console
     if _console is None:
@@ -368,7 +368,7 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
         while not stop.is_set():
             try:
                 line = _STDIN.readline()
-            except (OSError, EOFError):
+            except OSError, EOFError:
                 break
             if not line:
                 break

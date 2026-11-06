@@ -50,7 +50,7 @@ class _Gate:
     """A pending gate, kept so `open_gates` can describe it to surfaces that
     never saw the original channel push."""
 
-    future: "concurrent.futures.Future"
+    future: concurrent.futures.Future
     kind: str
     prompt: str
     options: list[str] | None
@@ -490,7 +490,7 @@ def parse_elicit_result(
         return "cancel", None
     try:
         content = validate_form(result.get("content"), schema)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return "cancel", None
     return "accept", content if field is None else content[field]
 
@@ -742,7 +742,7 @@ def stdin_owned() -> bool:
     return _stdin_owned
 
 
-def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
+def tty_prompt(prompt: str, *, stream: IO[str] | None = None) -> str | None:
     """Write `prompt` to the real terminal and read one stripped, lowercased line.
 
     Defaults to sys.__stderr__ / sys.__stdin__. Returns None if there is
@@ -782,7 +782,7 @@ def tty_prompt(prompt: str, *, stream: "IO[str] | None" = None) -> str | None:
     try:
         if not stdin.isatty():
             return None
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     out.write(prompt)
     out.flush()

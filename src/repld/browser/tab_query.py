@@ -148,7 +148,7 @@ class TabQueryMixin:
                 continue
             try:
                 results.append(json.loads(raw))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
         return results
 

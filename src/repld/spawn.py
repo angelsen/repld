@@ -108,7 +108,7 @@ def _unit_state(sock_path: Path) -> str:
             timeout=10,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return ""
     return r.stdout.strip()
 

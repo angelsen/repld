@@ -137,7 +137,7 @@ class _DedupEntry:
 
     __slots__ = ("count", "meta", "session", "text")
 
-    def __init__(self, text: str, meta: dict, session: "Session | None" = None) -> None:
+    def __init__(self, text: str, meta: dict, session: Session | None = None) -> None:
         """Hold the first push's text and meta; `count` tracks duplicates."""
         self.count = 0
         self.text = text
@@ -197,7 +197,7 @@ def _dedup_push(
     meta: dict,
     dedup_key: str,
     loop: asyncio.AbstractEventLoop | None,
-    session: "Session | None" = None,
+    session: Session | None = None,
 ) -> None:
     """Push a console error, collapsing duplicates within `_DEDUP_WINDOW`.
 
@@ -273,7 +273,7 @@ _frame_seq_counter = iter(range(1, 1 << 30))
 
 
 def _check_controls_observation(
-    params: dict, target_id: str, session: "Session | None" = None
+    params: dict, target_id: str, session: Session | None = None
 ) -> None:
     """Detect __controls__ console.debug messages and push as channel notifications.
 
@@ -289,7 +289,7 @@ def _check_controls_observation(
     raw = args[1].get("value", "")
     try:
         obs = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return
     control = obs.get("control", "?")
     action = obs.get("action", "?")
@@ -331,7 +331,7 @@ def _push_error_text(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None,
-    session: "Session | None" = None,
+    session: Session | None = None,
 ) -> None:
     """Suppression-check, truncate, and dedup-push a console error line."""
     text = text[:300]
@@ -361,7 +361,7 @@ class RendererBusyError(TimeoutError):
     """A page-served command timed out while the browser process still answered."""
 
 
-def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
+def _dialog_pending_error(cdp: CDPSession) -> DialogPendingError:
     """Build a `DialogPendingError` describing the open human-owned dialog."""
     d = cdp._open_dialog or {}
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
@@ -373,7 +373,7 @@ def _dialog_pending_error(cdp: "CDPSession") -> DialogPendingError:
 
 
 def _push_tab(
-    cdp: "CDPSession", text: str, meta: dict, *, in_receipt: bool = False
+    cdp: CDPSession, text: str, meta: dict, *, in_receipt: bool = False
 ) -> None:
     """Push a tab event to its live claim (`route_to`); no claim, no push.
 
@@ -389,7 +389,7 @@ def _push_tab(
         push_channel(text, meta, session=session)
 
 
-async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
+async def _handle_dialog(cdp: CDPSession, params: dict) -> None:
     """Answer a native JS dialog (alert/confirm/prompt/beforeunload), or leave it.
 
     An unanswered dialog blocks Chrome's renderer, and the CDP command that
@@ -463,7 +463,7 @@ async def _handle_dialog(cdp: "CDPSession", params: dict) -> None:
     )
 
 
-def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) -> None:
+def _leave_dialog_to_human(cdp: CDPSession, dialog_type: str, message: str) -> None:
     """Record a dialog left for the human and wake in-flight renderer commands."""
     entry = {
         "type": dialog_type,
@@ -500,7 +500,7 @@ def _leave_dialog_to_human(cdp: "CDPSession", dialog_type: str, message: str) ->
     )
 
 
-def _push_tab_crashed(cdp: "CDPSession") -> None:
+def _push_tab_crashed(cdp: CDPSession) -> None:
     """Push a `tab_crashed` notification to the tab's live claim."""
     short_id = f"{cdp.port}:{cdp.chrome_target_id[:6].lower()}"
     _push_tab(
@@ -510,7 +510,7 @@ def _push_tab_crashed(cdp: "CDPSession") -> None:
     )
 
 
-def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
+def _record_dialog_closed(cdp: CDPSession, params: dict) -> None:
     """Report how a dialog `_leave_dialog_to_human` left open was answered."""
     opened = cdp._open_dialog
     if opened is None:
@@ -539,7 +539,7 @@ def _record_dialog_closed(cdp: "CDPSession", params: dict) -> None:
     )
 
 
-def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
+def _record_filechooser_opened(cdp: CDPSession, params: dict) -> None:
     """Log and announce an unresolved file chooser, called directly from
     `_handle_event` (not through `bg.spawn`).
 
@@ -605,7 +605,7 @@ def _record_filechooser_opened(cdp: "CDPSession", params: dict) -> None:
     )
 
 
-async def _handle_filechooser(cdp: "CDPSession", params: dict) -> None:
+async def _handle_filechooser(cdp: CDPSession, params: dict) -> None:
     """Resolve a pre-armed file-chooser prompt via `DOM.setFileInputFiles`.
 
     Only reached when `tab.expect_file_chooser()` armed `_filechooser_policy`.
@@ -666,7 +666,7 @@ def unresolved_filechooser_error(
     return None
 
 
-async def _handle_auth(cdp: "CDPSession", params: dict) -> None:
+async def _handle_auth(cdp: CDPSession, params: dict) -> None:
     """Resolve, hand back, or report an HTTP Basic/Digest auth challenge.
 
     Requires `Fetch.enable` with `handleAuthRequests: True` (capture.enable),
@@ -774,7 +774,7 @@ def _push_console_error(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None = None,
-    session: "Session | None" = None,
+    session: Session | None = None,
 ) -> None:
     """Push console.error messages as channel notifications."""
     parts = []
@@ -794,7 +794,7 @@ def _push_exception(
     target_id: str,
     port: int,
     loop: asyncio.AbstractEventLoop | None = None,
-    session: "Session | None" = None,
+    session: Session | None = None,
 ) -> None:
     """Push uncaught exceptions as channel notifications."""
     details = params.get("exceptionDetails", {})
@@ -1040,7 +1040,7 @@ class CDPSession:
         _create_views(self.db.execute)
 
     @property
-    def route_to(self) -> "Session | None":
+    def route_to(self) -> Session | None:
         """Where this tab's pushes go: a `taken` tab's live owner, else the
         action in flight, else the owner, else the task that last acted on it
         while that task runs, else the last action's grace tail, else nobody."""
@@ -1065,7 +1065,7 @@ class CDPSession:
             return a
         return None
 
-    def _task_claim(self) -> "Session | None":
+    def _task_claim(self) -> Session | None:
         """The session of the task that last acted on this tab, while it runs."""
         tid = self.last_caller_task
         if tid is None:

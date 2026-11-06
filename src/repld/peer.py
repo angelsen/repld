@@ -472,7 +472,7 @@ class Peer:
                         path, limit=_READ_LIMIT
                     )
                     return reader, writer, path
-                except (FileNotFoundError, ConnectionRefusedError):
+                except FileNotFoundError, ConnectionRefusedError:
                     pass
             if attempt == 0 and self.start:
                 await self._ensure_started()

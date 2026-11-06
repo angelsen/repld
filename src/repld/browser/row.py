@@ -263,7 +263,7 @@ def _parse_json(val: Any) -> Any:
         return val
     try:
         return json.loads(val)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
 
 

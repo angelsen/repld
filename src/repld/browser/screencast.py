@@ -46,7 +46,7 @@ class Screencast:
     """The stream `Tab.screencast` returns; at most one per tab."""
 
     def __init__(
-        self, cdp: "CDPSession", handler: Handler, params: dict[str, Any]
+        self, cdp: CDPSession, handler: Handler, params: dict[str, Any]
     ) -> None:
         """Bind a handler to `cdp` with the given `Page.startScreencast` params."""
         self._cdp = cdp
@@ -83,7 +83,7 @@ class Screencast:
 
 
 def begin(
-    cdp: "CDPSession",
+    cdp: CDPSession,
     handler: Handler,
     *,
     format: str,
@@ -121,7 +121,7 @@ def discard(sc: Screencast) -> None:
         sc._cdp._screencast = None
 
 
-def on_frame(cdp: "CDPSession", params: dict[str, Any]) -> None:
+def on_frame(cdp: CDPSession, params: dict[str, Any]) -> None:
     """Hand one `Page.screencastFrame` to the handler. Called from the recv loop."""
     sc = cdp._screencast
     if sc is None:
@@ -166,7 +166,7 @@ async def _invoke_and_ack(sc: Screencast, frame: Frame, ack_id: int) -> None:
                 logger.debug("Page.screencastFrameAck: %s", exc)
 
 
-async def restore(cdp: "CDPSession") -> None:
+async def restore(cdp: CDPSession) -> None:
     """Re-issue the stream under a new CDP session; Chrome drops it on detach."""
     sc = cdp._screencast
     if sc is None:

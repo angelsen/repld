@@ -97,7 +97,7 @@ def _stdin_is_tty() -> bool:
     stdin = sys.__stdin__
     try:
         return stdin is not None and stdin.isatty()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
 
 

@@ -82,7 +82,7 @@ def _fetch(lock: dict, hint_path: Path) -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=2) as resp:
             body = json.loads(resp.read())
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+    except urllib.error.URLError, OSError, json.JSONDecodeError, ValueError:
         return None
     return body if isinstance(body, dict) else None
 

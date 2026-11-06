@@ -30,10 +30,10 @@ _META_VALUE_LIMIT = 2000
 # Optional single callback, same shape as events.set_sink: a project's
 # repld_init.py registers one so push_channel never has to import anything
 # project-specific.
-_meta_augmenter: "Callable[[], dict[str, str]] | None" = None
+_meta_augmenter: Callable[[], dict[str, str]] | None = None
 
 
-def set_meta_augmenter(fn: "Callable[[], dict[str, str]] | None") -> None:
+def set_meta_augmenter(fn: Callable[[], dict[str, str]] | None) -> None:
     """Register (or clear) a callback whose returned dict merges into every push's meta.
 
     Must be synchronous and cheap: push_channel runs on whatever thread or
@@ -49,10 +49,10 @@ def push_channel(
     content: str,
     meta: dict | None = None,
     *,
-    session: "ipc.Session | None" = None,
+    session: ipc.Session | None = None,
     fallback_broadcast: bool = False,
-    exclude: "ipc.Session | None" = None,
-    on_parked_flush: "Callable[[bool], None] | None" = None,
+    exclude: ipc.Session | None = None,
+    on_parked_flush: Callable[[bool], None] | None = None,
 ) -> bool | None:
     """Send a `notifications/claude/channel` notification and emit a local
     `ChannelPush` event so the pane and the event log mirror what the MCP agent
@@ -116,10 +116,10 @@ def push_owed(
     content: str,
     meta: dict,
     *,
-    session: "ipc.Session",
+    session: ipc.Session,
     owed_s: float,
-    on_flush: "Callable[[bool], None] | None" = None,
-) -> "ipc.Post":
+    on_flush: Callable[[bool], None] | None = None,
+) -> ipc.Post:
     """A targeted push owed to `session`'s `claude_session_id` for `owed_s`
     seconds rather than to the connection (`ipc.Server.deliver`): a task
     result whose session re-registers from a new host still gets it, once.
@@ -134,7 +134,7 @@ def push_owed(
 
 
 def push_kind(
-    content: str, kind: str, *, session: "ipc.Session | None" = None, **meta: str
+    content: str, kind: str, *, session: ipc.Session | None = None, **meta: str
 ) -> None:
     """`push_channel` with the ubiquitous ``{"kind": ...}`` meta shape spelled out once.
 

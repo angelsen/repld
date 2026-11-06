@@ -1027,7 +1027,7 @@ class BrowserSession:
 
     async def _resolve_download_owner(
         self,
-        owner: "asyncio.Future[tuple[CDPSession | None, Session | None]]",
+        owner: asyncio.Future[tuple[CDPSession | None, Session | None]],
         frame_id: str,
     ) -> None:
         """Settle `owner` with the tab a download's frame belongs to (else None)
@@ -1048,7 +1048,7 @@ class BrowserSession:
         self,
         kind: str,
         name: str,
-        owner: "asyncio.Future[tuple[CDPSession | None, Session | None]] | None",
+        owner: asyncio.Future[tuple[CDPSession | None, Session | None]] | None,
         params: dict,
     ) -> None:
         """Push a download channel message to the session that started it."""
@@ -1079,7 +1079,7 @@ class BrowserSession:
             session=session,
         )
 
-    def _pattern_owner(self, url: str) -> "Session | None":
+    def _pattern_owner(self, url: str) -> Session | None:
         """The most recent live session that registered a pattern matching `url`."""
         for pattern, owners in self._pattern_owners.items():
             if fnmatch(url, pattern):
@@ -1088,7 +1088,7 @@ class BrowserSession:
                         return owner
         return None
 
-    def _inherited_owner(self, target_info: dict) -> "Session | None":
+    def _inherited_owner(self, target_info: dict) -> Session | None:
         """Owner for an auto-attached target: the watcher of the first matching
         pattern, else its opener's. A popup's URL is empty at attach, so the
         opener's pick is provisional (`owner_from_opener`)."""

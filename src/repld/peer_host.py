@@ -151,7 +151,7 @@ def bind_check(func: Callable, args: list, kwargs: dict) -> None:
     reads as never-ran. Objects with no introspectable signature skip the check."""
     try:
         sig = inspect.signature(func)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return
     try:
         sig.bind(*args, **kwargs)
@@ -212,7 +212,7 @@ def _build_main_entry(name: str, obj: Callable) -> dict:
     """Build a descriptor for one callable defined in `__main__`."""
     try:
         signature = str(inspect.signature(obj))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         signature = "(...)"
     return {
         "name": name,
@@ -227,11 +227,11 @@ def inspect_target(target: str) -> dict:
     obj = resolve_target(target)
     try:
         signature: str | None = str(inspect.signature(obj))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         signature = None
     try:
         file = inspect.getsourcefile(obj)  # type: ignore[arg-type]
-    except (TypeError, OSError):
+    except TypeError, OSError:
         file = None
     if inspect.isclass(obj):
         kind = "class"

@@ -175,7 +175,7 @@ def save_hint() -> None:
         loaded = json.loads(_hint_path.read_text())
         if isinstance(loaded, dict):
             hint = loaded
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         pass
 
     hint["dashboard_port"] = bound_port() or 0

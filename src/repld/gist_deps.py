@@ -106,13 +106,13 @@ def _is_importable(name: str) -> bool:
     try:
         if importlib.util.find_spec(name.replace("-", "_")) is not None:
             return True
-    except (ImportError, ValueError):
+    except ImportError, ValueError:
         pass
     for import_name in _distribution_import_names(name):
         try:
             if importlib.util.find_spec(import_name) is not None:
                 return True
-        except (ImportError, ValueError):
+        except ImportError, ValueError:
             continue
     return False
 
@@ -412,7 +412,7 @@ def _can_prompt() -> bool:
         return False
     try:
         return stdin.isatty()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
 
 
@@ -543,7 +543,7 @@ def install_deps(missing: list[_DepInfo]) -> bool:
 
     try:
         selected = _prompt_dep_selection(missing)
-    except (EOFError, KeyboardInterrupt):
+    except EOFError, KeyboardInterrupt:
         _tty_write("\n")
         return False
     if not selected:

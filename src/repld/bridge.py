@@ -316,7 +316,7 @@ class Bridge:
                 if not line.strip():
                     continue
                 self._handle_client_line(line)
-        except (BrokenPipeError, OSError, ValueError):
+        except BrokenPipeError, OSError, ValueError:
             pass
         # Client-side EOF is the only thing that ends this process. Drain first:
         # a client that closes stdin right after its last request is still owed
@@ -742,7 +742,7 @@ class Bridge:
         """The parsed JSON at `path`, or None when it is missing or corrupt."""
         try:
             return json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return None
 
     # -- kernel liveness -------------------------------------------------------
@@ -1069,7 +1069,7 @@ class Bridge:
                     timeout=3,
                     check=False,
                 ).stdout
-            except (OSError, subprocess.SubprocessError):
+            except OSError, subprocess.SubprocessError:
                 return None
             reason = _reason_from_journal(out)
             if reason:
@@ -1085,7 +1085,7 @@ class Bridge:
             try:
                 sys.stdout.write(json.dumps(msg) + "\n")
                 sys.stdout.flush()
-            except (BrokenPipeError, OSError, ValueError):
+            except BrokenPipeError, OSError, ValueError:
                 pass
 
     def _to_client_raw(self, line: str) -> None:
@@ -1094,7 +1094,7 @@ class Bridge:
             try:
                 sys.stdout.write(line)
                 sys.stdout.flush()
-            except (BrokenPipeError, OSError, ValueError):
+            except BrokenPipeError, OSError, ValueError:
                 pass
 
     def _to_kernel(self, msg: dict) -> bool:
@@ -1165,7 +1165,7 @@ class Bridge:
                     continue
                 self._track_kernel_message(msg, rid)
                 self._to_client_raw(line)
-        except (BrokenPipeError, OSError, ValueError):
+        except BrokenPipeError, OSError, ValueError:
             pass
         finally:
             if rfile is not None:

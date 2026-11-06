@@ -423,7 +423,7 @@ async def _handle_binding(session: CDPSession, params: dict) -> None:
     payload_str = params.get("payload", "{}")
     try:
         payload = json.loads(payload_str)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return
     gate_id = payload.get("gate_id")
     value = payload.get("value")

@@ -168,7 +168,7 @@ def dashboard_token(hint_path: Path) -> str:
     """
     try:
         hint = json.loads(hint_path.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
+    except OSError, json.JSONDecodeError, ValueError:
         return ""
     return str(hint.get("token") or "") if isinstance(hint, dict) else ""
 
@@ -207,7 +207,7 @@ def sweep_dead_pid_files(directory: Path) -> int:
 
 
 def sweep_own_stale_files(
-    directory: Path, *, max_age: float, keep: "set[str] | frozenset[str]" = frozenset()
+    directory: Path, *, max_age: float, keep: set[str] | frozenset[str] = frozenset()
 ) -> int:
     """Unlink *this* process's `{pid}-*` files untouched for `max_age` seconds.
 

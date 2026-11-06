@@ -68,7 +68,7 @@ def list_sessions() -> list[dict]:
         try:
             info = json.loads(f.read_text())
             pid = int(info["pid"])
-        except (OSError, KeyError, ValueError, TypeError):
+        except OSError, KeyError, ValueError, TypeError:
             # Corrupt, unreadable, or not the shape we write. Judge liveness by
             # the filename pid so a live kernel's file is not deleted out from
             # under it, but drop the payload rather than returning it. Every

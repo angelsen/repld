@@ -101,7 +101,7 @@ class _Tee(io.TextIOBase):
                 try:
                     fp.write(s)
                     fp.flush()
-                except (ValueError, OSError):
+                except ValueError, OSError:
                     pass  # pruned between check and write
         cls = StdoutChunk if self.stream == "stdout" else StderrChunk
         emit(cls(task_id, s))
@@ -129,7 +129,7 @@ def install_tee() -> None:
 
 # Set around a coroutine an MCP tool call hands to the loop, which carries no
 # repld task for `current_origin` to read.
-_tool_caller: contextvars.ContextVar["Session | None"] = contextvars.ContextVar(
+_tool_caller: contextvars.ContextVar[Session | None] = contextvars.ContextVar(
     "repld_tool_caller", default=None
 )
 
@@ -149,7 +149,7 @@ def current_task_id() -> str | None:
     return _current_task.get()
 
 
-def current_origin() -> "Session | None":
+def current_origin() -> Session | None:
     """The session that asked for the running cell or defer() task, if any.
 
     A peer connection (`Session.peer`) is not a session anyone can be pushed

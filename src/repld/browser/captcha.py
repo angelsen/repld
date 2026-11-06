@@ -227,7 +227,7 @@ async def _watch(tab: Tab, vendors: set[str]) -> None:
         await asyncio.sleep(POLL_S)
         try:
             found = await detect(tab)
-        except (DialogPendingError, TimeoutError):
+        except DialogPendingError, TimeoutError:
             continue  # the human's dialog or a busy page; the captcha is still theirs
         except Exception as exc:
             logger.debug("captcha watch on %s ended: %s", short_id, exc)

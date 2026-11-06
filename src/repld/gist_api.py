@@ -206,7 +206,7 @@ def _param_records(args: ast.arguments) -> list[dict]:
             try:
                 ast.literal_eval(default)
                 literal = True
-            except (ValueError, SyntaxError):
+            except ValueError, SyntaxError:
                 pass
         out.append(
             {

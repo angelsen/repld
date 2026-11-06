@@ -283,7 +283,7 @@ class BrowserPool:
             )
         return b
 
-    def resolve_tab(self, target_id: str) -> "Tab":
+    def resolve_tab(self, target_id: str) -> Tab:
         """Find an attached `Tab` by its raw Chrome targetId, across all ports."""
         for port, b in self._browsers.items():
             if not b._connected:
@@ -625,8 +625,8 @@ class BrowserPool:
         url: str,
         *,
         method: str = "GET",
-        body: "dict | str | None" = None,
-        headers: "dict[str, str] | None" = None,
+        body: dict | str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict:
         """In-page fetch using any attached tab (inherits cookies/session)."""
         await self._ensure_any()
@@ -706,7 +706,7 @@ class LazyBrowser:
             self._real = BrowserPool()
         return self._real
 
-    def peek(self) -> "BrowserPool | None":
+    def peek(self) -> BrowserPool | None:
         """Return the underlying pool without triggering bootstrap/connect."""
         return self._real
 

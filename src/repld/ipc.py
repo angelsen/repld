@@ -161,11 +161,11 @@ class _Owed(NamedTuple):
     """A channel push held in a park queue or the server outbox."""
 
     msg: dict
-    cb: "Callable[[bool], None] | None"
+    cb: Callable[[bool], None] | None
     until: float | None  # monotonic deadline; None = owed to this connection only
 
 
-def _run_callbacks(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> None:
+def _run_callbacks(callbacks: list[tuple[Callable[[bool], None], bool]]) -> None:
     """Run delivery callbacks with no lock held.
 
     They are caller code (`tasks.mark_push_delivered`).
@@ -177,17 +177,17 @@ def _run_callbacks(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> No
             pass  # a broken callback must not break the flush
 
 
-def can_elicit(session: "Session") -> bool:
+def can_elicit(session: Session) -> bool:
     """Whether a form-mode `elicitation/create` can reach a human via `session`."""
     return session.elicit_form and _is_elicitable(session)
 
 
-def can_elicit_url(session: "Session") -> bool:
+def can_elicit_url(session: Session) -> bool:
     """Whether a URL-mode `elicitation/create` can reach a human via `session`."""
     return session.elicit_url and _is_elicitable(session)
 
 
-def _is_elicitable(session: "Session") -> bool:
+def _is_elicitable(session: Session) -> bool:
     """Whether `session` is a live client with a return path.
 
     A `bg` worker's only return path is its one-way inbox, and a peer
@@ -262,7 +262,7 @@ class Session:
         self,
         msg: dict,
         *,
-        on_parked_flush: "Callable[[bool], None] | None" = None,
+        on_parked_flush: Callable[[bool], None] | None = None,
         owed_until: float | None = None,
     ) -> Post:
         """Server-initiated notification (channel push).
@@ -320,7 +320,7 @@ class Session:
         parked (including a park the timeout already released)."""
         return self._unpark_and_flush()
 
-    def take_parked(self) -> list["_Owed"]:
+    def take_parked(self) -> list[_Owed]:
         """Empty a closed connection's park queue for the `Server` to settle.
 
         Only after close: `post_channel` refuses then, so nothing lands behind it.
@@ -369,7 +369,7 @@ class Session:
             self.wfile.write(json.dumps(msg) + "\n")
             self.wfile.flush()
             return True
-        except (BrokenPipeError, OSError, ValueError):
+        except BrokenPipeError, OSError, ValueError:
             self._close_locked()
             return False
 
@@ -478,7 +478,7 @@ class Session:
         for f in (self.wfile, self.rfile):
             try:
                 f.close()
-            except (BrokenPipeError, OSError, ValueError):
+            except BrokenPipeError, OSError, ValueError:
                 pass
 
 
@@ -539,7 +539,7 @@ class Server:
         )
         self.accept_thread.start()
 
-    def broadcast_channel(self, msg: dict, *, exclude: "Session | None" = None) -> None:
+    def broadcast_channel(self, msg: dict, *, exclude: Session | None = None) -> None:
         """Post a server-initiated notification to every connected session.
 
         Sessions that have not sent notifications/initialized yet queue the
@@ -562,7 +562,7 @@ class Server:
         session: Session,
         msg: dict,
         *,
-        on_parked_flush: "Callable[[bool], None] | None" = None,
+        on_parked_flush: Callable[[bool], None] | None = None,
     ) -> bool | None:
         """Post to one session.
 
@@ -582,7 +582,7 @@ class Server:
         session: Session,
         msg: dict,
         *,
-        on_flush: "Callable[[bool], None] | None" = None,
+        on_flush: Callable[[bool], None] | None = None,
         owed_until: float | None = None,
     ) -> Post:
         """Post with the outcome spelled out, and optional outbox ownership.
@@ -833,7 +833,7 @@ class Server:
                 except json.JSONDecodeError:
                     continue
                 self._handle_request(session, req)
-        except (BrokenPipeError, OSError, ValueError):
+        except BrokenPipeError, OSError, ValueError:
             pass
         finally:
             self._on_reader_done(session)
@@ -877,7 +877,7 @@ class Server:
             except Exception:
                 pass
 
-    def _owe(self, session_id: str, item: "_Owed") -> Post:
+    def _owe(self, session_id: str, item: _Owed) -> Post:
         """Enqueue a push owed to `session_id`, delivering it now if a live session exists."""
         if item.until is not None and item.until <= time.monotonic():
             return Post.FAILED
@@ -982,7 +982,7 @@ def stop_server() -> None:
         _server.stop()
 
 
-def broadcast_channel(msg: dict, *, exclude: "Session | None" = None) -> None:
+def broadcast_channel(msg: dict, *, exclude: Session | None = None) -> None:
     """Broadcast a channel push to all connected sessions."""
     if _server is not None:
         _server.broadcast_channel(msg, exclude=exclude)
@@ -992,7 +992,7 @@ def post_to(
     session: Session,
     msg: dict,
     *,
-    on_parked_flush: "Callable[[bool], None] | None" = None,
+    on_parked_flush: Callable[[bool], None] | None = None,
 ) -> bool | None:
     """Deliver a server-initiated notification to one session only.
 
@@ -1010,7 +1010,7 @@ def deliver(
     session: Session,
     msg: dict,
     *,
-    on_flush: "Callable[[bool], None] | None" = None,
+    on_flush: Callable[[bool], None] | None = None,
     owed_until: float | None = None,
 ) -> Post:
     """See `Server.deliver`: a push owed to a session id, not a connection."""

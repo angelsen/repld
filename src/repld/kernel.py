@@ -384,7 +384,7 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
 # ---------------------------------------------------------------------------
 
 
-def _probe_future(loop: asyncio.AbstractEventLoop) -> "concurrent.futures.Future[None]":
+def _probe_future(loop: asyncio.AbstractEventLoop) -> concurrent.futures.Future[None]:
     """Schedule the watchdog's no-op liveness probe under a repld- name.
 
     Named at task-creation time (not from inside the coroutine) so it's
@@ -410,7 +410,7 @@ _LOOP_MACHINERY = (
 )
 
 
-def _is_starved(frames: "list[traceback.FrameSummary]") -> bool:
+def _is_starved(frames: list[traceback.FrameSummary]) -> bool:
     """True when the sampled stack means the OS never scheduled the loop
     thread, not that a callback held it. Two signatures, both stdlib:
     - the whole (post-`_LOOP_MACHINERY`-filter) stack is `selectors.*.select`:
@@ -483,7 +483,7 @@ def _read_pressure() -> _Pressure | None:
             swap_used=fields["SwapTotal"] - fields["SwapFree"],
             swap_total=fields["SwapTotal"],
         )
-    except (OSError, KeyError, ValueError, IndexError):
+    except OSError, KeyError, ValueError, IndexError:
         return None
 
 
@@ -506,10 +506,10 @@ def _is_library(filename: str) -> bool:
 class _Holder:
     """What holds a wedged loop, read from the watchdog thread."""
 
-    task: "asyncio.Task[object] | None"  # None: a plain callback, not a task
-    task_id: str | None                  # the repld task it runs for, if any
-    stack: list[str]                     # innermost last
-    culprit: str | None = None           # innermost non-library frame, when not innermost
+    task: asyncio.Task[object] | None  # None: a plain callback, not a task
+    task_id: str | None                # the repld task it runs for, if any
+    stack: list[str]                   # innermost last
+    culprit: str | None = None         # innermost non-library frame, when not innermost
     starved: bool = (
         False  # frame-shape signal only; _watch_block also weighs _read_pressure
     )
@@ -520,7 +520,7 @@ class _Holder:
         return self.task.get_name() if self.task is not None else "a loop callback"
 
     @property
-    def origin(self) -> "ipc.Session | None":
+    def origin(self) -> ipc.Session | None:
         """The IPC session that started this task, if any."""
         entry = tasks.get(self.task_id) if self.task_id else None
         return entry.get("origin") if entry else None
@@ -578,7 +578,7 @@ def _push_holder(content: str, kind: str, holder: _Holder, **meta: str) -> None:
 def _watch_block(
     loop: asyncio.AbstractEventLoop,
     thread_id: int,
-    probe: "concurrent.futures.Future[None]",
+    probe: concurrent.futures.Future[None],
     probed_at: float,
     stop: threading.Event,
     threshold: float,
@@ -975,7 +975,7 @@ class EveryHandle:
 
     label: str
     seconds: float
-    _task: "asyncio.Task[None]"
+    _task: asyncio.Task[None]
     tab: str | None = None
 
     def cancel(self) -> None:
@@ -1218,7 +1218,7 @@ class _Context:
         fut = asyncio.run_coroutine_threadsafe(_init_done.wait(), self.loop)
         try:
             fut.result(timeout=_INIT_WAIT_SECONDS)
-        except (concurrent.futures.TimeoutError, RuntimeError):
+        except concurrent.futures.TimeoutError, RuntimeError:
             fut.cancel()
 
     def snapshot(self, task_id: str) -> dict | None:
@@ -1323,7 +1323,7 @@ def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
             asyncio.run_coroutine_threadsafe(_drain_loop_tasks(), loop).result(
                 timeout=2.0
             )
-        except (concurrent.futures.TimeoutError, RuntimeError):
+        except concurrent.futures.TimeoutError, RuntimeError:
             pass  # loop wedged or already stopping, best effort
     loop.call_soon_threadsafe(loop.stop)
     ipc.stop_server()
@@ -1593,7 +1593,7 @@ def _start_services(
         # this outside any try, so a hand-mangled hint would take boot down.
         if isinstance(loaded, dict):
             hint = loaded
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         pass
 
     dashboard_port: int | None = None
@@ -1623,9 +1623,7 @@ def _start_services(
     return dashboard_port
 
 
-def _release_taken_tabs(
-    session: "ipc.Session", loop: asyncio.AbstractEventLoop
-) -> None:
+def _release_taken_tabs(session: ipc.Session, loop: asyncio.AbstractEventLoop) -> None:
     """ipc close hook: a `taken` tab must not outlive the session holding it."""
     browser = getattr(__main__, "browser", None)
     pool = browser.peek() if browser is not None else None
@@ -1699,7 +1697,7 @@ def _report_boot_failure() -> None:
         real.write("\nrepld: kernel failed to start\n")
         traceback.print_exc(file=real)
         real.flush()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass
 
 

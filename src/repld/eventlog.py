@@ -75,7 +75,7 @@ def _close_locked() -> None:
         _fp = None
 
 
-def write(ev: "events.Event") -> None:
+def write(ev: events.Event) -> None:
     """Append one NDJSON record. Never raises into emit()."""
     global _written
     try:
@@ -108,11 +108,11 @@ def write(ev: "events.Event") -> None:
             _fp.write(line)
             _fp.flush()
             _written += len(line)
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         pass
 
 
-def _build_record(ev: "events.Event") -> dict | None:
+def _build_record(ev: events.Event) -> dict | None:
     """Compose one JSON-safe dict per event, or None to skip it.
 
     Caller holds the lock; the per-task chunk budget is mutated here.

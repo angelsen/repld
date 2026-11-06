@@ -182,7 +182,7 @@ def read_stub(path: Path) -> dict | None:
         return None
     try:
         marker = ast.literal_eval(node)
-    except (ValueError, SyntaxError):
+    except ValueError, SyntaxError:
         return None
     ok = (
         isinstance(marker, dict)
