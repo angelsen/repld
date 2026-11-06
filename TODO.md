@@ -9,7 +9,7 @@
 
 ## Gist deps tooling
 
-- [ ] **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**
+- [x] (decided 2026-11-06: no runtime warning, the changelog line stands; the 3.14 floor makes `py3.12`/`py3.13` dead too, same note; measured here: no gist dep re-prompts because httpx, websockets and pillow come from the project venv) **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**
   `_deps_dir()` is `~/.local/share/repld/deps/py3.X` now; the flat
   `~/.local/share/repld/deps/` it replaced keeps everything ever installed there and nothing
   reads it. The `[Unreleased]` note does tell users it's unused and deletable by hand, which
