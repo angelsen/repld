@@ -568,6 +568,16 @@ class Tab(TabQueryMixin):
             f"__repld_gate({json.dumps(gate_id)}, {json.dumps(prompt)}, {json.dumps(buttons)})"
         )
 
+    async def _hide_gate(self, gate_id: str) -> None:
+        """Withdraw a gate from this tab's pill once it has ended by any route."""
+        try:
+            await self.js(
+                "window.__repld_gate_close && "
+                f"window.__repld_gate_close({json.dumps(gate_id)})"
+            )
+        except RuntimeError:
+            return  # the page, and the pill with it, is gone
+
     # ------------------------------------------------------------------
     # Gate convenience methods
     # ------------------------------------------------------------------

@@ -283,6 +283,15 @@ _PIN_JS = r"""
     _render_gate();
   };
 
+  window.__repld_gate_close = function(gate_id) {
+    if (_active_gate && _active_gate.gate_id === gate_id) {
+      _active_gate = _gate_queue.shift() || null;
+    } else {
+      _gate_queue = _gate_queue.filter(function(g) { return g.gate_id !== gate_id; });
+    }
+    _render_gate();
+  };
+
   window.__repld_remove = function() {
     if (window.__repld_hb_timer) clearInterval(window.__repld_hb_timer);
     window.removeEventListener('beforeunload', window.__repld_beforeunload);
@@ -296,6 +305,7 @@ _PIN_JS = r"""
     window.__repld_beforeunload = undefined;
     window.__repld_update = undefined;
     window.__repld_gate = undefined;
+    window.__repld_gate_close = undefined;
     window.__repld_remove = undefined;
   };
 

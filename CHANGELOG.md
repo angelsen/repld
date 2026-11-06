@@ -18,6 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A pinned tab's pill no longer keeps its Yes/No buttons after the gate is answered anywhere else (the elicitation modal, `repld gate answer`, the pane, the dashboard) or times out. The gate is withdrawn from the pill, and a gate queued behind it takes its place.
 - The `[filechooser]` push for a picker repld did not intercept said "on a shared tab" even on an idle `browser_open` tab, whose mode is `agent`. It now reads "not intercepted", and its meta key `shared: true` is `intercepted: false`.
 
 ### Removed

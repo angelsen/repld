@@ -265,15 +265,14 @@ async def _gate(
     # being cancelled (`cancel`, or the loop watchdog).
     reason: Literal["timeout", "cancelled", "declined"] = "cancelled"
     elicit_id: str | None = None
+    # `kind` is part of this, not just pinnedness: the pill is a row of
+    # buttons with no text input, so `_show_gate` renders confirm and
+    # choose and returns without drawing anything for an ask. Deciding on
+    # pinnedness alone made `tab.ask()` suppress the "repld gate answer"
+    # hint below *and* show no pill: on a headless kernel (the usual one)
+    # a gate that no surface could answer.
+    use_pill = tab is not None and getattr(tab, "_pinned", False) and kind != "ask"
     try:
-        # `kind` is part of this, not just pinnedness: the pill is a row of
-        # buttons with no text input, so `_show_gate` renders confirm and
-        # choose and returns without drawing anything for an ask. Deciding on
-        # pinnedness alone made `tab.ask()` suppress the "repld gate answer"
-        # hint below *and* show no pill: on a headless kernel (the usual one)
-        # a gate that no surface could answer.
-        use_pill = tab is not None and getattr(tab, "_pinned", False) and kind != "ask"
-
         # Channel push first, then prompt, so the panel renders on a fresh
         # line in the viewer before the prompt text (which ends with `: ` and
         # waits on stdin, so it must not be followed by panel borders).
@@ -328,6 +327,8 @@ async def _gate(
             _cancel_elicitation(elicit_id)
         with _gates_lock:
             gate = _gates.pop(gate_id, None)
+        if use_pill and tab is not None:
+            bg.spawn(tab._hide_gate(gate_id), name=f"repld-gate-hide-{gate_id}")
         # A gate ending unanswered has to be announced, not just forgotten:
         # `open_gates` is this dict, so `repld gate` self-corrects, but
         # every surface that *mirrors* it learns only from an event. Without

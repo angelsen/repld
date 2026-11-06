@@ -5949,6 +5949,74 @@ def phase_6_select_type_filter(kernel: Kernel) -> None:
         h.close()
 
 
+def phase_6_pill_gate_withdrawn(kernel: Kernel) -> None:
+    """A pinned tab's pill drops a gate that ended anywhere but on the pill.
+
+    The pill's queue entry used to leave only by a click, so a gate answered
+    from a modal, the CLI or a timeout left live-looking buttons on the page.
+    The second half queues a gate behind the first: withdrawing the active
+    one must promote the queued one, not blank the pill.
+    """
+    if not _chrome_ready("phase 6 pill gate withdrawn"):
+        return
+    from phases.gates import _gate_cli, _pending
+
+    h = _BridgeHarness(kernel)
+
+    def pill() -> tuple[str, int]:
+        """The prompt and button count the pill shows now; ('', 0) once its gate area is hidden."""
+        out = h.exec(
+            "print(await t.js(\"(a => a.style.display === 'none' ? '|0' : "
+            "document.getElementById('__repld_gate_prompt').textContent + '|' + "
+            "a.querySelectorAll('button').length)("
+            "document.getElementById('__repld_gate_area'))\"))"
+        )
+        text, _, count = out.strip().rpartition("|")
+        return text, int(count)
+
+    def wait_pill(want: tuple[str, int], label: str) -> None:
+        deadline = time.monotonic() + 10
+        got = pill()
+        while got != want and time.monotonic() < deadline:
+            time.sleep(0.2)
+            got = pill()
+        assert_eq(got, want, label)
+
+    def open_gate(prompt: str) -> str:
+        h.b.exec(f"await t.confirm({prompt!r})", timeout=1.0, call_timeout=15.0)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            found = [g for g in _pending(kernel) if g["prompt"] == prompt]
+            if found:
+                return found[0]["gate_id"]
+            time.sleep(0.2)
+        raise AssertionError(f"gate {prompt!r} never opened")
+
+    def answer(gate_id: str) -> None:
+        proc = _gate_cli(kernel, "answer", gate_id, "y")
+        assert_eq(proc.returncode, 0, f"CLI answer lands (stderr: {proc.stderr})")
+
+    try:
+        tid = h.open_tab("<h1>pill</h1>")
+        h.exec(f"t = await browser.get({tid!r})\nawait t.pin('pill withdraw')")
+        first = open_gate("First?")
+        wait_pill(("First?", 2), "the pill shows the first gate")
+        answer(first)
+        wait_pill(("", 0), "a CLI answer withdraws the pill's buttons")
+        print("  ✓ a gate answered off the pill leaves no buttons behind")
+
+        first = open_gate("Active?")
+        second = open_gate("Queued?")
+        wait_pill(("Active?", 2), "the first gate is the active one")
+        answer(first)
+        wait_pill(("Queued?", 2), "withdrawing the active gate promotes the queued one")
+        answer(second)
+        wait_pill(("", 0), "and the promoted one is withdrawn the same way")
+        print("  ✓ withdrawing the active gate promotes the queued one")
+    finally:
+        h.close()
+
+
 def phase_6_every_tab_fusion(kernel: Kernel) -> None:
     """every(tab=pattern) resolves browser.get(pattern) fresh every tick.
 

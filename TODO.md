@@ -488,7 +488,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   leads with the tab's URL/title, and `tab.auto_front` brings it forward. Elicitation also gives
   `ask` on a pinned tab its first surface (the pill has no text input).
   Also: `ask(secret=True)` via URL mode to the token-gated dashboard (form mode forbids secrets).
-- [ ] A pinned tab's pill outlives a gate answered anywhere else. `pin.py`'s `__repld_gate` queue entry is removed only
+- [x] (built: `__repld_gate_close`, `Tab._hide_gate`, called from `_gate`'s finally; `phase_6_pill_gate_withdrawn`) A pinned tab's pill outlives a gate answered anywhere else. `pin.py`'s `__repld_gate` queue entry is removed only
   by clicking its button; there is no JS to withdraw a gate by id, so an answer from the modal, CLI, pane, dashboard or
   a `timeout=` leaves "Yes/No" on the page (probed: modal Accept left both buttons; a later click is a harmless
   `resolve_gate` False but looks live). Wire `HumanPromptClosed`/`HumanPromptResponse` to a `__repld_gate_close(gate_id)`

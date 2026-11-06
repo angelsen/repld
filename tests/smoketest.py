@@ -77,6 +77,7 @@ from phases.browser import (
     phase_6_owned_tab_action_routing,
     phase_6_pattern_owner_liveness,
     phase_6_pending_clear_reconnect,
+    phase_6_pill_gate_withdrawn,
     phase_6_plan_click,
     phase_6_png_resize,
     phase_6_react_controlled_input,
@@ -272,6 +273,7 @@ PHASES = {
         phase_6_teardown_clears_pending(k),
         phase_6_hover_and_drag(k),
         phase_6_every_tab_fusion(k),
+        phase_6_pill_gate_withdrawn(k),
     ),
     7: phase_7_defer,
     8: lambda k: (
