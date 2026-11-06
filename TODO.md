@@ -490,6 +490,8 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
 - [x] (built: phase 20, `tests/phases/live_claude.py`, opt-in) Set up repeatable tests for `claude -p` and `--bg` (expected: no modal, the `awaiting_human`
   push is the only route; `claude -p` auto-cancels a request, so confirm the gate then stays open for the CLI,
   not that it ends). Phase 17 covers only the harness (no capability, `bg` kind).
+- [ ] Run phase 20 from inside a `claude --bg` worker: `live_claude._claude` pops `CLAUDE_JOB_DIR` so the `-p`
+  case's bridge is not kind='bg', but that scrub has only been reasoned about, never exercised from a real worker.
 - [x] (built: every gate carries its schema; `_one_field`, `parse_elicit_result(schema, field, result)`) Schema-first refactor: make `form` the one primitive and `confirm`/`ask`/`choose` thin wrappers over a
   one-field schema, dropping the kind branching in `gates.parse_elicit_result`/`_single_answer`/
   `build_requested_schema`; the kind stays a hint for pane, pill and CLI. Agent-facing names unchanged.
