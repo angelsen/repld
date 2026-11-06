@@ -2243,7 +2243,7 @@ Writing gists:
   `repld gist stub <peer> <gist>` (see the peers topic).
 """,
     "gates": """\
-await ask(prompt, *, tab=None, default=None, timeout=None)      → str
+await ask(prompt, *, tab=None, default=None, timeout=None, secret=False) → str
 await confirm(prompt, *, tab=None, default=None, timeout=None)  → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 await form(prompt, fields, *, required=None, timeout=None)      → dict
@@ -2268,6 +2268,11 @@ so `repld gate` is the usual route; the awaiting_human push says so and
 carries the gate id. `repld gate` lists what's pending, `repld gate answer
 <id> <value>` resolves it, and `repld log -f` shows gates as they open.
 ask() accepts tab= for symmetry, but the pill has no text input.
+ask(secret=True) is for a password or token: a client that declares URL-mode
+elicitation opens a localhost page where the human types it, so the value goes
+to the cell and not through the client; the event log records it redacted, and
+`repld gate answer` refuses it. Any other client gets the page URL in the push.
+Do not print the returned value.
 TimeoutError if no default and timeout expires — pass timeout= for any gate
 that must not park a cell indefinitely.
 Emits awaiting_human channel while blocked.

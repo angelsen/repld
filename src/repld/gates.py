@@ -31,14 +31,15 @@ late caller decline instead of deadlocking against it.
 import asyncio
 import concurrent.futures
 import json
+import secrets
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import IO, Literal
+from typing import IO, Literal, TypeGuard
 
-from . import bg, ipc, tasks
+from . import bg, dashboard, ipc, tasks
 from .channel import push_channel
 from .core_schemas import notification
 from .events import HumanPromptClosed, HumanPromptOpen, HumanPromptResponse, emit
@@ -63,6 +64,11 @@ class _Gate:
     # from one whose `set_result` lost a race, and only this is set by the one
     # code path that means "a human said something".
     answered: bool = False
+    # A secret gate is answered only at its dashboard URL, which `nonce` gates;
+    # `url_session` is the client told to open it, owed an elicitation-complete.
+    secret: bool = False
+    nonce: str = ""
+    url_session: ipc.Session | None = None
 
 
 _gates: dict[str, _Gate] = {}
@@ -111,15 +117,28 @@ async def ask(
     tab=None,
     default: str | None = None,
     timeout: float | None = None,
+    secret: bool = False,
 ) -> str:
     """Prompt the human for a free-form string response.
 
     `tab` is accepted for symmetry with confirm/choose. The pill UI has
     no text input, so the response is always typed in the terminal.
+
+    `secret=True` asks for a value the agent must not see in a prompt or log
+    (a password, a token): the human types it on a localhost page the client
+    opens, and the event log records it redacted. Only the cell gets it.
     """
     schema = _one_field({"type": "string", "title": "Answer"})
     value = await _gate(
-        "ask", prompt, None, default, timeout, tab=tab, schema=schema, field=_ANSWER
+        "ask",
+        prompt,
+        None,
+        default,
+        timeout,
+        tab=tab,
+        schema=schema,
+        field=_ANSWER,
+        secret=secret,
     )
     return str(value)
 
@@ -245,6 +264,7 @@ async def _gate(
     field: str | None,
     tab=None,
     on_open=None,
+    secret: bool = False,
 ) -> str | bool | dict:
     """Register a gate, announce it, optionally render a pill, and await the answer.
 
@@ -257,7 +277,15 @@ async def _gate(
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
         _gates[gate_id] = _Gate(
-            fut, kind, prompt, options, time.monotonic(), schema, field
+            fut,
+            kind,
+            prompt,
+            options,
+            time.monotonic(),
+            schema,
+            field,
+            secret=secret,
+            nonce=secrets.token_urlsafe(16) if secret else "",
         )
 
     # Only read when nobody answered, so the remaining question is which of the
@@ -280,7 +308,9 @@ async def _gate(
         if options:
             meta["options"] = ",".join(options)
         content = f"awaiting human: {prompt}"
-        if not _has_terminal and not use_pill:
+        if secret:
+            content += _secret_hint(gate_id)
+        elif not _has_terminal and not use_pill:
             # Nothing attached to this kernel can answer, and without timeout=
             # the cell blocks indefinitely. The agent sees this push, so give it
             # the literal command to hand the human rather than leaving both of
@@ -339,35 +369,96 @@ async def _gate(
         # this is the recommended path.
         if gate is not None and not gate.answered:
             emit(HumanPromptClosed(gate_id, reason))
+        elif gate is not None and gate.url_session is not None:
+            gate.url_session.write(
+                notification(
+                    "notifications/elicitation/complete",
+                    {"elicitationId": f"repld-elicit-{gate_id}"},
+                )
+            )
 
 
 def _send_elicitation(gate_id: str, prompt: str, schema: dict, tab) -> str | None:
     """Ask the origin session's client to put this gate in front of the human.
 
     Returns the request id, or None when the origin cannot be elicited (no
-    session, no `elicitation` capability, a `bg` worker, a peer): such a gate
-    keeps the `awaiting_human` push as its only announcement.
+    session, no matching `elicitation` capability, a `bg` worker, a peer): such
+    a gate keeps the `awaiting_human` push as its only announcement. A secret
+    gate asks in URL mode only, since form values pass through the client.
     """
     session = tasks.current_origin()
-    if session is None or not ipc.can_elicit(session):
-        return None
-    message = prompt
-    if tab is not None and getattr(tab, "_pinned", False):
-        message = f"{tab.url}\n{prompt}"
+    gate = _gates[gate_id]
     request_id = f"repld-elicit-{gate_id}"
+    params: dict
+    if gate.secret:
+        if not _can_elicit_url(session):
+            return None
+        gate.url_session = session
+        params = {
+            "mode": "url",
+            "message": prompt,
+            "url": _secret_url(gate_id),
+            "elicitationId": request_id,
+        }
+    else:
+        if session is None or not ipc.can_elicit(session):
+            return None
+        message = prompt
+        if tab is not None and getattr(tab, "_pinned", False):
+            message = f"{tab.url}\n{prompt}"
+        params = {"message": message, "requestedSchema": schema}
     _elicit_pending[request_id] = (gate_id, session)
     session.write(
         {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": "elicitation/create",
-            "params": {
-                "message": message,
-                "requestedSchema": schema,
-            },
+            "params": params,
         }
     )
     return request_id
+
+
+def _can_elicit_url(session: ipc.Session | None) -> TypeGuard[ipc.Session]:
+    """Whether `session` is a client that can open a URL for the human."""
+    return session is not None and ipc.can_elicit_url(session)
+
+
+def _secret_url(gate_id: str) -> str:
+    """The dashboard URL where the human answers the secret gate `gate_id`."""
+    nonce = _gates[gate_id].nonce
+    return f"http://127.0.0.1:{dashboard.bound_port()}/secret/{gate_id}?n={nonce}"
+
+
+def _secret_hint(gate_id: str) -> str:
+    """The push text that leads the human to a secret gate's page.
+
+    Empty when the origin client is sent the URL itself, so the nonce stays out
+    of the transcript unless nothing else can carry it.
+    """
+    if _can_elicit_url(tasks.current_origin()):
+        return ""
+    return f"\nsecret answer: open {_secret_url(gate_id)}"
+
+
+def secret_prompt(gate_id: str, nonce: str) -> str | None:
+    """The prompt of the pending secret gate `gate_id`, or None unless `nonce` matches it."""
+    gate = _find_secret(gate_id, nonce)
+    return None if gate is None else gate.prompt
+
+
+def submit_secret(gate_id: str, nonce: str, value: str) -> bool:
+    """Answer the secret gate `gate_id` with `value`; False unless `nonce` matches a pending one."""
+    return _find_secret(gate_id, nonce) is not None and resolve_gate(gate_id, value)
+
+
+def _find_secret(gate_id: str, nonce: str) -> _Gate | None:
+    """The pending secret gate `gate_id` if `nonce` is its nonce, compared in constant time."""
+    with _gates_lock:
+        gate = _gates.get(gate_id)
+    if gate is None or not gate.secret or gate.future.done():
+        return None
+    return gate if secrets.compare_digest(nonce, gate.nonce) else None
 
 
 def _cancel_elicitation(request_id: str) -> None:
@@ -420,6 +511,12 @@ def handle_elicit_result(
         gate = _gates.get(gate_id)
     if gate is None:
         return
+    if gate.secret:
+        # URL mode: accept only means the human opened the page, and cancel
+        # that they dismissed the prompt; the value arrives on the page.
+        if result.get("action") == "decline":
+            _decline_gate(gate)
+        return
     action, value = parse_elicit_result(gate.schema, gate.field, result)
     if action == "accept":
         resolve_gate(gate_id, value)
@@ -462,7 +559,7 @@ def resolve_gate(gate_id: str, value) -> bool:
         with _gates_lock:
             gate.answered = False
         return False
-    emit(HumanPromptResponse(gate_id, value))
+    emit(HumanPromptResponse(gate_id, "***" if gate.secret else value))
     return True
 
 
@@ -484,6 +581,7 @@ def open_gates() -> list[dict]:
             "prompt": g.prompt,
             "options": list(g.options or []),
             "schema": g.schema,
+            "secret": g.secret,
             "waiting_s": round(now - g.opened_at, 1),
         }
         for gid, g in pending
@@ -595,6 +693,9 @@ def answer_gate(gate_id: str, text: str) -> bool | str | dict:
     gate = next((g for g in open_gates() if g["gate_id"] == gate_id), None)
     if gate is None:
         raise GateAnswerError(f"no gate awaiting an answer: {gate_id}")
+    if gate["secret"]:
+        # The answer would sit in argv, a shell history or a JSON-RPC log.
+        raise GateAnswerError(f"gate {gate_id} takes a secret: answer it on its page")
     try:
         value = parse_response(gate["kind"], text, gate["options"], gate["schema"])
     except ValueError as exc:

@@ -9,6 +9,7 @@ import http.client
 import json
 import subprocess
 import time
+from urllib.parse import urlsplit
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true
 
@@ -252,6 +253,7 @@ def phase_17_gates(kernel: Kernel) -> None:
         _elicitation(kernel)
         _timeout_closes_the_gate(b, kernel)
         _dashboard_answers_a_gate(b, kernel)
+        _secret_gate(kernel)
         _pane_reshows_the_question()
         _pane_drops_a_timed_out_gate()
         _tty_prompt_declines_once_display_owns_stdin()
@@ -593,3 +595,106 @@ def _dashboard_answers_a_gate(b: Bridge, kernel: Kernel) -> None:
         "error" in json.loads(body), "an answered gate cannot be answered twice"
     )
     print("  ✓ dashboard gates / gate_answer: Bearer-only, same coercion, first wins")
+
+
+def _secret_page(kernel: Kernel, method: str, url: str, body: str | None = None):
+    """One request to a `/secret/...` URL, form-encoded for a POST: `(status, text)`."""
+    parts = urlsplit(url)
+    conn = http.client.HTTPConnection("127.0.0.1", parts.port, timeout=10)
+    try:
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        conn.request(method, parts.path + "?" + parts.query, body, headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read().decode()
+    finally:
+        conn.close()
+
+
+def _secret_gate(kernel: Kernel) -> None:
+    """`ask(secret=True)` goes to a URL-capable client as a URL elicitation.
+
+    The value arrives on the dashboard page, gated by the gate's own nonce; it
+    never reaches the CLI route, the elicitation reply or the event log.
+    """
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake(capabilities={"elicitation": {"form": {}, "url": {}}})
+        task = _open_gate(
+            b, '_s = await ask("Vault password?", secret=True)\n_s[::-1] == "2retnuh"'
+        )
+        req = _elicit_request(b, "Vault password?")
+        params = req["params"]
+        assert_eq(params["mode"], "url", "a secret gate asks in URL mode")
+        assert_true("requestedSchema" not in params, "and carries no form schema")
+        assert_eq(params["elicitationId"], req["id"], "elicitationId names the request")
+        url = params["url"]
+        gate = _pending(kernel)[0]
+        assert_eq(gate["secret"], True, "the gate lists as secret")
+
+        refused = _gate_cli(kernel, "answer", gate["gate_id"], "hunter2")
+        assert_true(refused.returncode != 0, "the CLI refuses a secret answer")
+        assert_true("hunter2" not in refused.stderr + refused.stdout, "and echoes none")
+
+        b.respond(req["id"], {"action": "accept"})
+        time.sleep(0.5)
+        assert_eq(len(_pending(kernel)), 1, "accept only opens the page")
+
+        status, _ = _secret_page(kernel, "GET", url.split("?")[0] + "?n=wrong")
+        assert_eq(status, 404, "a wrong nonce gets no form")
+        status, page = _secret_page(kernel, "GET", url)
+        assert_true(status == 200 and "Vault password?" in page, "the form renders")
+        status, _ = _secret_page(kernel, "POST", url, "n=wrong&value=hunter2")
+        assert_eq(status, 404, "a wrong nonce cannot answer")
+        assert_eq(len(_pending(kernel)), 1, "and leaves the gate open")
+
+        status, _ = _secret_page(
+            kernel, "POST", url, "n=" + url.split("n=")[1] + "&value=hunter2"
+        )
+        assert_eq(status, 200, "the right nonce answers")
+        assert_eq(_await_task(b, task).strip(), "True", "the cell gets the value")
+        done = b.wait_notification(
+            "notifications/elicitation/complete",
+            where=lambda m: m["params"]["elicitationId"] == req["id"],
+            timeout=10.0,
+        )
+        assert_true(done is not None, "the client is told the page was submitted")
+        status, _ = _secret_page(
+            kernel, "POST", url, "n=" + url.split("n=")[1] + "&value=x"
+        )
+        assert_eq(status, 404, "an answered gate takes no second answer")
+        log = paths.eventlog_for(paths.socket_path(kernel.cwd)).read_text()
+        assert_true("hunter2" not in log, "the event log never holds the secret")
+
+        task = _open_gate(b, 'await ask("Declined?", secret=True)')
+        req = _elicit_request(b, "Declined?")
+        b.respond(req["id"], {"action": "decline"})
+        assert_true(
+            "GateDeclined" in _await_task(b, task), "decline raises into the cell"
+        )
+        print("  ✓ ask(secret=True): URL elicitation, nonce-gated page, redacted log")
+    finally:
+        b.close()
+
+    # A form-only client is never sent a secret as a form.
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake(capabilities={"elicitation": {"form": {}}})
+        task = _open_gate(b, '_s = await ask("Form only?", secret=True)\n_s == "s3"')
+        push = b.wait_notification(
+            "notifications/claude/channel",
+            kind="awaiting_human",
+            where=lambda m: "Form only?" in m["params"]["content"],
+            timeout=10,
+        )
+        text = push["params"]["content"]
+        assert_true("/secret/" in text, "the push carries the page URL instead")
+        assert_true("repld gate answer" not in text, "and no CLI route")
+        url = text.split("open ")[1].split()[0]
+        status, _ = _secret_page(
+            kernel, "POST", url, "n=" + url.split("n=")[1] + "&value=s3"
+        )
+        assert_eq(status, 200, "the page answers it")
+        assert_eq(_await_task(b, task).strip(), "True", "the cell gets the value")
+        print("  ✓ ask(secret=True): a form-only client gets the URL in the push")
+    finally:
+        b.close()

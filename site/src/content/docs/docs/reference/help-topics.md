@@ -78,7 +78,7 @@ current_session_id() → str | None
 ## Human gates
 
 ```python
-await ask(prompt, *, tab=None, default=None, timeout=None)      → str
+await ask(prompt, *, tab=None, default=None, timeout=None, secret=False) → str
 await confirm(prompt, *, tab=None, default=None, timeout=None)  → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
 ```

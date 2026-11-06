@@ -4,6 +4,10 @@ Pure-stdlib async HTTP server on an ephemeral port.  Two routes:
   GET /       inline HTML page (`dashboard_html.PAGE`)
   POST /api   JSON-RPC commands (state, browser.connect, browser.watch, etc.)
 
+and `/secret/<gate_id>`, the page where a human answers an `ask(secret=True)`
+gate. It is gated by that gate's own nonce, not the dashboard token, so the URL
+can be handed to an MCP client without handing it the API.
+
 The markup lives in `dashboard_html.py`. This module is the server: routing,
 the auth ladder, and the JSON-RPC dispatch.
 """
@@ -21,7 +25,13 @@ import __main__
 
 from . import tasks
 from .channel import push_kind
-from .dashboard_html import PAGE, UNAUTHORIZED_PAGE
+from .dashboard_html import (
+    PAGE,
+    SECRET_DONE_PAGE,
+    SECRET_GONE_PAGE,
+    SECRET_PAGE,
+    UNAUTHORIZED_PAGE,
+)
 from .state import atomic_write_json
 
 _start_time: float = 0.0
@@ -38,6 +48,10 @@ _token: str = ""
 # sender is on loopback. Holding the token is not licence to OOM the process
 # the token exists to protect.
 _MAX_BODY_BYTES = 1 << 20
+
+# Ceiling on a `POST /secret/...` body, which is read before its nonce is
+# checked (the nonce is in the body), so it is tighter than `_MAX_BODY_BYTES`.
+_MAX_SECRET_BYTES = 1 << 16
 
 # Ceiling on the request's header block. The same argument as `_MAX_BODY_BYTES`
 # (an unbounded read on loopback is an OOM the token was supposed to prevent)
@@ -56,7 +70,7 @@ _MAX_HEADER_LINES = 100
 # ---------------------------------------------------------------------------
 
 
-def _bound_port() -> int | None:
+def bound_port() -> int | None:
     """The dashboard's listening port, or None before/without a bound server."""
     if _server and _server.sockets:
         return _server.sockets[0].getsockname()[1]
@@ -164,7 +178,7 @@ def save_hint() -> None:
     except (OSError, json.JSONDecodeError):
         pass
 
-    hint["dashboard_port"] = _bound_port() or 0
+    hint["dashboard_port"] = bound_port() or 0
     hint["token"] = _token
 
     browser = getattr(__main__, "browser", None)
@@ -403,7 +417,7 @@ async def _rpc_dispatch(method: str, params: dict) -> Any:
 
 def _cors_header(origin: str | None) -> str:
     """Echo Access-Control-Allow-Origin only for this dashboard's own origin."""
-    port = _bound_port()
+    port = bound_port()
     if not origin or port is None:
         return ""
     if origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
@@ -420,7 +434,7 @@ def _cookie_name() -> str:
     way (a cookie carrying project A's token simply fails B's compare_digest),
     but the suffix keeps each dashboard reading only its own.
     """
-    return f"repld_token_{_bound_port()}"
+    return f"repld_token_{bound_port()}"
 
 
 def _parse_cookies(header: str) -> dict[str, str]:
@@ -470,7 +484,7 @@ def _host_allowed(host: str | None) -> bool:
     browser's eyes, with no Origin header, so CORS cannot stop it from reading
     GET / (and the embedded token). Its requests carry Host: evil.com:<port>.
     """
-    port = _bound_port()
+    port = bound_port()
     if not host or port is None:
         return False
     # IPv4 loopback only: `_start` binds "127.0.0.1", never "::1".
@@ -605,6 +619,45 @@ async def _serve_page(
     )
 
 
+async def _serve_secret(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    method: str,
+    path: str,
+    query: str,
+    content_length: int,
+) -> None:
+    """Serve a secret gate's form (GET) or take its answer (POST)."""
+    from html import escape
+    from urllib.parse import parse_qs
+
+    from . import gates
+
+    gate_id = path.removeprefix("/secret/")
+    html = "text/html; charset=utf-8"
+    if method == "GET":
+        nonce = parse_qs(query).get("n", [""])[0]
+        prompt = gates.secret_prompt(gate_id, nonce)
+        if prompt is None:
+            await _send_response(writer, 404, SECRET_GONE_PAGE.encode(), html)
+            return
+        page = SECRET_PAGE.replace("__PROMPT__", escape(prompt)).replace(
+            "__NONCE__", escape(nonce)
+        )
+        await _send_response(writer, 200, page.encode(), html)
+        return
+    if content_length > _MAX_SECRET_BYTES:
+        await _send_response(writer, 413, b'{"error":"request body too large"}')
+        return
+    body = await asyncio.wait_for(reader.readexactly(content_length), timeout=5.0)
+    form = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+    nonce, value = form.get("n", [""])[0], form.get("value", [""])[0]
+    if not gates.submit_secret(gate_id, nonce, value):
+        await _send_response(writer, 404, SECRET_GONE_PAGE.encode(), html)
+        return
+    await _send_response(writer, 200, SECRET_DONE_PAGE.encode(), html)
+
+
 async def _serve_api(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -677,6 +730,10 @@ async def _serve_request(
 
     if method_http == "POST" and path == "/api":
         await _serve_api(reader, writer, headers, content_length, origin)
+        return
+
+    if path.startswith("/secret/") and method_http in ("GET", "POST"):
+        await _serve_secret(reader, writer, method_http, path, query, content_length)
         return
 
     await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)

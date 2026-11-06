@@ -178,14 +178,23 @@ def _run_callbacks(callbacks: "list[tuple[Callable[[bool], None], bool]]") -> No
 
 
 def can_elicit(session: "Session") -> bool:
-    """Whether a server-initiated `elicitation/create` can reach a human via `session`.
+    """Whether a form-mode `elicitation/create` can reach a human via `session`."""
+    return session.elicit_form and _is_elicitable(session)
+
+
+def can_elicit_url(session: "Session") -> bool:
+    """Whether a URL-mode `elicitation/create` can reach a human via `session`."""
+    return session.elicit_url and _is_elicitable(session)
+
+
+def _is_elicitable(session: "Session") -> bool:
+    """Whether `session` is a live client with a return path.
 
     A `bg` worker's only return path is its one-way inbox, and a peer
     connection is no client at all.
     """
     return (
-        session.elicit_form
-        and session.initialized
+        session.initialized
         and not session.closed
         and not session.peer
         and session.claude_session_kind != "bg"
@@ -229,6 +238,8 @@ class Session:
         self.inbox_socket: str | None = None
         # Whether the client's `initialize` declared form-mode elicitation.
         self.elicit_form = False
+        # Same for URL mode, which a client declares separately from form.
+        self.elicit_url = False
         # Set on the first `peer/*` request: a kernel-to-kernel call connection,
         # one per call, that never sends `initialize`. It is not a session
         # anything can be pushed to, so `post_channel` refuses and the

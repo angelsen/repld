@@ -728,3 +728,28 @@ function toast(msg, isError) {
 </body>
 </html>
 """
+
+
+SECRET_PAGE = """<!doctype html>
+<meta charset="utf-8"><title>repld secret</title>
+<body style="font:14px/1.6 ui-monospace,monospace;padding:2rem;max-width:40rem">
+<form method="post" autocomplete="off">
+<p>__PROMPT__</p>
+<input type="hidden" name="n" value="__NONCE__">
+<input type="password" name="value" autofocus required style="width:100%">
+<p><button>Send</button></p>
+</form>
+<p>The value goes to the kernel on this machine, not to the agent.</p>
+</body>"""
+
+SECRET_DONE_PAGE = """<!doctype html>
+<meta charset="utf-8"><title>repld secret</title>
+<body style="font:14px/1.6 ui-monospace,monospace;padding:2rem;max-width:40rem">
+<p>Sent. You can close this tab.</p>
+</body>"""
+
+SECRET_GONE_PAGE = """<!doctype html>
+<meta charset="utf-8"><title>repld secret</title>
+<body style="font:14px/1.6 ui-monospace,monospace;padding:2rem;max-width:40rem">
+<p>Nothing is waiting for this answer: it was answered, timed out, or never existed.</p>
+</body>"""

@@ -919,6 +919,7 @@ class Dispatcher(BrowserDispatchMixin):
             session.elicit_form = isinstance(elicitation, dict) and (
                 not elicitation or "form" in elicitation
             )
+            session.elicit_url = isinstance(elicitation, dict) and "url" in elicitation
         if session is not None and claude_id is not None:
             ipc.register_claude_session(
                 session,
