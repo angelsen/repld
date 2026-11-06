@@ -493,7 +493,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   a `timeout=` leaves "Yes/No" on the page (probed: modal Accept left both buttons; a later click is a harmless
   `resolve_gate` False but looks live). Wire `HumanPromptClosed`/`HumanPromptResponse` to a `__repld_gate_close(gate_id)`
   on the tab that owns the gate, and make `_gate`'s finally the one place that calls it.
-- [x] (built: `ask(secret=True)`, phase 17 `_secret_gate`; Accept and `notifications/elicitation/complete` against a live Claude Code still unprobed) URL-mode elicitation for `ask(secret=True)`: probed 2026-11-06 against Claude Code 2.1.316 through the bridge. A raw
+- [x] (built: `ask(secret=True)`, phase 17 `_secret_gate`; probed live 2026-11-06, Claude Code 2.1.316: Accept opens the URL and swaps the modal for "waiting for completion" with Reopen URL / Skip confirmation, and `notifications/elicitation/complete` closes it) URL-mode elicitation for `ask(secret=True)`: probed 2026-11-06 against Claude Code 2.1.316 through the bridge. A raw
   `elicitation/create` `{mode: "url", message, url, elicitationId}` renders "MCP server wants to open a URL" with
   message, URL and Accept/Decline, and Decline returns `{action: "decline"}` to the kernel (`gates/elicit_result`
   round trip works unchanged). Not probed: Accept (it opens the URL in the desktop browser; reply expected to be
