@@ -244,6 +244,7 @@ def phase_17_gates(kernel: Kernel) -> None:
         assert_eq(answered.returncode, 0, "and the CLI can actually answer it")
         print("  ✓ ask on a pinned tab keeps its headless answer route")
 
+        _elicitation(kernel)
         _timeout_closes_the_gate(b, kernel)
         _dashboard_answers_a_gate(b, kernel)
         _pane_reshows_the_question()
@@ -251,6 +252,166 @@ def phase_17_gates(kernel: Kernel) -> None:
         _tty_prompt_declines_once_display_owns_stdin()
     finally:
         b.close()
+
+
+def _elicit_request(b: Bridge, prompt: str) -> dict:
+    """The `elicitation/create` the client received for the gate asking `prompt`."""
+    return b.wait_notification(
+        "elicitation/create",
+        where=lambda m: m["params"]["message"] == prompt,
+        timeout=10.0,
+    )
+
+
+def _elicitation(kernel: Kernel) -> None:
+    """A client that declares `elicitation` gets the gate as a request; others do not.
+
+    Accept answers, Decline is "no" (`confirm` False, the rest `GateDeclined`),
+    Cancel answers nothing, and a gate another surface answers is withdrawn.
+    """
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake(capabilities={"elicitation": {"form": {}}})
+
+        # -- accept, one per kind ---------------------------------------------
+        task = _open_gate(b, 'await confirm("Ship it?")')
+        req = _elicit_request(b, "Ship it?")
+        schema = req["params"]["requestedSchema"]
+        assert_eq(schema["properties"]["answer"]["type"], "boolean", "confirm schema")
+        b.respond(req["id"], {"action": "accept", "content": {"answer": False}})
+        assert_eq(_await_task(b, task).strip(), "False", "accepted answer is the value")
+
+        task = _open_gate(b, 'await choose("Which?", ["alpha", "beta"])')
+        req = _elicit_request(b, "Which?")
+        assert_eq(
+            req["params"]["requestedSchema"]["properties"]["answer"]["enum"],
+            ["alpha", "beta"],
+            "choose schema carries the options",
+        )
+        b.respond(req["id"], {"action": "accept", "content": {"answer": "beta"}})
+        assert_eq(_await_task(b, task).strip(), "'beta'", "choose answered")
+
+        task = _open_gate(
+            b,
+            'await form("Deploy where?", {"env": ["prod", "stage"], "count": int,'
+            ' "dry": bool})',
+        )
+        req = _elicit_request(b, "Deploy where?")
+        props = req["params"]["requestedSchema"]["properties"]
+        assert_eq(
+            [props["env"]["type"], props["count"]["type"], props["dry"]["type"]],
+            ["string", "integer", "boolean"],
+            "form schema maps field types",
+        )
+        content = {"env": "prod", "count": 3, "dry": True}
+        b.respond(req["id"], {"action": "accept", "content": content})
+        assert_eq(
+            _await_task(b, task).strip(),
+            "{'env': 'prod', 'count': 3, 'dry': True}",
+            "form returns the dict",
+        )
+        print("  ✓ elicitation: accept answers confirm, choose and form")
+
+        # -- decline ----------------------------------------------------------
+        task = _open_gate(b, 'await confirm("Really?")')
+        req = _elicit_request(b, "Really?")
+        b.respond(req["id"], {"action": "decline"})
+        assert_eq(_await_task(b, task).strip(), "False", "decline is a no")
+
+        task = _open_gate(b, 'await ask("Token?")')
+        req = _elicit_request(b, "Token?")
+        b.respond(req["id"], {"action": "decline"})
+        assert_true(
+            "GateDeclined" in _await_task(b, task),
+            "declining an ask raises GateDeclined into the cell",
+        )
+        assert_eq(_pending(kernel), [], "a declined gate is closed")
+        print("  ✓ elicitation: decline is False for confirm, GateDeclined otherwise")
+
+        # -- cancel leaves the gate to the other surfaces -----------------------
+        task = _open_gate(b, 'await ask("Name?")')
+        req = _elicit_request(b, "Name?")
+        b.respond(req["id"], {"action": "cancel"})
+        time.sleep(1.0)
+        gate_id = _pending(kernel)[0]["gate_id"]
+        _gate_cli(kernel, "answer", gate_id, "ada")
+        assert_eq(_await_task(b, task).strip(), "'ada'", "CLI still answers it")
+        print("  ✓ elicitation: cancel answers nothing, the CLI still can")
+
+        # -- another surface wins: the modal is withdrawn -----------------------
+        task = _open_gate(b, 'await confirm("Race?")')
+        req = _elicit_request(b, "Race?")
+        gate_id = _pending(kernel)[0]["gate_id"]
+        _gate_cli(kernel, "answer", gate_id, "y")
+        cancelled = b.wait_notification(
+            "notifications/cancelled",
+            where=lambda m: m["params"]["requestId"] == req["id"],
+            timeout=10.0,
+        )
+        assert_true(cancelled is not None, "client is told to close the modal")
+        assert_eq(_await_task(b, task).strip(), "True", "the CLI answer won")
+        print("  ✓ elicitation: an answer from another surface cancels the request")
+
+        # -- a form answered as JSON from the CLI -------------------------------
+        task = _open_gate(b, 'await form("Who?", {"name": str})')
+        gate_id = _pending(kernel)[0]["gate_id"]
+        bad = _gate_cli(kernel, "answer", gate_id, '{"nme": "x"}')
+        assert_true(bad.returncode != 0, "a field the form lacks is refused")
+        good = _gate_cli(kernel, "answer", gate_id, '{"name": "ada"}')
+        assert_eq(good.returncode, 0, f"JSON answers a form (stderr: {good.stderr})")
+        assert_eq(_await_task(b, task).strip(), "{'name': 'ada'}", "form via CLI")
+        print("  ✓ elicitation: a form is answerable as JSON from the CLI")
+
+        # -- the answer must not queue behind a blocked reader ------------------
+        rid = b.send(
+            "tools/call",
+            {
+                "name": "exec",
+                "arguments": {"code": 'await confirm("Inline?")', "timeout": 15},
+            },
+        )
+        req = _elicit_request(b, "Inline?")
+        b.respond(req["id"], {"action": "accept", "content": {"answer": True}})
+        deadline = time.monotonic() + 8.0
+        done = None
+        while time.monotonic() < deadline and done is None:
+            msg = b.inbox.get(timeout=8.0)
+            if msg.get("id") == rid:
+                done = msg
+        assert_true(
+            done is not None and done["result"]["_meta"]["done"] is True,
+            "an exec parked in a gate returns inline once elicited",
+        )
+        print("  ✓ elicitation: the reply passes an exec holding the reader thread")
+    finally:
+        b.close()
+
+    # -- clients that cannot be asked ------------------------------------------
+    nocap = Bridge(kernel.cwd)
+    bg = Bridge(
+        kernel.cwd,
+        env={
+            "CLAUDE_JOB_DIR": "/tmp/repld-test-job",
+            "CLAUDE_CODE_SESSION_ID": "bg-elicit",
+        },
+    )
+    try:
+        nocap.handshake()
+        bg.handshake(capabilities={"elicitation": {"form": {}}})
+        for client in (nocap, bg):
+            _open_gate(client, 'await confirm("Unaskable?")')
+            try:
+                client.wait_notification("elicitation/create", timeout=1.5)
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError("an unaskable client received a request")
+            gate_id = _pending(kernel)[0]["gate_id"]
+            _gate_cli(kernel, "answer", gate_id, "y")
+        print("  ✓ elicitation: no request without the capability, none to a bg worker")
+    finally:
+        nocap.close()
+        bg.close()
 
 
 def _timeout_closes_the_gate(b: Bridge, kernel: Kernel) -> None:

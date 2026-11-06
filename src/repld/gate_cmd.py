@@ -70,7 +70,7 @@ def _format_gate(gate: dict) -> str:
     kind = gate.get("kind", "?")
     # Via render.py, not rebuilt here: this is a human reading what to type,
     # and it has to name the same options as the pane and `repld log -f`.
-    hint = gate_hint(kind, gate.get("options"))
+    hint = gate_hint(kind, gate.get("options"), gate.get("schema"))
     hint = f" {hint}" if hint else ""
     waited = gate.get("waiting_s", 0)
     return (

@@ -882,8 +882,8 @@ class Dispatcher(BrowserDispatchMixin):
             from . import gates
 
             return _response(rid, {"gates": gates.open_gates()})
-        if method == "gates/resolve":
-            return self._gates_resolve(rid, req.get("params", {}))
+        if method in ("gates/resolve", "gates/elicit_result"):
+            return self._gates_answer(method, rid, req.get("params", {}))
         # `repld tasks wait`/`cancel`, bare JSON-RPC like the gates methods
         # above, for the same reason: `repld tasks` is the only caller, no MCP
         # client is ever told these exist, and `cancel` already has an MCP
@@ -913,6 +913,12 @@ class Dispatcher(BrowserDispatchMixin):
         # bridge._replay_handshake) rather than a separate round-trip, so a
         # kernel restart re-identifies the session for free on replay.
         claude_id = params.get(BRIDGE_SESSION_ID_KEY)
+        if session is not None:
+            elicitation = (params.get("capabilities") or {}).get("elicitation")
+            # `{}` is form mode only, by the 2025-06-18 spec.
+            session.elicit_form = isinstance(elicitation, dict) and (
+                not elicitation or "form" in elicitation
+            )
         if session is not None and claude_id is not None:
             ipc.register_claude_session(
                 session,
@@ -1254,6 +1260,24 @@ class Dispatcher(BrowserDispatchMixin):
         except gates.GateAnswerError as exc:
             return _error(rid, -32602, str(exc))
         return _response(rid, {"gate_id": gate_id, "value": value})
+
+    def _gates_answer(self, method: str, rid, params: dict) -> dict:
+        """Route a `gates/resolve` or `gates/elicit_result` call to its handler."""
+        if method == "gates/resolve":
+            return self._gates_resolve(rid, params)
+        return self._gates_elicit_result(rid, params)
+
+    def _gates_elicit_result(self, rid, params: dict) -> dict:
+        """Hand the client's reply to one `elicitation/create` to `gates`."""
+        from . import gates
+
+        request_id = params.get("request_id")
+        if not isinstance(request_id, str):
+            return _error(rid, -32602, "missing request_id")
+        gates.handle_elicit_result(
+            request_id, params.get("result"), params.get("error")
+        )
+        return _response(rid, {})
 
     # ------------------------------------------------------------------
     # Tasks CLI (bare JSON-RPC, not MCP tools)

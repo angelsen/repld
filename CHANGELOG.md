@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Human gates reach the human as an MCP elicitation modal in Claude Code when the client declares `elicitation` (never for a `bg` worker or a peer call). Accept answers the gate; Decline is a no (`confirm()` returns `False`, `ask`/`choose`/`form` raise `GateDeclined`); cancel answers nothing and the pane, pill, `repld gate answer` and dashboard still can. A gate another surface answers, times out or whose kernel dies has its modal withdrawn with `notifications/cancelled`. The `awaiting_human` push is unchanged.
+- `form(prompt, fields)` asks several typed fields in one prompt and returns a dict; it is answerable as one JSON object from `repld gate answer`, the pane or the dashboard when no modal is available.
 - `tab.js()` raises `NavigatedError` (a `RuntimeError`) when the page navigates mid-evaluate, instead of the raw CDP text "Cannot find context with specified id". Callers that catch `RuntimeError` still work; a caller that must tell "the page moved" from "the script threw" catches the subclass. The expression was for the old page, so nothing is retried.
 
 ### Changed

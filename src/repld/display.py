@@ -86,7 +86,7 @@ _foreground_task_id: str | None = None
 # it happened to be showing. Insertion-ordered, so stdin routes to the newest
 # open gate (the one whose prompt is on screen) and falls back to the previous
 # one when that is answered elsewhere.
-_open_gates: "dict[str, tuple[str, str, list[str] | None]]" = {}
+_open_gates: "dict[str, tuple[str, str, list[str] | None, dict | None]]" = {}
 
 # Per-cell viewer cap. Pure bytes, single source of truth, no chunk-boundary
 # edge cases. 4 KB is about 50 short lines or 20 wide ones. Full content is
@@ -266,8 +266,8 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
     """Show the gate prompt. No trailing newline: the cursor stays for stdin."""
-    _open_gates[ev.gate_id] = (ev.kind, ev.prompt, ev.options)
-    _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id))
+    _open_gates[ev.gate_id] = (ev.kind, ev.prompt, ev.options, ev.schema)
+    _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id, ev.schema))
 
 
 def _close_gate(gate_id: str, line: str) -> None:
@@ -288,8 +288,8 @@ def _close_gate(gate_id: str, line: str) -> None:
     if _open_gates:
         # Its own question, not a placeholder: this is the only thing on screen
         # telling the human what they are still being asked.
-        gate_id, (kind, prompt, options) = next(reversed(_open_gates.items()))
-        _out(render.prompt_open(kind, prompt, options, gate_id))
+        gate_id, (kind, prompt, options, schema) = next(reversed(_open_gates.items()))
+        _out(render.prompt_open(kind, prompt, options, gate_id, schema))
 
 
 def _render_prompt_response(ev: HumanPromptResponse) -> None:
@@ -376,9 +376,11 @@ def _stdin_reader_loop(stop: threading.Event) -> None:
             # Newest open gate: the one whose prompt the cursor is parked on.
             if not _open_gates:
                 continue
-            gate_id, (kind, _prompt, options) = next(reversed(_open_gates.items()))
+            gate_id, (kind, _prompt, options, schema) = next(
+                reversed(_open_gates.items())
+            )
             try:
-                value = parse_response(kind, line, options)
+                value = parse_response(kind, line, options, schema)
             except ValueError as exc:
                 _out(f"{_DIM}{exc}: {_RESET}")
                 continue

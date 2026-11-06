@@ -2260,8 +2260,76 @@ def _no_display_delegates() -> None:
     )
 
 
+def _elicitation_pure() -> None:
+    """Form schemas, form answers and the mapping of an elicitation result."""
+    schema = gates.build_form_schema(
+        {"env": ["a", "b"], "n": int, "x": float, "ok": bool}
+    )
+    props = schema["properties"]
+    assert_eq(
+        [props[k]["type"] for k in ("env", "n", "x", "ok")],
+        ["string", "integer", "number", "boolean"],
+        "form field types",
+    )
+    assert_eq(schema["required"], ["env", "n", "x", "ok"], "all required by default")
+    narrowed = gates.build_form_schema({"a": str, "b": str}, required=["a"])
+    assert_eq(narrowed["required"], ["a"], "required= narrows")
+    for bad in ({"a": dict}, {"a": [1, 2]}, {"a": {"type": "object"}}, {}):
+        assert_true(_raises(gates.build_form_schema, bad), f"refuses {bad!r}")
+    assert_true(
+        _raises(gates.build_form_schema, {"a": str}, ["zz"]), "required names a field"
+    )
+
+    ok = '{"env": "a", "n": 2, "x": 1, "ok": false}'
+    assert_eq(gates.parse_response("form", ok, None, schema)["n"], 2, "form parses")
+    for text in (
+        "not json",
+        "[1]",
+        '{"env": "c", "n": 2, "x": 1, "ok": false}',
+        '{"env": "a", "n": true, "x": 1, "ok": false}',
+        '{"env": "a", "n": 2, "x": 1}',
+        '{"env": "a", "n": 2, "x": 1, "ok": false, "zz": 1}',
+    ):
+        assert_true(
+            _raises(gates.parse_response, "form", text, None, schema), f"rejects {text}"
+        )
+
+    one = gates.build_requested_schema("confirm", None, None)
+    assert_eq(one["properties"]["answer"]["type"], "boolean", "confirm schema")
+    pick = gates.build_requested_schema("choose", ["p", "q"], None)
+    assert_eq(pick["properties"]["answer"]["enum"], ["p", "q"], "choose schema")
+
+    def parse(kind, result, opts=None, sch=None):
+        return gates.parse_elicit_result(kind, opts, sch, result)
+
+    assert_eq(
+        parse("confirm", {"action": "accept", "content": {"answer": True}}),
+        ("accept", True),
+        "accept confirm",
+    )
+    assert_eq(parse("ask", {"action": "decline"}), ("decline", None), "decline")
+    for result in (
+        {"action": "cancel"},
+        {"action": "accept"},
+        {"action": "accept", "content": {"answer": "yes"}},
+        {"action": "accept", "content": {"answer": 1}},
+    ):
+        assert_eq(parse("confirm", result)[0], "cancel", f"cancel for {result}")
+    assert_eq(
+        parse("choose", {"action": "accept", "content": {"answer": "z"}}, ["p"])[0],
+        "cancel",
+        "an option the gate lacks is no answer",
+    )
+    assert_eq(
+        parse("form", {"action": "accept", "content": {"env": "q"}}, None, schema)[0],
+        "cancel",
+        "invalid form content is no answer",
+    )
+
+
 def phase_2_pure() -> None:
     _gate_coercion()
+    _elicitation_pure()
     _answer_split()
     _preview()
     _render()

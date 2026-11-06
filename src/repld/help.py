@@ -51,9 +51,12 @@ _EXEC_MODEL = (
     "tick is immediate unless delay= holds it back — use that when watching "
     "something you just started, or the health check races its warmup. "
     "fn.cancel() stops it. every.list() shows active tickers. "
-    "ask()/confirm()/choose() block the cell on human input; the answer comes "
-    "from the kernel's pane, a pinned tab's pill, or `repld gate answer <id>` "
-    "when the kernel is headless (the usual case — the push tells you which). "
+    "ask()/confirm()/choose()/form() block the cell on human input; the answer "
+    "comes from a Claude Code modal (MCP elicitation, when the client "
+    "supports it), the kernel's pane, a pinned tab's pill, or `repld gate "
+    "answer <id>` when the kernel is headless (the push tells you which). "
+    "Declining the modal is a no: confirm() returns False, the rest raise "
+    "GateDeclined; Esc answers nothing. "
     "notify(content, *, session=None, exclude=None, **meta) pushes a channel "
     "notification; session=<claude_session_id> targets one connected Claude "
     "Code session (False if it isn't connected, None if held by "
@@ -2243,9 +2246,20 @@ Writing gists:
 await ask(prompt, *, tab=None, default=None, timeout=None)      → str
 await confirm(prompt, *, tab=None, default=None, timeout=None)  → bool
 await choose(prompt, options, *, tab=None, default=None, timeout=None) → str
+await form(prompt, fields, *, required=None, timeout=None)      → dict
 
-Blocks the cell until a human answers. Three surfaces can answer, and
+form() asks several typed fields in one prompt. A field is str, int, float,
+bool, a list of strings (a choice) or a dict holding a primitive JSON-schema
+property ({"type": "integer", "minimum": 1}); nested values raise ValueError.
+Without a Claude Code modal it is answered as one JSON object.
+
+Blocks the cell until a human answers. Four surfaces can answer, and
 they race — first one wins:
+  Claude Code      an MCP elicitation modal on the session that ran the cell
+                   (client declares `elicitation`; never for `bg` workers).
+                   Accept answers. Decline is a no: confirm() returns False,
+                   the others raise GateDeclined. Esc answers nothing and the
+                   gate stays open for the surfaces below.
   kernel pane      only if the kernel was started as `repld` in a terminal
   pin pill         pass tab= (requires tab.pin()); confirm/choose only
   repld gate       any kernel, from the project dir — the headless answer
@@ -2579,8 +2593,9 @@ Injected into __main__:
                                otherwise check it at its most fragile
   no_display(value)            return value from a cell without auto-display
                                 re-printing it (still binds _/_N)
-  ask(prompt) / confirm(prompt) / choose(prompt, options)
+  ask(prompt) / confirm(prompt) / choose(prompt, options) / form(prompt, fields)
                                block the cell on human input. Answered from
+                               a Claude Code modal (elicitation),
                                the kernel's pane, from a pinned tab's pill
                                (confirm/choose, via tab=), or with
                                `repld gate answer <id> <value>` — the last

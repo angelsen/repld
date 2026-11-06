@@ -280,6 +280,9 @@ class Bridge:
         self._claude_session_kind = "bg" if os.environ.get("CLAUDE_JOB_DIR") else None
         self._claude_inbox_socket = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
         self._inflight: set[object] = set()
+        # Ids of requests the kernel sent to the client (`elicitation/create`),
+        # awaiting the client's reply. Disjoint from `_inflight` by direction.
+        self._kernel_requests: set[object] = set()
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
         self._cache: dict | None = None
@@ -420,6 +423,10 @@ class Bridge:
 
         rid = msg.get("id")
 
+        if "method" not in msg and rid is not None:
+            self._relay_client_response(msg, rid)
+            return
+
         # Bridge-served tools are answered *before* the liveness ladder. They
         # exist for the cases where the kernel is dead or is about to be
         # replaced, so insisting on a live one first would be backwards, and
@@ -453,6 +460,53 @@ class Bridge:
             return
 
         self._forward_to_kernel(msg, rid, line)
+
+    def _relay_client_response(self, msg: dict, rid: object) -> None:
+        """Hand the client's reply to a kernel-origin request back to the kernel.
+
+        Dropped when the id is unknown (the kernel that asked is gone). It goes
+        over a connection of its own, off this thread: the main kernel
+        connection's reader may be parked in a synchronous `exec`, and a reply
+        queued behind it would only arrive once the cell it unblocks had given up.
+        """
+        with self._state_lock:
+            known = rid in self._kernel_requests
+            self._kernel_requests.discard(rid)
+        if not known:
+            return
+        params = {
+            "request_id": rid,
+            "result": msg.get("result"),
+            "error": msg.get("error"),
+        }
+        threading.Thread(
+            target=self._send_gate_reply,
+            args=(params,),
+            daemon=True,
+            name="repld-bridge-elicit-reply",
+        ).start()
+
+    def _send_gate_reply(self, params: dict) -> None:
+        """Deliver one elicitation reply to the kernel on a short-lived connection."""
+        conn = ipc.connect_to_kernel(self.lock_path)
+        if isinstance(conn, str):
+            _err(f"elicitation reply dropped: {conn}")
+            return
+        sock = conn[0]
+        try:
+            req = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "gates/elicit_result",
+                "params": params,
+            }
+            sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
+            with sock.makefile("r", encoding="utf-8") as rfile:
+                rfile.readline()
+        except OSError as exc:
+            _err(f"elicitation reply dropped: {exc}")
+        finally:
+            sock.close()
 
     def _try_bridge_tool(self, msg: dict, rid: object) -> bool:
         """Whether `msg` was a call of a bridge-served tool, answered here."""
@@ -926,6 +980,7 @@ class Bridge:
             sock, self._sock = self._sock, None
             pid, self._kernel_pid = self._kernel_pid, None
             orphans, self._inflight = self._inflight, set()
+            asked, self._kernel_requests = self._kernel_requests, set()
             crashed = (
                 sock is not None
                 and not expected
@@ -948,6 +1003,14 @@ class Bridge:
         for rid in orphans:
             self._to_client(
                 _error(rid, KERNEL_GONE, "repld kernel restarted; request was lost")
+            )
+        # Closes the modal of a question nobody can receive the answer to.
+        for rid in asked:
+            self._to_client(
+                _notification(
+                    "notifications/cancelled",
+                    {"requestId": rid, "reason": "kernel gone"},
+                )
             )
         if crashed and self._client_initialized:
             # Off-thread: the journal lookup can take a second and this runs on
@@ -1049,6 +1112,24 @@ class Bridge:
             self._on_kernel_gone()
             return False
 
+    def _track_kernel_message(self, msg: dict, rid: object) -> None:
+        """Update the id sets for one kernel line on its way to the client.
+
+        A line with a method and an id is the kernel asking the client
+        something; it is not a reply, so it must not release a client request
+        that happens to share the id.
+        """
+        method = msg.get("method")
+        with self._state_lock:
+            if method == "notifications/cancelled":
+                self._kernel_requests.discard(
+                    (msg.get("params") or {}).get("requestId")
+                )
+            elif method and rid is not None:
+                self._kernel_requests.add(rid)
+            elif rid is not None:
+                self._inflight.discard(rid)
+
     def _read_kernel(self, sock: socket.socket, gen: int) -> None:
         """Pump one kernel generation's replies to the client."""
         pid = self._kernel_pid
@@ -1082,9 +1163,7 @@ class Bridge:
                     if isinstance(new_id, str):
                         self._claude_session_id = new_id
                     continue
-                if rid is not None:
-                    with self._state_lock:
-                        self._inflight.discard(rid)
+                self._track_kernel_message(msg, rid)
                 self._to_client_raw(line)
         except (BrokenPipeError, OSError, ValueError):
             pass

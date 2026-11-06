@@ -1072,6 +1072,29 @@ def _deferred_rebind(tmp: Path) -> None:
         a.close()
 
 
+def _elicitation_cancelled_on_kernel_death(tmp: Path) -> None:
+    """A question the dead kernel asked is withdrawn from the client, not left open."""
+    b = Bridge(tmp)
+    try:
+        b.handshake(capabilities={"elicitation": {}})
+        resp = b.exec('await confirm("Orphaned?")', timeout=1.0, call_timeout=40)
+        assert_eq(resp["result"]["_meta"]["done"], False, "gate cell is parked")
+        req = b.wait_notification(
+            "elicitation/create",
+            where=lambda m: m["params"]["message"] == "Orphaned?",
+            timeout=10,
+        )
+        os.kill(int(_wait_lock(tmp)["pid"]), signal.SIGKILL)
+        b.wait_notification(
+            "notifications/cancelled",
+            where=lambda m: m["params"]["requestId"] == req["id"],
+            timeout=15,
+        )
+        print("  ✓ a kernel dying with an elicitation open cancels it at the client")
+    finally:
+        b.close()
+
+
 def _id_collision_warning(tmp: Path) -> None:
     """Registering under an id a live connection holds warns on stderr; the
     holder re-registering its own id does not."""
@@ -1928,6 +1951,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _log_renderer_covers_every_event()
         _bridge_reattaches_to_successor(tmp)
         _clean_stop_is_not_a_crash(tmp)
+        _elicitation_cancelled_on_kernel_death(tmp)  # SIGKILLs the kernel
         _stop_kernel(tmp)
         _concurrent_boots(tmp)
     finally:

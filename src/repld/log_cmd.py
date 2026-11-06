@@ -181,6 +181,7 @@ def _render(rec: dict) -> str | None:
             rec.get("prompt", ""),
             rec.get("options"),
             str(rec.get("gate_id", "")),
+            rec.get("schema"),
         ).rstrip()
     if kind == "HumanPromptResponse":
         return render.prompt_response(rec.get("value"))

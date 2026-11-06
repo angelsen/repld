@@ -201,13 +201,26 @@ class Bridge:
         for line in self.proc.stderr:
             self.stderr_tail.append(line.rstrip())
 
-    def handshake(self, *, timeout: float = 5.0) -> dict:
-        """`initialize` + `notifications/initialized`; returns the initialize response."""
-        resp = self.call(
-            "initialize", {"protocolVersion": "2024-11-05"}, timeout=timeout
-        )
+    def handshake(
+        self, *, timeout: float = 5.0, capabilities: dict | None = None
+    ) -> dict:
+        """`initialize` + `notifications/initialized`; returns the initialize response.
+
+        `capabilities` is what this client declares, e.g. `{"elicitation": {}}`.
+        """
+        params: dict = {"protocolVersion": "2024-11-05"}
+        if capabilities is not None:
+            params["capabilities"] = capabilities
+        resp = self.call("initialize", params, timeout=timeout)
         self.send("notifications/initialized", {}, notif=True)
         return resp
+
+    def respond(self, rid: object, result: dict) -> None:
+        """Answer a request the server sent us (`elicitation/create`)."""
+        assert self.proc.stdin is not None
+        line = json.dumps({"jsonrpc": "2.0", "id": rid, "result": result})
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
 
     def exec(
         self, code: str, *, timeout: float | None = None, call_timeout: float = 5.0

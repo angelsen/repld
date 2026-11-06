@@ -1521,6 +1521,8 @@ def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:
         "ask": gates.ask,
         "confirm": gates.confirm,
         "choose": gates.choose,
+        "form": gates.form,
+        "GateDeclined": gates.GateDeclined,
         "no_display": runtime.no_display,
         "claude_sessions": _claude_sessions,
         "current_session_id": _current_session_id,

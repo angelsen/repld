@@ -127,7 +127,7 @@ def channel_block(content: str, meta: dict, *, t: float | None = None) -> str:
     return "\n".join(lines)
 
 
-def gate_hint(kind: str, options: list[str] | None) -> str:
+def gate_hint(kind: str, options: list[str] | None, schema: dict | None = None) -> str:
     """What a gate of `kind` accepts, unstyled: `[y/n]` or `[1=alpha, 2=beta]`.
 
     Empty for an `ask`, which takes free text. Shared with `repld gate`'s
@@ -139,11 +139,18 @@ def gate_hint(kind: str, options: list[str] | None) -> str:
         return "[y/n]"
     if kind == "choose" and options:
         return "[" + ", ".join(f"{i + 1}={o}" for i, o in enumerate(options)) + "]"
+    if kind == "form" and schema:
+        props = schema.get("properties", {})
+        return "[JSON: " + ", ".join(f"{n}:{p['type']}" for n, p in props.items()) + "]"
     return ""
 
 
 def prompt_open(
-    kind: str, prompt: str, options: list[str] | None, gate_id: str = ""
+    kind: str,
+    prompt: str,
+    options: list[str] | None,
+    gate_id: str = "",
+    schema: dict | None = None,
 ) -> str:
     """The human-gate question. No trailing newline: the TUI leaves the cursor
     on this line waiting for stdin, so the `: ` is part of the string.
@@ -153,7 +160,7 @@ def prompt_open(
     takes. Harmless in the pane, where you just type the answer.
     """
     out = f"{BOLD}{CYAN}? {prompt}{RESET}"
-    hint = gate_hint(kind, options)
+    hint = gate_hint(kind, options, schema)
     if hint:
         out += f" {DIM}{hint}{RESET}"
     if gate_id:

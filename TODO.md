@@ -450,7 +450,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
 
 ## MCP elicitation for human gates
 
-- [ ] Map `ask()`/`confirm()`/`choose()` onto MCP `elicitation/create` (2025-06-18): the three
+- [x] (built: phase 17 `_elicitation`, phase 15 kernel-death case; `form()` added) Map `ask()`/`confirm()`/`choose()` onto MCP `elicitation/create` (2025-06-18): the three
   form schemas fit exactly (StringSchema / BooleanSchema / single-select EnumSchema), and
   Claude Code renders elicitation as a prompt to the *human*, so the gates-are-not-tools
   invariant survives. Blocked on real bridge work: the bridge only ever forwards
@@ -463,7 +463,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   `awaiting_human` channel push otherwise (and always for ambient gates with no origin
   session). First-wins with the pane/pill/CLI routes via the existing `resolve_gate` race.
   Deliberately split out of the 2025-06-18 upgrade (0.3.0) to keep the bridge diff isolated.
-- [ ] Elicitation nesting, undecided pending a live probe in Claude Code: a gate usually opens in
+- [x] (settled: un-nested; live rendering of boolean/enum/multi-field forms still unprobed) Elicitation nesting, undecided pending a live probe in Claude Code: a gate usually opens in
   a cell that has already deferred, so no `tools/call` is pending to nest in. Candidates:
   (1) pause `exec`'s 2 s clock while a gate is open (amends "returns fast or defers, decided
   once"), (2) send `elicitation/create` un-nested from the deferred cell, (3) keep the

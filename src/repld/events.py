@@ -76,9 +76,10 @@ class HumanPromptOpen:
     """A human gate opened and is waiting for an answer."""
 
     gate_id: str
-    kind: Literal["ask", "confirm", "choose"]
+    kind: Literal["ask", "confirm", "choose", "form"]
     prompt: str
-    options: list[str] | None  # for choose
+    options: list[str] | None   # for choose
+    schema: dict | None = None  # for form
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +102,7 @@ class HumanPromptClosed:
     """
 
     gate_id: str
-    reason: Literal["timeout", "cancelled"]
+    reason: Literal["timeout", "cancelled", "declined"]
 
 
 @dataclass(frozen=True, slots=True)

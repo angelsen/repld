@@ -30,6 +30,7 @@ late caller decline instead of deadlocking against it.
 
 import asyncio
 import concurrent.futures
+import json
 import sys
 import threading
 import time
@@ -37,8 +38,9 @@ import uuid
 from dataclasses import dataclass
 from typing import IO, Literal
 
-from . import bg, tasks
+from . import bg, ipc, tasks
 from .channel import push_channel
+from .core_schemas import notification
 from .events import HumanPromptClosed, HumanPromptOpen, HumanPromptResponse, emit
 
 
@@ -52,6 +54,7 @@ class _Gate:
     prompt: str
     options: list[str] | None
     opened_at: float
+    schema: dict | None = None  # a form's `requestedSchema`
     # Whether a human actually answered, as opposed to the gate ending some
     # other way. Read by `_gate`'s finally to decide between the two closing
     # events, and a flag rather than an inspection of `future` because the
@@ -81,6 +84,21 @@ _stdin_owned = False
 
 _YES = frozenset({"y", "yes", "1", "true"})
 _NO = frozenset({"n", "no", "0", "false"})
+
+# Elicitation requests in flight: request id -> (gate_id, the session asked).
+_elicit_pending: dict[str, tuple[str, ipc.Session]] = {}
+
+_PRIMITIVES = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+_JSON_PRIMITIVES = frozenset(_PRIMITIVES.values())
+
+
+class GateDeclined(Exception):
+    """The human pressed Decline on an elicitation for a gate with no "no" answer."""
 
 
 async def ask(
@@ -131,8 +149,72 @@ async def choose(
     return str(value)
 
 
+async def form(
+    prompt: str,
+    fields: dict,
+    *,
+    required: list[str] | None = None,
+    timeout: float | None = None,
+) -> dict:
+    """Prompt the human for several typed fields at once; returns `{name: value}`.
+
+    A field is `str`, `int`, `float`, `bool`, a list of strings (a choice), or
+    a dict holding a primitive JSON-schema property (`minimum`, `format`,
+    `description`...). All are required unless `required=` narrows it. Raises
+    `ValueError` before asking if a field is not one of those.
+    """
+    schema = build_form_schema(fields, required)
+    value = await _gate("form", prompt, None, None, timeout, schema=schema)
+    assert isinstance(value, dict)
+    return value
+
+
+def build_form_schema(fields: dict, required: list[str] | None = None) -> dict:
+    """The flat `requestedSchema` for `fields`; raises `ValueError` on a non-primitive."""
+    if not fields:
+        raise ValueError("form() needs at least one field")
+    props: dict[str, dict] = {}
+    for name, spec in fields.items():
+        props[str(name)] = _field_property(str(name), spec)
+    names = list(props) if required is None else list(required)
+    unknown = [n for n in names if n not in props]
+    if unknown:
+        raise ValueError(f"required names no field: {', '.join(unknown)}")
+    return {"type": "object", "properties": props, "required": names}
+
+
+def _field_property(name: str, spec) -> dict:
+    """One field spec as a JSON-schema property; raises `ValueError` if it is not flat."""
+    if isinstance(spec, type) and spec in _PRIMITIVES:
+        return {"type": _PRIMITIVES[spec]}
+    if isinstance(spec, list) and spec and all(isinstance(o, str) for o in spec):
+        return {"type": "string", "enum": list(spec)}
+    if isinstance(spec, dict) and spec.get("type") in _JSON_PRIMITIVES:
+        return dict(spec)
+    raise ValueError(
+        f"field {name!r}: use str, int, float, bool, a list of strings, "
+        "or a dict with a primitive JSON-schema type"
+    )
+
+
+def build_requested_schema(
+    kind: str, options: list[str] | None, schema: dict | None
+) -> dict:
+    """The `requestedSchema` an `elicitation/create` for a gate of `kind` carries."""
+    if schema is not None:
+        return schema
+    prop: dict
+    if kind == "confirm":
+        prop = {"type": "boolean", "title": "Confirm", "default": True}
+    elif kind == "choose":
+        prop = {"type": "string", "title": "Choose", "enum": list(options or [])}
+    else:
+        prop = {"type": "string", "title": "Answer"}
+    return {"type": "object", "properties": {"answer": prop}, "required": ["answer"]}
+
+
 async def _gate(
-    kind: Literal["ask", "confirm", "choose"],
+    kind: Literal["ask", "confirm", "choose", "form"],
     prompt: str,
     options: list[str] | None,
     default: str | bool | None,
@@ -140,7 +222,8 @@ async def _gate(
     *,
     tab=None,
     on_open=None,
-) -> str | bool:
+    schema: dict | None = None,
+) -> str | bool | dict:
     """Register a gate, announce it, optionally render a pill, and await the answer.
 
     The try/finally opens right after registration so that anything raising
@@ -151,12 +234,13 @@ async def _gate(
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
-        _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic())
+        _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic(), schema)
 
     # Only read when nobody answered, so the remaining question is which of the
     # two silent endings it was: `timeout=` expiring, or the awaiting cell
     # being cancelled (`cancel`, or the loop watchdog).
-    reason: Literal["timeout", "cancelled"] = "cancelled"
+    reason: Literal["timeout", "cancelled", "declined"] = "cancelled"
+    elicit_id: str | None = None
     try:
         # `kind` is part of this, not just pinnedness: the pill is a row of
         # buttons with no text input, so `_show_gate` renders confirm and
@@ -185,9 +269,10 @@ async def _gate(
         push_channel(
             content, meta, session=tasks.current_origin(), fallback_broadcast=True
         )
-        emit(HumanPromptOpen(gate_id, kind, prompt, options))
+        emit(HumanPromptOpen(gate_id, kind, prompt, options, schema))
         if on_open is not None:
             on_open(gate_id)
+        elicit_id = _send_elicitation(gate_id, kind, prompt, options, schema, tab)
 
         # Route to pill UI if tab is pinned.
         if use_pill and tab is not None:
@@ -204,6 +289,9 @@ async def _gate(
         if timeout is not None:
             return await asyncio.wait_for(wrapped, timeout=timeout)
         return await wrapped
+    except GateDeclined:
+        reason = "declined"
+        raise
     except TimeoutError:
         reason = "timeout"
         if default is not None:
@@ -212,6 +300,8 @@ async def _gate(
         # the one that names the prompt nobody answered.
         raise TimeoutError(f"no response to {prompt!r} within {timeout}s") from None
     finally:
+        if elicit_id is not None:
+            _cancel_elicitation(elicit_id)
         with _gates_lock:
             gate = _gates.pop(gate_id, None)
         # A gate ending unanswered has to be announced, not just forgotten:
@@ -224,6 +314,123 @@ async def _gate(
         # this is the recommended path.
         if gate is not None and not gate.answered:
             emit(HumanPromptClosed(gate_id, reason))
+
+
+def _send_elicitation(
+    gate_id: str,
+    kind: str,
+    prompt: str,
+    options: list[str] | None,
+    schema: dict | None,
+    tab,
+) -> str | None:
+    """Ask the origin session's client to put this gate in front of the human.
+
+    Returns the request id, or None when the origin cannot be elicited (no
+    session, no `elicitation` capability, a `bg` worker, a peer): such a gate
+    keeps the `awaiting_human` push as its only announcement.
+    """
+    session = tasks.current_origin()
+    if session is None or not ipc.can_elicit(session):
+        return None
+    message = prompt
+    if tab is not None and getattr(tab, "_pinned", False):
+        message = f"{tab.url}\n{prompt}"
+    request_id = f"repld-elicit-{gate_id}"
+    _elicit_pending[request_id] = (gate_id, session)
+    session.write(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "elicitation/create",
+            "params": {
+                "message": message,
+                "requestedSchema": build_requested_schema(kind, options, schema),
+            },
+        }
+    )
+    return request_id
+
+
+def _cancel_elicitation(request_id: str) -> None:
+    """Close the client's modal for a gate that ended; a no-op once it answered."""
+    pending = _elicit_pending.pop(request_id, None)
+    if pending is None:
+        return
+    pending[1].write(
+        notification(
+            "notifications/cancelled",
+            {"requestId": request_id, "reason": "gate closed"},
+        )
+    )
+
+
+def parse_elicit_result(
+    kind: str, options: list[str] | None, schema: dict | None, result: dict
+) -> tuple[Literal["accept", "decline", "cancel"], str | bool | dict | None]:
+    """Map an `elicitation/create` result to the action and gate value it means.
+
+    Content that does not fit the gate reads as `cancel`: the gate stays open
+    for the other surfaces rather than taking a value nobody chose.
+    """
+    action = result.get("action")
+    if action == "decline":
+        return "decline", None
+    if action != "accept":
+        return "cancel", None
+    content = result.get("content")
+    if not isinstance(content, dict):
+        return "cancel", None
+    try:
+        if kind == "form":
+            return "accept", validate_form(content, schema or {})
+        return "accept", _single_answer(kind, options, content.get("answer"))
+    except (ValueError, TypeError):
+        return "cancel", None
+
+
+def _single_answer(kind: str, options: list[str] | None, answer) -> str | bool:
+    """The `answer` field of a one-field elicitation, checked against the gate kind."""
+    if kind == "confirm" and isinstance(answer, bool):
+        return answer
+    if kind == "choose" and isinstance(answer, str) and answer in (options or []):
+        return answer
+    if kind == "ask" and isinstance(answer, str):
+        return answer
+    raise TypeError(f"not a {kind} answer")
+
+
+def handle_elicit_result(
+    request_id: str, result: dict | None, error: dict | None
+) -> None:
+    """Apply the client's reply to an elicitation request; unknown ids are ignored.
+
+    Accept answers the gate. Decline is a "no": `False` for `confirm`, else
+    `GateDeclined` raised into the cell. Cancel or an error answers nothing.
+    """
+    pending = _elicit_pending.pop(request_id, None)
+    if pending is None or error is not None or result is None:
+        return
+    gate_id = pending[0]
+    with _gates_lock:
+        gate = _gates.get(gate_id)
+    if gate is None:
+        return
+    action, value = parse_elicit_result(gate.kind, gate.options, gate.schema, result)
+    if action == "accept":
+        resolve_gate(gate_id, value)
+    elif action == "decline" and gate.kind == "confirm":
+        resolve_gate(gate_id, False)
+    elif action == "decline":
+        _decline_gate(gate)
+
+
+def _decline_gate(gate: _Gate) -> None:
+    """Fail the gate's future with `GateDeclined`; a lost race is ignored."""
+    try:
+        gate.future.set_exception(GateDeclined(gate.prompt))
+    except concurrent.futures.InvalidStateError:
+        pass
 
 
 def resolve_gate(gate_id: str, value) -> bool:
@@ -272,6 +479,7 @@ def open_gates() -> list[dict]:
             "kind": g.kind,
             "prompt": g.prompt,
             "options": list(g.options or []),
+            "schema": g.schema,
             "waiting_s": round(now - g.opened_at, 1),
         }
         for gid, g in pending
@@ -279,8 +487,11 @@ def open_gates() -> list[dict]:
 
 
 def parse_response(
-    kind: str, text: str, options: list[str] | None = None
-) -> bool | str:
+    kind: str,
+    text: str,
+    options: list[str] | None = None,
+    schema: dict | None = None,
+) -> bool | str | dict:
     """Coerce a typed line into the value a gate of `kind` resolves to.
 
     Shared by the pane's stdin reader and `repld gate answer` so the two
@@ -289,6 +500,8 @@ def parse_response(
     whether to re-prompt (the pane) or exit non-zero (the CLI).
     """
     text = text.strip()
+    if kind == "form":
+        return parse_form(text, schema or {})
     if kind == "confirm":
         low = text.lower()
         if low in _YES:
@@ -311,11 +524,63 @@ def parse_response(
     return text
 
 
+def parse_form(text: str, schema: dict) -> dict:
+    """A form answer typed as one JSON object; `ValueError` names what is wrong."""
+    try:
+        content = json.loads(text)
+    except json.JSONDecodeError:
+        raise ValueError(
+            "answer with one JSON object, e.g. " + _example(schema)
+        ) from None
+    try:
+        return validate_form(content, schema)
+    except TypeError as exc:
+        raise ValueError(str(exc)) from None
+
+
+def validate_form(content, schema: dict) -> dict:
+    """`content` if it satisfies the flat `schema`; else `ValueError` (`TypeError` if not an object)."""
+    if not isinstance(content, dict):
+        raise TypeError("answer with one JSON object, e.g. " + _example(schema))
+    props = schema.get("properties", {})
+    for name in content:
+        if name not in props:
+            raise ValueError(f"no such field: {name}")
+    for name in schema.get("required", []):
+        if name not in content:
+            raise ValueError(f"missing field: {name}")
+    for name, value in content.items():
+        _check_field(name, value, props[name])
+    return content
+
+
+def _check_field(name: str, value, prop: dict) -> None:
+    """Raise `ValueError` unless `value` fits the primitive `prop`."""
+    kind = prop["type"]
+    # bool is an int subclass: `True` must not satisfy integer or number.
+    ok = {
+        "string": isinstance(value, str),
+        "boolean": isinstance(value, bool),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, int | float) and not isinstance(value, bool),
+    }[kind]
+    if not ok:
+        raise ValueError(f"{name}: expected {kind}")
+    if "enum" in prop and value not in prop["enum"]:
+        raise ValueError(f"{name}: choose one of {', '.join(prop['enum'])}")
+
+
+def _example(schema: dict) -> str:
+    """A JSON object naming the fields of `schema`, for an error message."""
+    props = schema.get("properties", {})
+    return "{" + ", ".join(f'"{n}": <{p["type"]}>' for n, p in props.items()) + "}"
+
+
 class GateAnswerError(ValueError):
     """An answer a gate refused: unknown or already-answered id, or a value its kind rejects."""
 
 
-def answer_gate(gate_id: str, text: str) -> bool | str:
+def answer_gate(gate_id: str, text: str) -> bool | str | dict:
     """Coerce `text` for the named pending gate and resolve it; returns the value.
 
     The one place a remote answer (`repld gate answer`, the dashboard) is
@@ -327,7 +592,7 @@ def answer_gate(gate_id: str, text: str) -> bool | str:
     if gate is None:
         raise GateAnswerError(f"no gate awaiting an answer: {gate_id}")
     try:
-        value = parse_response(gate["kind"], text, gate["options"])
+        value = parse_response(gate["kind"], text, gate["options"], gate["schema"])
     except ValueError as exc:
         raise GateAnswerError(str(exc)) from None
     if not resolve_gate(gate_id, value):
