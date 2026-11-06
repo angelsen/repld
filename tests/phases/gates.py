@@ -132,6 +132,11 @@ def phase_17_gates(kernel: Kernel) -> None:
         assert_true(
             listed[0]["waiting_s"] >= 0, "listed gate reports how long it waited"
         )
+        assert_eq(
+            listed[0]["schema"]["properties"]["answer"]["type"],
+            "boolean",
+            "a confirm lists its one-field schema",
+        )
         print("  ✓ repld gate --json lists the pending confirm")
 
         bad = _gate_cli(kernel, "answer", gate_id, "maybe")

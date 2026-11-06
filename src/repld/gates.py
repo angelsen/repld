@@ -1,4 +1,4 @@
-"""Human-gate primitives: ask, confirm, choose, plus the boot-time tty_prompt.
+"""Human-gate primitives: `form` and its one-field wrappers ask, confirm, choose, plus the boot-time tty_prompt.
 
 Gates are async coroutines. `await ask("name?")` yields to the asyncio loop
 while waiting on the human, so uvicorn / watchdog / other bg tasks keep
@@ -54,7 +54,8 @@ class _Gate:
     prompt: str
     options: list[str] | None
     opened_at: float
-    schema: dict | None = None  # a form's `requestedSchema`
+    schema: dict       # the elicitation `requestedSchema`; every kind carries one
+    field: str | None  # the one field a wrapper returns bare; None for `form`
     # Whether a human actually answered, as opposed to the gate ending some
     # other way. Read by `_gate`'s finally to decide between the two closing
     # events, and a flag rather than an inspection of `future` because the
@@ -96,6 +97,9 @@ _PRIMITIVES = {
 }
 _JSON_PRIMITIVES = frozenset(_PRIMITIVES.values())
 
+# The field name every wrapper gate's one-field schema uses.
+_ANSWER = "answer"
+
 
 class GateDeclined(Exception):
     """The human pressed Decline on an elicitation for a gate with no "no" answer."""
@@ -113,7 +117,10 @@ async def ask(
     `tab` is accepted for symmetry with confirm/choose. The pill UI has
     no text input, so the response is always typed in the terminal.
     """
-    value = await _gate("ask", prompt, None, default, timeout, tab=tab)
+    schema = _one_field({"type": "string", "title": "Answer"})
+    value = await _gate(
+        "ask", prompt, None, default, timeout, tab=tab, schema=schema, field=_ANSWER
+    )
     return str(value)
 
 
@@ -130,8 +137,17 @@ async def confirm(
     `on_open(gate_id)` is called once the gate is registered and answerable,
     for a surface that must tell this gate from another with the same prompt.
     """
+    schema = _one_field({"type": "boolean", "title": "Confirm", "default": True})
     value = await _gate(
-        "confirm", prompt, None, default, timeout, tab=tab, on_open=on_open
+        "confirm",
+        prompt,
+        None,
+        default,
+        timeout,
+        tab=tab,
+        on_open=on_open,
+        schema=schema,
+        field=_ANSWER,
     )
     return bool(value)
 
@@ -145,7 +161,19 @@ async def choose(
     timeout: float | None = None,
 ) -> str:
     """Prompt the human to choose one of the given options."""
-    value = await _gate("choose", prompt, options, default, timeout, tab=tab)
+    prop: dict = {"type": "string", "title": "Choose"}
+    if options:
+        prop["enum"] = list(options)
+    value = await _gate(
+        "choose",
+        prompt,
+        options,
+        default,
+        timeout,
+        tab=tab,
+        schema=_one_field(prop),
+        field=_ANSWER,
+    )
     return str(value)
 
 
@@ -164,9 +192,18 @@ async def form(
     `ValueError` before asking if a field is not one of those.
     """
     schema = build_form_schema(fields, required)
-    value = await _gate("form", prompt, None, None, timeout, schema=schema)
+    value = await _gate("form", prompt, None, None, timeout, schema=schema, field=None)
     assert isinstance(value, dict)
     return value
+
+
+def _one_field(prop: dict) -> dict:
+    """The `requestedSchema` of a wrapper gate: one required field named `_ANSWER`."""
+    return {
+        "type": "object",
+        "properties": {_ANSWER: prop},
+        "required": [_ANSWER],
+    }
 
 
 def build_form_schema(fields: dict, required: list[str] | None = None) -> dict:
@@ -197,22 +234,6 @@ def _field_property(name: str, spec) -> dict:
     )
 
 
-def build_requested_schema(
-    kind: str, options: list[str] | None, schema: dict | None
-) -> dict:
-    """The `requestedSchema` an `elicitation/create` for a gate of `kind` carries."""
-    if schema is not None:
-        return schema
-    prop: dict
-    if kind == "confirm":
-        prop = {"type": "boolean", "title": "Confirm", "default": True}
-    elif kind == "choose":
-        prop = {"type": "string", "title": "Choose", "enum": list(options or [])}
-    else:
-        prop = {"type": "string", "title": "Answer"}
-    return {"type": "object", "properties": {"answer": prop}, "required": ["answer"]}
-
-
 async def _gate(
     kind: Literal["ask", "confirm", "choose", "form"],
     prompt: str,
@@ -220,9 +241,10 @@ async def _gate(
     default: str | bool | None,
     timeout: float | None,
     *,
+    schema: dict,
+    field: str | None,
     tab=None,
     on_open=None,
-    schema: dict | None = None,
 ) -> str | bool | dict:
     """Register a gate, announce it, optionally render a pill, and await the answer.
 
@@ -234,7 +256,9 @@ async def _gate(
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
-        _gates[gate_id] = _Gate(fut, kind, prompt, options, time.monotonic(), schema)
+        _gates[gate_id] = _Gate(
+            fut, kind, prompt, options, time.monotonic(), schema, field
+        )
 
     # Only read when nobody answered, so the remaining question is which of the
     # two silent endings it was: `timeout=` expiring, or the awaiting cell
@@ -272,7 +296,7 @@ async def _gate(
         emit(HumanPromptOpen(gate_id, kind, prompt, options, schema))
         if on_open is not None:
             on_open(gate_id)
-        elicit_id = _send_elicitation(gate_id, kind, prompt, options, schema, tab)
+        elicit_id = _send_elicitation(gate_id, prompt, schema, tab)
 
         # Route to pill UI if tab is pinned.
         if use_pill and tab is not None:
@@ -316,14 +340,7 @@ async def _gate(
             emit(HumanPromptClosed(gate_id, reason))
 
 
-def _send_elicitation(
-    gate_id: str,
-    kind: str,
-    prompt: str,
-    options: list[str] | None,
-    schema: dict | None,
-    tab,
-) -> str | None:
+def _send_elicitation(gate_id: str, prompt: str, schema: dict, tab) -> str | None:
     """Ask the origin session's client to put this gate in front of the human.
 
     Returns the request id, or None when the origin cannot be elicited (no
@@ -345,7 +362,7 @@ def _send_elicitation(
             "method": "elicitation/create",
             "params": {
                 "message": message,
-                "requestedSchema": build_requested_schema(kind, options, schema),
+                "requestedSchema": schema,
             },
         }
     )
@@ -366,38 +383,24 @@ def _cancel_elicitation(request_id: str) -> None:
 
 
 def parse_elicit_result(
-    kind: str, options: list[str] | None, schema: dict | None, result: dict
+    schema: dict, field: str | None, result: dict
 ) -> tuple[Literal["accept", "decline", "cancel"], str | bool | dict | None]:
     """Map an `elicitation/create` result to the action and gate value it means.
 
-    Content that does not fit the gate reads as `cancel`: the gate stays open
-    for the other surfaces rather than taking a value nobody chose.
+    Content that does not fit `schema` reads as `cancel`: the gate stays open
+    for the other surfaces rather than taking a value nobody chose. A `field`
+    unwraps the one-field object a wrapper gate asked for.
     """
     action = result.get("action")
     if action == "decline":
         return "decline", None
     if action != "accept":
         return "cancel", None
-    content = result.get("content")
-    if not isinstance(content, dict):
-        return "cancel", None
     try:
-        if kind == "form":
-            return "accept", validate_form(content, schema or {})
-        return "accept", _single_answer(kind, options, content.get("answer"))
+        content = validate_form(result.get("content"), schema)
     except (ValueError, TypeError):
         return "cancel", None
-
-
-def _single_answer(kind: str, options: list[str] | None, answer) -> str | bool:
-    """The `answer` field of a one-field elicitation, checked against the gate kind."""
-    if kind == "confirm" and isinstance(answer, bool):
-        return answer
-    if kind == "choose" and isinstance(answer, str) and answer in (options or []):
-        return answer
-    if kind == "ask" and isinstance(answer, str):
-        return answer
-    raise TypeError(f"not a {kind} answer")
+    return "accept", content if field is None else content[field]
 
 
 def handle_elicit_result(
@@ -416,7 +419,7 @@ def handle_elicit_result(
         gate = _gates.get(gate_id)
     if gate is None:
         return
-    action, value = parse_elicit_result(gate.kind, gate.options, gate.schema, result)
+    action, value = parse_elicit_result(gate.schema, gate.field, result)
     if action == "accept":
         resolve_gate(gate_id, value)
     elif action == "decline" and gate.kind == "confirm":

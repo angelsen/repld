@@ -79,7 +79,7 @@ class HumanPromptOpen:
     kind: Literal["ask", "confirm", "choose", "form"]
     prompt: str
     options: list[str] | None   # for choose
-    schema: dict | None = None  # for form
+    schema: dict | None = None  # absent only in pre-schema event logs
 
 
 @dataclass(frozen=True, slots=True)

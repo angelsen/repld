@@ -487,10 +487,10 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   Also: `ask(secret=True)` via URL mode to the token-gated dashboard (form mode forbids secrets).
 - [x] Live check of the built wiring, 2026-11-06 (e8dc045a, Claude Code 2.1.316 TUI): confirm/choose/ask/form
   render and answer, Decline is `False`/`GateDeclined`, a CLI answer closes the modal, Esc leaves the gate open.
-- [ ] Still unchecked live with the built wiring: `claude -p` and `--bg` (expected: no modal, the `awaiting_human`
+- [ ] Set up repeatable tests for `claude -p` and `--bg` (live pass with the schema-first wiring still owed; expected: no modal, the `awaiting_human`
   push is the only route; `claude -p` auto-cancels a request, so confirm the gate then stays open for the CLI,
   not that it ends). Phase 17 covers only the harness (no capability, `bg` kind).
-- [ ] Schema-first refactor: make `form` the one primitive and `confirm`/`ask`/`choose` thin wrappers over a
+- [x] (built: every gate carries its schema; `_one_field`, `parse_elicit_result(schema, field, result)`) Schema-first refactor: make `form` the one primitive and `confirm`/`ask`/`choose` thin wrappers over a
   one-field schema, dropping the kind branching in `gates.parse_elicit_result`/`_single_answer`/
   `build_requested_schema`; the kind stays a hint for pane, pill and CLI. Agent-facing names unchanged.
 

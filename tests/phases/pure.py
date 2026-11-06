@@ -2294,36 +2294,49 @@ def _elicitation_pure() -> None:
             _raises(gates.parse_response, "form", text, None, schema), f"rejects {text}"
         )
 
-    one = gates.build_requested_schema("confirm", None, None)
-    assert_eq(one["properties"]["answer"]["type"], "boolean", "confirm schema")
-    pick = gates.build_requested_schema("choose", ["p", "q"], None)
-    assert_eq(pick["properties"]["answer"]["enum"], ["p", "q"], "choose schema")
+    def one(prop):
+        return gates._one_field(prop)
 
-    def parse(kind, result, opts=None, sch=None):
-        return gates.parse_elicit_result(kind, opts, sch, result)
+    confirm = one({"type": "boolean"})
+    pick = one({"type": "string", "enum": ["p", "q"]})
+    free = one({"type": "string"})
+
+    def parse(sch, result, field: str | None = "answer"):
+        return gates.parse_elicit_result(sch, field, result)
+
+    def accept(content):
+        return {"action": "accept", "content": content}
 
     assert_eq(
-        parse("confirm", {"action": "accept", "content": {"answer": True}}),
-        ("accept", True),
-        "accept confirm",
+        parse(confirm, accept({"answer": True})), ("accept", True), "accept confirm"
     )
-    assert_eq(parse("ask", {"action": "decline"}), ("decline", None), "decline")
+    assert_eq(parse(free, {"action": "decline"}), ("decline", None), "decline")
     for result in (
         {"action": "cancel"},
         {"action": "accept"},
-        {"action": "accept", "content": {"answer": "yes"}},
-        {"action": "accept", "content": {"answer": 1}},
+        accept({"answer": "yes"}),
+        accept({"answer": 1}),
+        accept({"answer": True, "extra": 1}),
     ):
-        assert_eq(parse("confirm", result)[0], "cancel", f"cancel for {result}")
+        assert_eq(parse(confirm, result)[0], "cancel", f"cancel for {result}")
     assert_eq(
-        parse("choose", {"action": "accept", "content": {"answer": "z"}}, ["p"])[0],
+        parse(pick, accept({"answer": "z"}))[0],
         "cancel",
         "an option the gate lacks is no answer",
     )
     assert_eq(
-        parse("form", {"action": "accept", "content": {"env": "q"}}, None, schema)[0],
+        parse(free, accept({"answer": "anything"})),
+        ("accept", "anything"),
+        "optionless text takes any string",
+    )
+    assert_eq(
+        parse(schema, accept({"env": "q"}), None)[0],
         "cancel",
         "invalid form content is no answer",
+    )
+    whole = {"env": "a", "n": 2, "x": 1, "ok": False}
+    assert_eq(
+        parse(schema, accept(whole), None), ("accept", whole), "a form keeps its dict"
     )
 
 
