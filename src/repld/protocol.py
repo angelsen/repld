@@ -915,7 +915,7 @@ class Dispatcher(BrowserDispatchMixin):
         claude_id = params.get(BRIDGE_SESSION_ID_KEY)
         if session is not None:
             elicitation = (params.get("capabilities") or {}).get("elicitation")
-            # `{}` is form mode only, by the 2025-06-18 spec.
+            # An empty `elicitation` object declares form mode only.
             session.elicit_form = isinstance(elicitation, dict) and (
                 not elicitation or "form" in elicitation
             )
