@@ -236,7 +236,7 @@ def phase_6_connect_race(_kernel: Kernel) -> None:
     )
 
     async def _reentrant() -> bool:
-        async def reconnect(s: "_S") -> None:
+        async def reconnect(s: _S) -> None:
             # Precisely what _reattach_core does when this command's own socket
             # error triggers a reconnect — on this same task, lock still held.
             s._fetch_enabled = False
@@ -510,7 +510,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-    def _stocked_pool() -> "BrowserPool":
+    def _stocked_pool() -> BrowserPool:
         pool = BrowserPool()
         dead = _Dead(port=1111)
         dead._connected = True  # sorts first, looks connected, isn't
@@ -596,7 +596,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
             self.sent.append(method)
             return {}
 
-    async def _reattach(*, pinned: bool, label: str | None = None) -> "_Cdp":
+    async def _reattach(*, pinned: bool, label: str | None = None) -> _Cdp:
         session = BrowserSession(port=9999)
         cdp = _Cdp(pinned=pinned, label=label)
         session._sessions["old-sid"] = cdp  # type: ignore[assignment]
@@ -1347,7 +1347,7 @@ def phase_6_input_visibility_guard(_kernel: Kernel) -> None:
     """
     from repld.browser.tab import Tab
 
-    def _make_tab(visibility: str) -> tuple[Tab, "_EngineFakeSession"]:
+    def _make_tab(visibility: str) -> tuple[Tab, _EngineFakeSession]:
         session = _EngineFakeSession(visibility=visibility)
         tab = Tab(session, "abcdef0123456789", port=9222)  # type: ignore[arg-type]
         return tab, session
@@ -2401,7 +2401,9 @@ def phase_6_owned_tab_action_routing(kernel: Kernel) -> None:
 
         b.exec(f"_ct = await browser.get('{tid}')\nawait _ct.click('#now')")
         assert_true(_got(b, "MARK-now", 5), "the acting session gets the push")
-        assert_true(not _got(a, "MARK-now", 1), "and not the session that opened the tab")
+        assert_true(
+            not _got(a, "MARK-now", 1), "and not the session that opened the tab"
+        )
 
         b.exec("await _ct.click('#later')")
         assert_true(
@@ -2413,7 +2415,9 @@ def phase_6_owned_tab_action_routing(kernel: Kernel) -> None:
         b.exec("await _ct.click('#taken')")
         assert_true(_got(a, "MARK-taken", 5), "a taken tab's owner outranks the action")
         assert_true(not _got(b, "MARK-taken", 1), "and the acting session gets nothing")
-        print("  ✓ owned tab: an action outranks the opener, take() outranks the action")
+        print(
+            "  ✓ owned tab: an action outranks the opener, take() outranks the action"
+        )
     finally:
         a.close()
         b.b.close()
@@ -2897,7 +2901,7 @@ def _proc_cpu_ticks(pid: int) -> int:
     return int(fields[11]) + int(fields[12])
 
 
-def _renderer_pid_of(h: "_BridgeHarness", tid: str) -> int | None:
+def _renderer_pid_of(h: _BridgeHarness, tid: str) -> int | None:
     """The throwaway Chrome renderer hosting `tid`, found by spinning its main
     thread for 400 ms and reading which renderer's CPU time moved. None when
     no single renderer stands out."""
