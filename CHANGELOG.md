@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.19.0] - 2026-11-07
+
+### Added
+
 - Human gates reach the human as an MCP elicitation modal in Claude Code when the client declares `elicitation` (never for a `bg` worker or a peer call). Accept answers the gate; Decline is a no (`confirm()` returns `False`, `ask`/`choose`/`form` raise `GateDeclined`); cancel answers nothing and the pane, pill, `repld gate answer` and dashboard still can. A gate another surface answers, times out or whose kernel dies has its modal withdrawn with `notifications/cancelled`. The `awaiting_human` push is unchanged.
 - `ask(prompt, secret=True)` collects a password or token on a localhost dashboard page, gated by a per-gate nonce, instead of through the client: a client declaring URL-mode elicitation is sent the page as a URL request (and told when it is submitted), any other gets the URL in the `awaiting_human` push. The value reaches only the cell; the event log records `***`, and `repld gate answer` and the dashboard `gate_answer` refuse a secret gate.
 - `form(prompt, fields)` asks several typed fields in one prompt and returns a dict; it is answerable as one JSON object from `repld gate answer`, the pane or the dashboard when no modal is available.
@@ -33,7 +43,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A pinned tab's pill no longer keeps its Yes/No buttons after the gate is answered anywhere else (the elicitation modal, `repld gate answer`, the pane, the dashboard) or times out. The gate is withdrawn from the pill, and a gate queued behind it takes its place.
 - The `[filechooser]` push for a picker repld did not intercept said "on a shared tab" even on an idle `browser_open` tab, whose mode is `agent`. It now reads "not intercepted", and its meta key `shared: true` is `intercepted: false`.
 
-### Removed
 
 ## [0.18.0] - 2026-11-05
 
