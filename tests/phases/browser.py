@@ -287,7 +287,7 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
                 raise RuntimeError("Cannot reach Chrome on port 3333: refused")
 
         b = Browser(port=3333)
-        b._connected = True  # stale: was connected, Chrome died since
+        b._connected = True         # stale: was connected, Chrome died since
         b._session = _DeadSocket()  # type: ignore[assignment]
         try:
             await b._ensure_connected()
@@ -513,7 +513,7 @@ def phase_6_dead_pool_listing(_kernel: Kernel) -> None:
     def _stocked_pool() -> BrowserPool:
         pool = BrowserPool()
         dead = _Dead(port=1111)
-        dead._connected = True  # sorts first, looks connected, isn't
+        dead._connected = True                           # sorts first, looks connected, isn't
         dead._session._sessions["dead-sid"] = _FakeCdp(  # type: ignore[assignment]
             "dead-target", "http://dead/"
         )
@@ -604,7 +604,7 @@ def phase_6_reattach_binding(_kernel: Kernel) -> None:
         async def fake_execute(method, params=None, session_id=None, timeout=30):
             return {"sessionId": "new-sid"}
 
-        session.execute = fake_execute  # type: ignore[assignment]
+        session.execute = fake_execute     # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
         return cdp
 
@@ -700,7 +700,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
 
     cdp_empty = _Cdp()
-    cdp_empty.reply = {}  # Chrome answering with no targetInfo is a no-op, not a KeyError
+    cdp_empty.reply = {}                                                # Chrome answering with no targetInfo is a no-op, not a KeyError
     asyncio.run(Tab(cdp_empty, "abc123", 9222)._refresh_target_info())  # type: ignore[arg-type]
     assert_eq(
         cdp_empty.target_info.get("url"),
@@ -3453,7 +3453,7 @@ def phase_6_ready_classification(_kernel: Kernel) -> None:
         "#app",
         "[data-testid='root']",
         "data-ready",
-        "main",  # bare tag — the regression
+        "main",    # bare tag — the regression
         "my-app",  # custom element — the regression
         "div",
         "text=Loaded",
@@ -4131,7 +4131,7 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
             assert_eq(collected, [], "no claim: the reject is dropped, not broadcast")
             cdp = _Cdp(mode="shared")
-            cdp.route_to = object()  # a live claim
+            cdp.route_to = object()                                             # a live claim
             await _handle_dialog(cdp, {"type": "confirm", "message": "Sure?"})  # type: ignore[arg-type]
             assert_eq(
                 len(collected), 1, "outside a window the reject pushes to the claim"
@@ -6675,7 +6675,7 @@ def phase_6_reattach_no_duplicate_session(_kernel: Kernel) -> None:
                 return {}
             return {}
 
-        session.execute = fake_execute  # type: ignore[assignment]
+        session.execute = fake_execute     # type: ignore[assignment]
         await session._reattach_core(cdp)  # type: ignore[arg-type]
 
         # Count _sessions entries pointing at this cdp.

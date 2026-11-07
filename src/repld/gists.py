@@ -63,10 +63,10 @@ __all__ = [
 # -- module state ----
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}  # fullname to source .py path
+_managed: dict[str, Path] = {}                 # fullname to source .py path
 _mtimes: dict[str, tuple[int, int, int]] = {}  # fullname to last `_file_key`
-_importers: dict[str, set[str]] = {}  # gist to the managed gists that imported it
-_installed_dirs: list[Path] = []  # set by install()
+_importers: dict[str, set[str]] = {}           # gist to the managed gists that imported it
+_installed_dirs: list[Path] = []               # set by install()
 _reload_lock = threading.Lock()
 
 # Subset of _managed sourced from a 'path:' dep directory rather than a real
