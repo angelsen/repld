@@ -95,7 +95,7 @@ class ThrowawayChrome:
             try:
                 self.port = int(port_file.read_text().splitlines()[0].strip())
                 return True
-            except (OSError, ValueError, IndexError):
+            except OSError, ValueError, IndexError:
                 time.sleep(0.1)
         return False
 

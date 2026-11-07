@@ -130,7 +130,7 @@ def py_blocks(src: str):
             if t.type == tokenize.COMMENT
             and not lines[t.start[0] - 1][: t.start[1]].strip()
         ]
-    except (tokenize.TokenError, IndentationError, SyntaxError):
+    except tokenize.TokenError, IndentationError, SyntaxError:
         return
     yield from _group(own)
 

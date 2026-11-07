@@ -41,7 +41,7 @@ def _wait_lock(cwd: Path, timeout: float = 20.0) -> dict:
     while time.monotonic() < deadline:
         try:
             return _lock(cwd)
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             time.sleep(0.1)
     raise AssertionError(f"no kernel lockfile appeared under {lock_path_for(cwd)}")
 
@@ -49,7 +49,7 @@ def _wait_lock(cwd: Path, timeout: float = 20.0) -> dict:
 def _stop_kernel(cwd: Path) -> None:
     try:
         pid = int(_lock(cwd)["pid"])
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except OSError, KeyError, TypeError, ValueError, json.JSONDecodeError:
         return
     try:
         os.kill(pid, signal.SIGTERM)

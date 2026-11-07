@@ -40,7 +40,7 @@ def _make_venv(root: Path, python: str | None = None) -> Path | None:
         r = subprocess.run(
             cmd, capture_output=True, text=True, timeout=180, check=False
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return None
     return (root / ".venv") if r.returncode == 0 else None
 
@@ -157,7 +157,7 @@ def _systemd_spawn_live(tmp: Path) -> None:
             try:
                 pid = int(json.loads((proj / "k.lock").read_text())["pid"])
                 break
-            except (OSError, ValueError, KeyError):
+            except OSError, ValueError, KeyError:
                 time.sleep(0.2)
         assert_true(pid > 0, "kernel wrote its lockfile")
 

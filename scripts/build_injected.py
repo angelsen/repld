@@ -80,7 +80,7 @@ SOURCE = {source!r}
 '''
 
 
-def _fail(msg: str) -> "None":
+def _fail(msg: str) -> None:
     sys.exit(f"build_injected: {msg}")
 
 
