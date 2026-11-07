@@ -72,7 +72,9 @@ def resolve_target(target: str) -> Callable:
 
     The first segment is a `__main__` name if one exists, else an import through
     `builtins.__import__` (`gists._GistImportHook` wraps that, which is what
-    reloads an edited gist, and `importlib.import_module` would bypass it).
+    reloads an edited gist, and `importlib.import_module` would bypass it). A
+    `__main__` name bound to a gist module is imported too, since that binding
+    stays the old module object after an edit.
     Later segments are `getattr`, falling back to a submodule import when the
     object is a module.
     """
@@ -82,8 +84,11 @@ def resolve_target(target: str) -> Callable:
         raise TargetError(_INVALID_PARAMS, str(exc)) from exc
     main_ns = sys.modules["__main__"].__dict__
     first = parts[0]
-    if first in main_ns:
-        obj: object = main_ns[first]
+    bound = main_ns.get(first)
+    if first in main_ns and not (
+        isinstance(bound, types.ModuleType) and first in gists._managed
+    ):
+        obj: object = bound
     else:
         try:
             obj = builtins.__import__(first)

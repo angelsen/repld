@@ -10,6 +10,8 @@ from pathlib import Path
 
 from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
+from repld import paths
+
 
 def phase_9_gist_tools(kernel: Kernel) -> None:
     """Gist-registered MCP tools: discovery, dispatch, auto-reload, error handling."""
@@ -441,9 +443,37 @@ def _list_changed(b: Bridge, gists_dir: Path) -> None:
         '    """Appears mid-session."""\n'
         '    return "x"\n'
     )
+    cache = paths.cache_for(paths.socket_path(gists_dir.parent))
     with _gist(gists_dir, "smoke_changed", source):
         b.wait_notification(method, timeout=6.0)
         assert_true("smoke_changed" in _tool_names(b), "tool listed after the push")
+        assert_true(
+            _cache_lists(cache, "smoke_changed", present=True),
+            "kernel.cache gains the tool the push announced",
+        )
     b.wait_notification(method, timeout=6.0)
     assert_true("smoke_changed" not in _tool_names(b), "tool gone after removal")
-    print("  ✓ tools/list_changed on gist tool add and remove")
+    assert_true(
+        _cache_lists(cache, "smoke_changed", present=False),
+        "kernel.cache drops the removed tool",
+    )
+    print(
+        "  ✓ tools/list_changed on gist tool add and remove, kernel.cache kept in step"
+    )
+
+
+def _cache_lists(
+    cache: Path, tool: str, *, present: bool, timeout: float = 5.0
+) -> bool:
+    """Whether `kernel.cache` comes to list (or not list) *tool* within *timeout*.
+
+    The poller writes the cache right after it broadcasts, so a reader that
+    just saw the push may beat the write.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        names = {t["name"] for t in json.loads(cache.read_text())["tools"]}
+        if (tool in names) == present:
+            return True
+        time.sleep(0.2)
+    return False

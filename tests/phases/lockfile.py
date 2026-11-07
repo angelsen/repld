@@ -608,11 +608,8 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             assert_true("999" in out, f"edit picked up without restart (got {out!r})")
             print("  ✓ mtime-reload applies to the extra dir, same as local/global")
 
-            # resolve() is a stateless dir walk (no _managed/sys.modules
-            # lookup), so it reports a *new* shadow immediately — while the
-            # already-imported module keeps serving the old file until a
-            # restart. resolve() disagreeing with the cached module's
-            # __file__ is the diagnostic for that gap.
+            # A new shadow in a higher-precedence dir wins on the next import:
+            # `_check_reload` drops the module it was shadowing.
             (tmp / "gists").mkdir(exist_ok=True)
             (tmp / "gists" / "plugin_math.py").write_text(
                 "def add(a, b):\n    return 'local'\n"
@@ -625,21 +622,20 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
                 "print('cached:', plugin_math.__file__)\n"
                 "print('value:', plugin_math.add(2, 3))",
             )
+            local = tmp / "gists" / "plugin_math.py"
             assert_true(
-                f"resolve: {tmp / 'gists' / 'plugin_math.py'}" in out,
-                f"resolve() names the new shadow immediately (got {out!r})",
-            )
-            assert_true(
-                f"cached: {extra / 'plugin_math.py'}" in out,
-                f"the already-imported module keeps its old __file__ (got {out!r})",
+                f"resolve: {local}" in out,
+                f"resolve() names the new shadow (got {out!r})",
             )
             assert_true(
-                "value: 999" in out,
-                f"and keeps serving the pre-shadow value until restart (got {out!r})",
+                f"cached: {local}" in out,
+                f"the next import loads the shadow, not the old file (got {out!r})",
             )
-            print(
-                "  ✓ resolve() vs. module.__file__ diagnoses a not-yet-restarted shadow"
+            assert_true(
+                "value: local" in out,
+                f"and serves the shadow's value without a restart (got {out!r})",
             )
+            print("  ✓ a new shadow in a higher-precedence dir wins on the next import")
         finally:
             k.stop()
             (tmp / "gists" / "plugin_math.py").unlink(missing_ok=True)

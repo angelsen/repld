@@ -28,6 +28,8 @@ from .state import atomic_write_json
 # Never rebound; gists.py holds references via this module's namespace.
 _linked: dict[str, Path] = {}
 _LINKS_FILENAME = ".links"
+# Manifest identity at the last `_load_links`; `reload_if_changed` compares to it.
+_loaded_stamp: tuple[int, int] | None = None
 
 
 def linked_names() -> frozenset[str]:
@@ -75,6 +77,27 @@ def write_links(gists_dir: Path, links: dict[str, str]) -> None:
     atomic_write_json(path, ordered, indent=2)
 
 
+def _manifest_stamp(gists_dir: Path) -> tuple[int, int] | None:
+    """`(mtime_ns, inode)` of the manifest, or None when there is none."""
+    try:
+        st = (gists_dir / _LINKS_FILENAME).stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_ino
+
+
+def reload_if_changed(gists_dir: Path) -> bool:
+    """Reload the `_linked` overlay if the manifest changed since the last load.
+
+    True when it reloaded. A kernel calls this on a timer so `repld gist add`
+    and `rm` take effect without a restart.
+    """
+    if _manifest_stamp(gists_dir) == _loaded_stamp:
+        return False
+    _load_links(gists_dir)
+    return True
+
+
 def _load_links(gists_dir: Path) -> None:
     """Populate the live `_linked` overlay from the manifest.
 
@@ -82,6 +105,9 @@ def _load_links(gists_dir: Path) -> None:
     rewrites the manifest. It is committed, and silently editing it would dirty
     the working tree. Use `repld gist rm --stale` to drop dead links.
     """
+    global _loaded_stamp
+    # Taken before the read: a write landing mid-read then reloads once more.
+    _loaded_stamp = _manifest_stamp(gists_dir)
     _linked.clear()
     try:
         links = read_links(gists_dir)

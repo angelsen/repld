@@ -11,6 +11,7 @@ import inspect
 import json
 import os
 import sys
+import threading
 import types
 import typing
 from collections.abc import Callable, Iterable
@@ -62,9 +63,10 @@ __all__ = [
 # -- module state ----
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}    # fullname to source .py path
-_mtimes: dict[str, float] = {}    # fullname to last known mtime
-_installed_dirs: list[Path] = []  # set by install()
+_managed: dict[str, Path] = {}                 # fullname to source .py path
+_mtimes: dict[str, tuple[int, int, int]] = {}  # fullname to last `_file_key`
+_installed_dirs: list[Path] = []               # set by install()
+_reload_lock = threading.Lock()
 
 # Subset of _managed sourced from a 'path:' dep directory rather than a real
 # gist dir or link. Still gets _check_reload's mtime-eviction, but is excluded
@@ -278,25 +280,70 @@ def _iter_gist_files(*, include_private: bool = False):
 # -- import machinery ----
 
 
-def _check_reload(fullname: str) -> None:
-    """Evict a stale gist from `sys.modules` so the next import reloads it.
+def _file_key(p: Path) -> tuple[int, int, int]:
+    """Identity of a file's current content: `(mtime_ns, inode, size)`."""
+    st = p.stat()
+    return st.st_mtime_ns, st.st_ino, st.st_size
 
+
+def _forget(fullname: str) -> None:
+    """Drop everything tracked for *fullname*, so the next import resolves it afresh."""
+    sys.modules.pop(fullname, None)
+    _managed.pop(fullname, None)
+    _mtimes.pop(fullname, None)
+    _path_dep_modules.discard(fullname)
+
+
+def _is_shadowed(fullname: str, src: Path) -> bool:
+    """Whether a higher-precedence gist file now resolves *fullname* instead of *src*."""
+    if "." in fullname or fullname in _path_dep_modules:
+        return False
+    resolved = _find_gist(fullname)
+    return resolved is not None and resolved != src
+
+
+def _claim_change(fullname: str, src: Path) -> bool:
+    """Evict *fullname* if *src* changed; True only for the one caller that did.
+
+    The new key is recorded here rather than by `find_spec`, or a second thread
+    (an IPC reader serving `tools/list`, a cell) would evict the module the
+    first is still reloading and run its top-level code twice. A reload that
+    fails stays retried: the module is already out of `sys.modules`.
+    """
+    with _reload_lock:
+        prev = _mtimes.get(fullname)
+        key = _file_key(src)
+        if prev is None or key == prev:
+            return False
+        _mtimes[fullname] = key
+        sys.modules.pop(fullname, None)
+        return True
+
+
+def _check_reload(fullname: str) -> None:
+    """Evict a changed, deleted or shadowed gist so the next import resolves it afresh.
+
+    Any difference in `_file_key` counts as a change, not only a newer mtime:
+    a restored backup or a `mv`-replaced file keeps or lowers the mtime.
     Also re-checks `__repld_deps__` for just this file and prompts for anything
     newly declared. `scan_deps()` runs once at boot, so without this a
     dependency added mid-session would sit unchecked until the whole process
     restarted.
     """
     src = _managed.get(fullname)
-    if src is None or not src.is_file():
+    if src is None:
         return
-    mtime = src.stat().st_mtime
-    prev = _mtimes.get(fullname)
-    if prev is not None and mtime > prev:
-        sys.modules.pop(fullname, None)
-        missing = gist_deps.scan_deps(paths=[src])
-        if missing:
-            gist_deps.install_deps(missing)
-        # Don't update _mtimes here; let find_spec update it on reload
+    if not src.is_file() or _is_shadowed(fullname, src):
+        _forget(fullname)
+        return
+    if not _claim_change(fullname, src):
+        return
+    # A fixed gist that breaks again must warn again.
+    stale = {k for k in _malformed_warned if k.startswith((f"{src}:", f"{fullname}:"))}
+    _malformed_warned.difference_update(stale)
+    missing = gist_deps.scan_deps(paths=[src])
+    if missing:
+        gist_deps.install_deps(missing)
 
 
 def _scan_new_deps(src: Path) -> None:
@@ -342,7 +389,7 @@ class _GistFinder(importlib.abc.MetaPathFinder):
         if fullname not in _managed:
             _scan_new_deps(p)
         _managed[fullname] = p
-        _mtimes[fullname] = p.stat().st_mtime
+        _mtimes[fullname] = _file_key(p)
         return importlib.util.spec_from_file_location(
             fullname,
             p,
@@ -530,10 +577,7 @@ class _GistImportHook:
         else:
             base = name
 
-        # Check if this module (or its top-level) is a managed gist. Dedupe
-        # base/top when equal (the common flat-gist case); _check_reload's
-        # dep-scan prompt would otherwise fire twice for one reload, since
-        # _mtimes isn't updated until find_spec runs, below.
+        # Check if this module (or its top-level) is a managed gist.
         top = base.split(".")[0]
         for candidate in {base, top}:
             _check_reload(candidate)

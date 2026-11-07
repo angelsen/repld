@@ -566,7 +566,7 @@ def _gist_add(argv: list[str]) -> int:
         gist_deps.install_deps(missing)
 
     print()
-    print("Restart the kernel to load the linked gist(s).")
+    print("A running kernel picks up the linked gist(s) within a few seconds.")
     return 0
 
 

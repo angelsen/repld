@@ -1732,37 +1732,46 @@ def _watch_owner(pid: int, stop: threading.Event) -> None:
     threading.Thread(target=wait, daemon=True, name="repld-owner-watch").start()
 
 
-def _watch_listings(stop: threading.Event, interval: float = 2.0) -> None:
+def _watch_listings(
+    stop: threading.Event, sock_path: Path, interval: float = 2.0
+) -> None:
     """Tell every client when `tools/list`/`resources/list` would answer differently.
 
-    Both are advertised with `listChanged`, and gist `_tool_*` edits and a
-    bootstrap-created `browser` change them mid-session. Polls rather than
-    hooking the import system so a gist edited on disk is seen before anything
-    imports it. The baseline is taken at start, so boot itself never fires.
+    Both are advertised with `listChanged`, and gist `_tool_*` edits, a changed
+    `./gists/.links` and a bootstrap-created `browser` change them mid-session.
+    Polls rather than hooking the import system so a gist edited on disk is
+    seen before anything imports it. The baseline is taken at start (retried
+    until it succeeds), so boot itself never fires. Each change also rewrites
+    `kernel.cache`, which would otherwise keep answering with the boot-time lists.
     """
+    from . import gist_links
     from .core_schemas import notification
     from .protocol import listing_state
 
     def poll() -> None:
-        try:
-            last = listing_state()
-        except Exception:
-            last = None
+        last = None
+        while last is None:
+            try:
+                last = listing_state()
+            except Exception:
+                if stop.wait(0.5):
+                    return
         while not stop.wait(interval):
+            gist_links.reload_if_changed(paths.local_gists_dir())
             try:
                 now = listing_state()
             except Exception:
                 continue  # a half-written gist must not kill the watcher
-            if last is not None and now != last:
-                if now[0] != last[0]:
-                    ipc.broadcast_channel(
-                        notification("notifications/tools/list_changed")
-                    )
-                if now[1] != last[1]:
-                    ipc.broadcast_channel(
-                        notification("notifications/resources/list_changed")
-                    )
+            if now == last:
+                continue
+            if now[0] != last[0]:
+                ipc.broadcast_channel(notification("notifications/tools/list_changed"))
+            if now[1] != last[1]:
+                ipc.broadcast_channel(
+                    notification("notifications/resources/list_changed")
+                )
             last = now
+            _write_cache(sock_path)
 
     threading.Thread(target=poll, daemon=True, name="repld-listing-watch").start()
 
@@ -1794,7 +1803,6 @@ def run_kernel(
         _boot_runtime(sock_path, display)
         _inject_builtins(loop)
         dashboard_port = _start_services(loop, sock_path, display)
-        _write_cache(sock_path)
         stop = _start_watchdog(loop, loop_thread_id, sock_path, dashboard_port)
 
         # 7. Project bootstrap, if this project has one. Deliberately *after*
@@ -1810,7 +1818,9 @@ def run_kernel(
         # bootstrap that fails, times out, or doesn't exist must still let exec
         # through. A kernel nobody can run code in cannot be repaired.
         loop.call_soon_threadsafe(_init_done.set)
-        _watch_listings(stop)
+        # After the bootstrap, which may create `browser` or register tools.
+        _write_cache(sock_path)
+        _watch_listings(stop, sock_path)
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.

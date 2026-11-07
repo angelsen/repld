@@ -2146,6 +2146,17 @@ Both on sys.path at kernel startup. Auto-reload: edit file, re-import → fresh 
 Module-level state does not survive a reload; keep it in __main__:
   STATE = __main__.__dict__.setdefault("_<gist>_state", {})
 
+Reload happens at an `import` statement or a tool call, per module: editing,
+deleting or shadowing a gist (a same-named file in a higher-precedence dir)
+takes effect on the next one. It does not reach:
+  - a gist that did `from b import f`: editing b.py reloads b, but the
+    importer keeps the old `f`. Use `import b` and call `b.f()`.
+  - names a cell bound (`from foo import bar`): run the import again.
+  - modules loaded with `importlib.import_module`, which skips the hook.
+A gist with `_tool_*` functions is imported off the event loop to answer
+`tools/list`, so start `asyncio.create_task`, `defer()` and `every()` from a
+function, never at module level.
+
 Discovery:
   Module docstring first line → shown in MCP instructions automatically.
   Override: set __repld_help__ = "..." in module for custom description.

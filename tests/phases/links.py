@@ -465,9 +465,7 @@ def _path_deps() -> None:
             )
             print("  ✓ path: dep import skips _register()/introspect() side effects")
 
-            stale_mtime = gists._mtimes["common"]
             common_path.write_text("VALUE = 99\n")
-            os.utime(common_path, (stale_mtime + 1, stale_mtime + 1))
             sys.modules["common"] = types.ModuleType("common")  # a prior import
             gists._check_reload("common")
             assert_true(

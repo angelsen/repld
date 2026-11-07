@@ -20,6 +20,7 @@ from repld import (
     gate_cmd,
     gates,
     gist_api,
+    gist_links,
     gist_lint,
     gists,
     kernel,
@@ -508,6 +509,141 @@ def _missing_import_memo() -> None:
         sys.modules.pop(name, None)
         gists._missing.pop(name, None)
     print("  ✓ gists: a failed import is retried only after a sys.path dir changes")
+
+
+def _reload_edge_cases() -> None:
+    """A gist is evicted, once, on any change to its file: older mtime, shadowing, deletion."""
+    import os
+    import sys
+    import tempfile
+    import types
+
+    name = "repld_smoke_reload_probe"
+    saved_dirs = gists._installed_dirs
+
+    def track(path: Path) -> None:
+        gists._managed[name] = path
+        gists._mtimes[name] = gists._file_key(path)
+        sys.modules[name] = types.ModuleType(name)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        lo, hi = Path(tmp, "lo"), Path(tmp, "hi")
+        lo.mkdir()
+        hi.mkdir()
+        src = lo / f"{name}.py"
+        src.write_text("A = 1\n")
+        gists._installed_dirs = [hi, lo]
+        try:
+            track(src)
+            src.write_text("A = 2\n")
+            past = src.stat().st_mtime_ns - 10_000_000_000
+            os.utime(src, ns=(past, past))
+            gists._check_reload(name)
+            assert_true(
+                name not in sys.modules, "a file restored to an older mtime is evicted"
+            )
+            assert_eq(
+                gists._mtimes[name],
+                gists._file_key(src),
+                "the new key is recorded at eviction",
+            )
+            sys.modules[name] = types.ModuleType(name)
+            gists._check_reload(name)
+            assert_true(name in sys.modules, "an unchanged file is not evicted again")
+
+            track(src)
+            warned = f"{src}:import"
+            with contextlib.redirect_stderr(io.StringIO()):
+                gists._warn_once(warned, "broken")
+                gists._warn_once("reload-probe:unrelated", "other")
+            src.write_text("A = 33\n")
+            gists._check_reload(name)
+            assert_true(
+                warned not in gists._malformed_warned,
+                "a changed gist may warn again",
+            )
+            assert_true(
+                "reload-probe:unrelated" in gists._malformed_warned,
+                "a warning belonging to nothing here is kept",
+            )
+            gists._malformed_warned.discard("reload-probe:unrelated")
+
+            track(src)
+            src.write_text("A = 444\n")
+            wins: list[bool] = []
+            barrier = threading.Barrier(8)
+
+            def race() -> None:
+                barrier.wait()
+                wins.append(gists._claim_change(name, src))
+
+            threads = [threading.Thread(target=race) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert_eq(sum(wins), 1, "one thread of eight claims a change")
+
+            track(src)
+            shadow = hi / f"{name}.py"
+            shadow.write_text("A = 'hi'\n")
+            gists._check_reload(name)
+            assert_true(
+                name not in sys.modules and name not in gists._managed,
+                "a gist shadowed by a higher-precedence file is dropped",
+            )
+            shadow.unlink()
+
+            track(src)
+            src.unlink()
+            gists._check_reload(name)
+            assert_true(
+                name not in sys.modules
+                and name not in gists._managed
+                and name not in gists._mtimes,
+                "a deleted gist is forgotten, not left importable",
+            )
+        finally:
+            gists._installed_dirs = saved_dirs
+            sys.modules.pop(name, None)
+            gists._managed.pop(name, None)
+            gists._mtimes.pop(name, None)
+    print(
+        "  ✓ gists: reload on older mtime, shadowing and deletion; a change is claimed once"
+    )
+
+
+def _links_reload() -> None:
+    """The `_linked` overlay follows `./gists/.links` without a restart."""
+    import tempfile
+
+    saved = dict(gist_links._linked)
+    saved_stamp = gist_links._loaded_stamp
+    gist_links._loaded_stamp = None
+    with tempfile.TemporaryDirectory() as tmp:
+        gdir = Path(tmp, "gists")
+        target = Path(tmp, "elsewhere.py")
+        target.write_text('"""Linked probe."""\n')
+        try:
+            assert_true(
+                not gist_links.reload_if_changed(gdir), "no manifest: nothing to reload"
+            )
+            gist_links.write_links(gdir, {"probe_link": str(target)})
+            assert_true(gist_links.reload_if_changed(gdir), "a new manifest reloads")
+            assert_true("probe_link" in gist_links.linked_names(), "the link is live")
+            assert_true(
+                not gist_links.reload_if_changed(gdir), "an unchanged manifest does not"
+            )
+            gist_links.write_links(gdir, {})
+            assert_true(gist_links.reload_if_changed(gdir), "a rewritten manifest does")
+            assert_true(
+                "probe_link" not in gist_links.linked_names(), "and the link is gone"
+            )
+        finally:
+            gist_links._linked.clear()
+            gist_links._linked.update(saved)
+            gist_links._loaded_stamp = saved_stamp
+    print("  ✓ gist links: the overlay reloads when the manifest changes")
 
 
 def _lint_helpers() -> None:
@@ -2354,6 +2490,8 @@ def phase_2_pure() -> None:
     _cli_args()
     _json_types()
     _missing_import_memo()
+    _reload_edge_cases()
+    _links_reload()
     _lint_helpers()
     _install_python()
     _screencast()
