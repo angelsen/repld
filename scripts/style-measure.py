@@ -82,6 +82,17 @@ def _functions_with_scope(tree: ast.Module) -> list[tuple[str, Func, bool]]:
     return found
 
 
+def _is_elif(parent: ast.AST, child: ast.AST) -> bool:
+    """Whether `child` is `parent`'s `elif`, which ast nests but a reader and ruff do not."""
+    return (
+        isinstance(parent, ast.If)
+        and isinstance(child, ast.If)
+        and parent.orelse == [child]
+        # `else:` then a lone `if` is a real block; only `elif` shares the parent's column.
+        and child.col_offset == parent.col_offset
+    )
+
+
 def _max_nesting(func: Func) -> int:
     """Deepest chain of nested blocks inside *func*, not descending into nested defs."""
 
@@ -90,7 +101,8 @@ def _max_nesting(func: Func) -> int:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (*FUNCTION_NODES, ast.ClassDef)):
                 continue
-            here = depth(child) + (1 if isinstance(child, BLOCK_NODES) else 0)
+            counts = isinstance(child, BLOCK_NODES) and not _is_elif(node, child)
+            here = depth(child) + (1 if counts else 0)
             deepest = max(deepest, here)
         return deepest
 
