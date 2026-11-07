@@ -1733,7 +1733,10 @@ def _watch_owner(pid: int, stop: threading.Event) -> None:
 
 
 def _watch_listings(
-    stop: threading.Event, sock_path: Path, interval: float = 2.0
+    stop: threading.Event,
+    sock_path: Path,
+    loop: asyncio.AbstractEventLoop,
+    interval: float = 2.0,
 ) -> None:
     """Tell every client when `tools/list`/`resources/list` would answer differently.
 
@@ -1746,7 +1749,7 @@ def _watch_listings(
     """
     from . import gist_links
     from .core_schemas import notification
-    from .protocol import listing_state
+    from .protocol import listing_state, refresh_gist_tools_on_loop
 
     def poll() -> None:
         last = None
@@ -1765,6 +1768,7 @@ def _watch_listings(
             if now == last:
                 continue
             if now[0] != last[0]:
+                refresh_gist_tools_on_loop(loop)
                 ipc.broadcast_channel(notification("notifications/tools/list_changed"))
             if now[1] != last[1]:
                 ipc.broadcast_channel(
@@ -1819,8 +1823,11 @@ def run_kernel(
         # through. A kernel nobody can run code in cannot be repaired.
         loop.call_soon_threadsafe(_init_done.set)
         # After the bootstrap, which may create `browser` or register tools.
+        from .protocol import refresh_gist_tools_on_loop
+
+        refresh_gist_tools_on_loop(loop)
         _write_cache(sock_path)
-        _watch_listings(stop, sock_path)
+        _watch_listings(stop, sock_path, loop)
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.

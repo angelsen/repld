@@ -5,11 +5,14 @@ replays the client's handshake onto a fresh kernel, but it never interprets a
 tool call, so every schema and handler below lives on this side of the socket.
 """
 
+import asyncio
 import base64
+import concurrent.futures
 import inspect
 import json
 import os
 import socket
+import sys
 import time
 from typing import ClassVar
 
@@ -838,6 +841,7 @@ _BROWSER_RESOURCES = [
 # exec output. The cap only guards the unbounded producers (browser network/
 # console dumps); everything above it falls back to the spill preview.
 _RESOURCE_MAX_BYTES = 64 * 1024
+_REFRESH_WAIT_SECONDS = 30.0
 _RESOURCE_MIMETYPES = {
     r["uri"]: r["mimeType"] for r in STATIC_RESOURCES + _BROWSER_RESOURCES
 }
@@ -947,6 +951,8 @@ class Dispatcher(BrowserDispatchMixin):
 
     def _tools_list(self, rid) -> dict:
         """Return the full tool catalogue including bridge and gist tools."""
+        if tool_listing_state() != _gist_tools_state:
+            refresh_gist_tools_on_loop(self.ctx.loop)
         return _response(rid, {"tools": _build_tools()})
 
     def _tools_call(
@@ -1462,9 +1468,53 @@ def _bridge_tool_names() -> frozenset[str]:
     return frozenset(bridge_tools.BRIDGE_TOOLS)
 
 
+_gist_tools: list[dict] = []
+_gist_tools_state: tuple | None = None
+
+
+def refresh_gist_tools() -> None:
+    """Re-scan gist `_tool_*` schemas into the list `tools/list` serves.
+
+    Must run on the kernel loop: `scan_tools` imports the owning gists, and a
+    module-level `create_task`/`defer`/`every` needs a running loop. A no-op
+    while `tool_listing_state` still matches the last scan.
+    """
+    global _gist_tools, _gist_tools_state
+    from . import gists
+
+    # Taken before the scan, so an edit landing mid-scan reads as stale next time.
+    state = tool_listing_state()
+    if state == _gist_tools_state:
+        return
+    _gist_tools = gists.scan_tools()
+    _gist_tools_state = state
+
+
+def refresh_gist_tools_on_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Run `refresh_gist_tools` on `loop` from another thread, waiting for it.
+
+    A wedged loop or a failed refresh leaves the previous scan in place.
+    """
+    done: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+    def run() -> None:
+        """Run the refresh on the loop and settle `done`."""
+        try:
+            refresh_gist_tools()
+            done.set_result(None)
+        except Exception as e:
+            done.set_exception(e)
+
+    loop.call_soon_threadsafe(run)
+    try:
+        done.result(timeout=_REFRESH_WAIT_SECONDS)
+    except Exception as e:
+        print(f"repld: failed to refresh gist tools: {e}", file=sys.stderr)
+
+
 def _build_tools() -> list[dict]:
     """Build the full tool list for `tools/list`."""
-    from . import bridge_tools, gists
+    from . import bridge_tools
 
     has_browser = _has_browser()
     tools = [t for t in TOOLS if has_browser or not t["name"].startswith("browser_")]
@@ -1473,7 +1523,7 @@ def _build_tools() -> list[dict]:
     # both directions, and parsing + re-serializing every tools/list reply
     # just to append them would cost it that property. The bridge intercepts
     # the matching tools/call on the way in instead.
-    return tools + bridge_tools.SCHEMAS + gists.scan_tools()
+    return tools + bridge_tools.SCHEMAS + _gist_tools
 
 
 def _build_resources() -> list[dict]:
@@ -1498,13 +1548,19 @@ def _build_resources() -> list[dict]:
 def listing_state() -> tuple[tuple, tuple]:
     """Cheap fingerprints of what `tools/list` and `resources/list` would say.
 
-    Import-free, unlike `_build_tools`: `scan_tools` imports the owning gist,
-    which must not happen on the poller's thread. A gist file's mtime stands in
-    for its inferred schema, so an edit to a tool's signature changes it.
+    Import-free, unlike `refresh_gist_tools`: `scan_tools` imports the owning
+    gist, which must not happen on the poller's thread. A gist file's mtime
+    stands in for its inferred schema, so an edit to a tool's signature changes it.
     """
     from . import gists
 
-    has_browser = _has_browser()
+    return tool_listing_state(), (_has_browser(), tuple(gists.scan()))
+
+
+def tool_listing_state() -> tuple:
+    """The `tools/list` half of `listing_state`: import-free, safe on any thread."""
+    from . import gists
+
     tool_files = []
     for p in gists._iter_gist_files():
         if gists._declared_tools(p):
@@ -1512,7 +1568,7 @@ def listing_state() -> tuple[tuple, tuple]:
                 tool_files.append((str(p), p.stat().st_mtime_ns))
             except OSError:
                 continue
-    return (has_browser, tuple(tool_files)), (has_browser, tuple(gists.scan()))
+    return (_has_browser(), tuple(tool_files))
 
 
 def build_discovery_cache() -> dict:

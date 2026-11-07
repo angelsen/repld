@@ -31,6 +31,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _image_result(b, gists_dir)
         _bad_tool_calls(b)
         _list_changed(b, gists_dir)
+        _imported_on_loop(b, gists_dir)
     finally:
         b.close()
 
@@ -460,6 +461,34 @@ def _list_changed(b: Bridge, gists_dir: Path) -> None:
     print(
         "  ✓ tools/list_changed on gist tool add and remove, kernel.cache kept in step"
     )
+
+
+def _imported_on_loop(b: Bridge, gists_dir: Path) -> None:
+    """A tool gist whose module level needs a running loop is listed, by `tools/list`
+    and by the poller's `kernel.cache` rewrite alike: both import on the loop."""
+    source = (
+        '"""Smoketest gist: module-level loop use."""\n\n'
+        "import asyncio\n\n"
+        "_LOOP = asyncio.get_running_loop()\n\n\n"
+        "def _tool_smoke_onloop() -> str:\n"
+        '    """Imported with a running loop."""\n'
+        '    return "x"\n'
+    )
+    cache = paths.cache_for(paths.socket_path(gists_dir.parent))
+    with _gist(gists_dir, "smoke_onloop", source):
+        names = _tool_names(b)
+        assert_true(
+            "smoke_onloop" in names, f"tool of a loop-bound gist listed (got {names!r})"
+        )
+        assert_true(
+            _cache_lists(cache, "smoke_onloop", present=True),
+            "kernel.cache lists the loop-bound gist's tool",
+        )
+    assert_true(
+        _cache_lists(cache, "smoke_onloop", present=False),
+        "kernel.cache drops it once the gist is gone",
+    )
+    print("  ✓ gist tools imported on the loop: module-level get_running_loop() works")
 
 
 def _cache_lists(

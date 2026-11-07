@@ -2153,9 +2153,10 @@ takes effect on the next one. It does not reach:
     importer keeps the old `f`. Use `import b` and call `b.f()`.
   - names a cell bound (`from foo import bar`): run the import again.
   - modules loaded with `importlib.import_module`, which skips the hook.
-A gist with `_tool_*` functions is imported off the event loop to answer
-`tools/list`, so start `asyncio.create_task`, `defer()` and `every()` from a
-function, never at module level.
+A gist with `_tool_*` functions is imported on the event loop to build its tool
+schema, at boot and again within a couple of seconds of an edit, so module-level
+`asyncio.create_task`, `defer()` and `every()` work. `tools/list` serves the
+last scan; a `tools/call` still imports the gist on the calling thread.
 
 Discovery:
   Module docstring first line → shown in MCP instructions automatically.
