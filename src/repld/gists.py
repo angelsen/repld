@@ -63,9 +63,10 @@ __all__ = [
 # -- module state ----
 
 # Module names managed by the gist finder (populated by _GistFinder)
-_managed: dict[str, Path] = {}                 # fullname to source .py path
+_managed: dict[str, Path] = {}  # fullname to source .py path
 _mtimes: dict[str, tuple[int, int, int]] = {}  # fullname to last `_file_key`
-_installed_dirs: list[Path] = []               # set by install()
+_importers: dict[str, set[str]] = {}  # gist to the managed gists that imported it
+_installed_dirs: list[Path] = []  # set by install()
 _reload_lock = threading.Lock()
 
 # Subset of _managed sourced from a 'path:' dep directory rather than a real
@@ -292,6 +293,20 @@ def _forget(fullname: str) -> None:
     _managed.pop(fullname, None)
     _mtimes.pop(fullname, None)
     _path_dep_modules.discard(fullname)
+    _cascade_evict(fullname)
+
+
+def _cascade_evict(changed: str) -> None:
+    """Evict, transitively, the managed gists that imported *changed*.
+
+    Their own files are unchanged, so `_claim_change` never sees them, but a
+    `from changed import f` bound the old `f`; only a re-import rebinds it.
+    The edges are rebuilt by the hook as the importers load again.
+    """
+    for name in _importers.pop(changed, ()):
+        if name in _managed:
+            sys.modules.pop(name, None)
+            _cascade_evict(name)
 
 
 def _is_shadowed(fullname: str, src: Path) -> bool:
@@ -317,10 +332,28 @@ def _claim_change(fullname: str, src: Path) -> bool:
             return False
         _mtimes[fullname] = key
         sys.modules.pop(fullname, None)
+        _cascade_evict(fullname)
         return True
 
 
 def _check_reload(fullname: str) -> None:
+    """Check *fullname* and every gist it imported, so an edit below it reaches it.
+
+    Importing `a` after only `b.py` changed must still reload `a` when `a`
+    did `from b import f`; `_check_one` evicts the importers of what changed.
+    """
+    seen: set[str] = set()
+    todo = [fullname]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        todo.extend(d for d, users in _importers.items() if name in users)
+        _check_one(name)
+
+
+def _check_one(fullname: str) -> None:
     """Evict a changed, deleted or shadowed gist so the next import resolves it afresh.
 
     Any difference in `_file_key` counts as a change, not only a newer mtime:
@@ -604,6 +637,9 @@ class _GistImportHook:
         # not gists, so gist-authoring conventions (docstring-as-description,
         # registry entries) don't apply.
         if top in _managed and top not in _path_dep_modules:
+            caller = globals.get("__name__") if globals else None
+            if caller in _managed and caller != top:
+                _importers.setdefault(top, set()).add(caller)
             _register(top)
             try:
                 summary = introspect(top)

@@ -2148,9 +2148,7 @@ Module-level state does not survive a reload; keep it in __main__:
 
 Reload happens at an `import` statement or a tool call, per module: editing,
 deleting or shadowing a gist (a same-named file in a higher-precedence dir)
-takes effect on the next one. It does not reach:
-  - a gist that did `from b import f`: editing b.py reloads b, but the
-    importer keeps the old `f`. Use `import b` and call `b.f()`.
+takes effect on the next one, and reloads the gists that imported it. It does not reach:
   - names a cell bound (`from foo import bar`): run the import again.
   - modules loaded with `importlib.import_module`, which skips the hook.
 A gist with `_tool_*` functions is imported on the event loop to build its tool

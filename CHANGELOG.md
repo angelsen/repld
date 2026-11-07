@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Editing a gist reloads the gists that did `from` it, transitively: `from b import f` in `a.py` no longer keeps the old `f` after `b.py` changes, and importing `a` alone is enough to see it.
 - Gist reload follows the file, not only a newer mtime: a restored older file, a `mv`-replaced one, a deleted gist and a local gist shadowing an already-imported global one all take effect on the next import, and one change reloads once even when a cell and `tools/list` import it together. A gist that failed to import, was fixed and broke again now warns again. A peer call reaches the edited version of a gist a cell had imported.
 - `kernel.cache` is rewritten when the tool or resource list changes, and written after `repld_init.py` has run, so a cold-started bridge no longer advertises the boot-time list (missing a bootstrap-created `browser` and every gist tool added since). The listing watcher retries a failed baseline instead of swallowing the first change, and `repld gist add`/`rm` reach a running kernel within seconds instead of needing a restart.
 - A gist with `_tool_*` functions is imported on the kernel loop to build its tool schema, so module-level `asyncio.create_task`, `defer()` and `every()` no longer make its tools vanish from `tools/list` and `kernel.cache`. `tools/list` serves a scan refreshed when the import-free listing fingerprint changes. A `tools/call` imports a changed gist on the loop too, so a tool edited after it was listed still loads.

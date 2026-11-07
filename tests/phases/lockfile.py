@@ -582,6 +582,15 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
             )
             print("  ✓ cross-imports between extra-dir gists resolve")
 
+            time.sleep(0.05)
+            (extra / "plugin_b.py").write_text("VALUE = 100\n")
+            out = _exec(tmp, "import plugin_a; print(plugin_a.RESULT)")
+            assert_true(
+                "200" in out,
+                f"editing plugin_b reloads plugin_a's `from plugin_b import` (got {out!r})",
+            )
+            print("  ✓ an edit to a gist reloads the gists that did `from` it")
+
             out = _exec(
                 tmp,
                 "from repld import gists\n"

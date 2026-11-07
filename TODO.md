@@ -31,9 +31,6 @@
 
 ## Gist reload and tool dispatch gaps
 
-- [ ] Reload is not transitive: `from b import f` in `a.py` keeps the old `f` after `b.py`
-  is edited. Only the `gists` topic in `help.py` says so. Fix by evicting importers of a
-  changed module, or by refusing to document it away.
 - [ ] A sync `_tool_*` handler still runs on the IPC reader thread (an async one hops to the
   loop through `_run_async`), so `asyncio.get_running_loop()` or `create_task` inside the
   handler body fails. Only the import moved to the loop. `exec` cells run sync code in

@@ -379,7 +379,7 @@ def _json_types() -> None:
         (dict[str, int], {"type": "object"}),
         (int | None, {"type": "integer"}),
         (Optional[list[int]], {"type": "array", "items": {"type": "integer"}}),  # noqa: UP045 — the typing.Union spelling is the case
-        (Optional[Annotated[str, "x"]], {"type": "string"}),                     # noqa: UP045
+        (Optional[Annotated[str, "x"]], {"type": "string"}),  # noqa: UP045
         (Literal["a", "b"], {"type": "string", "enum": ["a", "b"]}),
         (Literal[True], {"type": "boolean", "enum": [True]}),
         (
@@ -509,6 +509,43 @@ def _missing_import_memo() -> None:
         sys.modules.pop(name, None)
         gists._missing.pop(name, None)
     print("  ✓ gists: a failed import is retried only after a sys.path dir changes")
+
+
+def _transitive_reload() -> None:
+    """Editing a leaf gist evicts its importers, transitively, and importing the top finds it."""
+    import sys
+    import tempfile
+    import types
+
+    names = ("repld_smoke_tc", "repld_smoke_tb", "repld_smoke_ta")
+    leaf, mid, top = names
+    with tempfile.TemporaryDirectory() as tmp:
+        for n in names:
+            path = Path(tmp, f"{n}.py")
+            path.write_text("A = 1\n")
+            gists._managed[n] = path
+            gists._mtimes[n] = gists._file_key(path)
+            sys.modules[n] = types.ModuleType(n)
+        gists._importers[leaf] = {mid}
+        gists._importers[mid] = {top}
+        try:
+            Path(tmp, f"{leaf}.py").write_text("A = 22\n")
+            gists._check_reload(top)
+            assert_true(
+                not any(n in sys.modules for n in names),
+                "an edit to a leaf evicts its importers when only the top is imported",
+            )
+            assert_true(
+                leaf not in gists._importers and mid not in gists._importers,
+                "evicted edges are dropped, to be rebuilt as the importers load again",
+            )
+        finally:
+            for n in names:
+                sys.modules.pop(n, None)
+                gists._managed.pop(n, None)
+                gists._mtimes.pop(n, None)
+                gists._importers.pop(n, None)
+    print("  ✓ gists: an edit below a gist evicts it, transitively")
 
 
 def _reload_edge_cases() -> None:
@@ -2491,6 +2528,7 @@ def phase_2_pure() -> None:
     _json_types()
     _missing_import_memo()
     _reload_edge_cases()
+    _transitive_reload()
     _links_reload()
     _lint_helpers()
     _install_python()
