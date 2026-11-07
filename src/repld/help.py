@@ -2177,6 +2177,9 @@ Tool registration:
   line is spent on the tool description, so this is the only place to say
   what a date format or an id refers to. Composes with `| None`.
   Scaffold: repld gist new <name>
+  A sync handler runs off the loop, like a sync exec cell: asyncio.get_running_loop()
+  and create_task fail in its body. Schedule work with repld.defer() / repld.every(),
+  or write the handler `async def`, which runs on the loop.
 
   Example:
     async def _tool_foo_query(

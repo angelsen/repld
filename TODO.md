@@ -29,13 +29,6 @@
   tags against the actually-running interpreter's version would catch this class of bug
   before it manifests as a confusing runtime import error for a compiled extension.
 
-## Gist reload and tool dispatch gaps
-
-- [ ] A sync `_tool_*` handler still runs on the IPC reader thread (an async one hops to the
-  loop through `_run_async`), so `asyncio.get_running_loop()` or `create_task` inside the
-  handler body fails. Only the import moved to the loop. `exec` cells run sync code in
-  `asyncio.to_thread`, which has the same property, so this is a gap only if a gist author hits it.
-
 ## Browser
 
 - [x] **A download on a tab no session owns broadcasts to every connected session.** Fixed in b013333e (`_push_download` returns with no owner); the incident ran a released kernel without it, so it ships with the next release. 2026-11-01 ~20:30: Fredrik's own kartverket tab in the shared 9222 Chrome downloaded two PDFs; each `download_started`/`download_done` reached every Claude session on the cairn kernel, and two armed panes idle in a queue woke for a no-op turn per push (four turns for two files). `_downloads` targets `last_caller`; a tab with none should log the download and push to nobody, or only to the kernel's pane, never broadcast.

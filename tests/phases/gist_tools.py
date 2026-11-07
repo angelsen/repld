@@ -32,6 +32,7 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _bad_tool_calls(b)
         _list_changed(b, gists_dir)
         _imported_on_loop(b, gists_dir)
+        _sync_handler_defers(b, gists_dir)
     finally:
         b.close()
 
@@ -500,6 +501,29 @@ def _imported_on_loop(b: Bridge, gists_dir: Path) -> None:
         "kernel.cache drops it once the gist is gone",
     )
     print("  ✓ gist tools imported on the loop: module-level get_running_loop() works")
+
+
+def _sync_handler_defers(b: Bridge, gists_dir: Path) -> None:
+    """A sync handler runs off the loop, so `repld.defer()` is how it schedules work."""
+    source = (
+        '"""Smoketest gist: sync handler."""\n\n'
+        "import asyncio\n\n"
+        "import repld\n\n\n"
+        "async def _job() -> None:\n"
+        "    await asyncio.sleep(0.1)\n\n\n"
+        "def _tool_smoke_syncdefer() -> str:\n"
+        '    """Defer a job from a sync handler."""\n'
+        '    return repld.defer(_job(), "syncdefer")\n'
+    )
+    with _gist(gists_dir, "smoke_syncdefer", source):
+        tid = content_text(_call(b, "smoke_syncdefer", {})).strip()
+        b.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            timeout=10,
+            where=lambda n: n["params"]["meta"].get("task_id") == tid,
+        )
+    print("  ✓ a sync tool handler schedules work with defer()")
 
 
 def _cache_lists(

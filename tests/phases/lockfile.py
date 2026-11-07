@@ -552,7 +552,9 @@ def phase_5_init(_kernel: Kernel) -> None:
 
 def _init_tool_cached(tmp: Path) -> None:
     """`kernel.cache` is written after the bootstrap, so a `_tool_*` gist that
-    `repld_init.py` creates is listed for the next bridge's discovery."""
+    `repld_init.py` creates is listed for the next bridge's discovery. The
+    poller's baseline postdates the bootstrap, so only the boot write can put
+    it there."""
     from repld import paths
 
     (tmp / "repld_init.py").write_text(
