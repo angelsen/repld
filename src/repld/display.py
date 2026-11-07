@@ -265,7 +265,14 @@ def _render_channel_push(ev: ChannelPush) -> None:
 
 
 def _render_prompt_open(ev: HumanPromptOpen) -> None:
-    """Show the gate prompt. No trailing newline: the cursor stays for stdin."""
+    """Show the gate prompt. No trailing newline: the cursor stays for stdin.
+
+    A secret gate is announced but not registered, so the stdin reader never
+    takes its answer and the pane never invites typing a token into scrollback.
+    """
+    if ev.secret:
+        _out(f"{_DIM}[secret] {ev.prompt} (answer on the dashboard page){_RESET}\n")
+        return
     _open_gates[ev.gate_id] = (ev.kind, ev.prompt, ev.options, ev.schema)
     _out(render.prompt_open(ev.kind, ev.prompt, ev.options, ev.gate_id, ev.schema))
 

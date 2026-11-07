@@ -273,6 +273,10 @@ async def _gate(
     pops the entry. A gate left in `_gates` with nobody awaiting its future
     would let `repld gate` "answer" a dead promise.
     """
+    if secret and dashboard.bound_port() is None:
+        raise RuntimeError(
+            "a secret gate is answered on the dashboard, which is not listening"
+        )
     gate_id = uuid.uuid4().hex[:8]
     fut: concurrent.futures.Future = concurrent.futures.Future()
     with _gates_lock:
@@ -322,7 +326,7 @@ async def _gate(
         push_channel(
             content, meta, session=tasks.current_origin(), fallback_broadcast=True
         )
-        emit(HumanPromptOpen(gate_id, kind, prompt, options, schema))
+        emit(HumanPromptOpen(gate_id, kind, prompt, options, schema, secret))
         if on_open is not None:
             on_open(gate_id)
         elicit_id = _send_elicitation(gate_id, prompt, schema, tab)
@@ -458,7 +462,7 @@ def _find_secret(gate_id: str, nonce: str) -> _Gate | None:
         gate = _gates.get(gate_id)
     if gate is None or not gate.secret or gate.future.done():
         return None
-    return gate if secrets.compare_digest(nonce, gate.nonce) else None
+    return gate if secrets.compare_digest(nonce.encode(), gate.nonce.encode()) else None
 
 
 def _cancel_elicitation(request_id: str) -> None:

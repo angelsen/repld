@@ -105,10 +105,11 @@ def _load_links(gists_dir: Path) -> None:
     rewrites the manifest. It is committed, and silently editing it would dirty
     the working tree. Use `repld gist rm --stale` to drop dead links.
     """
-    global _loaded_stamp
+    global _loaded_stamp, _linked
     # Taken before the read: a write landing mid-read then reloads once more.
     _loaded_stamp = _manifest_stamp(gists_dir)
-    _linked.clear()
+    # Built aside and swapped whole: the watcher thread runs this while imports read `_linked`.
+    fresh: dict[str, Path] = {}
     try:
         links = read_links(gists_dir)
     except ValueError as e:
@@ -116,16 +117,18 @@ def _load_links(gists_dir: Path) -> None:
             f"repld: {e}; linked gists unavailable (fix or delete the file)",
             file=sys.stderr,
         )
+        _linked = fresh
         return
     for name, raw in links.items():
         p = Path(raw)
         if p.is_file():
-            _linked[name] = p
+            fresh[name] = p
         else:
             print(
                 f"repld: linked gist '{name}' path gone: {raw} (repld gist rm {name})",
                 file=sys.stderr,
             )
+    _linked = fresh
 
 
 def _sibling_imports(path: Path) -> set[str]:

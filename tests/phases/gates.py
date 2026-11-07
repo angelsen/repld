@@ -641,6 +641,8 @@ def _secret_gate(kernel: Kernel) -> None:
 
         status, _ = _secret_page(kernel, "GET", url.split("?")[0] + "?n=wrong")
         assert_eq(status, 404, "a wrong nonce gets no form")
+        status, _ = _secret_page(kernel, "GET", url.split("?")[0] + "?n=%C3%A9")
+        assert_eq(status, 404, "a non-ASCII nonce is a mismatch, not a 500")
         status, page = _secret_page(kernel, "GET", url)
         assert_true(status == 200 and "Vault password?" in page, "the form renders")
         status, _ = _secret_page(kernel, "POST", url, "n=wrong&value=hunter2")
@@ -664,6 +666,7 @@ def _secret_gate(kernel: Kernel) -> None:
         assert_eq(status, 404, "an answered gate takes no second answer")
         log = paths.eventlog_for(paths.socket_path(kernel.cwd)).read_text()
         assert_true("hunter2" not in log, "the event log never holds the secret")
+        assert_true('"secret": true' in log, "the open event marks the gate secret")
 
         task = _open_gate(b, 'await ask("Declined?", secret=True)')
         req = _elicit_request(b, "Declined?")

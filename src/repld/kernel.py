@@ -1808,6 +1808,8 @@ def run_kernel(
         _inject_builtins(loop)
         dashboard_port = _start_services(loop, sock_path, display)
         stop = _start_watchdog(loop, loop_thread_id, sock_path, dashboard_port)
+        # A slow or failed bootstrap must not leave a cold bridge with no cache.
+        _write_cache(sock_path)
 
         # 7. Project bootstrap, if this project has one. Deliberately *after*
         #    `_start_services` bound the socket: the bridge gives a spawn 5s to

@@ -303,7 +303,7 @@ def _cascade_evict(changed: str) -> None:
     `from changed import f` bound the old `f`; only a re-import rebinds it.
     The edges are rebuilt by the hook as the importers load again.
     """
-    for name in _importers.pop(changed, ()):
+    for name in tuple(_importers.pop(changed, ())):
         if name in _managed:
             sys.modules.pop(name, None)
             _cascade_evict(name)
@@ -349,7 +349,7 @@ def _check_reload(fullname: str) -> None:
         if name in seen:
             continue
         seen.add(name)
-        todo.extend(d for d, users in _importers.items() if name in users)
+        todo.extend(d for d, users in list(_importers.items()) if name in users)
         _check_one(name)
 
 

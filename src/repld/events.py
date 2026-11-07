@@ -80,6 +80,7 @@ class HumanPromptOpen:
     prompt: str
     options: list[str] | None   # for choose
     schema: dict | None = None  # absent only in pre-schema event logs
+    secret: bool = False        # answered only on the dashboard, never read from the pane
 
 
 @dataclass(frozen=True, slots=True)
