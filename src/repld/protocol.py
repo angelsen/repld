@@ -14,6 +14,7 @@ import os
 import socket
 import sys
 import time
+from collections.abc import Callable
 from typing import ClassVar
 
 import __main__
@@ -1096,11 +1097,10 @@ class Dispatcher(BrowserDispatchMixin):
         text-shaped preview to spill. A `content.Image`, or a list holding
         one, becomes one content block per item; an image is never spilled.
         """
-        from . import gists
         from .content import Image
 
         try:
-            handler = gists.resolve_tool(name)
+            handler = _resolve_tool_on_loop(name, self.ctx.loop)
         except AttributeError as exc:
             return _error(rid, -32602, str(exc))
         if handler is None:
@@ -1510,6 +1510,29 @@ def refresh_gist_tools_on_loop(loop: asyncio.AbstractEventLoop) -> None:
         done.result(timeout=_REFRESH_WAIT_SECONDS)
     except Exception as e:
         print(f"repld: failed to refresh gist tools: {e}", file=sys.stderr)
+
+
+def _resolve_tool_on_loop(
+    name: str, loop: asyncio.AbstractEventLoop
+) -> Callable | None:
+    """Import the gist owning tool *name* on `loop` and return its handler.
+
+    Raises what `gists.resolve_tool` raises. Module-level `create_task`/`defer`/
+    `every` needs a running loop, which an IPC reader thread lacks.
+    """
+    from . import gists
+
+    done: concurrent.futures.Future[Callable | None] = concurrent.futures.Future()
+
+    def run() -> None:
+        """Resolve the handler on the loop and settle `done`."""
+        try:
+            done.set_result(gists.resolve_tool(name))
+        except Exception as e:
+            done.set_exception(e)
+
+    loop.call_soon_threadsafe(run)
+    return done.result(timeout=_REFRESH_WAIT_SECONDS)
 
 
 def _build_tools() -> list[dict]:

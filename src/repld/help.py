@@ -2156,7 +2156,7 @@ takes effect on the next one. It does not reach:
 A gist with `_tool_*` functions is imported on the event loop to build its tool
 schema, at boot and again within a couple of seconds of an edit, so module-level
 `asyncio.create_task`, `defer()` and `every()` work. `tools/list` serves the
-last scan; a `tools/call` still imports the gist on the calling thread.
+last scan; a `tools/call` imports a changed gist on the loop too.
 
 Discovery:
   Module docstring first line → shown in MCP instructions automatically.

@@ -484,6 +484,17 @@ def _imported_on_loop(b: Bridge, gists_dir: Path) -> None:
             _cache_lists(cache, "smoke_onloop", present=True),
             "kernel.cache lists the loop-bound gist's tool",
         )
+        assert_eq(
+            content_text(_call(b, "smoke_onloop", {})),
+            "x",
+            "tools/call on a loop-bound gist",
+        )
+        _write(gists_dir / "smoke_onloop.py", source.replace('"x"', '"edited"'))
+        assert_eq(
+            content_text(_call(b, "smoke_onloop", {})),
+            "edited",
+            "tools/call re-imports a changed loop-bound gist on the loop",
+        )
     assert_true(
         _cache_lists(cache, "smoke_onloop", present=False),
         "kernel.cache drops it once the gist is gone",
