@@ -35,8 +35,6 @@
   loop through `_run_async`), so `asyncio.get_running_loop()` or `create_task` inside the
   handler body fails. Only the import moved to the loop. `exec` cells run sync code in
   `asyncio.to_thread`, which has the same property, so this is a gap only if a gist author hits it.
-- [ ] No test asserts that `kernel.cache` lists a tool created by `repld_init.py`; the boot
-  write moved after the bootstrap, but only `_imported_on_loop` pins the poller path.
 
 ## Browser
 

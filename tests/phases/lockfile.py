@@ -5,6 +5,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
@@ -436,7 +437,10 @@ def phase_5_init(_kernel: Kernel) -> None:
         finally:
             k.stop()
 
-        # 5. The flag is gone, not silently ignored.
+        # 5. A tool gist the bootstrap writes is in the boot-time kernel.cache.
+        _init_tool_cached(tmp)
+
+        # 6. The flag is gone, not silently ignored.
         rc = _repld(tmp, "--init", "repld_init.py")
         assert_true(rc.returncode != 0, "--init is rejected, not accepted as a no-op")
         assert_true(
@@ -544,6 +548,41 @@ def phase_5_init(_kernel: Kernel) -> None:
             k.stop()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _init_tool_cached(tmp: Path) -> None:
+    """`kernel.cache` is written after the bootstrap, so a `_tool_*` gist that
+    `repld_init.py` creates is listed for the next bridge's discovery."""
+    from repld import paths
+
+    (tmp / "repld_init.py").write_text(
+        "from pathlib import Path\n"
+        "Path('gists').mkdir(exist_ok=True)\n"
+        "Path('gists/init_made.py').write_text(\n"
+        '    \'"""Made by the bootstrap."""\\n\\n\'\n'
+        "    'def _tool_init_made() -> str:\\n'\n"
+        '    \'    """Created at boot."""\\n\'\n'
+        "    '    return \"x\"\\n'\n"
+        ")\n"
+    )
+    cache = paths.cache_for(paths.socket_path(tmp))
+    cache.unlink(missing_ok=True)
+    k = Kernel(tmp)
+    try:
+        deadline = time.monotonic() + 15
+        names: set[str] = set()
+        while time.monotonic() < deadline and "init_made" not in names:
+            if cache.exists():
+                names = {t["name"] for t in json.loads(cache.read_text())["tools"]}
+            time.sleep(0.2)
+        assert_true(
+            "init_made" in names,
+            f"kernel.cache lists the bootstrap-created tool (got {sorted(names)!r})",
+        )
+        print("  ✓ kernel.cache lists a tool gist created by repld_init.py")
+    finally:
+        k.stop()
+        shutil.rmtree(tmp / "gists", ignore_errors=True)
 
 
 def phase_5_search_dir(_kernel: Kernel) -> None:
