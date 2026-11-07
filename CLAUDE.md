@@ -11,16 +11,19 @@ Research preview. The kernel, bridge, MCP protocol (exec / get_task / cancel), h
 Python 3.14+, managed with **uv** using the `uv_build` backend (see `pyproject.toml`).
 
 ```bash
-uv sync                                                                                                 # install deps into .venv
-uv run repld                                                                                            # runs the `repld:main` entrypoint
-uv build                                                                                                # wheel + sdist via uv_build
-uv run tests/smoketest.py --phase 12                                                                    # end-to-end smoketest
-ruff check --fix && ruff format . gists && python3 scripts/align-comments.py --fix-all && basedpyright  # lint / format / align / type-check
-ruff check --preview --select PLR1702 --config 'lint.pylint.max-nested-blocks=4' src                    # nesting depth 4 (preview-only, held at zero)
-make injected                                                                                           # regenerate src/repld/browser/injected_source.py
+uv sync                                                                               # install deps into .venv
+uv run repld                                                                          # runs the `repld:main` entrypoint
+uv build                                                                              # wheel + sdist via uv_build
+uv run tests/smoketest.py --phase 12                                                  # end-to-end smoketest
+make fmt && basedpyright                                                              # lint / format / align / type-check
+ruff check --preview --select PLR1702 --config 'lint.pylint.max-nested-blocks=4' src  # nesting depth 4 (preview-only, held at zero)
+make injected                                                                         # regenerate src/repld/browser/injected_source.py
 ```
 
-`scripts/align-comments.py --fix-all` runs last on purpose — it re-applies
+`make fmt` is `ruff check --fix`, `ruff format . gists`, then
+`scripts/align-comments.py --fix-all`; run it whole, never `ruff format` alone or on
+a path subset, which collapses the alignment in unrelated files. The align step
+runs last on purpose — it re-applies
 column alignment to trailing `#` comments and `sig  → type` doc markers that
 `ruff format` would otherwise collapse to a flat 2-space gap on every `.py`
 file. This means a fresh `ruff format --check` run right after this command

@@ -1,6 +1,11 @@
 ROOT := $(shell git rev-parse --show-toplevel)
 
-.PHONY: deploy site-build site-preview injected
+.PHONY: deploy site-build site-preview injected fmt
+
+fmt:
+	ruff check --fix
+	ruff format . gists
+	python3 scripts/align-comments.py --fix-all
 
 injected:
 	uv run python scripts/build_injected.py
