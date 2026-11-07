@@ -42,6 +42,7 @@ _SWEEP_GLOBS = [
 
 
 def _sweep_targets() -> list[Path]:
+    """The sorted files `--fix-all` visits, symlinks and `__pycache__` excluded."""
     seen: set[Path] = set()
     for pattern in _SWEEP_GLOBS:
         for path in REPO_ROOT.glob(pattern):
@@ -148,6 +149,7 @@ _ARROW_RE = re.compile(r"^(.*\S)( {2,}→ ?.*)$")
 
 
 def _find_arrow(line: str) -> tuple[str, str] | None:
+    """Split `line` into code and its arrow marker, or `None` when it carries no standalone marker."""
     m = _ARROW_RE.match(line)
     if not m:
         return None
@@ -218,6 +220,7 @@ def fix_file(path: Path, tab: int = 0) -> bool:
 
 
 def main() -> int:
+    """Run the CLI (`--fix-all` sweep, or check/fix one file or stdin) and return the exit code."""
     if "--fix-all" in sys.argv:
         tab = 0
         for i, a in enumerate(sys.argv[1:]):

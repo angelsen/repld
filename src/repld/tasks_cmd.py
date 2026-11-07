@@ -36,10 +36,10 @@ def _err(msg: str) -> None:
     print(f"{_LABEL}: {msg}", file=sys.stderr, flush=True)
 
 
-def _report_error(err: dict) -> int:
-    """Render a JSON-RPC error, naming version skew when that is what it is.
+def _print_error(err: dict) -> int:
+    """Print a JSON-RPC error, naming version skew when that is what it is.
 
-    Mirrors `gate_cmd._report_error`: `wait`/`cancel` are as new to an old
+    Mirrors `gate_cmd._print_error`: `wait`/`cancel` are as new to an old
     kernel as `gates/list` once was, and get method-not-found the same way.
     """
     if err.get("code") == -32601:
@@ -212,7 +212,7 @@ def _wait(sock_path: Path, rest: list[str], as_json: bool) -> int:
             _err("kernel disconnected")
             return 1
         if "error" in resp:
-            return _report_error(resp["error"])
+            return _print_error(resp["error"])
         snap = resp.get("result", {})
         if as_json:
             print(json.dumps(snap, indent=2))
@@ -248,7 +248,7 @@ def _cancel(sock_path: Path, rest: list[str], as_json: bool) -> int:
             _err("kernel disconnected")
             return 1
         if "error" in resp:
-            return _report_error(resp["error"])
+            return _print_error(resp["error"])
         result = resp.get("result", {})
         accepted = bool(result.get("cancelled"))
         if as_json:

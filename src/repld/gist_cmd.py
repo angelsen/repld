@@ -232,7 +232,7 @@ def _gist_fetch(argv: list[str]) -> int:
         return 1
 
     written = _write_fetched(files, dest_dir, gist_id)
-    _report_fetched(description, written)
+    _print_fetched(description, written)
     return 0
 
 
@@ -358,7 +358,7 @@ def _write_fetched(files: dict[str, str], dest_dir: Path, gist_id: str) -> list[
     return written
 
 
-def _report_fetched(description: str, written: list[Path]) -> None:
+def _print_fetched(description: str, written: list[Path]) -> None:
     """Print what landed, the deps it declares but does not install, and next steps."""
     from . import gist_deps
 

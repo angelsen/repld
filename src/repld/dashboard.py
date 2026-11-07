@@ -580,7 +580,7 @@ async def _send_preflight(writer: asyncio.StreamWriter, origin: str | None) -> N
     await writer.drain()
 
 
-async def _serve_page(
+async def _handle_page(
     writer: asyncio.StreamWriter,
     query: str,
     headers: dict[str, str],
@@ -619,7 +619,7 @@ async def _serve_page(
     )
 
 
-async def _serve_secret(
+async def _handle_secret(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     method: str,
@@ -658,7 +658,7 @@ async def _serve_secret(
     await _send_response(writer, 200, SECRET_DONE_PAGE.encode(), html)
 
 
-async def _serve_api(
+async def _handle_api_post(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     headers: dict[str, str],
@@ -691,7 +691,7 @@ async def _serve_api(
     await _send_response(writer, 200, result, origin=origin)
 
 
-async def _serve_request(
+async def _handle_request(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     headers: dict[str, str],
@@ -725,15 +725,15 @@ async def _serve_request(
         return
 
     if method_http == "GET" and path == "/":
-        await _serve_page(writer, query, headers, origin)
+        await _handle_page(writer, query, headers, origin)
         return
 
     if method_http == "POST" and path == "/api":
-        await _serve_api(reader, writer, headers, content_length, origin)
+        await _handle_api_post(reader, writer, headers, content_length, origin)
         return
 
     if path.startswith("/secret/") and method_http in ("GET", "POST"):
-        await _serve_secret(reader, writer, method_http, path, query, content_length)
+        await _handle_secret(reader, writer, method_http, path, query, content_length)
         return
 
     await _send_response(writer, 404, b'{"error":"not found"}', origin=origin)
@@ -745,7 +745,7 @@ async def _handle_connection(
     """Serve one HTTP request, then close the connection."""
     headers: dict[str, str] = {}
     try:
-        await _serve_request(reader, writer, headers)
+        await _handle_request(reader, writer, headers)
     except (
         TimeoutError,
         asyncio.IncompleteReadError,

@@ -81,10 +81,12 @@ SOURCE = {source!r}
 
 
 def _fail(msg: str) -> None:
+    """Exit the build with `msg`."""
     sys.exit(f"build_injected: {msg}")
 
 
 def _git(*args: str, cwd: Path) -> str:
+    """Run `git` in `cwd` and return stripped stdout, exiting the build on a non-zero status."""
     proc = subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
     )
@@ -121,6 +123,7 @@ def _ensure_checkout() -> Path:
 
 
 def _esbuild_bin() -> Path:
+    """The cached esbuild binary, installing the pinned version with npm first when absent."""
     exe = ESBUILD_CACHE / "node_modules" / ".bin" / "esbuild"
     if exe.exists():
         return exe
@@ -143,6 +146,7 @@ def _esbuild_bin() -> Path:
 
 
 def _bundle(esbuild: Path, checkout: Path) -> str:
+    """Bundle the injected script from `checkout` with `esbuild` and return the JS source."""
     entry = checkout / "packages" / "injected" / "src" / "injectedScript.ts"
     proc = subprocess.run(
         [
@@ -168,6 +172,7 @@ def _bundle(esbuild: Path, checkout: Path) -> str:
 
 
 def _replace_header(content: str) -> str:
+    """Swap esbuild's preamble in `content` for `MODULE_PREFIX`."""
     # Port of utils/generate_injected.js:replaceEsbuildHeader. The first
     # `__toCommonJS` occurrence is its one-line definition, the last helper in
     # esbuild's preamble; cut through that line and substitute MODULE_PREFIX.
@@ -180,6 +185,7 @@ def _replace_header(content: str) -> str:
 
 
 def main() -> None:
+    """Rebuild `OUT` from the pinned Playwright commit."""
     checkout = _ensure_checkout()
     source = _replace_header(_bundle(_esbuild_bin(), checkout))
     if "InjectedScript" not in source:

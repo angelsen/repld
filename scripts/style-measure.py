@@ -129,6 +129,7 @@ def _line_classes(source: str, tree: ast.Module) -> tuple[int, int, int]:
 
 
 def _is_public(qualname: str) -> bool:
+    """Whether no segment of the dotted `qualname` is private."""
     return not any(part.startswith("_") for part in qualname.split("."))
 
 
@@ -209,6 +210,7 @@ def bodies(path: Path) -> list[tuple[str, str]]:
 
 
 def _print_report(m: dict) -> None:
+    """Print the text report for one module's measurements `m`."""
     print(f"{m['file']}")
     print(
         f"  lines: code {m['code_lines']}, comments {m['comment_lines']}"
@@ -243,6 +245,7 @@ def _print_report(m: dict) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Run the CLI over the named files and return the exit code."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

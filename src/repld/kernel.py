@@ -1263,7 +1263,7 @@ def _run_init_file(path: Path, loop: asyncio.AbstractEventLoop) -> None:
     traceback on channel, which is the state you want to fix it from. Killing
     boot instead would take away the thing that can run the fix. The read is
     inside the `try` for that reason too: an unreadable file must not reach
-    `_report_boot_failure` and end the process.
+    `_print_boot_failure` and end the process.
     """
     n = next(_exec_count)
     try:
@@ -1673,7 +1673,7 @@ def _start_watchdog(
     return stop
 
 
-def _report_boot_failure() -> None:
+def _print_boot_failure() -> None:
     """Put the in-flight exception on the *real* stderr, bypassing the tee.
 
     `install_tee()` runs partway through `_boot_runtime`, and `_Tee.write`
@@ -1833,7 +1833,7 @@ def run_kernel(
     except Exception:
         # Not BaseException: a Ctrl-C during boot needs no banner, and the
         # operator already knows why it stopped.
-        _report_boot_failure()
+        _print_boot_failure()
         raise
 
     # 8. Main thread: display or headless.
