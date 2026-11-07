@@ -575,8 +575,8 @@ class Tab(TabQueryMixin):
                 "window.__repld_gate_close && "
                 f"window.__repld_gate_close({json.dumps(gate_id)})"
             )
-        except RuntimeError:
-            return  # the page, and the pill with it, is gone
+        except RuntimeError, TimeoutError:
+            return  # the page is gone or its renderer is busy; nothing to retry
 
     # ------------------------------------------------------------------
     # Gate convenience methods
@@ -978,7 +978,9 @@ class Tab(TabQueryMixin):
             if not inject._is_stale(exc):
                 raise
             preview = expr if len(expr) <= 80 else expr[:80] + "..."
-            raise NavigatedError(f"page navigated during js({preview!r})") from exc
+            raise NavigatedError(
+                f"page navigated or closed during js({preview!r})"
+            ) from exc
 
     async def _evaluate(
         self, expr: str, await_promise: bool, user_gesture: bool, timeout: float

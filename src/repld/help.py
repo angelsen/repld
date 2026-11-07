@@ -2265,6 +2265,8 @@ await form(prompt, fields, *, required=None, timeout=None)      → dict
 form() asks several typed fields in one prompt. A field is str, int, float,
 bool, a list of strings (a choice) or a dict holding a primitive JSON-schema
 property ({"type": "integer", "minimum": 1}); nested values raise ValueError.
+minimum, maximum, minLength, maxLength and enum bind every surface; format
+only shapes the Claude Code modal.
 Without a Claude Code modal it is answered as one JSON object.
 
 Blocks the cell until a human answers. Four surfaces can answer, and

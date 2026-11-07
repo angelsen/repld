@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Literal, TypeGuard
 
@@ -207,7 +208,9 @@ async def form(
 
     A field is `str`, `int`, `float`, `bool`, a list of strings (a choice), or
     a dict holding a primitive JSON-schema property (`minimum`, `format`,
-    `description`...). All are required unless `required=` narrows it. Raises
+    `description`...). `minimum`, `maximum`, `minLength`, `maxLength` and
+    `enum` bind every surface; `format` shapes the Claude Code modal only.
+    All are required unless `required=` narrows it. Raises
     `ValueError` before asking if a field is not one of those.
     """
     schema = build_form_schema(fields, required)
@@ -660,6 +663,19 @@ def validate_form(content, schema: dict) -> dict:
     return content
 
 
+_BOUNDS: tuple[tuple[str, Callable[[float, float], bool], str], ...] = (
+    ("minimum", lambda v, b: v < b, "at least"),
+    ("maximum", lambda v, b: v > b, "at most"),
+    ("minLength", lambda v, b: v < b, "at least length"),
+    ("maxLength", lambda v, b: v > b, "at most length"),
+)
+
+
+def _measure(value, kind: str) -> float:
+    """The quantity a bound compares: a string's length, else the number itself."""
+    return len(value) if kind == "string" else value
+
+
 def _check_field(name: str, value, prop: dict) -> None:
     """Raise `ValueError` unless `value` fits the primitive `prop`."""
     kind = prop["type"]
@@ -673,7 +689,10 @@ def _check_field(name: str, value, prop: dict) -> None:
     if not ok:
         raise ValueError(f"{name}: expected {kind}")
     if "enum" in prop and value not in prop["enum"]:
-        raise ValueError(f"{name}: choose one of {', '.join(prop['enum'])}")
+        raise ValueError(f"{name}: choose one of {', '.join(map(str, prop['enum']))}")
+    for key, bad, word in _BOUNDS:
+        if key in prop and bad(_measure(value, kind), prop[key]):
+            raise ValueError(f"{name}: {word} {prop[key]}")
 
 
 def _example(schema: dict) -> str:

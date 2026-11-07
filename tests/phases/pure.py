@@ -2472,6 +2472,29 @@ def _elicitation_pure() -> None:
     def one(prop):
         return gates._one_field(prop)
 
+    bounded = gates.build_form_schema(
+        {
+            "n": {"type": "integer", "minimum": 1, "maximum": 5},
+            "s": {"type": "string", "minLength": 2, "maxLength": 3},
+            "e": {"type": "integer", "enum": [1, 2]},
+        }
+    )
+    ok = '{"n": 3, "s": "ab", "e": 1}'
+    assert_true(
+        not _raises(gates.parse_response, "form", ok, None, bounded), "in bounds passes"
+    )
+    for bad in (
+        '{"n": 0, "s": "ab", "e": 1}',
+        '{"n": 6, "s": "ab", "e": 1}',
+        '{"n": 3, "s": "a", "e": 1}',
+        '{"n": 3, "s": "abcd", "e": 1}',
+        '{"n": 3, "s": "ab", "e": 3}',
+    ):
+        assert_true(
+            _raises(gates.parse_response, "form", bad, None, bounded),
+            f"a bound or a non-string enum refuses {bad}",
+        )
+
     confirm = one({"type": "boolean"})
     pick = one({"type": "string", "enum": ["p", "q"]})
     free = one({"type": "string"})
