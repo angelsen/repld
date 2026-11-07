@@ -140,6 +140,7 @@ class Bridge:
         env: dict[str, str | None] | None = None,
         global_args: tuple[str, ...] = (),
         nested: bool = False,
+        under: Path | None = None,
     ):
         # A None value deletes the key rather than setting it — the ambient
         # environment this test process itself runs under (e.g. when this
@@ -154,7 +155,9 @@ class Bridge:
                 proc_env[k] = v
         # `nested` puts a non-exec'd shell between this process and the bridge,
         # so its process tree is one level deeper than a plain bridge's.
-        launcher = ["sh", "-c", '"$@"; exit $?', "sh"] if nested else []
+        # `under` is a copy of sh named `claude`, so the bridge has a claude ancestor.
+        shell = str(under) if under is not None else "sh"
+        launcher = [shell, "-c", '"$@"; exit $?', "sh"] if nested or under else []
         self.proc = subprocess.Popen(
             [
                 *launcher,

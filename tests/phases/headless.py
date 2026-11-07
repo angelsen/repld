@@ -995,6 +995,54 @@ def _rebind_stops_at_own_claude(tmp: Path) -> None:
         other.close()
 
 
+def _repeat_rebind_arms_nothing(tmp: Path) -> None:
+    """A repeat rebind (stale `old_id`, connection already under that claude)
+    refuses without arming a pending id, and `list_claude_connections` names
+    the claude above each bridge."""
+    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
+    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    a = Bridge(
+        tmp,
+        env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "seat-old"},
+        under=fake,
+    )
+    try:
+        _handshake(a)
+        claude_pid = a.proc.pid
+        code = (
+            "from repld import ipc\n"
+            "try:\n"
+            "    r = ipc.rebind_claude_session({new!r}, {pid}, {old!r})\n"
+            "    print('old=', r.old_id)\n"
+            "except LookupError as e:\n"
+            "    print('LookupError', e)\n"
+            "print(ipc.list_claude_connections(), len(ipc._server._pending_rebinds))"
+        )
+        out = content_text(
+            a.exec(
+                code.format(new="seat-new", pid=claude_pid, old="seat-old"),
+                call_timeout=40,
+            )
+        )
+        assert_true("old= seat-old" in out, f"first rebind lands (got {out!r})")
+        assert_true(
+            f"({claude_pid}, 'seat-new', None)" in out and out.endswith(" 0"),
+            f"connection listed under its claude pid (got {out!r})",
+        )
+        out = content_text(
+            a.exec(
+                code.format(new="seat-new", pid=claude_pid, old="seat-old"),
+                call_timeout=40,
+            )
+        )
+        assert_true("LookupError" in out, f"a repeat rebind refuses (got {out!r})")
+        assert_true(out.endswith(" 0"), f"and arms no pending id (got {out!r})")
+        print("  ✓ a repeat rebind arms nothing; connections list their claude pid")
+    finally:
+        a.close()
+        shutil.rmtree(fake.parent, ignore_errors=True)
+
+
 def _deferred_rebind(tmp: Path) -> None:
     """A rebind that finds no connection under the pane's `claude` is kept, and
     the bridge that registers under that `claude` takes its id, not the stale one."""
@@ -1945,6 +1993,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _rebind_prefers_nearest_bridge(tmp)
         _rebind_stops_at_own_claude(tmp)
         _deferred_rebind(tmp)
+        _repeat_rebind_arms_nothing(tmp)
         _id_collision_warning(tmp)
         _bg_inbox_fallback(tmp)
         _push_state_broadcast()

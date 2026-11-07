@@ -113,6 +113,13 @@ def _is_claude_process(pid: int) -> bool:
         return False
 
 
+def _resolve_claude_pid(pid: int | None) -> int | None:
+    """The nearest `claude` process at or above `pid`, else None."""
+    if pid is None:
+        return None
+    return next((p for p in _resolve_ancestry(pid) if _is_claude_process(p)), None)
+
+
 def _check_inbox_socket(path: object) -> str | None:
     """Validate a bridge-supplied inbox path.
 
@@ -236,6 +243,8 @@ class Session:
         self.claude_project_dir: str | None = None
         self.claude_session_kind: str | None = None
         self.inbox_socket: str | None = None
+        # The `claude` above the bridge, resolved at register (peer_pid alone is the bridge).
+        self.claude_pid: int | None = None
         # Whether the client's `initialize` declared form-mode elicitation.
         self.elicit_form = False
         # Same for URL mode, which a client declares separately from form.
@@ -631,6 +640,7 @@ class Server:
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
         session.claude_session_kind = session_kind
+        session.claude_pid = _resolve_claude_pid(session.peer_pid)
         session.inbox_socket = _check_inbox_socket(inbox_socket)
         with self.sessions_lock:
             holder = self._claude_sessions.get(session_id)
@@ -674,12 +684,14 @@ class Server:
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
+        connected = False
         for ancestor in _resolve_ancestry(pid):
             hits = [
                 (s, chain.index(ancestor))
                 for s, chain in candidates
                 if ancestor in chain
             ]
+            connected = connected or bool(hits)
             if old_id is not None:
                 hits = [(s, d) for s, d in hits if s.claude_session_id == old_id]
             # A pane's bridge hangs directly off its claude; a nested one (a
@@ -697,6 +709,12 @@ class Server:
             # Past the pane's own `claude` the only ancestors left are shared
             # (tmux, the login session): another pane's bridge would match.
             if _is_claude_process(ancestor):
+                # A connection already under this claude that `old_id` filtered
+                # out is a repeat rebind; arming would re-key a later nested bridge.
+                if connected:
+                    raise LookupError(
+                        f"no session under pid {pid}'s claude ({ancestor}) carries id {old_id!r}"
+                    )
                 with self.sessions_lock:
                     self._pending_rebinds[ancestor] = _PendingRebind(
                         new_id, time.monotonic() + _PENDING_REBIND_TTL
@@ -749,6 +767,18 @@ class Server:
             targets = list(self.sessions)
         return [
             (s.claude_session_id, s.claude_project_dir, s.claude_session_kind)
+            for s in targets
+            if not s.peer
+        ]
+
+    def list_claude_connections(
+        self,
+    ) -> list[tuple[int | None, str | None, str | None]]:
+        """All connected non-peer sessions as (claude_pid, session_id, kind) tuples."""
+        with self.sessions_lock:
+            targets = list(self.sessions)
+        return [
+            (s.claude_pid, s.claude_session_id, s.claude_session_kind)
             for s in targets
             if not s.peer
         ]
@@ -1097,3 +1127,15 @@ def list_claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
     if _server is None:
         return []
     return _server.list_claude_sessions()
+
+
+def list_claude_connections() -> list[tuple[int | None, str | None, str | None]]:
+    """All connected non-peer sessions as (claude_pid, session_id, kind) tuples.
+
+    `claude_pid` is the `claude` process above the connection's bridge, None
+    when none is found or the connection never registered an id. Lets a
+    supervisor map a seat's pid to the id its connection currently carries.
+    """
+    if _server is None:
+        return []
+    return _server.list_claude_connections()
