@@ -21,6 +21,7 @@ import signal
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
@@ -308,9 +309,9 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
             self._connected = False
             raise RuntimeError(f"Cannot reach Chrome on port {self.port}: refused")
 
-        async def open(
+        async def open(  # type: ignore[override]
             self, url: str, *, ready: str | None = None, new_window: bool = False
-        ) -> str:  # type: ignore[override]
+        ) -> str:
             raise AssertionError("open() reached the dead browser")
 
         async def get(self, target: str, **_kw: object) -> str:  # type: ignore[override]
@@ -320,9 +321,9 @@ def phase_6_dead_pool_failover(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(
+        async def open(  # type: ignore[override]
             self, url: str, *, ready: str | None = None, new_window: bool = False
-        ) -> str:  # type: ignore[override]
+        ) -> str:
             return f"opened:{url}"
 
         async def get(  # type: ignore[override]
@@ -430,9 +431,9 @@ def phase_6_lease_open_skip(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(
+        async def open(  # type: ignore[override]
             self, url: str, *, ready: str | None = None, new_window: bool = False
-        ) -> str:  # type: ignore[override]
+        ) -> str:
             raise OpenRefused(
                 "Target.createTarget is not available: a lease shares one tab"
             )
@@ -441,9 +442,9 @@ def phase_6_lease_open_skip(_kernel: Kernel) -> None:
         async def _ensure_connected(self) -> None:
             self._connected = True
 
-        async def open(
+        async def open(  # type: ignore[override]
             self, url: str, *, ready: str | None = None, new_window: bool = False
-        ) -> str:  # type: ignore[override]
+        ) -> str:
             return f"opened:{url}"
 
     async def _pool(with_live: bool) -> object:
@@ -3974,7 +3975,7 @@ def phase_6_dialog_policy(_kernel: Kernel) -> None:
             self.in_action = in_action or depth > 0
             self._action_depth = depth
             self.last_caller = None
-            self.route_to = None
+            self.route_to: object | None = None
             self._pinned = pinned
             self._pin_guard_unload = guard_unload
             self._dialog_policy: dict | None = None
@@ -6393,7 +6394,7 @@ def phase_6_auth_live(kernel: Kernel) -> None:
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, *_a: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Auth)
@@ -6551,7 +6552,7 @@ def phase_6_pending_clear_reconnect(_kernel: Kernel) -> None:
     async def _run() -> tuple[bool, bool, bool]:
         import websockets  # type: ignore[import-untyped]
 
-        async def handler(ws: object) -> None:
+        async def handler(ws: Any) -> None:
             """Answer every CDP message with an empty result."""
             async for raw in ws:
                 msg = json.loads(raw)
@@ -6567,6 +6568,7 @@ def phase_6_pending_clear_reconnect(_kernel: Kernel) -> None:
             # Simulate the state _teardown_ws leaves when it cancels the
             # recv_task before the recv_loop's own _fail_pending runs:
             # pending futures from concurrent callers remain in _pending.
+            assert session._recv_task is not None
             session._recv_task.cancel()
             try:
                 await session._recv_task

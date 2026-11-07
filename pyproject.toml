@@ -49,6 +49,7 @@ build-backend = "uv_build"
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
+exclude = ["gists", "**/node_modules", "**/__pycache__", ".venv"]
 
 [tool.ruff]
 # ruff format reformats embedded Python code blocks in markdown by default —

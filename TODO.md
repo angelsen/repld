@@ -37,9 +37,6 @@
   `asyncio.to_thread`, which has the same property, so this is a gap only if a gist author hits it.
 - [ ] No test asserts that `kernel.cache` lists a tool created by `repld_init.py`; the boot
   write moved after the bootstrap, but only `_imported_on_loop` pins the poller path.
-- [ ] `basedpyright` reports 56 errors on master, 43 of them in `gists/` (`browser_need.py` 13,
-  `proposal.py` 12, `partslink24_tab.py` 6, `served.py` 5, `teamviewer.py` 5, `lendexec.py` 2)
-  and 13 in `tests/phases/` (`browser.py` 11, `pure.py` 2); cause not investigated.
 - [ ] `scripts/align-comments.py --fix-all` rewrites `tests/phases/browser.py` on every run,
   so each lint pass needs `git checkout tests/phases/browser.py` afterwards.
 

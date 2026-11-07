@@ -2454,7 +2454,9 @@ def _elicitation_pure() -> None:
     )
 
     ok = '{"env": "a", "n": 2, "x": 1, "ok": false}'
-    assert_eq(gates.parse_response("form", ok, None, schema)["n"], 2, "form parses")
+    parsed = gates.parse_response("form", ok, None, schema)
+    assert isinstance(parsed, dict)
+    assert_eq(parsed["n"], 2, "form parses")
     for text in (
         "not json",
         "[1]",
