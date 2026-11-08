@@ -754,6 +754,8 @@ rather than an architectural one — the exact pattern already exists twice in t
   same open question as phase 16.
 - [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
+- [ ] `~/.claude/settings.json` no longer pins Opus, so the `[1m]` context variant is gone. If long sessions hit the context limit, re-add `claude-opus-5-5[1m]` (recap b5f1b364).
+- [ ] Leftovers of the elicitation probe (recap 2a4b9560): `elicit_probe.py` and `probe.json` sit in that session's scratchpad, so copy them somewhere durable before rerunning the probe, and the scratchpad folder stays trusted in Claude Code's config until removed by hand.
 
 ## Kernel crash hardening
 
@@ -767,6 +769,10 @@ Follow-ups to 0.11.1-0.11.3 (rebind `old_id=`, bridge `kernel_crashed` push, bri
 - [x] `rebind_claude_session(new_id, pid, old_id=...)` with no connection in `pid`'s own pane takes another pane's: 2026-11-04 08:4x, four `/clear`s at once in supervise panes whose bridges had not reattached after the 23:46 kernel restart (a gap longer than the 30 s window; each bridge reconnected only on its session's first MCP call, still labelled with its predecessor's id). Each hook's `old_id=` matched nothing, the bare call fell through to the depth tie-break, and the only connection in the tree, the master pane's bridge, was relabelled by each clear in turn (b2eb, 0b12, 67bd, fb70 stole it one after another; the master's `current_session_id()` read `fb704cc9`, its `roster.tell` came back to itself). Wanted: the match bounded to the pane's own `claude` subtree (the hook's ancestor), `LookupError` when that holds no connection, never a walk up to a shared tmux ancestor. Theft fixed in cc2e7b51; the refused pane's mislabel fixed by a kept pending rebind applied when its bridge registers. Fixed by hand with five explicit rebinds (`supervise` ledger `~/supervise-patches/day-2026-11-04-batch.txt`, the 08:5x line).
 - [x] Id-collision warning in `Server.register_claude_session` (a new connection taking an id a live one holds, stderr only) is tested by `_id_collision_warning` in phase 15 (9914a0c1); negative checks 2026-11-06: removing the `stderr.write` and removing the `holder is not session` guard each fail it. Phases 6-14, 16, 18, 19 passed against the deferred-rebind change in `ipc.py` at e5bad543.
 - [ ] (deferred 2026-09-30: `claude_code_research` now reads the whole tag up to `>`, so the 600-char prefix problem is gone on their side) Channel tag order: `kind=` and `task_id=` before `roster=` (peer finding 4; the roster attribute ran to 621 chars) so fixed-prefix parsers work.
+- [ ] Rebind keys on `comm == "claude"` (recaps e655a6b6, 3763948b): if Claude Code ever runs under another process name, `ipc.rebind_claude_session`'s ancestor walk is unbounded again and the pane-theft of 2026-11-04 returns. Re-check after a Claude Code upgrade that changes the binary name.
+- [ ] A rebind with `old_id=` that matches nothing under the pane's `claude` now raises `LookupError` at the claude boundary instead of walking up. The hook's bare-call fallback (the incident's path) was not inspected, so whether a fallback still reaches the raise is unchecked.
+- [ ] A pending rebind (`_PendingRebind`) does not carry pushes already held in `Server._outbox` under the old id. Only reachable across a kernel death; untested and unfixed (recap 9e05409b).
+- [ ] Devstack plugin repo, not repld: `session-roster.py` treats `ERR LookupError` as "no predecessor" silently, and the bounded match makes that outcome more common. It should log it (recaps e655a6b6, 3763948b).
 
 ## Channel delivery to `claude --bg` sessions
 
