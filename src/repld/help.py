@@ -2315,6 +2315,10 @@ current_session_id()
   exclude= take. None with nothing to attribute to: an ambient context
   (repld_init.py, an @every tick, a bare kernel REPL) or a connected
   client with no Claude Code identity.
+  The id is read once from CLAUDE_CODE_SESSION_ID at bridge start. A
+  `claude --resume`/`--continue` pane can carry a throwaway id there, and
+  nothing on the MCP wire names the resumed conversation, so a SessionStart
+  hook (source resume or clear) must call ipc.rebind_claude_session(new_id, pid).
 """,
     "peers": """\
 peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]

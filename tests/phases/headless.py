@@ -1037,6 +1037,10 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
         )
         assert_true("LookupError" in out, f"a repeat rebind refuses (got {out!r})")
         assert_true(out.endswith(" 0"), f"and arms no pending id (got {out!r})")
+        assert_true(
+            "carries id 'seat-old'" in out and "(it carries seat-new)" in out,
+            f"the refusal names the id the connection carries (got {out!r})",
+        )
         print("  ✓ a repeat rebind arms nothing; connections list their claude pid")
     finally:
         a.close()

@@ -691,6 +691,7 @@ class Server:
                 for s, chain in candidates
                 if ancestor in chain
             ]
+            carried = sorted(str(s.claude_session_id) for s, _ in hits)
             connected = connected or bool(hits)
             if old_id is not None:
                 hits = [(s, d) for s, d in hits if s.claude_session_id == old_id]
@@ -714,6 +715,7 @@ class Server:
                 if connected:
                     raise LookupError(
                         f"no session under pid {pid}'s claude ({ancestor}) carries id {old_id!r}"
+                        f" (it carries {', '.join(carried)})"
                     )
                 with self.sessions_lock:
                     self._pending_rebinds[ancestor] = _PendingRebind(

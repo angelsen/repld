@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The `LookupError` from `ipc.rebind_claude_session(..., old_id=)` when the connections under that `claude` carry other ids now names them, so a `claude --resume` pane filed under a throwaway id shows what it does carry. Claude Code puts no session id on the MCP wire, so the bridge cannot learn a resumed id itself: a SessionStart hook on `resume` must call `rebind_claude_session`.
+
 ### Fixed
 
 ### Removed
