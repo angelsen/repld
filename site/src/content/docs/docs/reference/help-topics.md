@@ -75,7 +75,7 @@ current_session_id() → str | None
 
 `claude_sessions()` lists every connected MCP session. `kind` is `"bg"` for a `claude --bg` worker, else `None`. `current_session_id()` returns the id of whoever triggered the code currently running — the same id `notify()`'s `session=`/`exclude=` take — or `None` with nothing to attribute to.
 
-The id is read once from `CLAUDE_CODE_SESSION_ID` when the bridge starts. A `claude --resume` or `--continue` pane can carry a throwaway id there, and nothing on the MCP wire names the resumed conversation, so a SessionStart hook (source `resume` or `clear`) must call `ipc.rebind_claude_session(new_id, pid)`.
+The id is read once from `CLAUDE_CODE_SESSION_ID` when the bridge starts. A `claude --resume` or `--continue` pane can carry a throwaway id there, and nothing on the MCP wire names the resumed conversation, so a SessionStart hook (source `resume` or `clear`) must re-key it: `repld rebind` does it from the hook payload (`{"matcher": "resume|clear", "hooks": [{"type": "command", "command": "repld rebind"}]}` under `hooks.SessionStart`), or call `ipc.rebind_claude_session(new_id, pid)` directly.
 
 ## Human gates
 

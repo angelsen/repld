@@ -1047,6 +1047,51 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
         shutil.rmtree(fake.parent, ignore_errors=True)
 
 
+def _rebind_cmd(tmp: Path) -> None:
+    """`repld rebind` re-keys a connection from a SessionStart payload on stdin:
+    `resume` and `clear` rebind, `startup` and a malformed payload do not."""
+    a = Bridge(
+        tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "throwaway"}
+    )
+
+    def rebind(payload: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["uv", "run", "--project", str(REPO), "repld", "rebind"],
+            cwd=str(tmp),
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    def carried() -> str:
+        return content_text(a.exec("print([s for s, _, _ in claude_sessions()])"))
+
+    try:
+        _handshake(a)
+        done = rebind('{"source": "startup", "session_id": "ignored"}')
+        assert_eq(done.returncode, 0, "startup payload exits 0")
+        assert_true("throwaway" in carried(), "startup leaves the connection's id")
+
+        done = rebind("not json")
+        assert_eq(done.returncode, 2, "a malformed payload exits 2")
+
+        done = rebind('{"source": "resume", "session_id": "real-conversation"}')
+        assert_eq(done.returncode, 0, f"resume payload exits 0 ({done.stderr!r})")
+        assert_true(
+            "real-conversation" in carried() and "throwaway" not in carried(),
+            f"resume re-keys the throwaway id (got {carried()!r})",
+        )
+
+        done = rebind('{"source": "clear", "session_id": "after-clear"}')
+        assert_eq(done.returncode, 0, f"clear payload exits 0 ({done.stderr!r})")
+        assert_true("after-clear" in carried(), "clear re-keys again")
+        print("  ✓ repld rebind re-keys on resume and clear, ignores startup")
+    finally:
+        a.close()
+
+
 def _deferred_rebind(tmp: Path) -> None:
     """A rebind that finds no connection under the pane's `claude` is kept, and
     the bridge that registers under that `claude` takes its id, not the stale one."""
@@ -1998,6 +2043,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _rebind_stops_at_own_claude(tmp)
         _deferred_rebind(tmp)
         _repeat_rebind_arms_nothing(tmp)
+        _rebind_cmd(tmp)
         _id_collision_warning(tmp)
         _bg_inbox_fallback(tmp)
         _push_state_broadcast()

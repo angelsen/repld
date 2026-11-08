@@ -1,6 +1,6 @@
 """CLI entry point and subcommand dispatch.
 
-Thirteen subcommands live in `_SUBCOMMANDS`, the single table driving both
+Fourteen subcommands live in `_SUBCOMMANDS`, the single table driving both
 dispatch and the `--help` listing.  A bare `repld` (no subcommand) falls
 through to the kernel's argparse.  Handlers are lazy-imported on match,
 keeping `repld bridge` (spawned every session) a dict lookup plus one import.
@@ -44,6 +44,11 @@ _SUBCOMMANDS = {
     ),
     "gate": ("gate_cmd", "run_gate", "list / answer pending human gates"),
     "tasks": ("tasks_cmd", "run_tasks", "in-flight tasks and active tickers"),
+    "rebind": (
+        "rebind_cmd",
+        "run_rebind",
+        "SessionStart hook: re-key this pane's connection after /clear or a resume",
+    ),
     "help": ("help", "run_help", "agent/human docs"),
     "gist": (
         "gist_cmd",

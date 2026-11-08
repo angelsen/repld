@@ -897,6 +897,10 @@ class Dispatcher(BrowserDispatchMixin):
             return self._tasks_wait(rid, req.get("params", {}), session)
         if method == "tasks/cancel":
             return self._tasks_cancel(rid, req.get("params", {}))
+        # `repld rebind`, a SessionStart hook's only call: bare JSON-RPC, not an
+        # MCP tool, since an agent re-keying connections would misroute pushes.
+        if method == "sessions/rebind":
+            return self._sessions_rebind(rid, req.get("params", {}))
         # Kernel-to-kernel calls: bare JSON-RPC for the same reason as the
         # methods above: only `peer.py` calls them, on a connection of its own
         # that never sends `initialize`. See `_peer` for what that implies.
@@ -1324,6 +1328,26 @@ class Dispatcher(BrowserDispatchMixin):
         if not tid:
             return _error(rid, -32602, "missing task_id")
         return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
+
+    def _sessions_rebind(self, rid, params: dict) -> dict:
+        """Re-key the connection under `params["pid"]`'s `claude` to `params["session_id"]`.
+
+        A `LookupError` (no connection, or one kept pending) is a result, not an
+        error: the hook has nothing further to do. An ambiguous pid is an error.
+        """
+        session_id, pid = params.get("session_id"), params.get("pid")
+        if not isinstance(session_id, str) or not isinstance(pid, int):
+            return _error(rid, -32602, "need session_id (str) and pid (int)")
+        try:
+            rebind = ipc.rebind_claude_session(session_id, pid)
+        except LookupError as exc:
+            return _response(rid, {"rebound": False, "message": str(exc)})
+        except ValueError as exc:
+            return _error(rid, -32602, str(exc))
+        return _response(
+            rid,
+            {"rebound": True, "old_id": rebind.old_id, "flushed": rebind.flushed},
+        )
 
     # ------------------------------------------------------------------
     # Peer calls (kernel-to-kernel, bare JSON-RPC)

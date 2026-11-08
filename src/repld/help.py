@@ -2318,7 +2318,8 @@ current_session_id()
   The id is read once from CLAUDE_CODE_SESSION_ID at bridge start. A
   `claude --resume`/`--continue` pane can carry a throwaway id there, and
   nothing on the MCP wire names the resumed conversation, so a SessionStart
-  hook (source resume or clear) must call ipc.rebind_claude_session(new_id, pid).
+  hook (source resume or clear) must re-key it: `repld rebind` does it from the
+  hook payload, or call ipc.rebind_claude_session(new_id, pid) directly.
 """,
     "peers": """\
 peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]
