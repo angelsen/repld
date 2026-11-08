@@ -8,15 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.20.0] - 2026-11-08
+
+### Added
+
 - `repld rebind`, a SessionStart hook command that re-keys a pane's repld connection to the session id in the hook payload on `resume` and `clear`. Claude Code puts no session id on the MCP wire, and a resume (`--resume` picker, `--continue`, in-session `/resume`) leaves the bridge on its start-time env id, so `current_session_id()`, `claude_sessions()` and `notify(session=)` named the wrong conversation. Add `{"matcher": "resume|clear", "hooks": [{"type": "command", "command": "repld rebind"}]}` under `hooks.SessionStart`.
 
 ### Changed
 
 - The `LookupError` from `ipc.rebind_claude_session(..., old_id=)` when the connections under that `claude` carry other ids now names them, so a `claude --resume` pane filed under a throwaway id shows what it does carry. Claude Code puts no session id on the MCP wire, so the bridge cannot learn a resumed id itself: a SessionStart hook on `resume` must call `rebind_claude_session`.
 
-### Fixed
-
-### Removed
 
 ## [0.19.0] - 2026-11-07
 
