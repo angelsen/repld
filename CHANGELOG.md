@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.21.0] - 2026-11-09
+
+### Added
+
 - The kernel refuses `os.kill`/`os.killpg` aimed at its own process group (`OwnGroupSignal`, a `PermissionError`), in every project with no `repld_init.py` guard.
 
 ### Changed
