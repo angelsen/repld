@@ -31,7 +31,19 @@ from pathlib import Path
 
 import __main__
 
-from . import bg, eventlog, events, gates, ipc, paths, render, sessions, state, tasks
+from . import (
+    bg,
+    eventlog,
+    events,
+    gates,
+    ipc,
+    killguard,
+    paths,
+    render,
+    sessions,
+    state,
+    tasks,
+)
 from .channel import push_channel, push_owed
 from .channel import push_kind as _push
 from .events import CellDone, CellStart
@@ -1486,6 +1498,9 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
                 "interpreter to fix",
                 file=sys.stderr,
             )
+
+    # Before gists and `repld_init.py`: every user cell runs guarded from byte 1.
+    killguard.install()
 
     # 2c. Set up gist directories on sys.path with auto-reload.
     from . import gists as _gists

@@ -125,6 +125,7 @@ from phases.channels import (
 from phases.core import (
     phase_3,
     phase_3_argv_and_registry,
+    phase_3_own_group_signal,
     phase_3_patch_targets,
     phase_3_task_spawns,
 )
@@ -167,6 +168,7 @@ PHASES = {
         phase_3_argv_and_registry(k),
         phase_3_patch_targets(k),
         phase_3_task_spawns(k),
+        phase_3_own_group_signal(k),
     ),
     4: lambda k: (
         phase_4(k),

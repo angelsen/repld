@@ -50,6 +50,56 @@ def _raises(fn, *args) -> str | None:
     return None
 
 
+def _own_group_signal() -> None:
+    import os
+    import signal
+
+    from repld import killguard
+
+    calls: list[tuple[str, int, int]] = []
+    own = os.getpgrp()
+    killpg, kill = killguard.build_guard(
+        lambda pg, sig: calls.append(("killpg", pg, sig)),
+        lambda pid, sig: calls.append(("kill", pid, sig)),
+        own,
+    )
+    refused = (
+        lambda: killpg(own, signal.SIGTERM),
+        lambda: killpg(0, signal.SIGTERM),
+        lambda: kill(-1, signal.SIGTERM),
+        lambda: kill(-own, signal.SIGTERM),
+        lambda: kill(0, signal.SIGTERM),
+    )
+    for call in refused:
+        try:
+            call()
+        except killguard.OwnGroupSignal as exc:
+            assert_true(isinstance(exc, PermissionError), "refusal is a PermissionError")
+            assert_true(str(own) in str(exc), "refusal names the kernel's pgid")
+        else:
+            raise AssertionError("signal at the kernel's group was not refused")
+    assert_eq(calls, [], "no refused signal reached the real call")
+
+    child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        killpg(child.pid, signal.SIGTERM)
+        kill(-child.pid, signal.SIGTERM)
+        kill(child.pid, signal.SIGTERM)
+    finally:
+        child.terminate()
+        child.wait()
+    assert_eq(
+        calls,
+        [
+            ("killpg", child.pid, signal.SIGTERM),
+            ("kill", -child.pid, signal.SIGTERM),
+            ("kill", child.pid, signal.SIGTERM),
+        ],
+        "a foreign group passes through",
+    )
+    print("  ✓ signals at the kernel's own process group are refused")
+
+
 def _gate_coercion() -> None:
     for word in ("y", "YES", " 1 ", "true"):
         assert_eq(gates.parse_response("confirm", word), True, f"confirm {word!r}")
@@ -2539,6 +2589,7 @@ def _elicitation_pure() -> None:
 
 
 def phase_2_pure() -> None:
+    _own_group_signal()
     _gate_coercion()
     _elicitation_pure()
     _answer_split()

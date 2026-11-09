@@ -445,3 +445,27 @@ def phase_3_task_spawns(_kernel: Kernel) -> None:
     assert_true(not bad, "task spawns held and named:\n    " + "\n    ".join(bad))
     assert_true(checked >= 20, f"sweep saw only {checked} spawn sites")
     print(f"  ✓ {checked} task spawn(s) all held and `repld-` named")
+
+
+def phase_3_own_group_signal(kernel: Kernel) -> None:
+    """A cell cannot signal the kernel's own process group, with no project init.
+
+    Signal 0 delivers nothing, so a missing guard fails the assertion instead
+    of killing the kernel under test.
+    """
+    b = Bridge(kernel.cwd)
+    try:
+        b.call("initialize", {"protocolVersion": "2024-11-05"})
+        for stmt in (
+            "os.killpg(os.getpgrp(), 0)",
+            "os.kill(0, 0)",
+            "os.kill(-1, 0)",
+            "os.kill(-os.getpgrp(), 0)",
+        ):
+            text = content_text(b.exec(f"import os\n{stmt}"))
+            assert_true("OwnGroupSignal" in text, f"{stmt} refused (got {text!r})")
+        text = content_text(b.exec("import os\nos.kill(os.getpid(), 0)\n'alive'"))
+        assert_true("alive" in text, f"own pid still signalable (got {text!r})")
+        print("  ✓ the kernel refuses signals at its own process group")
+    finally:
+        b.close()
