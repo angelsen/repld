@@ -12,9 +12,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The bare JSON-RPC methods (gates, tasks, `sessions/rebind`, peer) read an explicit null `params` as `{}`.
+
 ### Fixed
 
-### Removed
+- A push owed to a session's stale id is delivered when a pending `repld rebind` re-keys that bridge on register, instead of expiring in the outbox.
 
 ## [0.20.0] - 2026-11-08
 
