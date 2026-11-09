@@ -2,9 +2,9 @@
 
 `smoketest.py` spawns a throwaway headless Chrome for this phase (see
 `harness.ThrowawayChrome`), isolated from whatever else is attached to the
-developer's own debug Chrome. `REPLD_CHROME_PORT` still falls back to that
-real one if no Chrome binary was found to spawn — so the checks stay careful
-to touch only tabs they created themselves either way. Every one carries
+developer's own debug Chrome. A run without one fails; `REPLD_CHROME_PORT`
+is set to the spawned port. The checks touch only tabs they created
+themselves. Every one carries
 `_MARKER` in its URL, which is both how the watch pattern finds it and how
 `_close_marked_tabs` cleans up — including on the failure path, so a broken
 run can't leave tabs behind for the next one to trip over.
@@ -62,20 +62,19 @@ _SEL_CASES = [
 ]
 
 
-def _chrome_ready(label: str) -> bool:
-    """Whether the browser stack can run here at all. Prints why if not."""
+def _check_chrome(label: str) -> None:
+    """Raise unless the browser stack can run here: `websockets` importable and Chrome answering."""
     try:
         import websockets  # noqa: F401
     except ImportError:
-        print(f"  - {label}: websockets not installed (uv sync --extra browser), skip")
-        return False
+        raise AssertionError(
+            f"{label}: websockets not installed (uv sync --extra browser)"
+        ) from None
     try:
         with urllib.request.urlopen(f"{_cdp()}/json/version", timeout=2) as r:
             r.read()
-    except Exception:
-        print(f"  - {label}: Chrome not available at {_cdp()}, skipping")
-        return False
-    return True
+    except Exception as e:
+        raise AssertionError(f"{label}: Chrome not reachable at {_cdp()} ({e})") from e
 
 
 def _close_marked_tabs() -> None:
@@ -709,8 +708,7 @@ def phase_6_navigate_target_info_sync(kernel: Kernel) -> None:
     )
     print("  ✓ Tab._refresh_target_info() syncs target_info synchronously (no Chrome)")
 
-    if not _chrome_ready("phase 6 navigate target_info sync"):
-        return
+    _check_chrome("phase 6 navigate target_info sync")
 
     b = Bridge(kernel.cwd)
     try:
@@ -1651,11 +1649,7 @@ def phase_6_like_escaping(_kernel: Kernel) -> None:
     DuckDB rather than on the pattern string, because the escaping is only worth
     anything paired with the ESCAPE clause on the comparison.
     """
-    try:
-        import duckdb
-    except ImportError:
-        print("  - like escaping: duckdb not installed (uv sync --extra browser), skip")
-        return
+    import duckdb
 
     from repld.browser.tab_query import TabQueryMixin
 
@@ -1698,11 +1692,7 @@ def phase_6_har_redirects(_kernel: Kernel) -> None:
     pulled its headers from whichever hop's JSON sorted highest. Single-hop
     requests emit one event each and so never showed it — hence the chain here.
     """
-    try:
-        import duckdb
-    except ImportError:
-        print("  - har redirects: duckdb not installed (uv sync --extra browser), skip")
-        return
+    import duckdb
 
     from repld.browser.har import _create_views
 
@@ -1880,8 +1870,7 @@ def phase_6_label_and_reattach(kernel: Kernel) -> None:
     Requires a reachable Chrome (`smoketest.py` spawns a throwaway one for
     this phase); skips gracefully if none is up.
     """
-    if not _chrome_ready("phase 6 label/reattach"):
-        return
+    _check_chrome("phase 6 label/reattach")
 
     b = Bridge(kernel.cwd)
     try:
@@ -2023,8 +2012,7 @@ def phase_6_tab_close(kernel: Kernel) -> None:
     /json/list rather than repld's own bookkeeping, which a bug under test
     could satisfy by lying to itself.
     """
-    if not _chrome_ready("phase 6 tab close"):
-        return
+    _check_chrome("phase 6 tab close")
 
     b = Bridge(kernel.cwd)
     try:
@@ -2060,8 +2048,7 @@ def phase_6_tab_close(kernel: Kernel) -> None:
 
 def phase_6_open_new_window(kernel: Kernel) -> None:
     """`browser.open(url, new_window=True)` puts the tab in a window of its own; a plain open() shares one."""
-    if not _chrome_ready("phase 6 open new window"):
-        return
+    _check_chrome("phase 6 open new window")
     b = Bridge(kernel.cwd)
     try:
         b.handshake()
@@ -2091,8 +2078,7 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
     while the task runs; a read claims nothing, and neither does a tool call
     (it has no task), so it cannot erase a live cell's claim.
     """
-    if not _chrome_ready("phase 6 tab affinity"):
-        return
+    _check_chrome("phase 6 tab affinity")
 
     b = Bridge(kernel.cwd)
     try:
@@ -2167,8 +2153,7 @@ def phase_6_tab_affinity(kernel: Kernel) -> None:
 
 def phase_6_tab_owner(kernel: Kernel) -> None:
     """A tab's pushes go to the session that claimed it, not whoever drove it last."""
-    if not _chrome_ready("phase 6 tab owner"):
-        return
+    _check_chrome("phase 6 tab owner")
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
     try:
@@ -2221,8 +2206,7 @@ def phase_6_claim_routing(kernel: Kernel) -> None:
     wakes no session. On an open() tab the picker intercept holds for an
     agent action's span only; browser_take holds it between actions too.
     """
-    if not _chrome_ready("phase 6 claim routing"):
-        return
+    _check_chrome("phase 6 claim routing")
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
     try:
@@ -2376,8 +2360,7 @@ def phase_6_owned_tab_action_routing(kernel: Kernel) -> None:
     Outside an action the opener still gets them; browser_take makes the owner
     an explicit claim that outranks any action.
     """
-    if not _chrome_ready("phase 6 owned-tab action routing"):
-        return
+    _check_chrome("phase 6 owned-tab action routing")
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
     try:
@@ -2426,8 +2409,7 @@ def phase_6_owned_tab_action_routing(kernel: Kernel) -> None:
 def phase_6_auto_attach_owner(kernel: Kernel) -> None:
     """An auto-attached popup is owned by the watcher of its matching pattern,
     else by its opener's owner, so its pushes reach the right session."""
-    if not _chrome_ready("phase 6 auto-attach owner"):
-        return
+    _check_chrome("phase 6 auto-attach owner")
     import http.server
     import threading
 
@@ -2524,8 +2506,7 @@ def phase_6_endless_stream(kernel: Kernel) -> None:
     """A page `fetch()` of an endless octet-stream body keeps flowing on a capture-on tab,
     across a re-navigation: getResponseBody on it never returns, and its 5 s timeout leaves
     the response paused, so only skipping it at header time keeps the page's fetch alive."""
-    if not _chrome_ready("phase 6 endless stream"):
-        return
+    _check_chrome("phase 6 endless stream")
     import http.server
     import threading
     import time
@@ -2596,8 +2577,7 @@ def phase_6_endless_stream(kernel: Kernel) -> None:
 def phase_6_crash_mid_action(kernel: Kernel) -> None:
     """A renderer dying while a click is settling reports "the page crashed during this
     action" rather than a generic observation error."""
-    if not _chrome_ready("phase 6 crash mid action"):
-        return
+    _check_chrome("phase 6 crash mid action")
     import http.server
     import threading
 
@@ -2628,11 +2608,7 @@ def phase_6_crash_mid_action(kernel: Kernel) -> None:
         m = re.search(r"target: (\S+)", content_text(resp))
         assert m, f"browser_open carries no target ({content_text(resp)[:200]!r})"
         tid = m.group(1)
-        if not _test_renderer_pids():
-            print(
-                "  - crash mid action: skipped (no throwaway Chrome renderer to kill)"
-            )
-            return
+        assert_true(_test_renderer_pids(), "no throwaway Chrome renderer to kill")
         resp = h.tool("browser_click", {"target": tid, "selector": "#go"})
         text = _tool_error_text(resp) or content_text(resp)
         assert_true(
@@ -2648,8 +2624,7 @@ def phase_6_crash_mid_action(kernel: Kernel) -> None:
 
 def phase_6_download_tab_closed(kernel: Kernel) -> None:
     """A tab closed while its download is in flight: the done push still arrives."""
-    if not _chrome_ready("phase 6 download tab closed"):
-        return
+    _check_chrome("phase 6 download tab closed")
     import http.server
     import threading
 
@@ -2766,8 +2741,7 @@ def _kill_test_renderers() -> bool:
 
 def phase_6_tab_lifecycle_pushes(kernel: Kernel) -> None:
     """tab_crashed / tab_closed reach the owner only; a cross-site swap is not a close."""
-    if not _chrome_ready("phase 6 tab lifecycle pushes"):
-        return
+    _check_chrome("phase 6 tab lifecycle pushes")
     import http.server
     import threading
 
@@ -2924,8 +2898,7 @@ def phase_6_oopif_crash(kernel: Kernel) -> None:
     """Killing only a cross-origin iframe's renderer crashes that target alone:
     one tab_crashed naming the iframe, the parent's js/screenshot/tree keep
     working, and the iframe's own calls fail fast."""
-    if not _chrome_ready("phase 6 oopif crash"):
-        return
+    _check_chrome("phase 6 oopif crash")
     import http.server
     import threading
 
@@ -3099,8 +3072,7 @@ def phase_6_key_native_activation(kernel: Kernel) -> None:
     `text: " "` for Space; every other named key (Escape, Tab, ArrowDown, ...)
     is unaffected since it has no native default action to trigger.
     """
-    if not _chrome_ready("phase 6 key native activation"):
-        return
+    _check_chrome("phase 6 key native activation")
 
     b = Bridge(kernel.cwd)
     try:
@@ -3174,8 +3146,7 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
     the engine's css/role/text engines pierce open shadow roots natively, and
     this is the check that keeps that true across bundle bumps.
     """
-    if not _chrome_ready("phase 6 shadow DOM selectors"):
-        return
+    _check_chrome("phase 6 shadow DOM selectors")
 
     b = Bridge(kernel.cwd)
     try:
@@ -3217,8 +3188,7 @@ def phase_6_shadow_dom_selectors(kernel: Kernel) -> None:
 
 def phase_6(kernel: Kernel) -> None:
     """Browser integration — against a throwaway Chrome `smoketest.py` spawns
-    for this phase (falls back to a developer's own debug Chrome on
-    REPLD_CHROME_PORT/9222 if no throwaway one came up).
+    for this phase.
 
     Every assertion runs against a tab this phase opened itself. Watching `*`
     and asserting against whichever tab sorted first made the result depend on
@@ -3226,10 +3196,9 @@ def phase_6(kernel: Kernel) -> None:
     tab count, and a backgrounded or busy page failed `browser_js` on a 10s
     timeout while a fresh one passed.
 
-    Skips gracefully if Chrome is not reachable.
+    Fails when Chrome is not reachable.
     """
-    if not _chrome_ready("phase 6"):
-        return
+    _check_chrome("phase 6")
 
     b = Bridge(kernel.cwd)
     try:
@@ -3647,8 +3616,7 @@ def phase_6_strict_violation(kernel: Kernel) -> None:
     visibility ranks, and the receipt carries the "[2 matches, 1 visible]"
     note instead of an error.
     """
-    if not _chrome_ready("phase 6 strict violation"):
-        return
+    _check_chrome("phase 6 strict violation")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab("<button id=s1>Save</button><button id=s2>Save</button>")
@@ -3684,8 +3652,7 @@ def phase_6_click_receipt(kernel: Kernel) -> None:
     the DOM) and the intercepted click still dispatches — repld observes and
     reports, it does not refuse.
     """
-    if not _chrome_ready("phase 6 click receipt"):
-        return
+    _check_chrome("phase 6 click receipt")
     h = _BridgeHarness(kernel)
     try:
         # The handler opens a popup: a trusted click may, and the occluded
@@ -3771,8 +3738,7 @@ def phase_6_click_round_trips(kernel: Kernel) -> None:
     from splitting a pipelined pair, which would miscount on a fast local
     Chrome without saying why.
     """
-    if not _chrome_ready("phase 6 click round trips"):
-        return
+    _check_chrome("phase 6 click round trips")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -3834,8 +3800,7 @@ def phase_6_renderer_busy(kernel: Kernel) -> None:
     and no way to say the page, not the connection, was stuck. Here a 3 s
     spin stands in for the freeze.
     """
-    if not _chrome_ready("phase 6 renderer busy"):
-        return
+    _check_chrome("phase 6 renderer busy")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab("<p>busy</p>")
@@ -3886,8 +3851,7 @@ def phase_6_captcha(kernel: Kernel) -> None:
     textarea and the sitekey container are the real names. No vendor script
     runs; the fingerprint is the whole contract.
     """
-    if not _chrome_ready("phase 6 captcha"):
-        return
+    _check_chrome("phase 6 captcha")
     h = _BridgeHarness(kernel)
     page = (
         "<div class=g-recaptcha data-sitekey=k1></div>"
@@ -4178,8 +4142,7 @@ def phase_6_dialog(kernel: Kernel) -> None:
     hanging for the watchdog's full timeout — the actual regression this
     covers — and the reject/pre-arm/accept round trip lands on the real page.
     """
-    if not _chrome_ready("phase 6 dialog"):
-        return
+    _check_chrome("phase 6 dialog")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -4390,8 +4353,7 @@ def phase_6_filechooser(kernel: Kernel) -> None:
     confirmed live-repro regression this covers (see TODO.md's file-upload
     torture case) — and the resolve/pre-arm round trip lands on the real page.
     """
-    if not _chrome_ready("phase 6 filechooser"):
-        return
+    _check_chrome("phase 6 filechooser")
     import pathlib
     import tempfile
 
@@ -4500,8 +4462,7 @@ def phase_6_downloads(kernel: Kernel) -> None:
     `downloadProgress` become `download_started` / `download_done` pushes naming
     the file.
     """
-    if not _chrome_ready("phase 6 downloads"):
-        return
+    _check_chrome("phase 6 downloads")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -4527,8 +4488,7 @@ def phase_6_downloads(kernel: Kernel) -> None:
 def phase_6_download_routing(kernel: Kernel) -> None:
     """Downloads reach the tab's owner: started, done (which carries no frameId)
     and a download begun inside an iframe all route to A, not to B who drove it."""
-    if not _chrome_ready("phase 6 download routing"):
-        return
+    _check_chrome("phase 6 download routing")
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
     try:
@@ -4577,8 +4537,7 @@ def phase_6_download_routing(kernel: Kernel) -> None:
 
 def phase_6_reconnect_push(kernel: Kernel) -> None:
     """A dropped Chrome socket is healed by the next call; only a lost tab is announced."""
-    if not _chrome_ready("phase 6 reconnect push"):
-        return
+    _check_chrome("phase 6 reconnect push")
     a = _BridgeHarness(kernel)
     b = _BridgeHarness(kernel)
     drop = (
@@ -4629,8 +4588,7 @@ def phase_6_reconnect_push(kernel: Kernel) -> None:
 
 def phase_6_screencast(kernel: Kernel) -> None:
     """`tab.screencast` streams repaints, acks per frame, and survives a reconnect."""
-    if not _chrome_ready("phase 6 screencast"):
-        return
+    _check_chrome("phase 6 screencast")
     h = _BridgeHarness(kernel)
     anim = (
         "<script>setInterval(()=>{document.body.style.background="
@@ -4747,8 +4705,7 @@ def phase_6_screencast(kernel: Kernel) -> None:
 
 def phase_6_click_point(kernel: Kernel) -> None:
     """click('x,y') and wheel() reach a DOM-less target at exact coordinates."""
-    if not _chrome_ready("phase 6 click point"):
-        return
+    _check_chrome("phase 6 click point")
     h = _BridgeHarness(kernel)
     page = (
         "<body style='margin:0'><canvas id=c width=400 height=300 "
@@ -4826,8 +4783,7 @@ def phase_6_click_point(kernel: Kernel) -> None:
 
 def phase_6_plan_click(kernel: Kernel) -> None:
     """plan_click resolves and hit-tests without pressing; run() dispatches at the plan."""
-    if not _chrome_ready("phase 6 plan click"):
-        return
+    _check_chrome("phase 6 plan click")
     h = _BridgeHarness(kernel)
     page = (
         "<body style='margin:0'><button id=b style='position:absolute;left:100px;"
@@ -5164,8 +5120,7 @@ def phase_6_scoped_lease(kernel: Kernel) -> None:
 
 def phase_6_connect_url(kernel: Kernel) -> None:
     """connect(url=) attaches by http base or ws URL, heals a drop, and persists nothing."""
-    if not _chrome_ready("phase 6 connect url"):
-        return
+    _check_chrome("phase 6 connect url")
     base = _cdp().replace("localhost", "127.0.0.1")
     with urllib.request.urlopen(f"{base}/json/version", timeout=2) as r:
         ws = json.load(r)["webSocketDebuggerUrl"]
@@ -5208,8 +5163,7 @@ def phase_6_tab_mode(kernel: Kernel) -> None:
     """A tab's mode (agent/shared) decides who owns its native prompts, is
     shown in browser_tabs, and moves only through browser_take/browser_release.
     """
-    if not _chrome_ready("phase 6 tab mode"):
-        return
+    _check_chrome("phase 6 tab mode")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -5286,8 +5240,7 @@ def phase_6_click_arrival(kernel: Kernel) -> None:
     consequence, which needs page-specific drag machinery no offline
     fixture engages.
     """
-    if not _chrome_ready("phase 6 click arrival"):
-        return
+    _check_chrome("phase 6 click arrival")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -5326,8 +5279,7 @@ def phase_6_actionability(kernel: Kernel) -> None:
     A disabled control errors inside the bounded wait instead of clicking a
     dead element; a control enabled 500 ms later is waited for and clicked.
     """
-    if not _chrome_ready("phase 6 actionability"):
-        return
+    _check_chrome("phase 6 actionability")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -5366,8 +5318,7 @@ def phase_6_react_controlled_input(kernel: Kernel) -> None:
     before switching to the native-setter + synthetic-events path, which works
     cross-world because instance-level descriptor patches don't cross worlds.
     """
-    if not _chrome_ready("phase 6 react controlled input"):
-        return
+    _check_chrome("phase 6 react controlled input")
     h = _BridgeHarness(kernel)
     try:
         fixture = (
@@ -5427,8 +5378,7 @@ def phase_6_react_controlled_input(kernel: Kernel) -> None:
 
 def phase_6_select_option(kernel: Kernel) -> None:
     """browser_select drives native <select> and custom listboxes; a miss lists options."""
-    if not _chrome_ready("phase 6 select option"):
-        return
+    _check_chrome("phase 6 select option")
     h = _BridgeHarness(kernel)
     try:
         # The custom half is react-select-shaped on purpose: the chosen value
@@ -5502,8 +5452,7 @@ def phase_6_select_option(kernel: Kernel) -> None:
 def phase_6_aria_ref_roundtrip(kernel: Kernel) -> None:
     """browser_tree refs act as selectors, die on navigation with a hint, and
     mode='ax' keeps the ref-less CDP tree."""
-    if not _chrome_ready("phase 6 aria-ref roundtrip"):
-        return
+    _check_chrome("phase 6 aria-ref roundtrip")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab('<button id=cm onclick="window.hit=1">Click me</button>')
@@ -5552,8 +5501,7 @@ def phase_6_engine_reinjection(kernel: Kernel) -> None:
     `reattach_session` path against live Chrome, the same route a WebSocket
     reconnect takes.
     """
-    if not _chrome_ready("phase 6 engine reinjection"):
-        return
+    _check_chrome("phase 6 engine reinjection")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab("<button id=x>X</button>")
@@ -5598,8 +5546,7 @@ def phase_6_viewport_param(kernel: Kernel) -> None:
     Emulation.setDeviceMetricsOverride dance, and forgetting it meant
     coordinate-multiplier math against a scaled capture.
     """
-    if not _chrome_ready("phase 6 viewport param"):
-        return
+    _check_chrome("phase 6 viewport param")
     h = _BridgeHarness(kernel)
     try:
         url = f"data:text/html,<p>{_MARKER}-viewport</p>"
@@ -5632,8 +5579,7 @@ def phase_6_viewport_param(kernel: Kernel) -> None:
 def phase_6_observation_diff(kernel: Kernel) -> None:
     """Mutation observations carry a changes: AX-diff — appeared/gone/state —
     and suppress it across a navigation, where the whole tree is new."""
-    if not _chrome_ready("phase 6 observation diff"):
-        return
+    _check_chrome("phase 6 observation diff")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab(
@@ -5690,8 +5636,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
     browser_drag presses, moves with buttons=1, releases — micro-stepping out
     of a small origin, dwelling at the drop point for a debounced drop
     handler, and re-resolving a drop zone that mounts on dragstart."""
-    if not _chrome_ready("phase 6 hover and drag"):
-        return
+    _check_chrome("phase 6 hover and drag")
     h = _BridgeHarness(kernel)
     try:
         # No literal '#' anywhere in the markup: everything past one is the
@@ -5902,8 +5847,7 @@ def phase_6_hover_and_drag(kernel: Kernel) -> None:
 def phase_6_select_type_filter(kernel: Kernel) -> None:
     """select_option types into an aria-autocomplete field so an option below
     a virtualized list's render window becomes reachable."""
-    if not _chrome_ready("phase 6 select type-filter"):
-        return
+    _check_chrome("phase 6 select type-filter")
     h = _BridgeHarness(kernel)
     try:
         # 30 statuses, list renders only the first 5 matching the filter —
@@ -5962,8 +5906,7 @@ def phase_6_pill_gate_withdrawn(kernel: Kernel) -> None:
     The second half queues a gate behind the first: withdrawing the active
     one must promote the queued one, not blank the pill.
     """
-    if not _chrome_ready("phase 6 pill gate withdrawn"):
-        return
+    _check_chrome("phase 6 pill gate withdrawn")
     from phases.gates import _gate_cli, _pending
 
     h = _BridgeHarness(kernel)
@@ -6029,8 +5972,7 @@ def phase_6_every_tab_fusion(kernel: Kernel) -> None:
     the case a captured-once Tab can't recover from on its own; a fresh
     resolve each tick self-heals to the replacement with no ticker restart.
     """
-    if not _chrome_ready("phase 6 every tab fusion"):
-        return
+    _check_chrome("phase 6 every tab fusion")
     h = _BridgeHarness(kernel)
 
     def next_tick(pred, desc: str, timeout: float = 8.0) -> dict:
@@ -6099,8 +6041,7 @@ def phase_6_seeded_tree(kernel: Kernel) -> None:
     hit (OOPIF -- DOM.getNodeForLocation returns the iframe element itself),
     and a coordinate whose DOM element has no AX representation.
     """
-    if not _chrome_ready("phase 6 seeded tree"):
-        return
+    _check_chrome("phase 6 seeded tree")
     h = _BridgeHarness(kernel)
     try:
         # --- 1. Visible element: button at known coordinates -----------------
@@ -6192,8 +6133,7 @@ def phase_6_seeded_tree(kernel: Kernel) -> None:
 def phase_6_set_files_hidden(kernel: Kernel) -> None:
     """set_files on a real backgrounded tab verifies readability; on a frozen one the
     bounded probe reports instead of hanging or raising."""
-    if not _chrome_ready("phase 6 set_files hidden"):
-        return
+    _check_chrome("phase 6 set_files hidden")
     import pathlib
     import tempfile
 
@@ -6373,8 +6313,7 @@ def phase_6_auth_live(kernel: Kernel) -> None:
     throwaway does) or cancels is Chrome's; the live assertion is only that
     repld did not answer.
     """
-    if not _chrome_ready("phase 6 auth live"):
-        return
+    _check_chrome("phase 6 auth live")
     import base64
     import http.server
     import threading
@@ -6749,8 +6688,7 @@ def phase_6_type_round_trips(kernel: Kernel) -> None:
     technique as phase_6_click_round_trips so a fast local Chrome cannot
     split a pipelined pair.
     """
-    if not _chrome_ready("phase 6 type round trips"):
-        return
+    _check_chrome("phase 6 type round trips")
     h = _BridgeHarness(kernel)
     try:
         tid = h.open_tab("<input id=inp autofocus>")
@@ -6810,8 +6748,7 @@ def phase_6_seed_screenshot_offloop(kernel: Kernel) -> None:
     call would run on the loop thread; `asyncio.to_thread` dispatches it
     to a thread-pool worker.
     """
-    if not _chrome_ready("phase 6 seed screenshot offloop"):
-        return
+    _check_chrome("phase 6 seed screenshot offloop")
     h = _BridgeHarness(kernel)
     try:
         page = (

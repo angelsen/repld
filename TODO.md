@@ -433,9 +433,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   are only touched incidentally. Both browser bugs found on 2026-07-31 were in that area,
   and both surfaced from *using* the code rather than from three separate reading passes that
   had all explicitly scoped it out.
-- [ ] Phase 6 still needs a live Chrome on `:9222`. It is deterministic now — it opens its own
-  `data:` tab, asserts against that alone, and cleans up in `finally` — but it skips silently
-  without a browser, so CI would report green having run none of it.
+- [x] Phase 6 skipped silently without a browser. `smoketest.py` now fails when no throwaway Chrome comes up, and `browser.py`'s `_check_chrome` raises instead of returning.
 - [x] `cdp._async_prune` runs its `DELETE` on the loop. Measured at 4.5 ms for 5k of 50k rows,
   which is why it was left alone; the docstring's claim that running as a task "avoids
   blocking recv" is still wrong in kind (a task on the same loop defers *when* it blocks, not

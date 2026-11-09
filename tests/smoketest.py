@@ -358,13 +358,12 @@ def main() -> int:
                 os.environ["REPLD_CHROME_PORT"] = str(chrome.port)
                 print(f"== throwaway chrome on port {chrome.port} ==")
             else:
-                # Point at a port nothing binds (1 is privileged, always
-                # refused) rather than leaving REPLD_CHROME_PORT unset — unset
-                # falls back to 9222 in `_cdp()`, which is exactly the
-                # developer's own debug Chrome this is meant to stay off of.
-                os.environ["REPLD_CHROME_PORT"] = "1"
-                print("== no chrome binary found, phase 6 will skip ==")
-                chrome = None
+                print(
+                    "FAIL: phase 6 needs a Chrome that starts;"
+                    " leave 6 out with --phases",
+                    file=sys.stderr,
+                )
+                return 1
 
         print(f"== kernel cwd: {tmp} ==")
         kernel = Kernel(tmp)

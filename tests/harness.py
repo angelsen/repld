@@ -69,8 +69,7 @@ class ThrowawayChrome:
 
     def start(self, timeout: float = 15.0) -> bool:
         """Launch Chrome and wait for its port. False if unavailable or it
-        never came up — the caller skips phase 6 rather than failing the run,
-        same as `_chrome_ready` already does for an unreachable Chrome."""
+        never came up; the caller fails the run, since phase 6 cannot run without it."""
         if self.binary is None:
             return False
         self.profile_dir = Path(tempfile.mkdtemp(prefix="repld-test-chrome-"))
