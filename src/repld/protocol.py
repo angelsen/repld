@@ -879,36 +879,38 @@ class Dispatcher(BrowserDispatchMixin):
             return _response(rid, {"resourceTemplates": RESOURCE_TEMPLATES})
         if method == "resources/read":
             return self._read_resource(rid, req.get("params", {}))
-        # Human gates. Deliberately JSON-RPC methods and *not* MCP tools: they
-        # exist so a human can unblock a cell, and an agent that could answer
-        # its own `confirm()` would defeat the primitive. `repld gate` is the
-        # only caller; no MCP client is ever told these exist.
+        reply = self._handle_bare(method, rid, req.get("params"), session)
+        if reply is not None:
+            return reply
+        if rid is None:
+            return None
+        return _error(rid, -32601, f"method not found: {method}")
+
+    def _handle_bare(
+        self, method: str | None, rid, params: dict | None, session: ipc.Session
+    ) -> dict | None:
+        """Answer a bare JSON-RPC method no MCP client is told about, or `None` if it is not one.
+
+        Never MCP tools: an agent answering its own `confirm()` or re-keying
+        connections would defeat the primitive.
+        """
+        params = params or {}
         if method == "gates/list":
             from . import gates
 
             return _response(rid, {"gates": gates.open_gates()})
         if method in ("gates/resolve", "gates/elicit_result"):
-            return self._gates_answer(method, rid, req.get("params", {}))
-        # `repld tasks wait`/`cancel`, bare JSON-RPC like the gates methods
-        # above, for the same reason: `repld tasks` is the only caller, no MCP
-        # client is ever told these exist, and `cancel` already has an MCP
-        # tool twin (_cancel below) that agents use instead.
+            return self._gates_answer(method, rid, params)
         if method == "tasks/wait":
-            return self._tasks_wait(rid, req.get("params", {}), session)
+            return self._tasks_wait(rid, params, session)
         if method == "tasks/cancel":
-            return self._tasks_cancel(rid, req.get("params", {}))
-        # `repld rebind`, a SessionStart hook's only call: bare JSON-RPC, not an
-        # MCP tool, since an agent re-keying connections would misroute pushes.
+            return self._tasks_cancel(rid, params)
         if method == "sessions/rebind":
-            return self._sessions_rebind(rid, req.get("params", {}))
-        # Kernel-to-kernel calls: bare JSON-RPC for the same reason as the
-        # methods above: only `peer.py` calls them, on a connection of its own
-        # that never sends `initialize`. See `_peer` for what that implies.
+            return self._sessions_rebind(rid, params)
+        # `peer.py` calls these on a connection of its own that never sends `initialize`.
         if method in (PEER_LIST_METHOD, PEER_INSPECT_METHOD, PEER_CALL_METHOD):
-            return self._peer(rid, method, req.get("params") or {}, session)
-        if rid is None:
-            return None
-        return _error(rid, -32601, f"method not found: {method}")
+            return self._peer(rid, method, params, session)
+        return None
 
     # ------------------------------------------------------------------
     # initialize

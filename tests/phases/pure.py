@@ -74,7 +74,9 @@ def _own_group_signal() -> None:
         try:
             call()
         except killguard.OwnGroupSignal as exc:
-            assert_true(isinstance(exc, PermissionError), "refusal is a PermissionError")
+            assert_true(
+                isinstance(exc, PermissionError), "refusal is a PermissionError"
+            )
             assert_true(str(own) in str(exc), "refusal names the kernel's pgid")
         else:
             raise AssertionError("signal at the kernel's group was not refused")
