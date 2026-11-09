@@ -314,7 +314,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   Lesson for the next run: the integrator brief must say "apply the worktree's whole diff", not
   the one source file, or an authored test stays behind in the worktree. Script kept at the
   session's workflows dir; worth saving as `/burndown` when the ratchet next catches something.
-- [ ] **House style, written down and ratcheted (brainstorm 2026-11-01, tail of session
+- [x] **House style, written down and ratcheted (brainstorm 2026-11-01, tail of session
   fc824213; measured, not started).** No external guide: Google/NumPy docstring styles are built
   on `Args:`/`Returns:` sections and the package has 1 of those in 743 docstrings; the rest are
   prose stating the contract or the why. Measured adherence in `src/repld`: return annotations
@@ -436,7 +436,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
 - [ ] Phase 6 still needs a live Chrome on `:9222`. It is deterministic now — it opens its own
   `data:` tab, asserts against that alone, and cleans up in `finally` — but it skips silently
   without a browser, so CI would report green having run none of it.
-- [ ] `cdp._async_prune` runs its `DELETE` on the loop. Measured at 4.5 ms for 5k of 50k rows,
+- [x] `cdp._async_prune` runs its `DELETE` on the loop. Measured at 4.5 ms for 5k of 50k rows,
   which is why it was left alone; the docstring's claim that running as a task "avoids
   blocking recv" is still wrong in kind (a task on the same loop defers *when* it blocks, not
   *whether*). Revisit only if the cap or the row count changes.
