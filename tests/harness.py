@@ -147,6 +147,9 @@ class Bridge:
         # CLAUDE_CODE_SESSION_ID, and a bare os.environ.copy() would leak it
         # into a bridge a test means to spawn with no Claude Code identity.
         proc_env = os.environ.copy()
+        # A `bg` test bridge would stamp the developer session's own inbox and
+        # deliver its gate pushes there; a test that wants one passes `env=`.
+        proc_env.pop("CLAUDE_CODE_MESSAGING_SOCKET", None)
         for k, v in (env or {}).items():
             if v is None:
                 proc_env.pop(k, None)
