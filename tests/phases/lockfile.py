@@ -33,9 +33,7 @@ def phase_5_permissions(kernel: Kernel) -> None:
     assert_true(session_file.exists(), f"session file exists ({session_file})")
     assert_eq(_mode(session_file), "0o600", "session file is 0600")
 
-    # Earlier phases exec'd cells that printed, and every cell with output
-    # spills from byte 1 — so this kernel has spill files by now.
-    spills = list(paths.RUNTIME_DIR.glob(f"{pid}-*.out"))
+    spills = _live_spills(kernel)
     assert_true(spills, f"kernel {pid} wrote at least one spill file")
     for s in spills:
         assert_eq(_mode(s), "0o600", f"spill file {s.name} is 0600")
@@ -51,6 +49,20 @@ def phase_5_permissions(kernel: Kernel) -> None:
     assert_eq(_mode(kernel.lock_path), "0o600", "kernel.lock is 0600")
     assert_eq(_mode(paths.cache_for(sock)), "0o600", "kernel.cache is 0600")
     print("  ✓ socket + lock + cache all 0600, no post-create chmod window")
+
+
+def _live_spills(kernel: Kernel) -> list[Path]:
+    """Spill files of `kernel`, after a printing cell guarantees it has at least one."""
+    from repld import paths
+
+    b = Bridge(kernel.cwd)
+    try:
+        b.handshake()
+        b.exec("print('phase 5 spill')")
+    finally:
+        b.close()
+    pid = json.loads(kernel.lock_path.read_text())["pid"]
+    return list(paths.RUNTIME_DIR.glob(f"{pid}-*.out"))
 
 
 def _a_dead_pid() -> int:
@@ -189,7 +201,7 @@ def phase_5_sweep(kernel: Kernel) -> None:
         s.write_text("stale")
 
     live_pid = json.loads(kernel.lock_path.read_text())["pid"]
-    live_spills = set(paths.RUNTIME_DIR.glob(f"{live_pid}-*.out"))
+    live_spills = set(_live_spills(kernel))
     assert_true(live_spills, f"live kernel {live_pid} has spills to protect")
 
     tmp = Path(_tmp.mkdtemp(prefix="repld-sweep-"))
