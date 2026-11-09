@@ -27,10 +27,8 @@ from harness import Bridge, Kernel, assert_eq, assert_true, content_text
 
 
 def _cdp() -> str:
-    """The CDP HTTP origin — smoketest.py points this at a throwaway Chrome
-    via REPLD_CHROME_PORT before the kernel spawns; the fallback is whatever
-    a developer's own debug Chrome happens to be listening on."""
-    return f"http://localhost:{os.environ.get('REPLD_CHROME_PORT', '9222')}"
+    """The throwaway Chrome's CDP HTTP origin, from the port `smoketest.py` exports."""
+    return f"http://localhost:{os.environ['REPLD_CHROME_PORT']}"
 
 
 # Distinctive enough that a watch pattern built from it can't match anything of
