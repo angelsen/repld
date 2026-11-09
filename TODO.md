@@ -771,7 +771,7 @@ Follow-ups to 0.11.1-0.11.3 (rebind `old_id=`, bridge `kernel_crashed` push, bri
 - [ ] (deferred 2026-09-30: `claude_code_research` now reads the whole tag up to `>`, so the 600-char prefix problem is gone on their side) Channel tag order: `kind=` and `task_id=` before `roster=` (peer finding 4; the roster attribute ran to 621 chars) so fixed-prefix parsers work.
 - [ ] Rebind keys on `comm == "claude"` (recaps e655a6b6, 3763948b): if Claude Code ever runs under another process name, `ipc.rebind_claude_session`'s ancestor walk is unbounded again and the pane-theft of 2026-11-04 returns. Re-check after a Claude Code upgrade that changes the binary name.
 - [ ] A rebind with `old_id=` that matches nothing under the pane's `claude` now raises `LookupError` at the claude boundary instead of walking up. The hook's bare-call fallback (the incident's path) was not inspected, so whether a fallback still reaches the raise is unchecked.
-- [ ] A pending rebind (`_PendingRebind`) does not carry pushes already held in `Server._outbox` under the old id. Only reachable across a kernel death; untested and unfixed (recap 9e05409b).
+- [x] A pending rebind (`_PendingRebind`) did not carry pushes already held in `Server._outbox` under the old id. `register_claude_session` now drains the stale id's outbox before the successor's; phase 15 `_deferred_rebind` covers it.
 - [ ] Devstack plugin repo, not repld: `session-roster.py` treats `ERR LookupError` as "no predecessor" silently, and the bounded match makes that outcome more common. It should log it (recaps e655a6b6, 3763948b).
 
 ## Channel delivery to `claude --bg` sessions

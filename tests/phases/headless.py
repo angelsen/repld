@@ -1133,13 +1133,18 @@ def _deferred_rebind(tmp: Path) -> None:
         # `peer_pid` must win and be pushed back so the bridge stamps it next time.
         reg = (
             "import time\n"
-            "from repld import ipc\n"
+            "from repld import channel, ipc\n"
             "srv = ipc._server\n"
             "s = next(x for x in srv.sessions if x.claude_session_id == {have!r})\n"
             "srv._pending_rebinds[s.peer_pid] = ipc._PendingRebind({want!r}, time.monotonic() + 30)\n"
+            "seen = []\n"
+            "srv._outbox[{stale!r}] = [ipc._Owed(\n"
+            "    channel._build_channel_msg('owed to the stale id', {{'kind': 'owed-stale'}}),\n"
+            "    seen.append, time.monotonic() + 30)]\n"
             "ipc.register_claude_session(s, {stale!r}, None)\n"
             "srv._claude_sessions.pop({stale!r}, None)\n"
-            "print(s.claude_session_id, s.peer_pid not in srv._pending_rebinds, current_session_id())"
+            "print(s.claude_session_id, s.peer_pid not in srv._pending_rebinds, current_session_id(),\n"
+            "      {stale!r} in srv._outbox, seen)"
         )
         out = content_text(
             a.exec(
@@ -1148,8 +1153,12 @@ def _deferred_rebind(tmp: Path) -> None:
             )
         )
         assert_true(
-            "applied-id True applied-id" in out,
-            f"the pending id wins on register and is consumed (got {out!r})",
+            "applied-id True applied-id False [True]" in out,
+            f"the pending id wins on register and is consumed, and the stale id's"
+            f" outbox drains to it (got {out!r})",
+        )
+        a.wait_notification(
+            "notifications/claude/channel", kind="owed-stale", timeout=5.0
         )
         # The bridge's cached id is only moved by the pushed BRIDGE_REBIND_METHOD.
         os.kill(int(_lock(tmp)["pid"]), signal.SIGKILL)

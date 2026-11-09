@@ -628,12 +628,14 @@ class Server:
         Replaces any existing entry for the same id without unregistering
         it first. A reconnecting bridge (kernel restart) presents the same
         id on a fresh Session, and the old one is already gone or going.
-        Whatever the outbox holds for the id is delivered here.
+        Whatever the outbox holds for the id, or for the stale id a pending
+        rebind replaces, is delivered here.
 
         A rebind that found no connection under this bridge's `claude`
         (`rebind_claude_session`) wins over `session_id`, the stale id the
         bridge stamps from its env, and the bridge is told to stamp it from now on.
         """
+        stale_id = session_id
         pending_id = self._take_pending_rebind(session)
         if pending_id is not None:
             session_id = pending_id
@@ -655,6 +657,8 @@ class Server:
                     f" from live pid {holder.peer_pid}, which loses targeted pushes\n"
                 )
             self._claude_sessions[session_id] = session
+        if stale_id != session_id:
+            self._drain_outbox(stale_id, session)
         self._drain_outbox(session_id, session)
         if pending_id is not None:
             session.post_channel(
