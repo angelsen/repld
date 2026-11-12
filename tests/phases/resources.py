@@ -203,7 +203,7 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
 
 
 def phase_8_help_resources(_kernel: Kernel) -> None:
-    """Every help topic but `migration` is a listed resource, and every doc URI has text.
+    """Every help topic is a listed resource, and every doc URI has text.
 
     `core_schemas.DOC_RESOURCES` is hand-written (the bridge must not parse
     `help.py` to list it), so nothing but this stops a new topic shipping
@@ -214,8 +214,8 @@ def phase_8_help_resources(_kernel: Kernel) -> None:
 
     assert_eq(
         sorted(cs.DOC_HELP_TOPICS.values()),
-        sorted(set(h._TOPICS) - {"migration"}),
-        "one repld://help/<topic> resource per topic, migration excepted",
+        sorted(h._TOPICS),
+        "one repld://help/<topic> resource per topic",
     )
     assert_eq(
         sorted(cs.DOC_HELP_TOPICS),

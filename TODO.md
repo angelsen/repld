@@ -600,6 +600,7 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
 
 ## Features (from session 002 backlog)
 
+- [ ] `browser_open` (MCP tool, `browser_dispatch._bh_open`) has no `new_window` although `browser.open()` does.
 - [ ] Safari/iOS support — WebKit Inspector over usbmuxd (gist, not core)
 - [ ] `py-align` as PyPI package — currently `~/.local/bin/` vendored script
 - [ ] Vite plugin — auto-inject `data-testid` in dev mode (SvelteKit + Astro)
@@ -770,6 +771,7 @@ Follow-ups to 0.11.1-0.11.3 (rebind `old_id=`, bridge `kernel_crashed` push, bri
 - [ ] Rebind keys on `comm == "claude"` (recaps e655a6b6, 3763948b): if Claude Code ever runs under another process name, `ipc.rebind_claude_session`'s ancestor walk is unbounded again and the pane-theft of 2026-11-04 returns. Re-check after a Claude Code upgrade that changes the binary name.
 - [ ] A rebind with `old_id=` that matches nothing under the pane's `claude` now raises `LookupError` at the claude boundary instead of walking up. The hook's bare-call fallback (the incident's path) was not inspected, so whether a fallback still reaches the raise is unchecked.
 - [x] A pending rebind (`_PendingRebind`) did not carry pushes already held in `Server._outbox` under the old id. `register_claude_session` now drains the stale id's outbox before the successor's; phase 15 `_deferred_rebind` covers it.
+- [ ] The boot sweep's flock fix (6be58531) leaves a narrow window: a boot contending for a dead project's `kernel.flock` in the instant `state.sweep_dead_project_dirs` holds it, before the unlink, exits 0 as if an incumbent existed. No kernel results until the next trigger; not reproduced.
 - [ ] Devstack plugin repo, not repld: `session-roster.py` treats `ERR LookupError` as "no predecessor" silently, and the bounded match makes that outcome more common. It should log it (recaps e655a6b6, 3763948b).
 
 ## Channel delivery to `claude --bg` sessions

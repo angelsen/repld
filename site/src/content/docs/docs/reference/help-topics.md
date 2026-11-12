@@ -107,26 +107,34 @@ Gates are deliberately **not** MCP tools — an agent able to answer its own `co
 
 ## Channel notification kinds
 
-| Kind                                                                           | Source                                                    |
-| ------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `task_done`                                                                    | exec or defer finished                                    |
-| `every`                                                                        | periodic tick result or error (`label` in meta)           |
-| `awaiting_human`                                                               | ask/confirm/choose pending                                |
-| `bg_task_error`                                                                | uncaught exception in background task                     |
-| `loop_blocked`                                                                 | asyncio loop blocked > 5s                                 |
-| `loop_kill`                                                                    | watchdog cancelled the task holding the loop              |
-| `loop_unblocked`                                                               | a reported block ended                                    |
-| `init_loaded`                                                                  | `repld_init.py` ran at boot — `__main__` is pre-populated |
-| `init_error`                                                                   | `repld_init.py` raised                                    |
-| `venv`                                                                         | a project venv was adopted onto the running kernel        |
-| `console_error`                                                                | `console.error` or uncaught exception from a watched tab  |
-| `pin_lost`                                                                     | a pinned tab navigated cross-origin                       |
-| `controls`                                                                     | `window.controls` action observation                      |
-| `dialog`                                                                       | native JS dialog auto-dismissed                           |
-| `filechooser`                                                                  | native file chooser opened                                |
-| `auth`                                                                         | HTTP auth challenge cancelled (no pre-arm)                |
-| `browser_warning`                                                              | a drag endpoint was occluded                              |
-| `browser_connect` / `browser_disconnect` / `browser_watch` / `browser_unwatch` | dashboard browser actions                                 |
+| Kind                                                                           | Source                                                                     |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `task_done`                                                                    | exec or defer finished                                                     |
+| `every`                                                                        | periodic tick result or error (`label` in meta)                            |
+| `awaiting_human`                                                               | ask/confirm/choose/form pending (carries the answer command when headless) |
+| `bg_task_error`                                                                | uncaught exception in background task                                      |
+| `loop_blocked`                                                                 | asyncio loop blocked > 5s                                                  |
+| `loop_kill`                                                                    | watchdog cancelled the task holding the loop                               |
+| `loop_unblocked`                                                               | a reported block ended                                                     |
+| `init_loaded`                                                                  | `repld_init.py` ran at boot — `__main__` is pre-populated                  |
+| `init_error`                                                                   | `repld_init.py` raised                                                     |
+| `venv`                                                                         | a project venv was adopted onto the running kernel                         |
+| `kernel_started`                                                               | the bridge's lazy spawn landed; the full tool list follows                 |
+| `kernel_crashed`                                                               | the kernel died without a goodbye; `__main__` is gone                      |
+| `console_error`                                                                | `console.error` or uncaught exception on a tab you claim                   |
+| `pin_lost`                                                                     | a pinned tab navigated cross-origin                                        |
+| `controls`                                                                     | `window.controls` action observation                                       |
+| `dialog`                                                                       | native JS dialog answered, or waiting for the human                        |
+| `filechooser`                                                                  | native file chooser opened: resolved (pre-armed) or left open              |
+| `captcha`                                                                      | a captcha needs a human, or was solved                                     |
+| `auth`                                                                         | HTTP auth challenge cancelled (no pre-arm) or left to Chrome's prompt      |
+| `download_started` / `download_done` / `download_canceled`                     | a download on a tab you claim                                              |
+| `tab_crashed`                                                                  | a tab's renderer crashed; navigate or reload revives it                    |
+| `tab_closed`                                                                   | a tab you claim was closed from outside repld                              |
+| `browser_disconnected`                                                         | a `url=` browser was retired (reason in the text); broadcast               |
+| `browser_reconnected`                                                          | Chrome reconnected and some tabs were lost; broadcast                      |
+| `browser_warning`                                                              | a drag endpoint was occluded                                               |
+| `browser_connect` / `browser_disconnect` / `browser_watch` / `browser_unwatch` | dashboard browser actions                                                  |
 
 `loop_blocked` fires once a probe on the kernel loop misses `REPLD_LOOP_BLOCK_THRESHOLD` (default 5 s). It names the task holding the loop and the top of its stack, led by a `blocked at:` line naming the innermost frame outside the stdlib and installed packages (the call that chose to block), and a `loop_unblocked` with `blocked_s` follows when the block ends. Past `REPLD_LOOP_KILL_THRESHOLD` (default 30 s; `0` disables) the watchdog asks that task to cancel. The cancel can't interrupt synchronous code; it lands at the task's next `await`.
 

@@ -24,7 +24,7 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
       PRODUCTION     (repld://docs/production) graduation guide:
                                                gist → FastMCP/FastAPI with wiring examples
       PEERS_GUIDE    (repld://docs/peers)      kernel-to-kernel calls: peers, stubs, identity
-  Each topic but `migration` is also served as repld://help/<topic>;
+  Each topic is also served as repld://help/<topic>;
   `resolve_doc` is the one reader behind every doc URI.
 """
 
@@ -2287,36 +2287,6 @@ repld gist stub --check [NAME...]      typed async shims; --check reports drift 
 Resolution, errors, identity, cold peers, stubs and the security note:
 repld://docs/peers.
 """,
-    "migration": """\
-Why a repld project has no state files (0.1.x → 0.2).
-
-repld 0.2 writes nothing into a project directory. Files an older setup
-created are absent on purpose — none of these are missing, they are gone:
-
-  .pyrepl.lock/.sock/.dashboard  runtime state; now
-                                 $XDG_RUNTIME_DIR/repld/projects/<slug>/ as
-                                 kernel.lock/.sock/.dashboard. `repld status`
-                                 prints the live paths.
-  .mcp.json                      never written now. Register the server with
-                                 `claude mcp add repld -- repld bridge`.
-  CLAUDE.md repld:start block    gone; that content is the MCP `initialize`
-                                 instructions, composed fresh each session.
-  repl.py + --init               now ./repld_init.py, auto-detected and run by
-                                 every kernel, whoever started it.
-  __repld_tools__                removed in 0.2 and ignored, so a file still
-                                 declaring one has silently lost its tools.
-                                 `repld gist lint` is what reports it.
-
-Still in the project and yours to commit: ./gists/, ./gists/.links, ./.env,
-./repld_init.py.
-
-If you FIND a .pyrepl.* file, it is 0.1.x leftover, not something this version
-made. .pyrepl.lock names a pid that may still be running — check it with
-`ps -p <pid> -o pid,command` before signalling, since a stale lockfile can name
-a reused pid. .pyrepl.dashboard holds a dead dashboard's API token; it was only
-gitignored where `repld init` ran, so check `git ls-files | grep pyrepl`.
-Cleanup: https://angelsen.github.io/repld/docs/guides/upgrading/
-""",
 }
 
 
@@ -2329,7 +2299,7 @@ def _reference() -> str:
     """
     return (
         f"Reference: `repld help <topic>` — topics: {', '.join(sorted(_TOPICS))}; "
-        "each but migration is also the resource repld://help/<topic>.\n"
+        "each is also the resource repld://help/<topic>.\n"
         "Read repld://docs/guide for exec patterns and gist conventions. "
         "Read repld://docs/browser before driving a browser.\n"
         "Read repld://docs/production when graduating gists to FastMCP/FastAPI.\n"
