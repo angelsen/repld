@@ -180,6 +180,9 @@ or plain data transforms.
   worker regardless of its own --tools flag or working directory — a
   missing restriction fails silent, not loud.
 
+  Spawning it without blocking the kernel's loop: repld://docs/guide,
+  "Dispatching a subprocess".
+
 == The portable unit: the gist ==
 
   A gist is a plain Python file with no framework dependency. Data in,
@@ -192,6 +195,10 @@ or plain data transforms.
     repld                   # imports gists for interactive prototyping
     fastapi                 # imports gists for production endpoints
     inngest                 # calls gists as durable step functions
+
+  How the file is laid out so the wiring sheds cleanly: repld://docs/production,
+  "The two-layer pattern". A stage that lives in another project's kernel is
+  called in place through peers, not copied: repld://docs/peers.
 
 == Human gates ==
 
@@ -257,7 +264,7 @@ Graduating gists to production
 
 A gist is a plain Python file that runs in repld during prototyping. The same
 code runs in production — FastMCP, FastAPI, or any framework. This guide shows
-how to wire it.
+how to wire it; repld://docs/playbook covers when a gist is ready to graduate.
 
 == The two-layer pattern ==
 
@@ -318,21 +325,8 @@ Where the env var comes from depends on context:
   - Production (FastAPI/FastMCP): .env at project root, loaded by framework
   - CI/deploy: platform secrets (Fly.io, Railway, etc.)
 
-repld loads .env from the project directory (same place as gists/) at kernel
-boot. Existing env vars are never overwritten.
-
-Boot is the *only* time it is read — unlike gists/, which reload on mtime. A
-value written to .env afterwards stays invisible until something asks:
-
-  from repld import load_dotenv
-  load_dotenv()
-
-And because existing vars win, a name captured while it was empty stays empty.
-Clear it first when correcting one:
-
-  import os
-  os.environ.pop("API_TOKEN", None)
-  load_dotenv()
+The kernel reads .env once, at boot, and never overrides a variable that is
+already set: repld://docs/guide, "Secrets and .env", has the reload rules.
 
 For browser-auth APIs — no token at all. The browser session IS the
 credential. Use the fetch= callable pattern above.
@@ -347,6 +341,8 @@ credential. Use the fetch= callable pattern above.
     Gist relies on browser session auth. Production service runs alongside
     repld + Chrome.
     Production deps: uv add repld-tool[browser,http]
+    Or leave it in its kernel and call it from the other project as a peer,
+    with nothing vendored: repld://docs/peers.
 
   Hybrid (token + browser fallback):
     Token auth when available, browser fallback when not. The fetch=
@@ -1655,6 +1651,9 @@ No cross-kernel event subscription: a peer cannot be told when something happens
 in another kernel. Poll with @every, or have the callee notify() its own sessions.
 Live objects do not cross; return the data, or a path to it.
 
+A callee that must answer with no kernel running is not a peer: graduate the
+gist to its own service, repld://docs/production.
+
 == Reference ==
 
   peers.list() -> list[dict]
@@ -2426,6 +2425,9 @@ needed, other tickers and cells keep running while it's in flight:
   )
   out, err = await proc.communicate()
 
+What a dispatched claude -p should be granted (and why --strict-mcp-config is
+always passed): repld://docs/playbook, "Dispatched reasoning".
+
 Pass start_new_session=True for a child you may later signal as a group: the
 kernel refuses os.kill / os.killpg aimed at its own process group
 (OwnGroupSignal), which a child started without it shares.
@@ -2483,6 +2485,25 @@ imports from it fail with an error naming `repld restart`.
 
 No API layer, no HTTP, no serialization — you're in the process. Faster
 than any external tool for ad-hoc queries, data inspection, and debugging.
+
+=== Secrets and .env ===
+
+Read secrets from os.environ, never hardcode them. The kernel loads ./.env
+(the project directory, same place as gists/) at boot, and never overrides a
+variable that is already set.
+
+Boot is the *only* time it is read, unlike gists/, which reload on mtime. A
+value written to .env afterwards stays invisible until something asks:
+
+  from repld import load_dotenv
+  load_dotenv()
+
+And because existing vars win, a name captured while it was empty stays empty.
+Clear it first when correcting one:
+
+  import os
+  os.environ.pop("API_TOKEN", None)
+  load_dotenv()
 
 == Live introspection with repld_init.py ==
 
@@ -2755,20 +2776,12 @@ ignored tool-registration list). Suppress a specific finding with
 
 === Writing portable gists ===
 
-When a gist might graduate to production (FastMCP, FastAPI), use the two-layer
-pattern: core logic as pure async functions at the top of the file, repld
-wiring (typed _tool_* functions) at the bottom. The core functions move
-to production unchanged; the wiring gets replaced by @mcp.tool or @router.get.
+When a gist might graduate to production (FastMCP, FastAPI), keep two layers:
+core logic as pure async functions at the top of the file, with no
+`import repld`, and the repld wiring (typed _tool_* functions) at the bottom.
 
-For secrets, use os.environ["TOKEN"] — never hardcode. The kernel loads .env
-from the project root at boot.
-
-For browser-auth APIs, accept a fetch= callable parameter in the core function.
-In repld, pass tab.fetch. In production, pass an httpx client or use token
-auth instead. The core function doesn't care which path.
-
-Read repld://docs/production for the full graduation guide with wiring
-examples and scaffolding steps.
+Read repld://docs/production for the pattern in full (the fetch= callable for
+browser-auth APIs included), wiring examples and scaffolding steps.
 
 == Background automation ==
 

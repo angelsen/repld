@@ -16,6 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `repld://docs/guide`, `production` and `playbook` each tell a fact once and link to the others: the `.env` reload rules (`load_dotenv()`) moved from the production guide to the working guide, the two-layer gist pattern lives in the production guide only, and the guide's subprocess section and the playbook's dispatch tiers point at each other. `repld://docs/peers`, `production` and `playbook` are cross-linked.
 - `repld://docs/browser` no longer repeats every Tab method: its Tab API section covers only behaviour beyond the one-line entries in `repld://help/browser`, which is the complete method list (the guide is 44 KB, down from 53 KB). The click-dispatch and cross-frame tree mechanics moved to `repld://docs/browser-internals`.
 - Tool arguments are checked against the tool's `inputSchema` for every tool, gist tools included: a missing required argument, a wrong type or a value outside the enum is an in-band error the model can correct, not a run on bad input or a `-32603`. An unknown `task_id` is in-band too.
 - The server `instructions` are held to Claude Code's 4,096-character cut: the exec model is shorter, the browser model is a pointer (its detail moved into `repld://docs/browser`), and the gist listing takes the room that is left.
