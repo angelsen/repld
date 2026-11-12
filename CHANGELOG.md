@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.22.1] - 2026-11-12
+
+### Fixed
+
 - A `--socket` / `REPLD_SOCKET` path longer than the 107 bytes a unix socket allows is refused at once, naming the path and the limit. Before, the bridge spawned a kernel that died on `AF_UNIX path too long` and then waited out its 5 s spawn timeout with no reason given.
 
-### Removed
 
 ## [0.22.0] - 2026-11-12
 
