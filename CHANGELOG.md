@@ -12,6 +12,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The agent-facing docs describe dialogs, the file picker and push routing as they have worked since 0.18/0.19: an `open()` tab answers native prompts only while an action is in flight, a dialog your own action opens is answered on a shared tab too, a `take()` owner outranks the action in flight and an `open()`/`watch()` owner does not, and `release()` leaves the tab shared with no owner. The instructions, `repld://docs/browser` and the `browser_dismiss_dialog`/`browser_take`/`browser_release`/`browser_set_files` tool descriptions said an agent tab always answered.
+- `repld://docs/browser` corrections: `tab.sse()` returns newest-first, `tab.fetch()` also returns `base64Encoded`, the bearer-token example reads `["request"]["headers"]`, `Action.gate()` lists `on_open=`; new sections cover a `connect(url=)` browser's retirement rules and `TabCrashedError`/`CDPCommandError`.
+- `repld help` lists `start`, `tasks`, `rebind` and `--project`; `repld help exec` lists the `download_*`, `tab_crashed`, `tab_closed`, `browser_disconnected`, `browser_reconnected`, `kernel_started` and `kernel_crashed` channel kinds; `repld help gates` names the dashboard as an answering surface and `notify(session=)`'s `None` for a parked target.
+- The uv-project dependency hint no longer says to restart the kernel after `uv add`: a newly installed package is importable on the next import. The guide names the Python 3.14 venv floor, `start_new_session=True` for a child the cell will signal, and where gist state that must outlive a reload belongs.
+
 ### Removed
 
 ## [0.21.0] - 2026-11-09

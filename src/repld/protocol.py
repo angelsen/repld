@@ -126,7 +126,7 @@ TOOLS = [
     },
     {
         "name": "browser_tabs",
-        "description": "List currently attached browser tabs with their target_id, url, and title.",
+        "description": "List currently attached browser tabs with their target_id, mode (agent or shared), url, and title.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -424,7 +424,7 @@ TOOLS = [
             "leave the pointer parked on it. Hover-revealed UI (menus, "
             "toolbars, tooltips) stays up for a following browser_click, and "
             "the observation's changes: section reports what the hover "
-            "revealed. Also takes 'x,y' page coordinates, for visual-only "
+            "revealed. Also takes 'x,y' viewport coordinates, for visual-only "
             "targets whose accessible proxy sits elsewhere (SVG diagram "
             "nodes). Returns receipt + observation."
         ),
@@ -597,14 +597,15 @@ TOOLS = [
         "name": "browser_dismiss_dialog",
         "description": (
             "Answer the native JS dialog open on a tab, or pre-arm the next one. "
-            "On an agent tab (browser_open, browser_take) every dialog is "
+            "A dialog your own action opens (and every dialog on a tab held by "
+            "browser_take) is "
             "dismissed the instant it opens so nothing hangs - but confirm()/"
             "prompt() reject by default and the click/type/etc. call that "
             "triggered one raises instead of returning a receipt, since "
             "accepting one is never guessed. Call this first with accept=true, "
-            "then repeat the action, to make it actually accept (one-shot). On "
-            "a shared tab (attached with browser_watch or by an existing tab) "
-            "the human's dialog stays native; if one is open, this answers it."
+            "then repeat the action, to make it actually accept (one-shot). A "
+            "dialog that opens outside your action is left to the human; if "
+            "one is open, this answers it."
         ),
         "inputSchema": {
             "type": "object",
@@ -626,10 +627,12 @@ TOOLS = [
     {
         "name": "browser_take",
         "description": (
-            "Make a tab agent-owned: repld answers its JS dialogs and suppresses "
-            "its native file picker (answer with browser_set_files). Tabs from "
-            "browser_open start this way; tabs attached to an existing page "
-            "start shared, so a human's own prompts stay native."
+            "Hold a tab as agent-owned: repld answers every JS dialog on it and "
+            "suppresses its native file picker (answer with browser_set_files), "
+            "and its pushes come to you, until browser_release or your session "
+            "ends. A browser_open tab does this only while one of your actions "
+            "is in flight; tabs attached to an existing page start shared, so a "
+            "human's own prompts stay native."
         ),
         "inputSchema": {
             "type": "object",
@@ -642,7 +645,8 @@ TOOLS = [
         "description": (
             "Make a tab shared: JS dialogs and the file picker outside your own "
             "actions are left to the human; you hear about them only while you "
-            "drive the tab. Undoes browser_take."
+            "drive the tab. Ends a browser_take; on a tab you opened it also "
+            "gives up the between-action pushes and the picker intercept."
         ),
         "inputSchema": {
             "type": "object",
@@ -655,7 +659,8 @@ TOOLS = [
         "description": (
             "Resolve the most recent unanswered native file-chooser prompt "
             "on a tab (opened by clicking a real <input type=file>-backed "
-            "control; on an agent tab (browser_open, browser_take) "
+            "control; inside your action on a browser_open tab, or any time "
+            "on a browser_take tab, "
             "Page.setInterceptFileChooserDialog stops the real OS picker from "
             "opening, so this is the way to answer it; a shared tab's picker "
             "stays open for the human. A chooser from the "

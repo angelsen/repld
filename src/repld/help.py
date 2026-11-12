@@ -114,18 +114,21 @@ _BROWSER_MODEL = (
     "browser_invoke (act) MCP tools. Action observations push as channel messages. "
     "Console errors from watched tabs push as [console:error] channel messages automatically "
     "(cross-tab duplicates within 2s are collapsed; browser.suppress(substring) mutes matching errors). "
-    "Tabs are `agent` (browser_open: repld answers native prompts) or `shared` (any tab you attach "
-    "to: the human's own dialogs and file picker stay native, and you are told). browser_take/"
-    "browser_release switch it; browser_tabs shows it. On an agent tab native dialogs "
-    "(alert/confirm/prompt/beforeunload) are dismissed the instant they open "
+    "Tabs are `agent` (browser_open) or `shared` (any tab you attach to: a human may be on it). "
+    "browser_take/browser_release switch it; browser_tabs shows it. A native dialog "
+    "(alert/confirm/prompt/beforeunload) that your own action opens, on either kind of tab, is "
+    "dismissed the instant it opens "
     "so nothing hangs — but confirm()/prompt() reject by default and the triggering call errors "
     "rather than returning a receipt, since accepting one is never guessed. Pre-arm "
     "browser_dismiss_dialog(target, accept=true) first, then repeat the action, to accept it. "
     "alert() (only one option) and beforeunload (governed by the pin's guard_unload) don't error. "
-    "On a shared tab a dialog waits for the human and the triggering call fails fast; "
-    "browser_dismiss_dialog answers it. A native file chooser on an agent tab is intercepted rather than "
+    "A dialog that opens outside your action (a page timer, between your calls) is the human's: "
+    "it waits, you are told, calls that need the page fail fast, and browser_dismiss_dialog "
+    "answers it. Only a tab held by browser_take has every dialog answered. A native file chooser "
+    "your action opens on an agent tab is intercepted rather than "
     "opened for real — it stays open until tab.set_files(paths) answers it, or pre-arm with "
-    "tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click. "
+    "tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click (the way to "
+    "answer one on a shared tab, whose picker otherwise stays native). "
     "Read repld://docs/browser for the full API, internals, and workflow patterns."
 )
 
@@ -647,9 +650,11 @@ on an already-attached tab still reports the original attach's value.
       say what it will do; `await action.run()` performs it at the planned
       point and returns the Receipt.  run() never re-resolves, so a page that
       moved in between is clicked where it was.
-      `await action.gate(prompt=None, *, default=None, timeout=None)` holds it behind a
-      confirm gate (the tab's pill when pinned), then runs it; a "no" raises
-      ActionDeclined with nothing dispatched.
+      `await action.gate(prompt=None, *, default=None, timeout=None, on_open=None)`
+      holds it behind a confirm gate (the tab's pill when pinned), then runs it;
+      a "no" raises ActionDeclined with nothing dispatched. on_open(gate_id) is
+      called once the gate is answerable, for a viewer that shows the action
+      against exactly that gate.
 
   tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
       Focus element, select-all existing content, type character-by-character
@@ -783,7 +788,7 @@ on an already-attached tab still reports the original attach's value.
   tab.fetch(url, *, method='GET', body=None, headers=None)    → dict
       In-page JS fetch() — inherits the browser's cookies, session, and CORS
       origin.  NOT a separate HTTP call.
-      Returns: {"status": int, "ok": bool, "body": Any}
+      Returns: {"status": int, "ok": bool, "body": Any, "base64Encoded": bool}
       body is auto-parsed as JSON whenever it's valid JSON, regardless of
       content-type (plenty of real APIs mislabel JSON as text/plain or
       text/html).  A non-JSON text body is returned as-is.
@@ -811,13 +816,13 @@ on an already-attached tab still reports the original attach's value.
       See "Settle loop" below for what "idle" means.
 
   tab.dismiss_dialog(accept=True, prompt_text=None)           → str
-      Answer the dialog open on this tab, else pre-arm the next one. Agent
-      tabs auto-dismiss already (see "Native JS dialogs" above) - this
-      overrides the default for one dialog, e.g. to make a confirm() return
-      true. On a shared tab it answers a dialog left open for the human.
+      Answer the dialog open on this tab, else pre-arm the next one. A dialog
+      your own action opens is auto-dismissed already (see "Native JS dialogs"
+      below) - this overrides the default for one dialog, e.g. to make a
+      confirm() return true. It also answers a dialog left open for the human.
 
   tab.take() / tab.release()                                  → str
-      Switch the tab to `agent` / `shared` (see "Tab mode" above). tab.mode
+      Switch the tab to `agent` / `shared` (see "Tab mode" below). tab.mode
       reads it.
 
   tab.set_files(paths)                                        → str
@@ -931,7 +936,7 @@ Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
       Query SSE (EventSource) messages.  Each row has: request_id,
       event_name, event_id, data, timestamp.  Chrome parses the stream
       and fires Network.eventSourceMessageReceived per message — no
-      manual parsing needed.  Returns max 500 rows, oldest-first.
+      manual parsing needed.  Returns max 500 rows, newest-first.
       NOTE: only captures EventSource API connections, not fetch()-based
       SSE streams (common in modern apps for POST/custom-header SSE).
 
@@ -1061,10 +1066,13 @@ Channel push: apps that wire setObservationSink to console.debug('__controls__',
 Console errors (console.error) and uncaught exceptions (Runtime.exceptionThrown)
   from watched tabs push as [console:error] channel messages immediately.
   No polling needed — the agent sees errors the moment they happen. Routed to
-  the tab's live claim: its owner (open/take/watch), else the action in
-  flight, else the cell or defer() task that last acted on it (click, type,
-  navigate, screenshot; reads like js/tree claim nothing) while that task
-  runs, else a short grace tail after the last action. A tab nobody claims
+  the tab's live claim: the session holding it by take(), else the action in
+  flight, else its owner (whoever opened or watched it), else the cell or
+  defer() task that last acted on it (click, type, navigate, screenshot;
+  reads like js/tree claim nothing) while that task runs, else a short grace
+  tail after the last action (REPLD_BROWSER_ACTION_GRACE_S, 1.5 s). So a
+  second session driving a tab you opened gets its own action's pushes; you
+  get the ones between actions. A tab nobody claims
   pushes nobody — a human's own browsing is silent; watch() or take() a tab
   to hear it between your actions.
 
@@ -1168,15 +1176,19 @@ getBy*() chaining (.filter(), a second getBy*() call) is refused with
 Every attached tab is `agent` or `shared`, shown in browser_tabs and tab.mode.
 The mode decides who owns the tab's native prompts (dialogs, file picker):
 
-  agent   repld answers them. browser.open() / browser_open tabs start here.
-  shared  the human may be using the tab, so they stay native and you are
-          notified. get(), watch() and browser_* calls on an existing tab
-          start here - attaching to a page is not taking it over.
+  agent   repld answers them while one of your actions is in flight; between
+          actions a human on the tab gets the native ones. browser.open() /
+          browser_open tabs start here.
+  shared  the human may be using the tab, so the file picker stays native and
+          you are notified. get(), watch() and browser_* calls on an existing
+          tab start here - attaching to a page is not taking it over.
 
-  await tab.take()      # → agent  (browser_take)
-  await tab.release()   # → shared (browser_release)
+  await tab.take()      # → agent, held: every prompt is repld's (browser_take)
+  await tab.release()   # → shared, and nobody's: your claim on its pushes goes
+                        #   too, on a tab you opened as well (browser_release)
 
 Only take()/release() change it; expect_file_chooser and dismiss_dialog do not.
+A held tab is released when the session that took it disconnects.
 
 == Native JS dialogs ==
 
@@ -1184,8 +1196,9 @@ alert()/confirm()/prompt()/beforeunload block Chrome's renderer until
 answered, which would otherwise hang the CDP command that triggered them
 for the full watchdog timeout.
 
-On an `agent` tab repld listens for Page.javascriptDialogOpening and answers
-every dialog within milliseconds, before it can wedge anything:
+For a dialog your own action opens (on any tab), and for every dialog on a
+tab held by take(), repld listens for Page.javascriptDialogOpening and
+answers within milliseconds, before it can wedge anything:
 
   alert()       → accepted (the only option)
   beforeunload  → accepted (navigate away), unless the tab is pinned with
@@ -1206,8 +1219,8 @@ The pre-arm is one-shot: it applies to the next dialog only, then reverts to
 the defaults above. alert()/beforeunload never error — accepting either
 isn't a guess (alert has no other option; beforeunload already reflects the
 pin's own guard_unload). Their outcome shows up as a `dialog:` line in the
-observation; a dialog that opens outside your action (a page timer, a
-`tab.js()` call) pushes to channel instead, to the tab's live claim:
+observation; on a held tab, a dialog that opens outside your action (a page
+timer, a `tab.js()` call) pushes to channel instead, to the tab's live claim:
 `[dialog:confirm] 9222:a1b2c3: 'Delete?' → rejected (auto)`.
 
 A dialog outside any agent action is the human's, on an `open()` tab too.
@@ -1413,6 +1426,21 @@ reconnects automatically on the next CDP command:
     only Chrome session IDs change (remapped internally)
   - Serialized by an asyncio Lock to prevent concurrent reconnect races
 
+A connect(url=) browser (a hosted provider, a lend lease) is kept through a
+transient failure: a 5xx or a refused connection leaves its tabs parked, and
+the next successful redial reattaches the same Tab objects with their history.
+It is retired for good, with one browser_disconnected push naming the reason,
+on a WebSocket close 4410, an upgrade refused 401/403/404/410, or
+REPLD_URL_UNREACHABLE_S (default 300) of failed redials. browser_reconnected
+is pushed only when some tabs could not be restored.
+
+=== Tab crash ===
+
+A tab whose renderer crashed fails every page-served call at once with
+TabCrashedError (and a tab_crashed push to the tab's claim) instead of riding out the
+30 s timeout; browser_navigate / tab.navigate() / reload() revive it. A CDP
+error raises CDPCommandError, a RuntimeError that keeps the JSON-RPC `code`.
+
 === DuckDB event store ===
 
 Each attached tab has its own in-memory DuckDB connection.  All CDP events are
@@ -1479,7 +1507,7 @@ When working with a new web app:
 For APIs that use bearer tokens or API keys (auth not tied to cookies):
 
   r = tab.network(url="*/api/*")[0]
-  token = tab.request(r.request_id)["request_headers"]["Authorization"]
+  token = tab.request(r.request_id)["request"]["headers"]["Authorization"]
 
   import urllib.request, json
   req = urllib.request.Request("https://api.example.com/data",
@@ -1770,7 +1798,9 @@ def _deps_hint() -> str:
     if (Path.cwd() / "uv.lock").exists():
         return (
             "Dependencies: this is a uv project. "
-            "Add packages with `uv add <pkg>`, then restart the kernel. "
+            "Add packages with `uv add <pkg>`; the next import picks a new "
+            "package up with no restart (an upgrade of one already imported "
+            "needs `repld restart`). "
             "Gists can also declare __repld_deps__ for auto-install at boot."
         )
     return (
@@ -1893,12 +1923,17 @@ Commands:
   repld exec               Interactive REPL (state persists in kernel)
   repld log [-f]           Recent kernel activity; -f streams it live
   repld status [--json]    pid / uptime / dashboard + live kernels elsewhere
+  repld start              Start a headless kernel if none is running (for hooks)
   repld stop [--all]       Stop this project's kernel (or every one)
   repld restart            Stop, then start a fresh headless kernel
   repld dashboard          Open the kernel's web control panel (supplies its API
                            token; the page is not served without one)
   repld gate               List gates waiting on a human answer
   repld gate answer ID VAL Answer one (the route for a headless kernel)
+  repld tasks [--json]     In-flight defer() tasks and @every tickers
+  repld tasks wait|cancel ID  Block on one task's result, or cancel it
+  repld rebind             SessionStart hook: re-key this pane's connection
+                           after --resume / /clear (reads the hook payload)
   repld bridge             Stdio MCP bridge (Claude Code spawns this)
   repld gist new NAME      Scaffold a tool gist in ./gists/NAME.py
   repld gist fetch URL     Download a GitHub gist into ./gists (--global)
@@ -1910,11 +1945,15 @@ Commands:
   repld browser ARGS...    Re-exec with browser deps (duckdb/websockets/pillow)
   repld help [TOPIC]       This help (re-fetchable: agent can `!repld help`)
 
+  repld --project DIR CMD  Run CMD for another project's kernel (before the
+                           subcommand; --project-git: the main checkout of
+                           this worktree)
+
 Topics:
   exec      exec / defer / get_task / cancel + channel kinds
   browser   Tab and Browser Python API
   gists     Auto-reloading module directories
-  gates     ask / confirm / choose + notify
+  gates     ask / confirm / choose / form + notify
   peers     Call another project's kernel as an awaitable service
 """
 
@@ -1963,7 +2002,7 @@ cancel(task_id)    → {cancelled: bool}
 Channel kinds:
   task_done             exec or defer finished
   every                 periodic tick result or error (kind=every, label=fn_name)
-  awaiting_human        ask/confirm/choose pending
+  awaiting_human        ask/confirm/choose/form pending (carries the answer command when headless)
   bg_task_error         uncaught exception in background task
   loop_blocked          asyncio loop blocked > 5s (task + stack holding it in meta/content)
   loop_kill             watchdog requested cancellation of the task holding the loop
@@ -1974,11 +2013,19 @@ Channel kinds:
   browser_watch         dashboard watched a pattern (pattern in meta)
   browser_unwatch       dashboard unwatched a pattern
   controls              window.controls action observation (control, action, state in meta)
-  console_error         console.error or uncaught exception from watched tab
-  dialog                native JS dialog auto-dismissed (target, dialog_type, action in meta)
+  console_error         console.error or uncaught exception on a tab you claim
+  dialog                native JS dialog answered, or waiting for the human (target, dialog_type, action in meta)
   filechooser           native file chooser opened — resolved (pre-armed) or left open (target, mode in meta)
   captcha               a captcha needs a human, or was solved (target, vendor, state in meta)
-  auth                  HTTP Basic/Digest challenge cancelled, no pre-arm (target, scheme, realm in meta)
+  auth                  HTTP Basic/Digest challenge cancelled (no pre-arm) or left to Chrome's prompt (target, scheme, realm in meta)
+  download_started      a download began on a tab you claim; download_done / download_canceled
+                        follow (path in meta, remote_path on a url= browser)
+  tab_crashed           a tab's renderer crashed; navigate or reload revives it (target in meta)
+  tab_closed            a tab you claim was closed from outside repld
+  browser_disconnected  a url= browser was retired (reason in the text); broadcast
+  browser_reconnected   Chrome reconnected and some tabs were lost; broadcast
+  kernel_started        the bridge's lazy spawn landed; the full tool list follows
+  kernel_crashed        the kernel died without a goodbye (pid, reason in meta); __main__ is gone
   browser_warning       a drag endpoint was occluded by another element (target in meta)
   pin_lost              pinned tab navigated cross-origin — pin contract broken (target in meta)
   browser_disconnect    dashboard disconnected a Chrome connection or tab
@@ -2011,7 +2058,7 @@ Tab (async unless noted):
   tab.wait_for(selector, timeout=5)                       → None (wait for element to appear)
   tab.wait_for_idle(timeout=5, quiet=0.5)                 → int  (network idle; returns settle ms)
   tab.dismiss_dialog(accept=True, prompt_text=)           → str  (answer the open dialog, else pre-arm the next one, one-shot)
-  tab.take() / tab.release()                              → str  (agent: repld answers native prompts / shared: left to the human; tab.mode reads it)
+  tab.take() / tab.release()                              → str  (hold the tab: repld answers every native prompt / shared: left to the human; tab.mode reads it)
   tab.set_files(paths)                                    → str  (resolve the most recent open file chooser; [] cancels; raises if none open)
   tab.expect_file_chooser(paths)                          → str  (pre-arm the next file chooser's files, one-shot)
   tab.expect_auth(username, password)                     → str  (pre-arm the next HTTP Basic/Digest challenge, one-shot)
@@ -2063,7 +2110,7 @@ Browser:
   browser.connect(port=, profile=, url=, headers=)  → Browser  (add Chrome instance; profile= reads DevToolsActivePort; url= attaches by http(s)/ws(s) URL)
   browser.get(target, timeout=, fresh=, ready=)     → Tab  (glob or target ID; skips workers for globs)
   browser.watch(pattern)                            → str  (watch all matching, auto-attach new)
-  browser.open(url)                                 → Tab
+  browser.open(url, ready=, new_window=)            → Tab  (starts `agent`; new_window= keeps it visible, so video is not reclaimed)
   browser.acquire(pattern, open=, ready=, timeout=) → Tab  (get(), falling back to open() on a miss)
   browser.tabs                  → list[Tab]
   browser.pages()               → list[dict]
@@ -2269,7 +2316,7 @@ minimum, maximum, minLength, maxLength and enum bind every surface; format
 only shapes the Claude Code modal.
 Without a Claude Code modal it is answered as one JSON object.
 
-Blocks the cell until a human answers. Four surfaces can answer, and
+Blocks the cell until a human answers. Five surfaces can answer, and
 they race — first one wins:
   Claude Code      an MCP elicitation modal on the session that ran the cell
                    (client declares `elicitation`; never for `bg` workers).
@@ -2279,6 +2326,7 @@ they race — first one wins:
   kernel pane      only if the kernel was started as `repld` in a terminal
   pin pill         pass tab= (requires tab.pin()); confirm/choose only
   repld gate       any kernel, from the project dir — the headless answer
+  dashboard        the strip above the tabs (`repld dashboard`)
 An auto-spawned kernel (Claude Code's bridge, `repld restart`) has no pane,
 so `repld gate` is the usual route; the awaiting_human push says so and
 carries the gate id. `repld gate` lists what's pending, `repld gate answer
@@ -2297,8 +2345,10 @@ notify(content, *, session=None, exclude=None, **meta)
   One-shot channel push. With no session=, broadcasts to all MCP sessions.
   session=<claude_session_id> targets one Claude Code session by the id
   claude_sessions() lists — returns True if delivered, False if that
-  session isn't connected (no fallback to broadcast: a miss is dropped,
-  same rule as a task-done push whose originator disconnected).
+  session isn't connected, None if it is held by ipc.park_pushes. No
+  fallback to broadcast and no queue: a miss is dropped. (A task's own
+  completion push is different: it is owed to the asking session id for
+  an hour and delivered when a connection carrying that id returns.)
   exclude=<claude_session_id> — only meaningful alongside the broadcast
   path (session left None; ignored otherwise) — skips that one session,
   e.g. a self-report whose caller already has the result synchronously.
@@ -2475,6 +2525,10 @@ needed, other tickers and cells keep running while it's in flight:
   )
   out, err = await proc.communicate()
 
+Pass start_new_session=True for a child you may later signal as a group: the
+kernel refuses os.kill / os.killpg aimed at its own process group
+(OwnGroupSignal), which a child started without it shares.
+
 From a ticker or another background task (not a top-level exec cell),
 wrap the dispatch in defer() explicitly — there's no cell to fall back to
 exec's own inline-or-deferred timeout, so nothing surfaces completion
@@ -2500,9 +2554,13 @@ A globally-installed repld (uv tool install repld-tool, the recommended
 setup) still sees them: entry points that run a kernel re-exec under
 ./.venv's interpreter first, so the kernel is bound to the project's Python
 rather than to repld's own. Nothing needs to be added to the project's
-dependencies. The one hard requirement is that ./.venv match repld's minor
-version — a cross-version venv is refused outright rather than spliced in
-half, and imports from it then fail with an error saying so.
+dependencies. The one hard requirement is that ./.venv be on Python 3.14 or
+newer: a venv below that floor is not bound (the kernel says so on stderr and
+runs without the project's packages; recreate it with `uv venv --python 3.14
+&& uv sync`). A ./.venv that appears after the kernel booted is adopted in
+place only when its minor version matches the running interpreter; a
+cross-version one is refused outright rather than spliced in half, and
+imports from it fail with an error naming `repld restart`.
 
   # FastAPI project — query the DB directly
   from myapp.db import async_session_maker
@@ -2755,7 +2813,8 @@ HMR reload behind a native confirm dialog nothing can dismiss.
 
 Gate write operations. Anything that mutates state should call
 tab.confirm(prompt) or tab.choose(prompt, options) first. The gate appears
-in both the terminal and the pill UI — first resolution wins.
+on every surface at once (the Claude Code modal, the pill, the pane, the
+dashboard, `repld gate`) — first resolution wins.
 
 That's repld's own gate — separate from a native confirm()/prompt() the
 target app itself pops (e.g. clicking its own "Delete" button). Those are
@@ -2775,7 +2834,10 @@ output, stable downstream code, and a shape that fits in a docstring.
 
 Module-level state resets on reload. Globals (clients, caches) re-initialize
 when the gist auto-reloads; stale connections are not closed. Keep such
-state disposable — lazy-init clients, caches that can rebuild.
+state disposable — lazy-init clients, caches that can rebuild. State that
+must outlive an edit (an open connection, a login) lives in __main__:
+  STATE = __main__.__dict__.setdefault("_<gist>_state", {})
+and anything that must outlive a kernel restart is set up in repld_init.py.
 
 Lint before calling it done. `repld gist lint [name...]` checks: the module
 docstring's first line stands alone (it's what gets truncated into tool
