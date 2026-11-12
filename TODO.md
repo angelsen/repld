@@ -7,6 +7,9 @@
   lack `og:image`). Terminal-noir bg + repld logo. Meta-tag plumbing already ships with a
   placeholder default in `SEO.astro`.
 
+- [ ] `site/src/content/docs/**` has never been audited line by line against `help.py`: only the `py3.12` path and the channel kinds table were compared (recaps 01e56d59, a5fb7c4e). `guides/getting-started.md` keeps its own `load_dotenv` passage, a second copy of the `.env` rules outside `help.py` (recap 5eda672b).
+- [ ] `repld://docs/browser`'s `== Behavior recap ==` (3.6 KB) still restates the `browser` topic and the tool descriptions, and `REPLD_BROWSER_ACTION_GRACE_S` and the 600 s `wait_captcha` limit are named only in passing (recap 665cf1dd).
+
 ## Gist deps tooling
 
 - [x] (decided 2026-11-06: no runtime warning, the changelog line stands; the 3.14 floor makes `py3.12`/`py3.13` dead too, same note; measured here: no gist dep re-prompts because httpx, websockets and pillow come from the project venv) **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**
@@ -434,6 +437,8 @@ or syscalls, and `LoopOwned`'s snapshot is atomic *because of* the GIL. What sur
   and both surfaced from *using* the code rather than from three separate reading passes that
   had all explicitly scoped it out.
 - [x] Phase 6 skipped silently without a browser. `smoketest.py` now fails when no throwaway Chrome comes up, and `browser.py`'s `_check_chrome` raises instead of returning.
+- [ ] Phase 15 can leave headless kernels running after the suite exits. Seen 2026-11-12: four `repld --no-display` kernels (started 10:20, 10:21, 10:22, 10:40) still up an hour later with their `/tmp/repld-headless-*` cwd already removed, reparented to `systemd --user`, outside any `repld-*` unit, still listed by `repld status`. Not every run leaks (the 11:4x run left none). Cause unknown; a kernel booting after the final `_stop_kernel` (`_concurrent_boots` is the last case) is a guess. Possibly the same event as the unexplained exit 1 at the end of phase 15 (recap 9e05409b).
+- [ ] `_cold_jsonrpc_edges`' "no kernel spawned" assertion has no negative check of its own; only the null-id `ping` mutation was run (recap a5fb7c4e).
 - [x] `cdp._async_prune` runs its `DELETE` on the loop. Measured at 4.5 ms for 5k of 50k rows,
   which is why it was left alone; the docstring's claim that running as a task "avoids
   blocking recv" is still wrong in kind (a task on the same loop defers *when* it blocks, not
@@ -755,6 +760,9 @@ rather than an architectural one — the exact pattern already exists twice in t
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
 - [ ] `~/.claude/settings.json` no longer pins Opus, so the `[1m]` context variant is gone. If long sessions hit the context limit, re-add `claude-opus-5-5[1m]` (recap b5f1b364).
 - [ ] Leftovers of the elicitation probe (recap 2a4b9560): `elicit_probe.py` and `probe.json` sit in that session's scratchpad, so copy them somewhere durable before rerunning the probe, and the scratchpad folder stays trusted in Claude Code's config until removed by hand.
+- [ ] A cold `resources/read` of an unknown `repld://docs/*` URI spawns a kernel before it is refused: `bridge._try_bridge_intercept` returns `False` for any URI `_static_docs()` lacks, as it must for a gist or browser resource (recap a5fb7c4e).
+- [ ] A `--socket` path too long for `AF_UNIX` makes the spawned kernel die with `AF_UNIX path too long` while the bridge waits out its 5 s and reports nothing better (recap a5fb7c4e, seen in that session's probe, not re-run). The length could be refused in `paths.resolve_socket_path`.
+- [ ] Other repos, stale after `repld_init.py` replaced `--init` and after project-venv binding: `~/Projects/private/oversikt-ai/tools/devpanel/CLAUDE.md` (lines 134-192, `repl.py` + `--init`) and the comment at `~/Projects/private/termtap2/repld_init.py:14` ("runs under repld's own interpreter") (recap 01e56d59).
 
 ## Kernel crash hardening
 
@@ -770,6 +778,7 @@ Follow-ups to 0.11.1-0.11.3 (rebind `old_id=`, bridge `kernel_crashed` push, bri
 - [ ] (deferred 2026-09-30: `claude_code_research` now reads the whole tag up to `>`, so the 600-char prefix problem is gone on their side) Channel tag order: `kind=` and `task_id=` before `roster=` (peer finding 4; the roster attribute ran to 621 chars) so fixed-prefix parsers work.
 - [ ] Rebind keys on `comm == "claude"` (recaps e655a6b6, 3763948b): if Claude Code ever runs under another process name, `ipc.rebind_claude_session`'s ancestor walk is unbounded again and the pane-theft of 2026-11-04 returns. Re-check after a Claude Code upgrade that changes the binary name.
 - [ ] A rebind with `old_id=` that matches nothing under the pane's `claude` now raises `LookupError` at the claude boundary instead of walking up. The hook's bare-call fallback (the incident's path) was not inspected, so whether a fallback still reaches the raise is unchecked.
+- [ ] Whether Claude Code runs several SessionStart hooks in sequence or in parallel is unmeasured; it matters to anything that pins `repld rebind`'s order against another hook (recap ffe9e89c).
 - [x] A pending rebind (`_PendingRebind`) did not carry pushes already held in `Server._outbox` under the old id. `register_claude_session` now drains the stale id's outbox before the successor's; phase 15 `_deferred_rebind` covers it.
 - [ ] The boot sweep's flock fix (6be58531) leaves a narrow window: a boot contending for a dead project's `kernel.flock` in the instant `state.sweep_dead_project_dirs` holds it, before the unlink, exits 0 as if an incumbent existed. No kernel results until the next trigger; not reproduced.
 - [ ] Devstack plugin repo, not repld: `session-roster.py` treats `ERR LookupError` as "no predecessor" silently, and the bounded match makes that outcome more common. It should log it (recaps e655a6b6, 3763948b).
