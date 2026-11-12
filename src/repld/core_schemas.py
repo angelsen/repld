@@ -7,10 +7,11 @@ project and no `kernel.cache` exists yet to answer from. Keeping one copy
 here is what lets both sides agree on the schema without the bridge
 importing `protocol.py` and pulling in the kernel's dependency chain.
 
-`DOC_RESOURCES` entries carry a `_help_attr` alongside the wire fields: both
-sides serve the same four docs out of `help.py`, so riding the attribute name
-on the entry keeps adding a fifth doc to one edit instead of three across three
-modules. It is stripped before the dict goes on the wire (`wire()`).
+`DOC_RESOURCES` entries carry a `_help_attr` (a `help.py` constant) or a
+`_help_topic` (a `help._TOPICS` key) alongside the wire fields: both sides
+serve the same docs out of `help.py`, so riding the source on the entry keeps
+adding a doc to one edit instead of three across three modules. It is stripped
+before the dict goes on the wire (`wire()`).
 """
 
 # -- Protocol version --------------------------------------------------------
@@ -258,7 +259,7 @@ DOC_RESOURCES: list[dict] = [
     {
         "uri": "repld://docs/browser",
         "name": "repld-browser",
-        "description": "Browser API reference, internals (capture, settle, selectors, session recovery), and workflow patterns.",
+        "description": "Browser guide: getting tabs, the Tab API with its behavior, tab modes, dialogs, file choosers, selectors, workflow patterns. Read before driving a browser.",
         "mimeType": "text/plain",
         "_help_attr": "BROWSER_GUIDE",
     },
@@ -286,13 +287,61 @@ DOC_RESOURCES: list[dict] = [
         "mimeType": "text/plain",
         "_help_attr": "PEERS_GUIDE",
     },
+    {
+        "uri": "repld://docs/browser-internals",
+        "name": "repld-browser-internals",
+        "description": "How the browser layer works: body capture, the settle loop, session recovery, reconnect and retirement, tab crash, the DuckDB event store. Read when a browser call behaves unexpectedly.",
+        "mimeType": "text/plain",
+        "_help_attr": "BROWSER_INTERNALS",
+    },
+    {
+        "uri": "repld://help/exec",
+        "name": "repld-help-exec",
+        "description": "Cheat-sheet (`repld help exec`): exec, defer, every, get_task, cancel and every channel push kind. Read to identify a push or check a signature.",
+        "mimeType": "text/plain",
+        "_help_topic": "exec",
+    },
+    {
+        "uri": "repld://help/browser",
+        "name": "repld-help-browser",
+        "description": "Cheat-sheet (`repld help browser`): every Tab and Browser method, one line each. The cheap first read; repld://docs/browser has the behavior.",
+        "mimeType": "text/plain",
+        "_help_topic": "browser",
+    },
+    {
+        "uri": "repld://help/gists",
+        "name": "repld-help-gists",
+        "description": "Cheat-sheet (`repld help gists`): paths, reload rules, _tool_* registration, __repld_deps__, lint, fetch and cross-project links. Read before writing or editing a gist.",
+        "mimeType": "text/plain",
+        "_help_topic": "gists",
+    },
+    {
+        "uri": "repld://help/gates",
+        "name": "repld-help-gates",
+        "description": "Cheat-sheet (`repld help gates`): ask, confirm, choose, form, the surfaces that answer them, notify and session ids. Read before putting a human in the loop.",
+        "mimeType": "text/plain",
+        "_help_topic": "gates",
+    },
+    {
+        "uri": "repld://help/peers",
+        "name": "repld-help-peers",
+        "description": "Cheat-sheet (`repld help peers`): the peers API and its errors, one line each. repld://docs/peers has the rules.",
+        "mimeType": "text/plain",
+        "_help_topic": "peers",
+    },
 ]
 
-# URI to name of the `help.py` module attribute holding that doc's text. Both
-# the kernel (`protocol._read_resource`) and the bridge (`bridge._static_docs`)
-# getattr through this; neither imports the constants eagerly, since a bridge
-# that never serves a doc should not pay to parse help.py.
-DOC_HELP_ATTRS: dict[str, str] = {r["uri"]: r["_help_attr"] for r in DOC_RESOURCES}
+# URI to where `help.py` holds that doc's text: a module attribute, or a key
+# of `help._TOPICS`. The kernel (`protocol._read_resource`) and the bridge
+# (`bridge._static_docs`) test membership here and read through
+# `help.resolve_doc`; neither imports help.py eagerly, since a bridge that
+# never serves a doc should not pay to parse it.
+DOC_HELP_ATTRS: dict[str, str] = {
+    r["uri"]: r["_help_attr"] for r in DOC_RESOURCES if "_help_attr" in r
+}
+DOC_HELP_TOPICS: dict[str, str] = {
+    r["uri"]: r["_help_topic"] for r in DOC_RESOURCES if "_help_topic" in r
+}
 
 # The cross-project gist registry. Advertised unconditionally by both sides,
 # but *not* a doc: there is no help.py attribute behind it (the kernel renders

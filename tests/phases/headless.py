@@ -326,6 +326,15 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
         assert_true(
             not lock_path_for(tmp).exists(), "doc resource read did not spawn a kernel"
         )
+        resp = b.call("resources/read", {"uri": "repld://help/gates"}, timeout=10)
+        assert_true(
+            "await ask(" in resp["result"]["contents"][0]["text"],
+            "a help topic resource is served by the bridge alone",
+        )
+        assert_true(
+            not lock_path_for(tmp).exists(),
+            "topic resource read did not spawn a kernel",
+        )
         print("  ✓ tools/list + resources/read(docs) served from cache, no spawn")
 
         # Neither a liveness probe nor a genuinely unknown method may cost a

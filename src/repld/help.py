@@ -16,17 +16,20 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
   Topics                  → pure API reference for the human user
   MCP resources           → on-demand docs, one constant each:
       GUIDE          (repld://docs/guide)      working guide — patterns + conventions
-      BROWSER_GUIDE  (repld://docs/browser)    browser API reference + internals
+      BROWSER_GUIDE  (repld://docs/browser)    browser API reference + behavior
+      BROWSER_INTERNALS (repld://docs/browser-internals)  capture, settle, recovery
       PLAYBOOK       (repld://docs/playbook)   workflow methodology:
                                                interactive → gist → trigger → production
       PRODUCTION     (repld://docs/production) graduation guide:
                                                gist → FastMCP/FastAPI with wiring examples
       PEERS_GUIDE    (repld://docs/peers)      kernel-to-kernel calls: peers, stubs, identity
+  Each topic but `migration` is also served as repld://help/<topic>;
+  `resolve_doc` is the one reader behind every doc URI.
 """
 
 from pathlib import Path
 
-from . import cli_args
+from . import cli_args, core_schemas
 from .state import read_lock
 
 # ---------------------------------------------------------------------------
@@ -427,7 +430,9 @@ BROWSER_GUIDE = """\
 repld browser — comprehensive guide
 
 API reference, non-obvious behaviors, and workflow patterns for the browser
-object.  Read this instead of diving into source code.
+object.  Read this instead of diving into source code.  Every method in one
+line each: repld://help/browser.  How it works underneath:
+repld://docs/browser-internals.
 
 == Behavior recap ==
 
@@ -789,7 +794,7 @@ on an already-attached tab still reports the original attach's value.
 
   tab.wait_for_idle(*, timeout=5.0, quiet=0.5)                → int
       Wait for network idle.  Returns settle time in ms.
-      See "Settle loop" below for what "idle" means.
+      See "Settle loop" in repld://docs/browser-internals for what "idle" means.
 
   tab.dismiss_dialog(accept=True, prompt_text=None)           → str
       Answer the dialog open on this tab, else pre-arm the next one. A dialog
@@ -1268,7 +1273,7 @@ Captchas (reCAPTCHA v2/v3, hCaptcha, Turnstile, Arkose):
 
 HTTP Basic/Digest auth (a 401 with WWW-Authenticate):
   Only intercepted on a tab with Fetch enabled (get()/open(), or explicit
-  capture — see "Network body capture" below); a watch()-attached tab always
+  capture — see "Network body capture" in repld://docs/browser-internals); a watch()-attached tab always
   shows Chrome's credentials prompt. With no pre-arm the challenge follows
   the tab's claim: inside an agent action, or on a taken tab, it is
   cancelled outright — a clean failed request, never a guessed login; with
@@ -1299,6 +1304,83 @@ push meta, not at a fixed location. On a connect(url=) browser it is
 `remote_path`: that file is on the browser's host, not readable locally.
 
 == Internals ==
+
+Body capture, the settle loop, session recovery, reconnect and retirement, tab
+crash and the event store: read repld://docs/browser-internals.
+
+== Workflow patterns ==
+
+=== When to use exec vs browser MCP tools ===
+
+Use exec with the browser object when you need to:
+  - Chain multiple operations (fetch → filter → fetch again)
+  - Use Python logic (conditionals, loops, error handling)
+  - Build up state across steps
+  - Do anything with the results beyond displaying them
+
+Use the browser MCP tools (browser_click, browser_network, etc.) for:
+  - Quick single inspections ("what's on this page?")
+  - One-off actions where you don't need the result in Python
+
+=== API discovery workflow ===
+
+When working with a new web app:
+
+  # 1. Attach and watch traffic
+  await browser.watch("*app.example.com*")
+  # → user clicks around in the app to generate traffic
+
+  # 2. See what API calls the app makes
+  tab = await browser.get("*app.example.com*")
+  tab.network(url="*/api/*")
+
+  # 3. Inspect a specific request
+  r = tab.network(url="*/api/users*")[0]
+  r.url, r.method, r.status
+  tab.request(r.request_id)     # full headers, auth scheme, timing
+  r.body()                      # response body (shortcut)
+
+  # 4. Replay the call via tab.fetch() — inherits the browser session
+  users = (await tab.fetch("/api/users"))["body"]
+
+  # 5. Clear old traffic before exploring more
+  tab.clear()
+
+=== Building clients from captured traffic ===
+
+For APIs that use bearer tokens or API keys (auth not tied to cookies):
+
+  r = tab.network(url="*/api/*")[0]
+  token = tab.request(r.request_id)["request"]["headers"]["Authorization"]
+
+  import urllib.request, json
+  req = urllib.request.Request("https://api.example.com/data",
+      headers={"Authorization": token})
+  data = json.loads(urllib.request.urlopen(req).read())
+
+For APIs that rely on cookies or session state — use tab.fetch(), or, once
+the session is established, tab.http_client() to keep calling it without the
+tab (plain concurrent httpx calls instead of one at a time through the page).
+
+=== Multi-tab gists (embedded apps) ===
+
+When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
+  - admin tab for navigation (host page)
+  - iframe tab for fetch/js (app context with auth)
+
+After navigating the admin tab, re-acquire the iframe with
+browser.get(pattern, timeout=10) — iframes reload on host navigation.
+Never navigate an iframe directly — it destroys the embedded session.
+"""
+
+# ---------------------------------------------------------------------------
+# BROWSER_INTERNALS (repld://docs/browser-internals resource)
+# ---------------------------------------------------------------------------
+
+BROWSER_INTERNALS = """\
+repld browser internals
+
+How the browser layer behaves underneath the API in repld://docs/browser.
 
 === Network body capture ===
 
@@ -1439,70 +1521,6 @@ inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
 BrowserSession.attach() tracks in-flight attaches via an _attaching set.  If
 attach() is called concurrently for the same target_id, the second call
 returns None immediately.
-
-== Workflow patterns ==
-
-=== When to use exec vs browser MCP tools ===
-
-Use exec with the browser object when you need to:
-  - Chain multiple operations (fetch → filter → fetch again)
-  - Use Python logic (conditionals, loops, error handling)
-  - Build up state across steps
-  - Do anything with the results beyond displaying them
-
-Use the browser MCP tools (browser_click, browser_network, etc.) for:
-  - Quick single inspections ("what's on this page?")
-  - One-off actions where you don't need the result in Python
-
-=== API discovery workflow ===
-
-When working with a new web app:
-
-  # 1. Attach and watch traffic
-  await browser.watch("*app.example.com*")
-  # → user clicks around in the app to generate traffic
-
-  # 2. See what API calls the app makes
-  tab = await browser.get("*app.example.com*")
-  tab.network(url="*/api/*")
-
-  # 3. Inspect a specific request
-  r = tab.network(url="*/api/users*")[0]
-  r.url, r.method, r.status
-  tab.request(r.request_id)     # full headers, auth scheme, timing
-  r.body()                      # response body (shortcut)
-
-  # 4. Replay the call via tab.fetch() — inherits the browser session
-  users = (await tab.fetch("/api/users"))["body"]
-
-  # 5. Clear old traffic before exploring more
-  tab.clear()
-
-=== Building clients from captured traffic ===
-
-For APIs that use bearer tokens or API keys (auth not tied to cookies):
-
-  r = tab.network(url="*/api/*")[0]
-  token = tab.request(r.request_id)["request"]["headers"]["Authorization"]
-
-  import urllib.request, json
-  req = urllib.request.Request("https://api.example.com/data",
-      headers={"Authorization": token})
-  data = json.loads(urllib.request.urlopen(req).read())
-
-For APIs that rely on cookies or session state — use tab.fetch(), or, once
-the session is established, tab.http_client() to keep calling it without the
-tab (plain concurrent httpx calls instead of one at a time through the page).
-
-=== Multi-tab gists (embedded apps) ===
-
-When the app lives in an iframe (e.g., Shopify embedded apps), hold both tabs:
-  - admin tab for navigation (host page)
-  - iframe tab for fetch/js (app context with auth)
-
-After navigating the admin tab, re-acquire the iframe with
-browser.get(pattern, timeout=10) — iframes reload on host navigation.
-Never navigate an iframe directly — it destroys the embedded session.
 """
 
 
@@ -2428,12 +2446,21 @@ def _reference() -> str:
     silently published a list that omitted it.
     """
     return (
-        f"Reference: `repld help <topic>` — topics: {', '.join(sorted(_TOPICS))}\n"
+        f"Reference: `repld help <topic>` — topics: {', '.join(sorted(_TOPICS))}; "
+        "each but migration is also the resource repld://help/<topic>.\n"
         "Read repld://docs/guide for exec patterns and gist conventions. "
-        "Read repld://docs/browser for the full browser API and internals.\n"
+        "Read repld://docs/browser before driving a browser.\n"
         "Read repld://docs/production when graduating gists to FastMCP/FastAPI.\n"
         "Read repld://docs/peers before calling another project's kernel."
     )
+
+
+def resolve_doc(uri: str) -> str:
+    """The text behind a doc resource URI; `KeyError` for a URI `core_schemas` does not list."""
+    attr = core_schemas.DOC_HELP_ATTRS.get(uri)
+    if attr is not None:
+        return globals()[attr]
+    return _TOPICS[core_schemas.DOC_HELP_TOPICS[uri]]
 
 
 # `== Builtins ==` below recaps _EXEC_MODEL's builtins — keep in sync.
@@ -2702,15 +2729,15 @@ browser is lazy-injected into __main__. Connects to Chrome on first use
 Use exec with the browser object for multi-step operations (fetch, filter,
 iterate). Use browser MCP tools for quick one-off inspections.
 
-Read repld://docs/browser for the full API reference, internals (settle loop,
-body capture patterns, selector dispatch, session recovery, DuckDB event
-store), and workflow patterns (API discovery, building clients, multi-tab
-gists).
+Read repld://help/browser for every method in one line each,
+repld://docs/browser for behavior and workflow patterns (API discovery,
+building clients, multi-tab gists), and repld://docs/browser-internals for
+the settle loop, body capture, session recovery and the DuckDB event store.
 
 == Gists ==
 
-See `repld help gists` for the full API reference (paths, tool registration,
-dependencies, cross-project links).
+See repld://help/gists (`repld help gists`) for the full API reference (paths,
+tool registration, dependencies, cross-project links).
 
 Gists wrap anything into a callable API — web apps via the browser, databases,
 graph stores, embedding indexes, internal services.

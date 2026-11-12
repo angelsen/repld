@@ -106,7 +106,7 @@ _NEEDS_KERNEL = frozenset({"tools/call", "resources/read"})
 
 # Docs whose reader is about to use tools the static list omits: reading one spawns
 # the kernel, whose `list_changed` then delivers them.
-_SPAWNING_DOCS = frozenset({"repld://docs/browser"})
+_SPAWNING_DOCS = frozenset({"repld://docs/browser", "repld://help/browser"})
 
 
 def _ephemeral_socket_path() -> Path:
@@ -178,9 +178,9 @@ _static_docs_cache: dict[str, str] | None = None
 def _static_docs() -> dict[str, str]:
     """The doc resources, pure constants lazily imported from help.py.
 
-    Which URIs these are, and which `help.py` constant backs each, comes from
-    `core_schemas.DOC_HELP_ATTRS`, the same map the kernel reads, so adding a
-    doc is one edit rather than three. Resolved on first `resources/read` of
+    Which URIs these are comes from `core_schemas.DOC_HELP_ATTRS` and
+    `DOC_HELP_TOPICS`, the same maps the kernel reads, so adding a doc is one
+    edit rather than three. Resolved on first `resources/read` of
     one of these URIs rather than at module import time, so a bridge that never
     serves docs never pays to parse help.py.
     """
@@ -189,8 +189,8 @@ def _static_docs() -> dict[str, str]:
         from . import help as _help
 
         _static_docs_cache = {
-            uri: getattr(_help, attr)
-            for uri, attr in core_schemas.DOC_HELP_ATTRS.items()
+            uri: _help.resolve_doc(uri)
+            for uri in (*core_schemas.DOC_HELP_ATTRS, *core_schemas.DOC_HELP_TOPICS)
         }
     return _static_docs_cache
 

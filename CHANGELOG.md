@@ -8,6 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Each `repld help` topic (`exec`, `browser`, `gists`, `gates`, `peers`) is also an MCP resource, `repld://help/<topic>`, listed in `resources/list` and served with no kernel running. An agent reads the one-line-per-method browser cheat-sheet (12 KB) or the gates reference without shelling out or loading a full guide.
+- `repld://docs/browser-internals` holds the browser guide's internals (body capture, settle loop, session recovery, reconnect and retirement, tab crash, event store), moved out of `repld://docs/browser`, which now points to it.
+
 - `notifications/cancelled` from the client stops an in-flight `exec` and suppresses its reply.
 - `repld gist lint` has a `tool-name` rule: a `_tool_*` named like a built-in, or with a name or parameter outside what MCP and Claude Code accept, is flagged (and skipped at boot with a warning).
 

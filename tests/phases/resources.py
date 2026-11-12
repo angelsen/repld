@@ -160,7 +160,8 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     )
 
     # 2. The two browser surfaces cover the same symbols.
-    guide = set(re.findall(_ATTR_RE, h.BROWSER_GUIDE))
+    prose = h.BROWSER_GUIDE + h.BROWSER_INTERNALS
+    guide = set(re.findall(_ATTR_RE, prose))
     topic = set(re.findall(_ATTR_RE, h._TOPICS["browser"]))
     assert_eq(sorted(guide - topic), [], 'in BROWSER_GUIDE but not _TOPICS["browser"]')
     assert_eq(sorted(topic - guide), [], 'in _TOPICS["browser"] but not BROWSER_GUIDE')
@@ -172,8 +173,7 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     undocumented = sorted(
         m
         for m in tab
-        if not m.startswith("_")
-        and (m not in h.BROWSER_GUIDE or m not in h._TOPICS["browser"])
+        if not m.startswith("_") and (m not in prose or m not in h._TOPICS["browser"])
     )
     assert_eq(
         undocumented, [], "every public Tab method is documented on both surfaces"
@@ -199,6 +199,39 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     )
     print(
         f"  ✓ all {len(peer_public)} public Peer/_Peers members documented on both surfaces"
+    )
+
+
+def phase_8_help_resources(_kernel: Kernel) -> None:
+    """Every help topic but `migration` is a listed resource, and every doc URI has text.
+
+    `core_schemas.DOC_RESOURCES` is hand-written (the bridge must not parse
+    `help.py` to list it), so nothing but this stops a new topic shipping
+    with no resource, or an entry naming a constant or topic that is gone.
+    """
+    import repld.help as h
+    from repld import core_schemas as cs
+
+    assert_eq(
+        sorted(cs.DOC_HELP_TOPICS.values()),
+        sorted(set(h._TOPICS) - {"migration"}),
+        "one repld://help/<topic> resource per topic, migration excepted",
+    )
+    assert_eq(
+        sorted(cs.DOC_HELP_TOPICS),
+        sorted(f"repld://help/{t}" for t in cs.DOC_HELP_TOPICS.values()),
+        "a topic resource's URI names its topic",
+    )
+    uris = [r["uri"] for r in cs.DOC_RESOURCES]
+    assert_eq(
+        sorted(uris),
+        sorted([*cs.DOC_HELP_ATTRS, *cs.DOC_HELP_TOPICS]),
+        "every doc resource has exactly one source in help.py",
+    )
+    empty = [u for u in uris if not h.resolve_doc(u)]
+    assert_eq(empty, [], "every doc resource resolves to text")
+    print(
+        f"  ✓ {len(uris)} doc resources resolve, {len(cs.DOC_HELP_TOPICS)} from topics"
     )
 
 
@@ -476,6 +509,18 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
         )
         assert_true("peers.get" in doc["text"], "docs/peers is the peers guide")
         print(f"  ✓ repld://docs/peers read in full ({len(doc['text'])} bytes)")
+
+        for uri, marker in (
+            ("repld://help/gates", "await ask("),
+            ("repld://docs/browser-internals", "=== Settle loop ==="),
+        ):
+            resp = b.call("resources/read", {"uri": uri})
+            doc = resp["result"]["contents"][0]
+            assert_true(
+                marker in doc["text"] and "[full output:" not in doc["text"],
+                f"{uri} served in full by the kernel",
+            )
+            print(f"  ✓ {uri} read in full ({len(doc['text'])} bytes)")
 
         # scan_deps survives a dep whose dotted parent is missing —
         # find_spec("no_such_parent.sub") raises, _is_importable must swallow it

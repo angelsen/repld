@@ -154,6 +154,7 @@ from phases.pure import phase_2_pure
 from phases.resources import (
     phase_8_doc_surfaces,
     phase_8_gist_resources,
+    phase_8_help_resources,
     phase_8_site_signatures,
 )
 from phases.sessions import phase_13_sessions
@@ -281,6 +282,7 @@ PHASES = {
     8: lambda k: (
         phase_8_doc_surfaces(k),
         phase_8_site_signatures(k),
+        phase_8_help_resources(k),
         phase_8_gist_resources(k),
     ),
     9: phase_9_gist_tools,

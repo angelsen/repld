@@ -29,6 +29,7 @@ from .core_schemas import (
     CAPABILITIES,
     CORE_TOOLS,
     DOC_HELP_ATTRS,
+    DOC_HELP_TOPICS,
     PEER_CALL_METHOD,
     PEER_INSPECT_METHOD,
     PEER_LIST_METHOD,
@@ -1192,15 +1193,13 @@ class Dispatcher(BrowserDispatchMixin):
         if not isinstance(uri, str):
             return _error(rid, -32602, "resources/read needs a string uri")
         try:
-            # Static docs first: `core_schemas.DOC_HELP_ATTRS` is the one map,
-            # shared with the bridge's cache-less fallback. help.py is imported
-            # here rather than at module scope so it stays a read-time cost.
-            attr = DOC_HELP_ATTRS.get(uri)
+            # help.py is imported here rather than at module scope so it
+            # stays a read-time cost.
             reader = self._RESOURCE_DISPATCH.get(uri)
-            if attr is not None:
+            if uri in DOC_HELP_ATTRS or uri in DOC_HELP_TOPICS:
                 from . import help as _help
 
-                text = getattr(_help, attr)
+                text = _help.resolve_doc(uri)
             elif reader is not None:
                 text = reader(self)
             elif uri.startswith("repld://gists/"):
