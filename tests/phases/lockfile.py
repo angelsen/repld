@@ -262,13 +262,6 @@ def phase_5_project_sweep(kernel: Kernel) -> None:
     try:
         fresh = Kernel(tmp)
         try:
-            # `Kernel` returns once a lockfile exists, and the seeded one does.
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                booted = state.read_lock(fresh.lock_path)
-                if isinstance(booted, dict) and booted["pid"] != dead:
-                    break
-                time.sleep(0.05)
             contender = state.acquire_lock(own_flock)
             if contender is not None:
                 os.close(contender)

@@ -406,10 +406,10 @@ class Kernel:
         return lock_path_for(self.cwd)
 
     def _wait_lockfile(self, timeout: float = 10.0) -> None:
-        lock = self.lock_path
+        """Return once this kernel's own lockfile is written, else kill it and raise."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if lock.exists():
+            if self._is_own_lock():
                 return
             if self.proc.poll() is not None:
                 break
@@ -420,7 +420,19 @@ class Kernel:
         except Exception:
             log = "<no log>"
         self.kill()
-        raise RuntimeError(f"kernel never wrote lockfile. stderr:\n{log}")
+        raise RuntimeError(f"kernel never wrote its lockfile. stderr:\n{log}")
+
+    def _is_own_lock(self) -> bool:
+        """Whether `kernel.lock` names a process in this kernel's process group.
+
+        A SIGKILLed predecessor leaves its lockfile behind in the same cwd, so
+        the file existing says nothing; `self.proc.pid` is the group id.
+        """
+        try:
+            pid = int(json.loads(self.lock_path.read_text())["pid"])
+            return os.getpgid(pid) == self.proc.pid
+        except OSError, KeyError, TypeError, ValueError:
+            return False
 
     def stop(self) -> None:
         if self.proc.poll() is None:
