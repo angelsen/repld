@@ -26,6 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A kernel booted after its predecessor was SIGKILLed no longer deletes its own `kernel.flock` in the boot sweep. It kept a lock on a file nothing else could open, so a second kernel could start for the same project beside it. The sweep now skips any project directory whose flock is held, and a boot re-takes the flock if the file was removed under it.
 - A `ping` sent as a notification or with a null id is no longer answered with `"id": null`.
 - A malformed client line (unparseable JSON, a batch array, an id with no method) gets `-32700`/`-32600` instead of being dropped, and a non-JSON line from the kernel is no longer written to the client's stdout.
 - A gist `_tool_*` named `exec`, `get_task`, `cancel`, `repld_restart` or `browser_*` no longer duplicates a built-in in `tools/list` or hijacks its dispatch.

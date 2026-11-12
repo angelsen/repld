@@ -235,10 +235,14 @@ def phase_5_project_sweep(kernel: Kernel) -> None:
     test: a synthetic dead-pid project dir, plus a lock-less one standing in
     for a kernel mid-boot (flock taken, `kernel.lock` not written yet) —
     which must be left alone, not swept as if it were abandoned.
+
+    The booting kernel's own directory carries a dead pid's `kernel.lock` as
+    well, as after a SIGKILL: the sweep must not unlink the flock that kernel
+    holds, or the next boot takes a fresh one and runs beside it.
     """
     import tempfile as _tmp
 
-    from repld import paths
+    from repld import paths, state
 
     dead = _a_dead_pid()
     dead_dir = paths.PROJECTS_DIR / "sweeptest-deadbeef"
@@ -252,9 +256,26 @@ def phase_5_project_sweep(kernel: Kernel) -> None:
     live_pid = json.loads(kernel.lock_path.read_text())["pid"]
 
     tmp = Path(_tmp.mkdtemp(prefix="repld-projsweep-"))
+    own_flock = paths.flock_for(paths.socket_path(tmp))
+    own_flock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    paths.lock_for(paths.socket_path(tmp)).write_text(json.dumps({"pid": dead}))
     try:
         fresh = Kernel(tmp)
         try:
+            # `Kernel` returns once a lockfile exists, and the seeded one does.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                booted = state.read_lock(fresh.lock_path)
+                if isinstance(booted, dict) and booted["pid"] != dead:
+                    break
+                time.sleep(0.05)
+            contender = state.acquire_lock(own_flock)
+            if contender is not None:
+                os.close(contender)
+            assert_true(
+                contender is None,
+                "a kernel booted over a dead predecessor's lock still holds the flock",
+            )
             assert_true(
                 not dead_dir.exists(), "dead kernel's whole project dir reclaimed"
             )

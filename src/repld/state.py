@@ -260,6 +260,13 @@ def sweep_dead_project_dirs(projects_dir: Path) -> int:
     flock race, or a `paths.project_dir()` writer such as downloads) is left
     alone too: there's nothing here to say it's abandoned rather than simply
     unused. Client lookups (`status`, `exec`) never create one.
+
+    The directory's `kernel.flock` is held across the removal, and a directory
+    whose flock is taken is skipped: a dead pid in `kernel.lock` says only that
+    the last kernel died, and its successor (the caller included, whose own
+    directory this walk reaches) holds the flock long before it rewrites the
+    lock. Removing the file under a held flock leaves that kernel locking an
+    inode no contender can open, so a second kernel boots beside it.
     """
     removed = 0
     try:
@@ -274,10 +281,15 @@ def sweep_dead_project_dirs(projects_dir: Path) -> int:
             continue
         if isinstance(read_lock(lock_path), dict):
             continue  # pid alive
+        fd = acquire_lock(entry / "kernel.flock")
+        if fd is None:
+            continue
         try:
             shutil.rmtree(entry)
         except OSError:
             continue
+        finally:
+            os.close(fd)
         removed += 1
     return removed
 
@@ -299,17 +311,40 @@ def acquire_lock(flock_path: Path) -> int | None:
     thing the file is good for would be actively misleading. `ftruncate`
     rather than `O_TRUNC`: it empties the file we already hold the lock on
     instead of the one we were about to contend for, and keeps the inode.
+
+    The verdict counts only on the inode the path still names.
+    `sweep_dead_project_dirs` unlinks this file while holding it, so a
+    contender that opened it just before reads a win or a loss about a file
+    no later boot can reach, and asks again.
     """
-    flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    while True:
+        flock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(flock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            won = False
+        else:
+            won = True
+        if not _is_path_inode(fd, flock_path):
+            os.close(fd)
+            continue
+        if not won:
+            os.close(fd)
+            return None
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        return fd
+
+
+def _is_path_inode(fd: int, path: Path) -> bool:
+    """Whether `path` still names the file `fd` has open."""
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        on_disk = path.stat()
     except OSError:
-        os.close(fd)
-        return None
-    os.ftruncate(fd, 0)
-    os.write(fd, f"{os.getpid()}\n".encode())
-    return fd
+        return False
+    held = os.fstat(fd)
+    return (held.st_dev, held.st_ino) == (on_disk.st_dev, on_disk.st_ino)
 
 
 def acquire_lock_blocking(flock_path: Path) -> int:
