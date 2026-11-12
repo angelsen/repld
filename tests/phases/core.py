@@ -277,8 +277,10 @@ def _phase_3_jsonrpc_edges(b: Bridge) -> None:
     raw(json.dumps({"jsonrpc": "2.0", "method": "ping", "id": None}))
     resp = b.call("ping", {})
     assert_eq(resp["result"], {}, "a ping with an id is still answered")
+    # `Bridge.call` stashes whatever precedes its own reply, so a stray answer is there.
     assert_true(
-        b.inbox.empty(), "neither the id-less nor the null-id ping was answered first"
+        not any("result" in m for m in b._notifs),
+        "neither the id-less nor the null-id ping was answered first",
     )
     for line, code, label in (
         ("{nope", -32700, "unparseable JSON"),

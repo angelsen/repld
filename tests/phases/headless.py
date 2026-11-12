@@ -25,6 +25,7 @@ from harness import (
     lock_path_for,
 )
 
+from phases.core import _phase_3_jsonrpc_edges
 from repld import core_schemas, state
 
 
@@ -373,6 +374,21 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
         )
     finally:
         b.close()
+
+
+def _cold_jsonrpc_edges(tmp: Path) -> None:
+    """With no kernel running the bridge itself answers the JSON-RPC edges, and spawns nothing."""
+    _stop_kernel(tmp)
+    b = Bridge(tmp)
+    try:
+        _phase_3_jsonrpc_edges(b)
+        assert_true(
+            not lock_path_for(tmp).exists(),
+            "pings and malformed lines did not spawn a kernel",
+        )
+    finally:
+        b.close()
+    print("  ✓ the same edges hold on a bridge with no kernel, and none is spawned")
 
 
 def _version_mismatch_cache_discarded(tmp: Path) -> None:
@@ -2043,6 +2059,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _autospawn_and_heal(tmp)
         _bridge_served_tools(tmp)
         _lazy_discovery_from_cache(tmp)
+        _cold_jsonrpc_edges(tmp)
         _version_mismatch_cache_discarded(tmp)
         _cache_survives_reboot(tmp)
         _new_project_uses_global_cache()
