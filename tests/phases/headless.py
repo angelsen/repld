@@ -1865,28 +1865,46 @@ def _concurrent_boots(tmp: Path) -> None:
         )
         for _ in range(3)
     ]
-    # Wait for the losers to exit — an unresolved `uv run` on a slow box
-    # would otherwise read as a surviving kernel.
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and sum(p.poll() is None for p in procs) > 1:
-        time.sleep(0.2)
-    alive = [p for p in procs if p.poll() is None]
-    assert_eq(len(alive), 1, "exactly one of three racing kernels survived")
-    assert_true(
-        all(p.returncode == 0 for p in procs if p.poll() is not None),
-        "the losers exited 0",
-    )
-    # The lockfile pid is the kernel itself, not the `uv run` wrapper we hold.
-    lock = _wait_lock(tmp)
-    os.kill(int(lock["pid"]), 0)  # raises if the lockfile points at a corpse
-    print("  ✓ flock: three concurrent boots left exactly one kernel")
-    for p in procs:
-        if p.poll() is None:
-            p.send_signal(signal.SIGTERM)
+    try:
+        # Wait for the losers to exit — an unresolved `uv run` on a slow box
+        # would otherwise read as a surviving kernel.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and sum(p.poll() is None for p in procs) > 1:
+            time.sleep(0.2)
+        alive = [p for p in procs if p.poll() is None]
+        assert_eq(len(alive), 1, "exactly one of three racing kernels survived")
+        assert_true(
+            all(p.returncode == 0 for p in procs if p.poll() is not None),
+            "the losers exited 0",
+        )
+        # The lockfile pid is the kernel itself, not the `uv run` wrapper we hold.
+        _wait_live_lock(tmp)
+        print("  ✓ flock: three concurrent boots left exactly one kernel")
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.send_signal(signal.SIGTERM)
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+
+def _wait_live_lock(cwd: Path, timeout: float = 20.0) -> dict:
+    """The lockfile once it names a running kernel.
+
+    The losers exit on the flock, which the winner takes before it rewrites
+    `kernel.lock`, so the file can still name the SIGKILLed predecessor.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         try:
-            p.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            p.kill()
+            lock = _lock(cwd)
+            os.kill(int(lock["pid"]), 0)
+            return lock
+        except OSError, KeyError, ValueError:
+            time.sleep(0.1)
+    raise AssertionError(f"no live kernel behind {lock_path_for(cwd)}")
 
 
 def _log_renderer_covers_every_event() -> None:
