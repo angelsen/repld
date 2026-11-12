@@ -211,12 +211,17 @@ PROJECT_SOCKET_CONFLICT = (
     "repld: --project/--project-git and --socket are mutually exclusive"
 )
 
+# Linux `sun_path` is 108 bytes including its NUL.
+SOCKET_PATH_MAX = 107
+
 
 def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
     """Parse ``--socket PATH`` from *argv*, returning (socket, remaining args).
 
     Parses and consumes every ``--socket PATH`` / ``--socket=PATH`` occurrence
     (first value wins) so callers never re-implement the flag syntax.
+    A path the kernel could not bind (longer than `SOCKET_PATH_MAX` bytes) is
+    refused here, before any caller dials it or spawns a kernel at it.
     """
     sock: str | None = None
     rest: list[str] = []
@@ -235,7 +240,14 @@ def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:
         i += 1
     if sock and project_pinned:
         raise SystemExit(PROJECT_SOCKET_CONFLICT)
-    return (Path(sock) if sock else default_socket_path()), rest
+    path = Path(sock) if sock else default_socket_path()
+    length = len(os.fsencode(path))
+    if length > SOCKET_PATH_MAX:
+        raise SystemExit(
+            f"repld: socket path is {length} bytes, over the {SOCKET_PATH_MAX} "
+            f"a unix socket allows: {path}"
+        )
+    return path, rest
 
 
 def resolve_lock_path(argv: list[str]) -> tuple[Path, list[str]]:

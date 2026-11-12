@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import traceback
+import unittest.mock
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
@@ -1969,6 +1970,25 @@ def _peer_resolution() -> None:
     print("  ✓ peers: name/path resolution, ambiguity, canonical-socket preference")
 
 
+def _socket_path_length() -> None:
+    fits = "/" + "s" * (paths.SOCKET_PATH_MAX - 1)
+    assert_eq(
+        paths.resolve_socket_path(["--socket", fits, "x"]),
+        (Path(fits), ["x"]),
+        "a path at the limit resolves",
+    )
+    long = fits + "s"
+    err = _expect(SystemExit, paths.resolve_socket_path, ["--socket", long])
+    assert_true(
+        str(paths.SOCKET_PATH_MAX) in str(err) and long in str(err),
+        f"the refusal names the limit and the path (got {err})",
+    )
+    _expect(SystemExit, paths.resolve_socket_path, [f"--socket={long}"])
+    with unittest.mock.patch.dict("os.environ", {"REPLD_SOCKET": long}):
+        _expect(SystemExit, paths.resolve_socket_path, [])
+    print("  ✓ resolve_socket_path refuses a path too long for AF_UNIX")
+
+
 def _peer_host_vetting() -> None:
     assert_eq(peer_host.parse_target("a.b.c"), ["a", "b", "c"], "dotted name")
     for bad in ("", "a..b", "1x", "a-b", ".a", "a.", "os.path;x"):
@@ -2765,6 +2785,7 @@ def phase_2_pure() -> None:
     _lease_routes()
     _stop_flushes_inflight_reply()
     _peer_resolution()
+    _socket_path_length()
     _peer_host_vetting()
     _peer_responses()
     _peer_describe()

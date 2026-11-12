@@ -374,6 +374,15 @@ def phase_3_argv_and_registry(_kernel: Kernel) -> None:
     )
     print("  ✓ `repld --socket S stop` names the subcommand-first order")
 
+    long = "/x/" + "s" * 120 + "/kernel.sock"
+    code, out = _repld("stop", "--socket", long)
+    assert_eq(code, 1, "a socket path too long for AF_UNIX is refused")
+    assert_true(
+        "107" in out and long in out,
+        f"…naming the limit and the path (got {out[:200]!r})",
+    )
+    print("  ✓ an over-long --socket is refused before anything dials or spawns")
+
     code, out = _repld("gist", "badverb", "--help")
     assert_eq(code, 0, "repld gist badverb --help asks for usage, not the verb")
     print("  ✓ `gist <unknown> --help` prints usage (wants_help scans every arg)")
