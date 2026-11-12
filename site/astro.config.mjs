@@ -35,6 +35,9 @@ export default defineConfig({
 		sitemap(),
 		starlight({
 			title: 'repld',
+			// The 404 is src/pages/404.astro: a 404.md docs entry collides with Starlight's
+			// own [...slug] route, and with neither, the build logs a failed entry lookup.
+			disable404Route: true,
 			customCss: ['./src/styles/starlight-theme.css'],
 			expressiveCode: {
 				themes: ['vesper'],
