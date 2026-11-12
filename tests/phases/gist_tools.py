@@ -30,6 +30,8 @@ def phase_9_gist_tools(kernel: Kernel) -> None:
         _oversized_result_spills(b, gists_dir)
         _image_result(b, gists_dir)
         _bad_tool_calls(b)
+        _tool_input_validation(b, gists_dir)
+        _reserved_tool_names(b, gists_dir)
         _list_changed(b, gists_dir)
         _imported_on_loop(b, gists_dir)
         _sync_handler_defers(b, gists_dir)
@@ -426,6 +428,65 @@ def _bad_tool_calls(b: Bridge) -> None:
         f"error says 'missing tool name' (got {resp['error']['message']!r})",
     )
     print("  ✓ missing tool name → MCP error")
+
+
+def _tool_input_validation(b: Bridge, gists_dir: Path) -> None:
+    """A gist tool's arguments are checked against its inferred schema before it runs."""
+    source = (
+        '"""Smoketest gist with a typed tool."""\n\n'
+        "def _tool_smoke_add(a: int, b: int = 1) -> dict:\n"
+        '    """Add two numbers."""\n'
+        '    return {"sum": a + b}\n'
+    )
+    with _gist(gists_dir, "smoke_validate", source):
+        assert_eq(
+            _tool(b, "smoke_add")["inputSchema"]["required"], ["a"], "a is required"
+        )
+        ok = _call(b, "smoke_add", {"a": 2})
+        assert_eq(ok["result"]["structuredContent"], {"sum": 3}, "a valid call runs")
+        for args, needle in (
+            ({"a": "x"}, "must be integer"),
+            ({}, "missing required"),
+            ({"a": 1, "z": 2}, "unknown argument"),
+        ):
+            resp = _call(b, "smoke_add", args)
+            assert_true(
+                resp["result"].get("isError") is True and needle in content_text(resp),
+                f"smoke_add {args!r} refused in-band with {needle!r} (got {resp!r})",
+            )
+    print(
+        "  ✓ gist tool: wrong type, missing and unknown arguments refused before the handler"
+    )
+
+
+def _reserved_tool_names(b: Bridge, gists_dir: Path) -> None:
+    """A `_tool_*` named like a built-in is skipped, so tools/list never duplicates a name."""
+    source = (
+        '"""Smoketest gist shadowing built-ins."""\n\n'
+        "def _tool_exec(x: str) -> str:\n"
+        '    """Shadow exec."""\n'
+        "    return x\n\n"
+        "def _tool_browser_zzz(x: str) -> str:\n"
+        '    """Shadow a browser tool."""\n'
+        "    return x\n\n"
+        "def _tool_smoke_fine(x: str) -> str:\n"
+        '    """A tool that is fine."""\n'
+        "    return x\n"
+    )
+    with _gist(gists_dir, "smoke_reserved", source):
+        names = _tool_names(b)
+        assert_eq(names.count("exec"), 1, "exec is listed once, not shadowed")
+        assert_true("browser_zzz" not in names, "browser_* names are reserved")
+        assert_true("smoke_fine" in names, "the gist's other tool still lists")
+        from repld import gist_lint
+
+        findings = gist_lint.lint_file(gists_dir / "smoke_reserved.py")
+        assert_eq(
+            sorted(f.rule for f in findings if f.rule == "tool-name"),
+            ["tool-name", "tool-name"],
+            "gist lint flags both reserved names",
+        )
+    print("  ✓ gist tool named like a built-in is skipped, and lint says so")
 
 
 def _list_changed(b: Bridge, gists_dir: Path) -> None:

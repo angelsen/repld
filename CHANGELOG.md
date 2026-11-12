@@ -8,16 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `notifications/cancelled` from the client stops an in-flight `exec` and suppresses its reply.
+- `repld gist lint` has a `tool-name` rule: a `_tool_*` named like a built-in, or with a name or parameter outside what MCP and Claude Code accept, is flagged (and skipped at boot with a warning).
+
 ### Changed
+
+- Tool arguments are checked against the tool's `inputSchema` for every tool, gist tools included: a missing required argument, a wrong type or a value outside the enum is an in-band error the model can correct, not a run on bad input or a `-32603`. An unknown `task_id` is in-band too.
+- The server `instructions` are held to Claude Code's 4,096-character cut: the exec model is shorter, the browser model is a pointer (its detail moved into `repld://docs/browser`), and the gist listing takes the room that is left.
+- `resources/read` answers `-32002` for an unknown URI or gist, `-32602` for a missing `uri` and `-32603` for a failed read.
+- `notify()` raises `ValueError` for a meta key outside letters, digits and underscores (Claude Code silently dropped it).
+- `form()` field dicts are limited to the MCP elicitation primitive subset: string `enum` only, `format` one of `email`/`uri`/`date`/`date-time`, no nested keys.
+- A gist tool's `structuredContent` is sent only when its text block was not truncated.
+- Tools carry a `title`, and the read-only browser tools that touch only repld's own store are marked closed-world.
 
 ### Fixed
 
+- A `ping` sent as a notification or with a null id is no longer answered with `"id": null`.
+- A malformed client line (unparseable JSON, a batch array, an id with no method) gets `-32700`/`-32600` instead of being dropped, and a non-JSON line from the kernel is no longer written to the client's stdout.
+- A gist `_tool_*` named `exec`, `get_task`, `cancel`, `repld_restart` or `browser_*` no longer duplicates a built-in in `tools/list` or hijacks its dispatch.
 - The agent-facing docs describe dialogs, the file picker and push routing as they have worked since 0.18/0.19: an `open()` tab answers native prompts only while an action is in flight, a dialog your own action opens is answered on a shared tab too, a `take()` owner outranks the action in flight and an `open()`/`watch()` owner does not, and `release()` leaves the tab shared with no owner. The instructions, `repld://docs/browser` and the `browser_dismiss_dialog`/`browser_take`/`browser_release`/`browser_set_files` tool descriptions said an agent tab always answered.
 - `repld://docs/browser` corrections: `tab.sse()` returns newest-first, `tab.fetch()` also returns `base64Encoded`, the bearer-token example reads `["request"]["headers"]`, `Action.gate()` lists `on_open=`; new sections cover a `connect(url=)` browser's retirement rules and `TabCrashedError`/`CDPCommandError`.
 - `repld help` lists `start`, `tasks`, `rebind` and `--project`; `repld help exec` lists the `download_*`, `tab_crashed`, `tab_closed`, `browser_disconnected`, `browser_reconnected`, `kernel_started` and `kernel_crashed` channel kinds; `repld help gates` names the dashboard as an answering surface and `notify(session=)`'s `None` for a parked target.
 - The uv-project dependency hint no longer says to restart the kernel after `uv add`: a newly installed package is importable on the next import. The guide names the Python 3.14 venv floor, `start_new_session=True` for a child the cell will signal, and where gist state that must outlive a reload belongs.
 
 ### Removed
+
+- The `claude/channel/permission` capability: nothing handled a permission request, so Claude Code could relay approval prompts to a channel nobody was reading.
 
 ## [0.21.0] - 2026-11-09
 

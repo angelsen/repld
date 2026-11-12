@@ -60,8 +60,8 @@ from .core_schemas import (
     BRIDGE_REBIND_METHOD,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
+    check_arguments,
     tool_error,
-    unknown_arguments,
 )
 from .core_schemas import (
     error as _error,
@@ -411,20 +411,27 @@ class Bridge:
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
-            msg = None
+            self._refuse_client_line(None, -32700, "parse error")
+            return
 
+        # Refused rather than forwarded: there is nothing for the kernel to act
+        # on, and falling through reached _ensure_kernel, so one truncated
+        # stdin line used to spawn a kernel and then ship it the garbage.
         if not isinstance(msg, dict):
-            # Dropped rather than forwarded. There is no id to answer, the
-            # kernel can't act on it either, and the old fall-through reached
-            # _ensure_kernel, so one truncated stdin line used to spawn a
-            # kernel and then ship it the garbage.
-            _err("ignoring unparseable line from client")
+            self._refuse_client_line(None, -32600, "invalid request: not a JSON object")
             return
 
         rid = msg.get("id")
 
-        if "method" not in msg and rid is not None:
-            self._relay_client_response(msg, rid)
+        if "method" not in msg:
+            if "result" in msg or "error" in msg:
+                self._relay_client_response(msg, rid)
+            else:
+                self._refuse_client_line(rid, -32600, "invalid request: no method")
+            return
+
+        if msg["method"] == "notifications/cancelled":
+            self._cancel_client_request(msg)
             return
 
         # Bridge-served tools are answered *before* the liveness ladder. They
@@ -461,6 +468,33 @@ class Bridge:
 
         self._forward_to_kernel(msg, rid, line)
 
+    def _refuse_client_line(self, rid: object, code: int, message: str) -> None:
+        """Answer a client line that is not a valid request with a JSON-RPC error."""
+        _err(f"refusing client line: {message}")
+        self._to_client(_error(rid, code, message))
+
+    def _cancel_client_request(self, msg: dict) -> None:
+        """Stop the kernel work for a request the client abandoned, if it is still in flight.
+
+        Consumed here rather than forwarded: the kernel connection's reader is
+        parked inside a synchronous `exec`, so a cancel queued behind it would
+        arrive only once the call it should stop had finished. An id already
+        answered, or never ours, is ignored.
+        """
+        request_id = (msg.get("params") or {}).get("requestId")
+        with self._state_lock:
+            pending = request_id in self._inflight
+            # No reply will follow a cancelled request, so it must not stay owed.
+            self._inflight.discard(request_id)
+        if not pending:
+            return
+        threading.Thread(
+            target=self._send_bare,
+            args=("requests/cancel", {"request_id": request_id}),
+            daemon=True,
+            name="repld-bridge-cancel",
+        ).start()
+
     def _relay_client_response(self, msg: dict, rid: object) -> None:
         """Hand the client's reply to a kernel-origin request back to the kernel.
 
@@ -480,31 +514,26 @@ class Bridge:
             "error": msg.get("error"),
         }
         threading.Thread(
-            target=self._send_gate_reply,
-            args=(params,),
+            target=self._send_bare,
+            args=("gates/elicit_result", params),
             daemon=True,
             name="repld-bridge-elicit-reply",
         ).start()
 
-    def _send_gate_reply(self, params: dict) -> None:
-        """Deliver one elicitation reply to the kernel on a short-lived connection."""
+    def _send_bare(self, method: str, params: dict) -> None:
+        """Send one bare JSON-RPC request to the kernel on a short-lived connection."""
         conn = ipc.connect_to_kernel(self.lock_path)
         if isinstance(conn, str):
-            _err(f"elicitation reply dropped: {conn}")
+            _err(f"{method} dropped: {conn}")
             return
         sock = conn[0]
         try:
-            req = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "gates/elicit_result",
-                "params": params,
-            }
+            req = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
             sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
             with sock.makefile("r", encoding="utf-8") as rfile:
                 rfile.readline()
         except OSError as exc:
-            _err(f"elicitation reply dropped: {exc}")
+            _err(f"{method} dropped: {exc}")
         finally:
             sock.close()
 
@@ -521,7 +550,7 @@ class Bridge:
     def _handle_bridge_tool(self, rid: object, name: str, args: dict) -> None:
         """Dispatch a bridge-served tool call and write the response to the client."""
         entry = bridge_tools.BRIDGE_TOOLS[name]
-        problem = unknown_arguments(entry["schema"], args)
+        problem = check_arguments(entry["schema"], args)
         if problem:
             if rid is not None:
                 self._to_client(tool_error(rid, problem))
@@ -681,7 +710,8 @@ class Bridge:
             # Answered here, not by a kernel. The bridge is the thing being
             # pinged. Must not fall through: anything the intercept declines
             # that isn't in _NEEDS_KERNEL is answered -32601.
-            self._to_client(_response(rid, {}))
+            if rid is not None:
+                self._to_client(_response(rid, {}))
             return True
 
         if method == "resources/read":
@@ -1150,7 +1180,7 @@ class Bridge:
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
-                    self._to_client_raw(line)
+                    _err("dropping a non-JSON line from the kernel")
                     continue
                 rid = msg.get("id")
                 if rid == BRIDGE_INIT_ID:

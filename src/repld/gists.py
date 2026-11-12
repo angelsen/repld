@@ -10,6 +10,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import sys
 import threading
 import types
@@ -818,6 +819,34 @@ def _declared_tools(p: Path) -> list[str] | None:
     ]
 
 
+_TOOL_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
+_PARAM_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def tool_name_problem(name: str, params: Iterable[str]) -> str | None:
+    """Return why a gist tool `name` with parameters `params` cannot be advertised, or None.
+
+    A built-in's name would duplicate it in `tools/list` (or, for `browser_*`,
+    route the call to the browser handler); the character sets are the MCP
+    tool-name rule (SEP-986) and Claude Code's property-name rule, past which
+    it drops the whole tool.
+    """
+    from . import bridge_tools
+    from .core_schemas import CORE_TOOLS
+
+    reserved = {t["name"] for t in CORE_TOOLS} | set(bridge_tools.BRIDGE_TOOLS)
+    if name in reserved or name.startswith("browser_"):
+        return f"tool name '{name}' is reserved for a built-in tool"
+    if not _TOOL_NAME_RE.fullmatch(name):
+        return f"tool name '{name}' must be 1-128 characters of A-Z a-z 0-9 _ . -"
+    bad = [p for p in params if not _PARAM_NAME_RE.fullmatch(p)]
+    if bad:
+        return (
+            f"parameter {', '.join(bad)} must be 1-64 characters of A-Z a-z 0-9 _ . -"
+        )
+    return None
+
+
 def _annotation_parts(annotation: object) -> tuple[object, str | None]:
     """Split ``Annotated[T, "description"]`` into ``(T, description)``.
 
@@ -998,6 +1027,10 @@ def scan_tools() -> list[dict]:
                 _warn_once(
                     f"{p}:_tool_{tname}", f"repld: {p.name}: _tool_{tname}: {exc}"
                 )
+                continue
+            problem = tool_name_problem(tname, schema["inputSchema"]["properties"])
+            if problem:
+                _warn_once(f"{p}:_tool_{tname}:name", f"repld: {p.name}: {problem}")
                 continue
             seen.add(tname)
             results.append(schema)

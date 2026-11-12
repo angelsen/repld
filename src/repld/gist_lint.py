@@ -24,6 +24,10 @@ Checks:
              file still carrying one silently loses its tools (or exposes
              them with a bogus single `args` parameter inferred from a
              stale handler signature). This is the only thing that says so.
+  tool-name  A `_tool_*` function whose tool name is a built-in's, or whose
+             name or parameter names fall outside what MCP and Claude Code
+             accept. `scan_tools` skips it with a warning at boot; this
+             says so before then.
 
 Suppress a finding with a `# gistlint: ignore=<rule>[,<rule>]` comment on
 the flagged line or the line above it. For `firstline` (a whole-file check)
@@ -104,6 +108,7 @@ def lint_file(path: Path) -> list[Finding]:
     findings.extend(_check_shape(path, tree, ignores))
     findings.extend(_check_deps(path, tree, ignores))
     findings.extend(_check_legacy_tools(path, tree, ignores))
+    findings.extend(_check_tool_names(path, tree, ignores))
     return findings
 
 
@@ -443,3 +448,24 @@ def _check_legacy_tools(
             '(Annotated[T, "..."] for a param description)',
         )
     ]
+
+
+# -- tool-name rule -----------------------------------------------------------
+
+
+def _check_tool_names(
+    path: Path, tree: ast.Module, ignores: dict[int, set[str]]
+) -> list[Finding]:
+    """Flag a `_tool_*` function that `gists.scan_tools` would refuse to advertise."""
+    findings: list[Finding] = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("_tool_"):
+            continue
+        args = node.args
+        params = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+        problem = gists.tool_name_problem(node.name.removeprefix("_tool_"), params)
+        if problem and not _is_ignored(node.lineno, "tool-name", ignores):
+            findings.append(Finding(path, node.lineno, "tool-name", problem))
+    return findings

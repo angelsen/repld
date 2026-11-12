@@ -1,8 +1,10 @@
 """Phases 2–3: Core MCP plumbing — initialize, tools/list, sync exec, deferred exec, get_task."""
 
+import json
 import socket
 import time
 from pathlib import Path
+from queue import Empty
 
 from harness import REPO, Bridge, Kernel, assert_eq, assert_true, content_text
 
@@ -125,19 +127,25 @@ def phase_3(kernel: Kernel) -> None:
         )
         print(f"  ✓ get_task: done, output {snap['text'].strip()!r}")
 
-        # Unknown task_id → JSON-RPC error, not a hollow success
+        # Unknown task_id is an input problem the model can fix, so it is an
+        # in-band error (SEP-1303), not a JSON-RPC one.
         resp = b.call(
             "tools/call", {"name": "get_task", "arguments": {"task_id": "bogus-tid"}}
         )
+        text = content_text(resp)
         assert_true(
-            "error" in resp and "unknown task_id" in resp["error"]["message"],
-            f"get_task rejects unknown task_id (got {resp!r})",
+            resp.get("result", {}).get("isError") is True and "unknown task_id" in text,
+            f"get_task rejects unknown task_id in-band (got {resp!r})",
         )
         assert_true(
-            f"(kernel: {kernel.cwd}" in resp["error"]["message"],
-            f"and names the kernel asked (got {resp['error']['message']!r})",
+            f"(kernel: {kernel.cwd}" in text,
+            f"and names the kernel asked (got {text!r})",
         )
-        print("  ✓ get_task: unknown task_id → JSON-RPC error")
+        print("  ✓ get_task: unknown task_id -> isError naming the kernel")
+
+        _phase_3_input_validation(b)
+        _phase_3_jsonrpc_edges(b)
+        _phase_3_client_cancel(b)
 
         # An argument no schema declares is refused in-band (isError, so the model sees it), never dropped.
         for name, args in (
@@ -217,6 +225,106 @@ def phase_3(kernel: Kernel) -> None:
         print("  ✓ Session.close() explicitly closes rfile/wfile, not just the socket")
     finally:
         b.close()
+
+
+def _phase_3_input_validation(b: Bridge) -> None:
+    """A call that breaks its inputSchema is an isError the model can read, never a run or a -32603."""
+    for name, args, needle in (
+        ("exec", {}, "missing required"),
+        ("exec", {"code": "RAN_BAD_TIMEOUT = 1", "timeout": "abc"}, "timeout"),
+        ("exec", {"code": 5}, "code"),
+        ("get_task", {}, "missing required"),
+        ("cancel", {"task_id": 7}, "task_id"),
+    ):
+        resp = b.call("tools/call", {"name": name, "arguments": args})
+        assert_true(
+            resp.get("result", {}).get("isError") is True
+            and needle in content_text(resp),
+            f"{name} {args!r} refused in-band naming {needle!r} (got {resp!r})",
+        )
+    assert_true(
+        "False" in content_text(b.exec("print('RAN_BAD_TIMEOUT' in dir())")),
+        "the refused exec never ran",
+    )
+    resp = b.call("tools/call", {"name": "exec", "arguments": ["x"]})
+    assert_eq(
+        resp.get("error", {}).get("code"), -32602, "non-object arguments are -32602"
+    )
+    resp = b.call("tools/call", {"name": "no_such_tool", "arguments": {}})
+    assert_eq(resp.get("error", {}).get("code"), -32602, "an unknown tool stays -32602")
+    print(
+        "  ✓ tools/call: required, type and shape checked against inputSchema, in-band"
+    )
+
+
+def _phase_3_jsonrpc_edges(b: Bridge) -> None:
+    """Notifications get no reply; unparseable and malformed lines get -32700 / -32600."""
+    assert b.proc.stdin is not None
+    caps = b.call("initialize", {"protocolVersion": "2025-06-18"})["result"][
+        "capabilities"
+    ]
+    assert_true(
+        "claude/channel/permission" not in caps["experimental"],
+        "no permission-relay capability is declared (nothing implements it)",
+    )
+
+    def raw(line: str) -> None:
+        assert b.proc.stdin is not None
+        b.proc.stdin.write(line + "\n")
+        b.proc.stdin.flush()
+
+    raw(json.dumps({"jsonrpc": "2.0", "method": "ping"}))
+    raw(json.dumps({"jsonrpc": "2.0", "method": "ping", "id": None}))
+    resp = b.call("ping", {})
+    assert_eq(resp["result"], {}, "a ping with an id is still answered")
+    assert_true(
+        b.inbox.empty(), "neither the id-less nor the null-id ping was answered first"
+    )
+    for line, code, label in (
+        ("{nope", -32700, "unparseable JSON"),
+        ('[{"jsonrpc":"2.0","method":"ping","id":9}]', -32600, "a batch array"),
+        ('{"jsonrpc":"2.0","id":5}', -32600, "an id with no method"),
+    ):
+        raw(line)
+        msg = b.inbox.get(timeout=3)
+        assert_eq(msg.get("error", {}).get("code"), code, f"{label} -> {code}")
+    assert_eq(b.call("ping", {})["result"], {}, "the bridge survives all of it")
+    print(
+        "  ✓ JSON-RPC edges: null-id ping silent, -32700 / -32600 for malformed lines"
+    )
+
+
+def _phase_3_client_cancel(b: Bridge) -> None:
+    """`notifications/cancelled` stops the exec and suppresses its reply; unknown ids are ignored."""
+    code = (
+        "import asyncio\n"
+        "try:\n"
+        "    await asyncio.sleep(30)\n"
+        "finally:\n"
+        "    CANCEL_SEEN = True\n"
+    )
+    rid = b.send(
+        "tools/call", {"name": "exec", "arguments": {"code": code, "timeout": 20}}
+    )
+    time.sleep(0.5)
+    b.send("notifications/cancelled", {"requestId": 424242}, notif=True)
+    b.send("notifications/cancelled", {"requestId": rid, "reason": "test"}, notif=True)
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        try:
+            msg = b.inbox.get(timeout=0.2)
+        except Empty:
+            continue
+        assert_true(
+            msg.get("id") != rid, f"a cancelled request is not answered (got {msg!r})"
+        )
+        b._notifs.append(msg)
+    assert_true(
+        "True" in content_text(b.exec("print(globals().get('CANCEL_SEEN'))")),
+        "the cancelled cell was actually stopped",
+    )
+    assert_eq(b.call("ping", {})["result"], {}, "an unknown cancelled id is ignored")
+    print("  ✓ notifications/cancelled: the cell stops, no reply, unknown ids ignored")
 
 
 def phase_3_argv_and_registry(_kernel: Kernel) -> None:

@@ -242,6 +242,31 @@ def build_form_schema(fields: dict, required: list[str] | None = None) -> dict:
     return {"type": "object", "properties": props, "required": names}
 
 
+_FIELD_KEYS: dict[str, frozenset[str]] = {
+    "string": frozenset(
+        {
+            "type",
+            "title",
+            "description",
+            "default",
+            "minLength",
+            "maxLength",
+            "format",
+            "enum",
+            "enumNames",
+        }
+    ),
+    "number": frozenset(
+        {"type", "title", "description", "default", "minimum", "maximum"}
+    ),
+    "integer": frozenset(
+        {"type", "title", "description", "default", "minimum", "maximum"}
+    ),
+    "boolean": frozenset({"type", "title", "description", "default"}),
+}
+_STRING_FORMATS = frozenset({"email", "uri", "date", "date-time"})
+
+
 def _field_property(name: str, spec) -> dict:
     """One field spec as a JSON-schema property; raises `ValueError` if it is not flat."""
     if isinstance(spec, type) and spec in _PRIMITIVES:
@@ -249,11 +274,28 @@ def _field_property(name: str, spec) -> dict:
     if isinstance(spec, list) and spec and all(isinstance(o, str) for o in spec):
         return {"type": "string", "enum": list(spec)}
     if isinstance(spec, dict) and spec.get("type") in _JSON_PRIMITIVES:
+        _check_field_dict(name, spec)
         return dict(spec)
     raise ValueError(
         f"field {name!r}: use str, int, float, bool, a list of strings, "
         "or a dict with a primitive JSON-schema type"
     )
+
+
+def _check_field_dict(name: str, spec: dict) -> None:
+    """Refuse a field dict outside the MCP elicitation primitive subset (no nesting)."""
+    stray = sorted(set(spec) - _FIELD_KEYS[spec["type"]])
+    if stray:
+        raise ValueError(
+            f"field {name!r}: {', '.join(stray)} not allowed on a {spec['type']} field"
+        )
+    if spec.get("format", "date") not in _STRING_FORMATS:
+        raise ValueError(
+            f"field {name!r}: format must be one of {', '.join(sorted(_STRING_FORMATS))}"
+        )
+    options = spec.get("enum", [])
+    if not all(isinstance(o, str) for o in options):
+        raise ValueError(f"field {name!r}: enum values must be strings")
 
 
 async def _gate(

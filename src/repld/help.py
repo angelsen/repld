@@ -33,133 +33,58 @@ from .state import read_lock
 # Composable instruction blocks (agent-facing, behavioral model only)
 # ---------------------------------------------------------------------------
 
-# Builtins recap also in GUIDE's `== Builtins ==` section — keep in sync.
+# Claude Code cuts server instructions at this many characters (mcp.md, "For MCP
+# server authors"); everything past it never reaches the model.
+INSTRUCTIONS_BUDGET = 4096
+
+# Builtins recap also in GUIDE's `== Builtins ==` section; keep in sync.
 _EXEC_MODEL = (
     "Execution model: "
-    "exec runs code in shared __main__. If it exceeds timeout, returns "
-    "{task_id, done:false} and pushes channel on completion — but a session "
-    "that ends its turn does not reliably see it: a one-shot client (`claude -p`) "
-    "never does, an idle `claude --bg` worker is woken only without "
-    "bypassPermissions and before the host retires the idle job. If you need "
-    "the result, poll get_task(task_id) yourself before finishing. "
-    "Output: head+tail preview; full at [full output: /path] — use Read/Grep. "
-    "_ / _N history. Top-level await. "
-    "no_display(value) returns value without re-printing it (still binds _/_N) — "
-    "for functions that already print their own output. "
-    "defer(coro, label) schedules a background task, returns task_id immediately, "
-    "pushes channel on completion — same caveat as exec's deferred case. "
-    "every(seconds, delay=0)(fn) schedules fn to run periodically; the first "
-    "tick is immediate unless delay= holds it back — use that when watching "
-    "something you just started, or the health check races its warmup. "
-    "fn.cancel() stops it. every.list() shows active tickers. "
-    "ask()/confirm()/choose()/form() block the cell on human input; the answer "
-    "comes from a Claude Code modal (MCP elicitation, when the client "
-    "supports it), the kernel's pane, a pinned tab's pill, or `repld gate "
-    "answer <id>` when the kernel is headless (the push tells you which). "
-    "Declining the modal is a no: confirm() returns False, the rest raise "
-    "GateDeclined; Esc answers nothing. "
+    "exec runs code in shared __main__ (top-level await, _ / _N history). Past "
+    "`timeout` it returns {task_id, done:false} and pushes a channel message on "
+    "completion, but a session that ends its turn may never see the push "
+    "(`claude -p` never does; an idle `claude --bg` worker only sometimes), so "
+    "poll get_task(task_id) before finishing if you need the result. "
+    "Output is a head+tail preview; the full text is at [full output: /path], "
+    "read it with Read/Grep. "
+    "defer(coro, label) runs a background task and pushes on completion (same "
+    "caveat). every(seconds, delay=0)(fn) runs fn periodically (fn.cancel(), "
+    "every.list()). "
     "notify(content, *, session=None, exclude=None, **meta) pushes a channel "
-    "notification; session=<claude_session_id> targets one connected Claude "
-    "Code session (False if it isn't connected, None if held by "
-    "ipc.park_pushes; no fallback to broadcast); "
-    "exclude=<claude_session_id> — only with session left None — skips that "
-    "one session from the broadcast (e.g. a self-report that already has the "
-    "result synchronously). "
-    "claude_sessions() lists connected (session_id, project_dir, kind) tuples "
-    "— kind is 'bg' for a `claude --bg` worker, else None. "
-    "current_session_id() returns the claude_session_id of whoever triggered "
-    "the code currently running, or None if there's nothing to attribute to. "
-    "peers calls other projects' kernels (see Peers below); peer_caller() names "
-    "who called this kernel from another one, else None. "
-    "When you see a task that could run continuously — monitoring, polling, "
-    "watching for changes — suggest wiring it with defer() + notify() or @every. "
-    "The kernel persists; one-shot work can become background automation."
+    "message; meta keys are letters, digits and underscores. "
+    "ask()/confirm()/choose()/form() block the cell on a human; declining "
+    "raises GateDeclined (confirm() returns False). "
+    "no_display(value) returns value without re-printing it. "
+    "A task that could run continuously (monitoring, polling, watching) should "
+    "become defer() + notify() or @every. "
+    "Every builtin in full: repld://docs/guide."
 )
 
 _BROWSER_MODEL = (
-    "Browser model: "
-    "Watch by URL pattern. Short target IDs (9222:a1b2c3). "
-    "Multi-browser: browser.connect(port) adds Chrome instances; target IDs route by port prefix. "
-    "Selectors resolve strictly (Playwright engine): >1 match with no single "
-    "visible winner errors with a candidate list instead of guessing; input "
-    "waits for visible/enabled/stable; click/type return a receipt line naming "
-    "what was actually hit. type verifies the value landed, falling back to the "
-    "native setter for framework-controlled inputs. browser_select drives "
-    "dropdowns (native <select> or custom listbox; an aria-autocomplete field "
-    "gets the option typed in as a filter, reaching virtualized lists). "
-    "browser_hover parks the pointer on an element — selector or 'x,y' "
-    "(hover-revealed UI stays up); browser_drag runs press→moves→release "
-    "atomically in one call (selectors or 'x,y' endpoints, micro-stepped "
-    "out of small origins). "
-    "browser_tree default is an aria snapshot with [ref=eN] handles — reuse as "
-    "aria-ref=eN selectors until the next snapshot or navigation; mode='ax' is "
-    "the raw CDP tree; at='x,y' hit-tests a coordinate instead and returns a "
-    "small elided tree rooted there, with real [ref=eN] handles usable the "
-    "same way (an iframe hit reports the redirect instead). "
-    "Mutations (click/type/select/hover/drag/navigate/key/open) settle then "
-    "return receipt + a changes: AX-diff (what appeared/disappeared/changed "
-    "state) + tree + network delta + console delta. "
-    "Tree crosses iframes. Network separates API calls from assets. "
-    "get()/open() capture request/response bodies; watch() attaches lightweight. "
-    "Read workflow: network → request → body. "
-    "browser object available in exec for chaining. "
-    "every(seconds, tab=pattern)(fn) resolves browser.get(pattern) fresh on "
-    "every tick and passes the live Tab to fn — for a ticker that touches a "
-    "tab across hours/days, since a Tab captured once goes stale across a "
-    "navigation or crash. "
-    "For repeated browser interactions, write a gist (gists/*.py) to capture "
-    "the API pattern. tab.pin() guards the session; tab.confirm()/choose() "
-    "gate mutations in the browser. "
-    "Controls: apps exposing window.controls get browser_controls (discover) and "
-    "browser_invoke (act) MCP tools. Action observations push as channel messages. "
-    "Console errors from watched tabs push as [console:error] channel messages automatically "
-    "(cross-tab duplicates within 2s are collapsed; browser.suppress(substring) mutes matching errors). "
-    "Tabs are `agent` (browser_open) or `shared` (any tab you attach to: a human may be on it). "
-    "browser_take/browser_release switch it; browser_tabs shows it. A native dialog "
-    "(alert/confirm/prompt/beforeunload) that your own action opens, on either kind of tab, is "
-    "dismissed the instant it opens "
-    "so nothing hangs — but confirm()/prompt() reject by default and the triggering call errors "
-    "rather than returning a receipt, since accepting one is never guessed. Pre-arm "
-    "browser_dismiss_dialog(target, accept=true) first, then repeat the action, to accept it. "
-    "alert() (only one option) and beforeunload (governed by the pin's guard_unload) don't error. "
-    "A dialog that opens outside your action (a page timer, between your calls) is the human's: "
-    "it waits, you are told, calls that need the page fail fast, and browser_dismiss_dialog "
-    "answers it. Only a tab held by browser_take has every dialog answered. A native file chooser "
-    "your action opens on an agent tab is intercepted rather than "
-    "opened for real — it stays open until tab.set_files(paths) answers it, or pre-arm with "
-    "tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click (the way to "
-    "answer one on a shared tab, whose picker otherwise stays native). "
-    "Read repld://docs/browser for the full API, internals, and workflow patterns."
+    "Browser: `browser` is in __main__ (browser.get(pattern), browser.open(url), "
+    "browser.watch(pattern)) and the browser_* tools are listed. Selectors "
+    "resolve strictly, mutations return a receipt plus a changes: diff, and "
+    "tab.pin() guards the session. Read repld://docs/browser before driving a page."
 )
 
 _GISTS_MODEL = (
-    "Gists: ~/.repld/gists/ and ./gists/ on sys.path. Auto-reload on re-import.\n"
-    "Before using a gist, read repld://gists/{name} for the full API — constructor args, "
-    "method signatures, and usage patterns.\n"
-    "Stable gists can register as MCP tools via typed _tool_* functions — "
-    "callable directly without exec, discoverable in tools/list. Schema is "
-    "inferred from type hints and the docstring's first line.\n"
-    'Gists declare deps via __repld_deps__ = ["httpx>=0.27"]; '
-    'use "." to depend on the gist\'s own project; use "path:vendor/lib" to '
-    "add a local (non-pip-installable) directory to sys.path, relative to "
-    "the project root. Kernel prompts to install missing PyPI ones at boot.\n"
-    "Read repld://gists/_registry to see gists written in other projects — an "
-    "entry marked (already here) is already resolvable in this one, so skip "
-    "it; otherwise the user can link one in with `repld gist add <name>` "
-    "(no copy)."
+    "Gists: ~/.repld/gists/ and ./gists/ are on sys.path and reload on "
+    "re-import. Read repld://gists/{name} for a gist's API before using it. "
+    "Typed _tool_* functions in a gist become MCP tools (schema from the type "
+    "hints and the docstring's first line). A gist declares dependencies with "
+    '__repld_deps__ = ["httpx>=0.27"] ("." is the gist\'s own project, '
+    '"path:vendor/lib" a local directory); missing ones are offered for '
+    "install at boot. repld://gists/_registry lists gists from other "
+    "projects; `repld gist add <name>` links one in."
 )
 
 _PEERS_MODEL = (
-    "Peers: other projects' kernels are services you can call. peers.list() shows "
-    'the live ones; peer = peers.get("voice-api") takes a directory name or a path; '
-    'await peer.call("gist.fn", *args, **kwargs) runs any dotted name in THAT '
-    "kernel (its own venv, deps and warm state, so nothing to install here) and "
-    "returns a JSON value. Bulk data goes by file path. Each error says whether it "
-    "ran: PeerRefused / PeerUnavailable never did, PeerCallError ran and raised, "
-    "PeerDisconnected is unknown and is never retried. gather and asyncio.timeout "
-    "work, and cancelling the await cancels the call there. "
-    "`repld gist stub <peer> <gist>` writes typed async shims. "
-    "Read repld://docs/peers before calling another kernel."
+    "Peers: other projects' kernels are services. "
+    '`await peers.get("voice-api").call("gist.fn", *args)` runs a dotted name '
+    "in THAT kernel and returns JSON; peers.list() shows the live ones. "
+    "PeerRefused/PeerUnavailable never ran, PeerCallError ran and raised, "
+    "PeerDisconnected is unknown and is never retried. "
+    "Read repld://docs/peers first."
 )
 
 _PLAYBOOK = (
@@ -503,6 +428,57 @@ repld browser — comprehensive guide
 
 API reference, non-obvious behaviors, and workflow patterns for the browser
 object.  Read this instead of diving into source code.
+
+== Behavior recap ==
+
+Watch by URL pattern. Short target IDs (9222:a1b2c3). Multi-browser:
+browser.connect(port) adds Chrome instances; target IDs route by port prefix.
+Selectors resolve strictly (Playwright engine): >1 match with no single
+visible winner errors with a candidate list instead of guessing; input waits
+for visible/enabled/stable; click/type return a receipt line naming what was
+actually hit. type verifies the value landed, falling back to the native
+setter for framework-controlled inputs. browser_select drives dropdowns
+(native <select> or custom listbox; an aria-autocomplete field gets the option
+typed in as a filter, reaching virtualized lists). browser_hover parks the
+pointer on an element, selector or 'x,y' (hover-revealed UI stays up);
+browser_drag runs press->moves->release atomically in one call (selectors or
+'x,y' endpoints, micro-stepped out of small origins). browser_tree default is
+an aria snapshot with [ref=eN] handles, reuse as aria-ref=eN selectors until
+the next snapshot or navigation; mode='ax' is the raw CDP tree; at='x,y' hit-
+tests a coordinate instead and returns a small elided tree rooted there, with
+real [ref=eN] handles usable the same way (an iframe hit reports the redirect
+instead). Mutations (click/type/select/hover/drag/navigate/key/open) settle
+then return receipt + a changes: AX-diff (what appeared/disappeared/changed
+state) + tree + network delta + console delta. Tree crosses iframes. Network
+separates API calls from assets. get()/open() capture request/response bodies;
+watch() attaches lightweight. Read workflow: network -> request -> body.
+browser object available in exec for chaining. every(seconds, tab=pattern)(fn)
+resolves browser.get(pattern) fresh on every tick and passes the live Tab to
+fn, for a ticker that touches a tab across hours/days, since a Tab captured
+once goes stale across a navigation or crash. For repeated browser
+interactions, write a gist (gists/*.py) to capture the API pattern. tab.pin()
+guards the session; tab.confirm()/choose() gate mutations in the browser.
+Controls: apps exposing window.controls get browser_controls (discover) and
+browser_invoke (act) MCP tools. Action observations push as channel messages.
+Console errors from watched tabs push as [console:error] channel messages
+automatically (cross-tab duplicates within 2s are collapsed;
+browser.suppress(substring) mutes matching errors). Tabs are `agent`
+(browser_open) or `shared` (any tab you attach to: a human may be on it).
+browser_take/browser_release switch it; browser_tabs shows it. A native dialog
+(alert/confirm/prompt/beforeunload) that your own action opens, on either kind
+of tab, is dismissed the instant it opens so nothing hangs, but
+confirm()/prompt() reject by default and the triggering call errors rather
+than returning a receipt, since accepting one is never guessed. Pre-arm
+browser_dismiss_dialog(target, accept=true) first, then repeat the action, to
+accept it. alert() (only one option) and beforeunload (governed by the pin's
+guard_unload) don't error. A dialog that opens outside your action (a page
+timer, between your calls) is the human's: it waits, you are told, calls that
+need the page fail fast, and browser_dismiss_dialog answers it. Only a tab
+held by browser_take has every dialog answered. A native file chooser your
+action opens on an agent tab is intercepted rather than opened for real, it
+stays open until tab.set_files(paths) answers it, or pre-arm with
+tab.expect_file_chooser(paths)/browser_expect_file_chooser before the click
+(the way to answer one on a shared tab, whose picker otherwise stays native).
 
 == Getting tabs ==
 
@@ -1850,42 +1826,56 @@ def static_instructions() -> str:
 
 
 def build_instructions() -> str:
-    """Compose INSTRUCTIONS dynamically based on kernel state."""
+    """Compose INSTRUCTIONS dynamically based on kernel state, within `INSTRUCTIONS_BUDGET`.
+
+    Everything fixed comes first in priority order; the gist listing is the
+    elastic part and takes what room is left, so no client cut ever lands
+    mid-section.
+    """
     import __main__
 
     from . import gists
 
-    parts = [_EXEC_MODEL]
-
-    # Browser section — only if browser object exists in namespace
+    head = [_EXEC_MODEL]
+    # Browser section only if the browser object exists in the namespace
     if "browser" in __main__.__dict__:
-        parts.append(_BROWSER_MODEL)
+        head.append(_BROWSER_MODEL)
+    head.append(_GISTS_MODEL)
 
-    # Gists base + available gists (with constructor signatures)
-    parts.append(_GISTS_MODEL)
-    available = gists.scan()
-    if available:
-        lines = ["Available gists:"]
-        for name, doc in available:
-            hint = gists.import_hint(name)
-            lines.append(f"  {hint:<55s} {doc}")
-        parts.append("\n".join(lines))
-
-    # Gist-registered tools
+    tail = [_PEERS_MODEL, _deps_hint(), _PLAYBOOK, _reference()]
     gist_tools = gists.scan_tools()
     if gist_tools:
-        names = [t["name"] for t in gist_tools]
-        parts.append(
-            "Gist tools: "
-            + ", ".join(names)
-            + " — call directly as MCP tools (no exec needed)."
+        names = ", ".join(t["name"] for t in gist_tools)
+        tail.insert(
+            0, f"Gist tools: {names}. Call them directly as MCP tools (no exec needed)."
         )
 
-    parts.append(_PEERS_MODEL)
-    parts.append(_deps_hint())
-    parts.append(_PLAYBOOK)
-    parts.append(_reference())
-    return "\n\n".join(parts)
+    room = INSTRUCTIONS_BUDGET - len("\n\n".join(head + tail)) - 2
+    listing = _gist_listing(gists.scan(), room)
+    return "\n\n".join(head + ([listing] if listing else []) + tail)
+
+
+def _gist_listing(available: list[tuple[str, str]], room: int) -> str | None:
+    """Format as many `available` gists as fit in `room` characters, or None if none do.
+
+    A cut listing ends with the line naming where the rest is.
+    """
+    from . import gists
+
+    more = "  ...and {n} more: repld://gists/_registry, repld://gists/{{name}}"
+    lines = ["Available gists:"]
+    used = len(lines[0]) + 1
+    for shown, (name, doc) in enumerate(available):
+        line = f"  {gists.import_hint(name)}  {doc[:70]}"
+        last = shown == len(available) - 1
+        reserve = 0 if last else len(more.format(n=len(available) - shown - 1)) + 1
+        if used + len(line) + 1 + reserve > room:
+            if len(lines) > 1:
+                lines.append(more.format(n=len(available) - shown))
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines) if len(lines) > 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -2268,7 +2258,8 @@ Linting:
   shape (dict/list-returning public methods need -> {shape} in their
   docstring's first line), deps (non-stdlib imports need __repld_deps__),
   legacy (a __repld_tools__ list, which is silently ignored -- nothing
-  else reports one).
+  else reports one), tool-name (a _tool_* named like a built-in, or with a
+  name outside what MCP and Claude Code accept).
   Suppress one: # gistlint: ignore=<rule> on the flagged line.
 
 Getting a gist you didn't write:
@@ -2652,7 +2643,9 @@ Injected into __main__:
                                session=<claude_session_id> targets one by the
                                id claude_sessions() lists — returns False if
                                it's not connected (no fallback to broadcast),
-                               True if delivered, None on a plain broadcast.
+                               True if delivered, None on a plain broadcast
+                               or when ipc.park_pushes holds the target (held,
+                               not dropped).
                                exclude=<claude_session_id> — only with session
                                left None — skips that one session from the
                                broadcast.
@@ -2686,6 +2679,9 @@ Injected into __main__:
                                is the only one a headless kernel has, and
                                headless is the usual case. Pass timeout=
                                for a gate that must not park a cell forever.
+                               Declining the modal is a no: confirm() returns
+                               False, the rest raise GateDeclined; Esc answers
+                               nothing. The push tells you which surface to use.
 
 == Browser ==
 

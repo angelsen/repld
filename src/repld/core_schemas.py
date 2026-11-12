@@ -24,12 +24,15 @@ modules. It is stripped before the dict goes on the wire (`wire()`).
 # alternative is a hand-synced copy in each, a drift no test can see since
 # every side would still be internally consistent.
 #
-# 2025-06-18 is the ceiling on purpose: 2025-11-25 adds nothing repld serves
-# (icons, URL elicitation, experimental tasks), and 2026-07-28 removes the
+# 2025-06-18 is the ceiling on purpose: 2025-11-25 adds nothing repld negotiates
+# (icons, experimental tasks), and 2026-07-28 removes the
 # `initialize` handshake outright. Adopting it is a bridge rearchitecture,
 # not a version bump. Everything repld uses from 2025-06-18 (tool annotations,
 # structuredContent/outputSchema, resource templates) is additive, which is
-# what makes serving the older revisions from the same code correct.
+# what makes serving the older revisions from the same code correct. The one
+# exception is URL-mode elicitation (a secret gate): it is sent on a 2025-06-18
+# session because the client declared `elicitation.url`, which only a client
+# implementing 2025-11-25 does, and a version gate would disable it for all.
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
 
@@ -103,7 +106,6 @@ CAPABILITIES: dict = {
     "resources": {"listChanged": True},
     "experimental": {
         "claude/channel": {},
-        "claude/channel/permission": {},
     },
 }
 
@@ -113,6 +115,7 @@ CAPABILITIES: dict = {
 CORE_TOOLS: list[dict] = [
     {
         "name": "exec",
+        "title": "Run Python",
         "description": (
             "Run Python in shared __main__. Returns inline within timeout; "
             "otherwise {task_id, done:false} with channel push on completion. "
@@ -126,10 +129,11 @@ CORE_TOOLS: list[dict] = [
             },
             "required": ["code"],
         },
-        "annotations": {"openWorldHint": True},
+        "annotations": {"title": "Run Python", "openWorldHint": True},
     },
     {
         "name": "get_task",
+        "title": "Get task",
         "description": (
             "Fetch current status and a head+tail preview of a task's output. "
             "Use Read on the returned `spill_path` for full content. Poll this "
@@ -221,10 +225,11 @@ CORE_TOOLS: list[dict] = [
                 "caller",
             ],
         },
-        "annotations": {"readOnlyHint": True},
+        "annotations": {"title": "Get task", "readOnlyHint": True},
     },
     {
         "name": "cancel",
+        "title": "Cancel task",
         "description": (
             "Attempt to cancel a running task. Returns whether cancellation "
             "was accepted. Cannot preempt tight sync loops (`while True: pass`), "
@@ -235,7 +240,7 @@ CORE_TOOLS: list[dict] = [
             "properties": {"task_id": {"type": "string"}},
             "required": ["task_id"],
         },
-        "annotations": {"idempotentHint": True},
+        "annotations": {"title": "Cancel task", "idempotentHint": True},
     },
 ]
 
@@ -327,20 +332,65 @@ RESOURCE_TEMPLATES: list[dict] = [
 # -- Argument validation -----------------------------------------------------
 
 
-def unknown_arguments(schema: dict, args: dict) -> str | None:
-    """Return the tool error for `tools/call` arguments `schema` does not declare, or None.
+def check_arguments(schema: dict, args: dict) -> str | None:
+    """Return the tool error for `tools/call` arguments that break `schema`, or None.
 
-    A handler that reads `args.get(...)` would otherwise drop a misspelled or
-    invented argument silently, and the call would look like it ran as asked.
-    Callers answer with `tool_error`, not `error`: a model that never sees the
-    refusal cannot correct the call (SEP-1303).
+    Refuses undeclared keys, missing `required` keys, a value whose JSON type
+    or `enum` the property forbids. A handler that reads `args.get(...)` would
+    otherwise drop a misspelled argument silently, or run on a wrong type, and
+    the call would look like it ran as asked. Callers answer with `tool_error`,
+    not `error`: a model that never sees the refusal cannot correct the call
+    (SEP-1303). Constructs beyond `type` and `enum` (`anyOf`, `$ref`) are left
+    to the handler.
     """
-    declared = schema.get("inputSchema", {}).get("properties", {})
+    input_schema = schema.get("inputSchema", {})
+    declared = input_schema.get("properties", {})
+    name = schema["name"]
     extra = sorted(set(args) - set(declared))
-    if not extra:
-        return None
-    takes = ", ".join(sorted(declared)) or "no arguments"
-    return f"{schema['name']}: unknown argument {', '.join(extra)} (it takes {takes})"
+    if extra:
+        takes = ", ".join(sorted(declared)) or "no arguments"
+        return f"{name}: unknown argument {', '.join(extra)} (it takes {takes})"
+    missing = [k for k in input_schema.get("required", []) if k not in args]
+    if missing:
+        return f"{name}: missing required argument {', '.join(missing)}"
+    for key, value in args.items():
+        problem = _value_problem(declared[key], value)
+        if problem:
+            return f"{name}: argument {key} {problem}"
+    return None
+
+
+def _value_problem(prop: dict, value: object) -> str | None:
+    """Return why `value` breaks the property schema `prop`, or None."""
+    kind = prop.get("type")
+    kinds = [kind] if isinstance(kind, str) else kind
+    if isinstance(kinds, list) and not any(_is_json_type(value, k) for k in kinds):
+        return f"must be {' or '.join(map(str, kinds))}, got {type(value).__name__}"
+    options = prop.get("enum")
+    if isinstance(options, list) and value not in options:
+        return f"must be one of {', '.join(map(repr, options))}"
+    return None
+
+
+def _is_json_type(value: object, kind: str) -> bool:
+    """Whether `value` is a JSON `kind`; a bool is never a number."""
+    if kind == "integer":
+        return not isinstance(value, bool) and (
+            isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+        )
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    expected = _JSON_TYPES.get(kind)
+    return expected is None or isinstance(value, expected)
+
+
+_JSON_TYPES: dict[str, type] = {
+    "string": str,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+    "null": type(None),
+}
 
 
 def wire(resources: list[dict]) -> list[dict]:

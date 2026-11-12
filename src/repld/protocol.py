@@ -35,7 +35,7 @@ from .core_schemas import (
     PROTOCOL_VERSION,
     RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
-    unknown_arguments,
+    check_arguments,
 )
 from .core_schemas import (
     error as _error,
@@ -757,7 +757,7 @@ TOOLS = [
     },
 ]
 
-# Core and browser tools by name, for `unknown_arguments`; a gist tool's own signature refuses an unknown keyword.
+# Core and browser tools by name, for `check_arguments`; a gist tool is checked against its scanned schema in `_gist_tool`.
 _STATIC_SCHEMAS = {t["name"]: t for t in TOOLS}
 
 # MCP tool annotations (2025-03-26), applied by name so the classification
@@ -767,15 +767,15 @@ _STATIC_SCHEMAS = {t["name"]: t for t in TOOLS}
 # (those dicts are shared with the bridge and must not be mutated here);
 # bridge_tools.SCHEMAS carry theirs inline for the same reason.
 _TOOL_ANNOTATIONS = {
-    # DuckDB/store reads and page reads, no mutation anywhere.
-    "browser_tabs": {"readOnlyHint": True},
-    "browser_pages": {"readOnlyHint": True},
-    "browser_network": {"readOnlyHint": True},
-    "browser_request": {"readOnlyHint": True},
-    "browser_body": {"readOnlyHint": True},
-    "browser_console": {"readOnlyHint": True},
+    # Store reads (repld's own DuckDB) are closed-world; tree and screenshot read the live page.
+    "browser_tabs": {"readOnlyHint": True, "openWorldHint": False},
+    "browser_pages": {"readOnlyHint": True, "openWorldHint": False},
+    "browser_network": {"readOnlyHint": True, "openWorldHint": False},
+    "browser_request": {"readOnlyHint": True, "openWorldHint": False},
+    "browser_body": {"readOnlyHint": True, "openWorldHint": False},
+    "browser_console": {"readOnlyHint": True, "openWorldHint": False},
     "browser_tree": {"readOnlyHint": True},
-    "browser_controls": {"readOnlyHint": True},
+    "browser_controls": {"readOnlyHint": True, "openWorldHint": False},
     "browser_screenshot": {"readOnlyHint": True},
     # repld-side attachment state, freely repeatable, never destructive.
     "browser_watch": {"destructiveHint": False, "idempotentHint": True},
@@ -867,24 +867,25 @@ class Dispatcher(BrowserDispatchMixin):
         """Dispatch one JSON-RPC request and return the response, or `None` for notifications."""
         method = req.get("method")
         rid = req.get("id")
+        params = req.get("params") or {}
         if method == "initialize":
-            return self._initialize(rid, req.get("params", {}), session)
+            return self._initialize(rid, params, session)
         if method == "notifications/initialized":
             session.set_initialized()
             return None
         if method == "ping":
-            return _response(rid, {})
+            return None if rid is None else _response(rid, {})
         if method == "tools/list":
             return self._tools_list(rid)
         if method == "tools/call":
-            return self._tools_call(rid, req.get("params", {}), session)
+            return self._tools_call(rid, params, session)
         if method == "resources/list":
             return self._resources_list(rid)
         if method == "resources/templates/list":
             return _response(rid, {"resourceTemplates": RESOURCE_TEMPLATES})
         if method == "resources/read":
-            return self._read_resource(rid, req.get("params", {}))
-        reply = self._handle_bare(method, rid, req.get("params"), session)
+            return self._read_resource(rid, params)
+        reply = self._handle_bare(method, rid, params, session)
         if reply is not None:
             return reply
         if rid is None:
@@ -910,6 +911,8 @@ class Dispatcher(BrowserDispatchMixin):
             return self._tasks_wait(rid, params, session)
         if method == "tasks/cancel":
             return self._tasks_cancel(rid, params)
+        if method == "requests/cancel":
+            return self._requests_cancel(rid, params, session)
         if method == "sessions/rebind":
             return self._sessions_rebind(rid, params)
         # `peer.py` calls these on a connection of its own that never sends `initialize`.
@@ -969,12 +972,16 @@ class Dispatcher(BrowserDispatchMixin):
 
     def _tools_call(
         self, rid, params: dict, session: ipc.Session | None = None
-    ) -> dict:
-        """Route a `tools/call` to the matching handler."""
+    ) -> dict | None:
+        """Route a `tools/call` to the matching handler; `None` once the client cancelled an `exec`."""
         name = params.get("name")
         args = params.get("arguments") or {}
+        if not name:
+            return _error(rid, -32602, "missing tool name")
+        if not isinstance(args, dict):
+            return _error(rid, -32602, "arguments must be an object")
         problem = (
-            unknown_arguments(_STATIC_SCHEMAS[name], args)
+            check_arguments(_STATIC_SCHEMAS[name], args)
             if name in _STATIC_SCHEMAS
             else None
         )
@@ -986,8 +993,6 @@ class Dispatcher(BrowserDispatchMixin):
             return self._get_task(rid, args)
         if name == "cancel":
             return self._cancel(rid, args)
-        if not name:
-            return _error(rid, -32602, "missing tool name")
         if name in _bridge_tool_names():
             # We advertise these but never serve them: the bridge answers them
             # on the way in. Arriving here means the client is talking to the
@@ -1011,14 +1016,23 @@ class Dispatcher(BrowserDispatchMixin):
             return self._browser_tool(rid, name, args, session=session)
         return self._gist_tool(rid, name, args)
 
-    def _exec(self, rid, args: dict, session: ipc.Session | None = None) -> dict:
-        """Run a cell and return inline or defer with a task_id."""
-        src = args.get("code", "")
+    def _exec(self, rid, args: dict, session: ipc.Session | None = None) -> dict | None:
+        """Run a cell and return inline or defer with a task_id; `None` once the client cancelled it."""
+        src = args["code"]
         timeout = float(args.get("timeout", 2.0))
         # origin=session: if this cell outruns `timeout`, its completion push
         # goes back to the caller alone, not to every connected session.
         task_id, done_event = self.ctx.start_task(src, origin=session)
-        finished = done_event.wait(timeout=timeout)
+        if session is not None and rid is not None:
+            session.request_tasks[rid] = task_id
+        try:
+            finished = done_event.wait(timeout=timeout)
+        finally:
+            if session is not None:
+                session.request_tasks.pop(rid, None)
+        if session is not None and rid in session.cancelled_requests:
+            session.cancelled_requests.discard(rid)
+            return None  # cancelled: the spec says to send no response
         snap = self.ctx.snapshot(task_id)
         assert snap is not None  # task_id was just created by start_task
         # `mark_nudged` is what promises the completion push, and it refuses
@@ -1061,12 +1075,10 @@ class Dispatcher(BrowserDispatchMixin):
 
     def _get_task(self, rid, args: dict) -> dict:
         """Return a task snapshot as `structuredContent`."""
-        tid = args.get("task_id")
-        if not tid:
-            return _error(rid, -32602, "missing task_id")
+        tid = args["task_id"]
         snap = self.ctx.snapshot(tid)
         if snap is None:
-            return _unknown_task(rid, tid)
+            return _tool_error(rid, _unknown_task_text(tid))
         # get_task declares an outputSchema (core_schemas.CORE_TOOLS), which
         # commits every success result to a conforming structuredContent; the
         # text block mirrors it, as the spec asks for pre-2025-06-18 clients.
@@ -1081,9 +1093,7 @@ class Dispatcher(BrowserDispatchMixin):
 
     def _cancel(self, rid, args: dict) -> dict:
         """Cancel a running task by id."""
-        tid = args.get("task_id")
-        if not tid:
-            return _error(rid, -32602, "missing task_id")
+        tid = args["task_id"]
         accepted = self.ctx.cancel_task(tid)
         status = "accepted" if accepted else "no-op"
         return _response(
@@ -1116,6 +1126,12 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, str(exc))
         if handler is None:
             return _error(rid, -32602, f"unknown tool: {name}")
+        if tool_listing_state() != _gist_tools_state:
+            refresh_gist_tools_on_loop(self.ctx.loop)
+        schema = next((t for t in _gist_tools if t["name"] == name), None)
+        problem = check_arguments(schema, args) if schema else None
+        if problem:
+            return _tool_error(rid, problem)
         try:
             result = handler(**args)
             if inspect.iscoroutine(result):
@@ -1142,14 +1158,19 @@ class Dispatcher(BrowserDispatchMixin):
                         }
                     )
                     continue
-                if isinstance(item, dict) and "structuredContent" not in body:
-                    # Dict returns ride as structuredContent too, no outputSchema
-                    # (nothing to infer one from), which the spec allows; only
-                    # objects qualify, since structuredContent is object-typed in
-                    # 2025-06-18. The text block stays the canonical fallback.
-                    body["structuredContent"] = item
                 text = item if isinstance(item, str) else json.dumps(item, indent=2)
                 sp = _spill_text(text, label=name)
+                # Dict returns ride as structuredContent too, no outputSchema
+                # (nothing to infer one from), which the spec allows; only
+                # objects qualify, since structuredContent is object-typed in
+                # 2025-06-18. A spilled text block is a preview, so it would
+                # no longer serialize the structure: skip the copy then.
+                if (
+                    isinstance(item, dict)
+                    and "structuredContent" not in body
+                    and not sp["truncated"]
+                ):
+                    body["structuredContent"] = item
                 body["content"].append(
                     {"type": "text", "text": _format_spill(sp, text)}
                 )
@@ -1167,7 +1188,9 @@ class Dispatcher(BrowserDispatchMixin):
 
     def _read_resource(self, rid, params: dict) -> dict:
         """Resolve a `repld://` URI and return its text content."""
-        uri = params.get("uri", "")
+        uri = params.get("uri")
+        if not isinstance(uri, str):
+            return _error(rid, -32602, "resources/read needs a string uri")
         try:
             # Static docs first: `core_schemas.DOC_HELP_ATTRS` is the one map,
             # shared with the bridge's cache-less fallback. help.py is imported
@@ -1184,7 +1207,7 @@ class Dispatcher(BrowserDispatchMixin):
                 name = uri.removeprefix("repld://gists/")
                 text = self._resource_gist(name)
             else:
-                return _error(rid, -32602, f"unknown resource: {uri}")
+                return _error(rid, -32002, f"unknown resource: {uri}", {"uri": uri})
             if len(text) <= _RESOURCE_MAX_BYTES:
                 content = text
                 mime = _RESOURCE_MIMETYPES.get(uri, "text/plain")
@@ -1200,8 +1223,10 @@ class Dispatcher(BrowserDispatchMixin):
                 rid,
                 {"contents": [{"uri": uri, "mimeType": mime, "text": content}]},
             )
+        except FileNotFoundError as exc:
+            return _error(rid, -32002, str(exc), {"uri": uri})
         except Exception as exc:
-            return _error(rid, -32000, f"resource read: {exc}")
+            return _error(rid, -32603, f"resource read: {exc}")
 
     def _resource_tabs(self) -> str:
         """List attached tabs as target_id / url / title lines."""
@@ -1336,6 +1361,25 @@ class Dispatcher(BrowserDispatchMixin):
             return _error(rid, -32602, "missing task_id")
         return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
 
+    def _requests_cancel(self, rid, params: dict, session: ipc.Session) -> dict:
+        """Cancel the in-flight `exec` a bridge's client abandoned, found by request id.
+
+        The bridge sends this on a connection of its own, since the one that
+        carries the request is parked inside that `exec`. Scoping by
+        `peer_pid` keeps a cancel from reaching another bridge's request that
+        happens to share the id. An unknown or finished id is a no-op.
+        """
+        found = (
+            ipc.find_request_task(session.peer_pid, params.get("request_id"))
+            if session.peer_pid is not None
+            else None
+        )
+        if found is None:
+            return _response(rid, {"cancelled": False})
+        owner, task_id = found
+        owner.cancelled_requests.add(params["request_id"])
+        return _response(rid, {"cancelled": self.ctx.cancel_task(task_id)})
+
     def _sessions_rebind(self, rid, params: dict) -> dict:
         """Re-key the connection under `params["pid"]`'s `claude` to `params["session_id"]`.
 
@@ -1458,19 +1502,22 @@ def _format_spill(sp: dict, fallback: str) -> str:
     return "\n".join(parts) or fallback
 
 
-def _unknown_task(rid, tid: str) -> dict:
-    """Build an error naming the kernel asked; a task is only known to the kernel it ran on."""
+def _unknown_task_text(tid: str) -> str:
+    """Build the message naming the kernel asked; a task is only known to the kernel it ran on."""
     try:
         lock = read_lock(lock_for(ipc.socket_path()))
         cwd = lock.get("cwd") if isinstance(lock, dict) else None
     except Exception:
         cwd = None
-    return _error(
-        rid,
-        -32602,
+    return (
         f"unknown task_id: {tid} (kernel: {cwd or os.getcwd()}; a task is known "
-        "only to the kernel it ran on, for an hour after it finishes)",
+        "only to the kernel it ran on, for an hour after it finishes)"
     )
+
+
+def _unknown_task(rid, tid: str) -> dict:
+    """Build the JSON-RPC error for the bare `tasks/*` methods, which answer a CLI."""
+    return _error(rid, -32602, _unknown_task_text(tid))
 
 
 def _peer_gone(sock: socket.socket) -> bool:

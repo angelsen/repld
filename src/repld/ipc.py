@@ -254,6 +254,11 @@ class Session:
         # anything can be pushed to, so `post_channel` refuses and the
         # broadcast/listing paths skip it.
         self.peer = False
+        # In-flight `exec` calls on this connection, request id to task id, so a
+        # client `notifications/cancelled` can stop the task; ids it cancelled
+        # wait in `cancelled_requests` for `_exec` to suppress the reply.
+        self.request_tasks: dict[object, str] = {}
+        self.cancelled_requests: set[object] = set()
 
     @property
     def closed(self) -> bool:
@@ -755,6 +760,17 @@ class Server:
         with self.sessions_lock:
             return self._claude_sessions.get(session_id)
 
+    def find_request_task(
+        self, peer_pid: int, request_id: object
+    ) -> tuple[Session, str] | None:
+        """Return the connection and task of `peer_pid`'s in-flight request `request_id`, or None."""
+        with self.sessions_lock:
+            for session in self.sessions:
+                task_id = session.request_tasks.get(request_id)
+                if session.peer_pid == peer_pid and task_id is not None:
+                    return session, task_id
+        return None
+
     def _take_pending_rebind(self, session: Session) -> str | None:
         """Pop the unexpired pending rebind keyed on an ancestor of `session`'s bridge."""
         if session.peer_pid is None:
@@ -1126,6 +1142,13 @@ def find_claude_session(session_id: str) -> Session | None:
     if _server is None:
         return None
     return _server.find_claude_session(session_id)
+
+
+def find_request_task(peer_pid: int, request_id: object) -> tuple[Session, str] | None:
+    """Return the connection and task of `peer_pid`'s in-flight request `request_id`, or None."""
+    if _server is None:
+        return None
+    return _server.find_request_task(peer_pid, request_id)
 
 
 def list_claude_sessions() -> list[tuple[str | None, str | None, str | None]]:

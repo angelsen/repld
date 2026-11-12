@@ -73,6 +73,7 @@ BRIDGE_TOOLS: dict[str, dict] = {
     "repld_restart": {
         "schema": {
             "name": "repld_restart",
+            "title": "Restart kernel",
             "description": (
                 "Restart this project's repld kernel, discarding its in-memory "
                 "state (variables, @every tickers, browser connections). The "
@@ -84,7 +85,11 @@ BRIDGE_TOOLS: dict[str, dict] = {
                 "environment. Not needed for gist edits: those auto-reload."
             ),
             "inputSchema": {"type": "object", "properties": {}},
-            "annotations": {"destructiveHint": True, "idempotentHint": True},
+            "annotations": {
+                "title": "Restart kernel",
+                "destructiveHint": True,
+                "idempotentHint": True,
+            },
         },
         "handler": _restart,
     },

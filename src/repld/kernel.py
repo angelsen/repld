@@ -19,6 +19,7 @@ import itertools
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import sys
@@ -293,6 +294,9 @@ def _banner(
 def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
     """Push a channel notification. meta keys become XML attributes.
 
+    A meta key must be letters, digits and underscores: Claude Code silently
+    drops any other, so `ValueError` names it here instead.
+
     session=None (default) broadcasts to every connected MCP session,
     returning None. session=<claude_session_id> targets one session by the
     id claude_sessions() lists, returning True if delivered, False if that
@@ -313,6 +317,12 @@ def _notify(content, *, session=None, exclude=None, **meta) -> bool | None:
     disconnected, never connected) is a no-op, the same as not excluding
     anyone, since there's nothing to skip.
     """
+    bad = [k for k in meta if not re.fullmatch(r"[A-Za-z0-9_]+", k)]
+    if bad:
+        raise ValueError(
+            f"notify meta key {', '.join(map(repr, bad))}: use letters, digits and "
+            "underscores only (Claude Code drops any other key)"
+        )
     if session is not None:
         target = ipc.find_claude_session(session)
         if target is None:

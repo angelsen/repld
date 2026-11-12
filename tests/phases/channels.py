@@ -115,6 +115,13 @@ def phase_4(kernel: Kernel) -> None:
         assert_eq(params["meta"]["color"], "blue", "notify meta.color")
         print(f"  ✓ notify(): content={params['content']!r} meta={params['meta']}")
 
+        resp = b.exec("notify('x', **{'bad-key': 1})", call_timeout=3.0)
+        assert_true(
+            resp["result"]["isError"] and "bad-key" in content_text(resp),
+            f"notify() refuses a meta key Claude Code would drop (got {resp!r})",
+        )
+        print("  ✓ notify(): a meta key outside letters/digits/underscores raises")
+
         # Error in nudged exec → error="1" + traceback content
         resp = b.exec(
             "import time\ntime.sleep(0.3)\nraise RuntimeError('boom')",

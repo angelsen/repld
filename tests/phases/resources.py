@@ -427,7 +427,13 @@ def phase_8_gist_resources(kernel: Kernel) -> None:
             {"uri": "repld://gists/nonexistent_xyz"},
         )
         assert_true("error" in resp, f"unknown gist returns error (got {resp!r})")
-        print("  ✓ unknown gist → MCP error")
+        assert_eq(resp["error"]["code"], -32002, "unknown gist is resource-not-found")
+        resp = b.call("resources/read", {"uri": "repld://nope"})
+        assert_eq(resp["error"]["code"], -32002, "unknown URI is resource-not-found")
+        assert_eq(resp["error"]["data"], {"uri": "repld://nope"}, "and names the uri")
+        resp = b.call("resources/read", {})
+        assert_eq(resp["error"]["code"], -32602, "a missing uri is invalid params")
+        print("  ✓ unknown gist / URI → -32002, missing uri → -32602")
 
         # Malformed gist → MCP error pointing at the syntax error, like a linter
         broken_file = gists_dir / "test_broken.py"

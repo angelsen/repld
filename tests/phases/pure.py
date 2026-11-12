@@ -356,35 +356,168 @@ def _envelopes() -> None:
     print("  ✓ core_schemas: response/error/notification envelopes, wire()")
 
 
-def _unknown_arguments() -> None:
+def _check_arguments() -> None:
     from repld.protocol import TOOLS
 
     by_name = {t["name"]: t for t in TOOLS}
-    ua = core_schemas.unknown_arguments
+    ca = core_schemas.check_arguments
     assert_eq(
-        ua(by_name["get_task"], {"task_id": "x"}), None, "declared argument passes"
+        ca(by_name["get_task"], {"task_id": "x"}), None, "declared argument passes"
     )
-    assert_eq(
-        ua(by_name["exec"], {}),
-        None,
-        "no arguments pass (required is the handler's call)",
+    msg = ca(by_name["exec"], {})
+    assert_true(
+        msg is not None and "missing required" in msg and "code" in msg,
+        f"a missing required argument is named: {msg!r}",
     )
-    msg = ua(by_name["get_task"], {"task_id": "x", "wait": 45})
+    msg = ca(by_name["get_task"], {"task_id": "x", "wait": 45})
     assert_true(
         msg is not None and "wait" in msg and "task_id" in msg,
         f"names the extra and what it takes: {msg!r}",
     )
-    msg = ua(by_name["exec"], {"code": "1", "zeta": 1, "alpha": 2})
+    msg = ca(by_name["exec"], {"code": "1", "zeta": 1, "alpha": 2})
     assert_true(
         msg is not None and msg.index("alpha") < msg.index("zeta"),
         f"extras sorted: {msg!r}",
     )
     no_args = {"name": "t", "inputSchema": {"type": "object", "properties": {}}}
     assert_true(
-        "no arguments" in (ua(no_args, {"x": 1}) or ""), "a no-argument tool says so"
+        "no arguments" in (ca(no_args, {"x": 1}) or ""), "a no-argument tool says so"
     )
+
+    msg = ca(by_name["exec"], {"code": "1", "timeout": "abc"})
+    assert_true(
+        msg is not None and "timeout" in msg and "number" in msg, f"wrong type: {msg!r}"
+    )
+    assert_eq(
+        ca(by_name["exec"], {"code": "1", "timeout": 3}), None, "an int is a number"
+    )
+    assert_true(
+        ca(by_name["exec"], {"code": "1", "timeout": True}) is not None,
+        "a bool is not a number",
+    )
+    typed = {
+        "name": "t",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer"},
+                "m": {"type": ["string", "null"]},
+                "e": {"type": "string", "enum": ["a", "b"]},
+            },
+        },
+    }
+    assert_eq(
+        ca(typed, {"n": 2.0, "m": None, "e": "a"}),
+        None,
+        "integral float, null in a type list, enum member",
+    )
+    assert_true(ca(typed, {"n": True}) is not None, "a bool is not an integer")
+    assert_true(
+        ca(typed, {"n": 2.5}) is not None, "a fractional float is not an integer"
+    )
+    assert_true(ca(typed, {"m": 3}) is not None, "a type list is any-of")
+    msg = ca(typed, {"e": "c"})
+    assert_true(msg is not None and "one of" in msg, f"enum membership: {msg!r}")
     print(
-        "  ✓ core_schemas.unknown_arguments: passes declared, names extras and what the tool takes"
+        "  ✓ core_schemas.check_arguments: unknown, missing, type and enum refused with a readable text"
+    )
+
+
+def _field_property_subset() -> None:
+    from repld import gates
+
+    fp = gates._field_property
+    full = {
+        "type": "string",
+        "title": "T",
+        "minLength": 1,
+        "format": "email",
+        "enum": ["a"],
+    }
+    assert_eq(fp("f", full), full, "a full string spec passes unchanged")
+    assert_eq(
+        fp("n", {"type": "integer", "minimum": 1}),
+        {"type": "integer", "minimum": 1},
+        "a bounded integer passes",
+    )
+    for bad, why in (
+        ({"type": "string", "format": "bogus"}, "unknown format"),
+        ({"type": "string", "enum": [1, 2]}, "numeric enum"),
+        ({"type": "string", "properties": {}}, "nested keys"),
+        ({"type": "boolean", "minimum": 0}, "a bound on a boolean"),
+    ):
+        try:
+            fp("f", bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"form field accepted: {why}")
+    print("  ✓ gates._field_property: restricted to the elicitation primitive subset")
+
+
+def _tool_name_rules() -> None:
+    from repld import gists
+
+    p = gists.tool_name_problem
+    assert_eq(p("lookup", ["q"]), None, "an ordinary tool passes")
+    for name in ("exec", "get_task", "cancel", "repld_restart", "browser_x"):
+        assert_true(p(name, []) is not None, f"{name} is reserved")
+    assert_true(p("has space", []) is not None, "a name outside the MCP charset")
+    assert_true(p("x" * 129, []) is not None, "a name past 128 characters")
+    assert_true(p("ok", ["a" * 65]) is not None, "a parameter name past 64 characters")
+    print("  ✓ gists.tool_name_problem: reserved names, charset and length refused")
+
+
+def _instruction_budget() -> None:
+    from repld import help as h
+
+    assert_true(
+        len(h.static_instructions()) <= h.INSTRUCTIONS_BUDGET,
+        "cold instructions fit the budget",
+    )
+    assert_true(
+        len(h.build_instructions()) <= h.INSTRUCTIONS_BUDGET,
+        "warm instructions fit the budget",
+    )
+    rows = [(f"gist{i}", "does a thing " * 6) for i in range(60)]
+    listing = h._gist_listing(rows, 600) or ""
+    assert_true(
+        len(listing) <= 600 and "more:" in listing,
+        "a long gist list is cut with a pointer to the rest",
+    )
+    assert_eq(h._gist_listing(rows, 10), None, "no room, no listing")
+    print(
+        "  ✓ help: instructions fit Claude Code's 4096-character cut; the gist listing is elastic"
+    )
+
+
+def _channel_meta_keys() -> None:
+    import ast
+    import re
+
+    src = Path(__file__).resolve().parents[2] / "src" / "repld"
+    bad: list[str] = []
+    for path in src.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, (ast.Name, ast.Attribute))
+            ):
+                continue
+            fn = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            if (
+                fn != "push_channel"
+                or len(node.args) < 2
+                or not isinstance(node.args[1], ast.Dict)
+            ):
+                continue
+            for key in node.args[1].keys:
+                if isinstance(key, ast.Constant) and not re.fullmatch(
+                    r"[A-Za-z0-9_]+", str(key.value)
+                ):
+                    bad.append(f"{path.name}:{key.lineno} {key.value!r}")
+    assert_true(not bad, f"channel meta keys Claude Code would drop: {bad}")
+    print(
+        "  ✓ push_channel meta dict literals use only letters, digits and underscores"
     )
 
 
@@ -2528,23 +2661,23 @@ def _elicitation_pure() -> None:
         {
             "n": {"type": "integer", "minimum": 1, "maximum": 5},
             "s": {"type": "string", "minLength": 2, "maxLength": 3},
-            "e": {"type": "integer", "enum": [1, 2]},
+            "e": {"type": "string", "enum": ["x", "y"]},
         }
     )
-    ok = '{"n": 3, "s": "ab", "e": 1}'
+    ok = '{"n": 3, "s": "ab", "e": "x"}'
     assert_true(
         not _raises(gates.parse_response, "form", ok, None, bounded), "in bounds passes"
     )
     for bad in (
-        '{"n": 0, "s": "ab", "e": 1}',
-        '{"n": 6, "s": "ab", "e": 1}',
-        '{"n": 3, "s": "a", "e": 1}',
-        '{"n": 3, "s": "abcd", "e": 1}',
-        '{"n": 3, "s": "ab", "e": 3}',
+        '{"n": 0, "s": "ab", "e": "x"}',
+        '{"n": 6, "s": "ab", "e": "x"}',
+        '{"n": 3, "s": "a", "e": "x"}',
+        '{"n": 3, "s": "abcd", "e": "x"}',
+        '{"n": 3, "s": "ab", "e": "z"}',
     ):
         assert_true(
             _raises(gates.parse_response, "form", bad, None, bounded),
-            f"a bound or a non-string enum refuses {bad}",
+            f"a bound or a value outside the enum refuses {bad}",
         )
 
     confirm = one({"type": "boolean"})
@@ -2599,7 +2732,11 @@ def phase_2_pure() -> None:
     _render()
     _format_args()
     _envelopes()
-    _unknown_arguments()
+    _check_arguments()
+    _field_property_subset()
+    _tool_name_rules()
+    _instruction_budget()
+    _channel_meta_keys()
     _ws_ping_policy()
     _reconnect_waiters()
     _cli_args()
