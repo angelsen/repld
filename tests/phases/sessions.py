@@ -130,7 +130,7 @@ def _test_unregister_on_shutdown() -> None:
         try:
             k.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            k.proc.kill()
+            k.kill()
             raise AssertionError("kernel did not exit within 5s of SIGTERM")
 
         assert_true(
@@ -139,6 +139,5 @@ def _test_unregister_on_shutdown() -> None:
         )
         print("  ✓ session file removed on shutdown")
     finally:
-        if k.proc.poll() is None:
-            k.proc.kill()
+        k.kill()
         shutil.rmtree(tmp, ignore_errors=True)

@@ -30,8 +30,7 @@ def _spawn() -> tuple[Path, Kernel, Bridge]:
 
 def _teardown(tmp: Path, kernel: Kernel, bridge: Bridge) -> None:
     bridge.close()
-    if kernel.proc.poll() is None:
-        kernel.proc.kill()
+    kernel.kill()
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -68,7 +67,7 @@ def _test_clean_drain() -> None:
         try:
             kernel.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            kernel.proc.kill()
+            kernel.kill()
             raise AssertionError("kernel did not exit within 5s of SIGTERM")
         dt = time.monotonic() - t0
 
@@ -117,7 +116,7 @@ def _test_budget_enforcement() -> None:
         try:
             kernel.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            kernel.proc.kill()
+            kernel.kill()
             raise AssertionError("kernel hung past 10s — budget did not fire")
         dt = time.monotonic() - t0
 

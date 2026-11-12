@@ -3,6 +3,7 @@
 Used by smoketest.py and all phase modules.
 """
 
+import fcntl
 import json
 import os
 import shutil
@@ -124,6 +125,68 @@ def runtime_dir_for(cwd: Path) -> Path:
     from repld import paths
 
     return paths.project_dir(cwd)
+
+
+def stop_kernel_at(cwd: Path) -> None:
+    """Stop whatever kernel owns `cwd`, one still booting included.
+
+    A held flock with no live pid in `kernel.lock` is a kernel between its
+    claim and its lockfile write, so that state is waited out, not read as
+    nothing to stop.
+    """
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        pid = _live_lock_pid(cwd)
+        if pid is not None:
+            _terminate(pid)
+            return
+        if not _is_flock_held(cwd):
+            return
+        time.sleep(0.1)
+
+
+def _live_lock_pid(cwd: Path) -> int | None:
+    """The pid `kernel.lock` names, if that process is running."""
+    try:
+        pid = int(json.loads(lock_path_for(cwd).read_text())["pid"])
+        os.kill(pid, 0)
+    except OSError, KeyError, TypeError, ValueError:
+        return None
+    return pid
+
+
+def _terminate(pid: int) -> None:
+    """SIGTERM `pid` and wait for it to go, with SIGKILL after 10 s."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _is_flock_held(cwd: Path) -> bool:
+    """Whether a kernel holds the project flock for `cwd`.
+
+    Opened without `O_CREAT`, so asking never brings a project dir into being.
+    """
+    from repld import paths
+
+    try:
+        fd = os.open(paths.flock_for(paths.socket_path(cwd)), os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    else:
+        return False
+    finally:
+        os.close(fd)
 
 
 class Bridge:
@@ -333,6 +396,8 @@ class Kernel:
                 stdout=subprocess.DEVNULL,
                 stderr=log,
                 env=env,
+                # Own process group, so `kill()` reaches the kernel behind `uv run`.
+                start_new_session=True,
             )
         self._wait_lockfile()
 
@@ -354,6 +419,7 @@ class Kernel:
             log = self.stderr_log.read_text()
         except Exception:
             log = "<no log>"
+        self.kill()
         raise RuntimeError(f"kernel never wrote lockfile. stderr:\n{log}")
 
     def stop(self) -> None:
@@ -362,7 +428,19 @@ class Kernel:
             try:
                 self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
+                self.kill()
+
+    def kill(self) -> None:
+        """SIGKILL the wrapper and the kernel behind it, whichever is still up.
+
+        `self.proc` is the `uv run` wrapper, and a SIGKILL sent to it alone
+        orphans the kernel; the group outlives a reaped leader.
+        """
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.proc.wait()
 
 
 def content_text(resp: dict) -> str:

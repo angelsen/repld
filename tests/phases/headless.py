@@ -23,6 +23,7 @@ from harness import (
     assert_true,
     content_text,
     lock_path_for,
+    stop_kernel_at,
 )
 
 from phases.core import _phase_3_jsonrpc_edges
@@ -45,24 +46,6 @@ def _wait_lock(cwd: Path, timeout: float = 20.0) -> dict:
         except OSError, json.JSONDecodeError:
             time.sleep(0.1)
     raise AssertionError(f"no kernel lockfile appeared under {lock_path_for(cwd)}")
-
-
-def _stop_kernel(cwd: Path) -> None:
-    try:
-        pid = int(_lock(cwd)["pid"])
-    except OSError, KeyError, TypeError, ValueError, json.JSONDecodeError:
-        return
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.1)
 
 
 def _autospawn_and_heal(tmp: Path) -> None:
@@ -285,7 +268,7 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
     `notifications/tools/list_changed`."""
     from repld import paths
 
-    _stop_kernel(tmp)
+    stop_kernel_at(tmp)
     cache_path = paths.cache_for(paths.socket_path(tmp))
     assert_true(
         cache_path.exists(), f"kernel.cache persisted after shutdown ({cache_path})"
@@ -378,7 +361,7 @@ def _lazy_discovery_from_cache(tmp: Path) -> None:
 
 def _cold_jsonrpc_edges(tmp: Path) -> None:
     """With no kernel running the bridge itself answers the JSON-RPC edges, and spawns nothing."""
-    _stop_kernel(tmp)
+    stop_kernel_at(tmp)
     b = Bridge(tmp)
     try:
         _phase_3_jsonrpc_edges(b)
@@ -395,7 +378,7 @@ def _version_mismatch_cache_discarded(tmp: Path) -> None:
     """A cache written by a different repld version is ignored, not trusted."""
     from repld import paths
 
-    _stop_kernel(tmp)
+    stop_kernel_at(tmp)
     cache_path = paths.cache_for(paths.socket_path(tmp))
     cached = json.loads(cache_path.read_text())
     cached["version"] = "0.0.0-does-not-exist"
@@ -440,7 +423,7 @@ def _cache_survives_reboot(tmp: Path) -> None:
     """
     from repld import paths
 
-    _stop_kernel(tmp)
+    stop_kernel_at(tmp)
     sock = paths.socket_path(tmp)
     durable = paths.state_cache_for(sock)
     assert_true(
@@ -1420,7 +1403,7 @@ def _push_state_broadcast() -> None:
         print("  ✓ push_state names an origin-less completion push as broadcast")
     finally:
         b.close()
-        _stop_kernel(tmp)
+        stop_kernel_at(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -1540,7 +1523,7 @@ def _project_flags(tmp: Path) -> None:
         )
     finally:
         b.close()
-        _stop_kernel(main)
+        stop_kernel_at(main)
 
 
 def _start_cmd(tmp: Path) -> None:
@@ -1579,7 +1562,7 @@ def _start_cmd(tmp: Path) -> None:
         assert_eq(str(_lock(proj)["pid"]), pid, "second start left the kernel alone")
         print("  ✓ repld start: spawns on a cold project, no-op when one is running")
     finally:
-        _stop_kernel(proj)
+        stop_kernel_at(proj)
 
 
 def _no_display_skips_queue(tmp: Path) -> None:
@@ -1810,7 +1793,7 @@ def _status_counts(tmp: Path) -> None:
         finally:
             b.close()
     finally:
-        _stop_kernel(sibling)
+        stop_kernel_at(sibling)
         shutil.rmtree(sibling, ignore_errors=True)
 
 
@@ -2104,8 +2087,8 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _bridge_reattaches_to_successor(tmp)
         _clean_stop_is_not_a_crash(tmp)
         _elicitation_cancelled_on_kernel_death(tmp)  # SIGKILLs the kernel
-        _stop_kernel(tmp)
+        stop_kernel_at(tmp)
         _concurrent_boots(tmp)
     finally:
-        _stop_kernel(tmp)
+        stop_kernel_at(tmp)
         shutil.rmtree(tmp, ignore_errors=True)

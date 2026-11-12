@@ -26,6 +26,7 @@ from harness import (
     content_text,
     lock_path_for,
     runtime_dir_for,
+    stop_kernel_at,
 )
 
 _SESSION = "sess-peer"
@@ -619,7 +620,7 @@ def _death(a: Bridge, tmp: Path) -> None:
             try:
                 k.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                k.proc.kill()
+                k.kill()
             _stop(None, path)
     print(
         "  ✓ peers: death mid-call is unknown (clean only after a goodbye), a graceful stop answers as cancelled, never retried"
@@ -640,15 +641,15 @@ def _cold_peer(a: Bridge, tmp: Path) -> None:
         "a stopped peer is PeerUnavailable naming the way to start it",
     )
 
-    out = _run(
-        a,
-        "from repld.kernel import DOTENV_KEYS\nos.environ['PEER_SECRET'] = '1'\nDOTENV_KEYS.add('PEER_SECRET')\n"
-        f"pd = peers.get({str(cold)!r}, start=True)\n"
-        "print(json.dumps([await pd.call('os.getcwd'), await pd.call('os.environ.get', 'PEER_SECRET')]))\n"
-        "os.environ.pop('PEER_SECRET', None)\nDOTENV_KEYS.discard('PEER_SECRET')",
-        timeout=90,
-    )
     try:
+        out = _run(
+            a,
+            "from repld.kernel import DOTENV_KEYS\nos.environ['PEER_SECRET'] = '1'\nDOTENV_KEYS.add('PEER_SECRET')\n"
+            f"pd = peers.get({str(cold)!r}, start=True)\n"
+            "print(json.dumps([await pd.call('os.getcwd'), await pd.call('os.environ.get', 'PEER_SECRET')]))\n"
+            "os.environ.pop('PEER_SECRET', None)\nDOTENV_KEYS.discard('PEER_SECRET')",
+            timeout=90,
+        )
         cwd, secret = _last_json(out)
         assert_eq(
             os.path.realpath(cwd),
@@ -659,11 +660,7 @@ def _cold_peer(a: Bridge, tmp: Path) -> None:
             secret, None, "the caller's .env keys did not reach the spawned kernel"
         )
     finally:
-        lock = json.loads(lock_path_for(cold).read_text())
-        os.kill(int(lock["pid"]), signal.SIGTERM)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and lock_path_for(cold).exists():
-            time.sleep(0.1)
+        stop_kernel_at(cold)
         shutil.rmtree(runtime_dir_for(cold), ignore_errors=True)
     print(
         "  ✓ peers: cold peer is an error unless start=True, which spawns it with a cleaned environment"
