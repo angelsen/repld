@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.22.0] - 2026-11-12
+
+### Added
+
 - Each `repld help` topic (`exec`, `browser`, `gists`, `gates`, `peers`) is also an MCP resource, `repld://help/<topic>`, listed in `resources/list` and, except `repld://help/browser` (reading it starts the kernel so the browser tools appear), served with no kernel running. An agent reads the one-line-per-method browser cheat-sheet (12 KB) or the gates reference without shelling out or loading a full guide.
 - `repld://docs/browser-internals` holds the browser guide's internals (body capture, settle loop, session recovery, reconnect and retirement, tab crash, event store), moved out of `repld://docs/browser`, which now points to it.
 
