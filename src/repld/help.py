@@ -16,7 +16,8 @@ the guide reads standalone; keep it in sync with `_EXEC_MODEL`. The surfaces:
   Topics                  → pure API reference for the human user
   MCP resources           → on-demand docs, one constant each:
       GUIDE          (repld://docs/guide)      working guide — patterns + conventions
-      BROWSER_GUIDE  (repld://docs/browser)    browser API reference + behavior
+      BROWSER_GUIDE  (repld://docs/browser)    browser behavior beyond the topic's
+                                               one-liners; need not name every method
       BROWSER_INTERNALS (repld://docs/browser-internals)  capture, settle, recovery
       PLAYBOOK       (repld://docs/playbook)   workflow methodology:
                                                interactive → gist → trigger → production
@@ -429,10 +430,10 @@ Same core function, different framework. Data in, data out.
 BROWSER_GUIDE = """\
 repld browser — comprehensive guide
 
-API reference, non-obvious behaviors, and workflow patterns for the browser
-object.  Read this instead of diving into source code.  Every method in one
-line each: repld://help/browser.  How it works underneath:
-repld://docs/browser-internals.
+Every method in one line each is repld://help/browser: read that for the
+method list and signatures.  This guide is the non-obvious behavior and the
+workflow patterns on top of it; read it instead of diving into source code.
+How it works underneath: repld://docs/browser-internals.
 
 == Behavior recap ==
 
@@ -590,266 +591,138 @@ only if an explicit ready= was polled and satisfied; False if the bare
 default was used.  Lives on the underlying session, so a later re-`get()`
 on an already-attached tab still reports the original attach's value.
 
-== Tab API (async) ==
+== Tab API: beyond the one-liners ==
+
+Every method and its signature is one line in repld://help/browser.  An entry
+here exists only where the behaviour needs more than that line; a method with
+no entry does what its line says.
 
   tab.js(expr, *, await_promise=True, user_gesture=True, timeout=30) → Any
-      Evaluate JS in page context.  Results returned by value (deep-serialized).
-      await_promise=True (default) awaits Promise results like the DevTools console.
-      user_gesture=True makes isTrusted=true on events.
-      timeout= bounds the wait; a page whose main thread is busy or frozen raises
-      RendererBusyError (a TimeoutError) saying so, since the browser still answers.
-      Raises BrowserJSError on JS exceptions (with preserved stack trace) and
-      NavigatedError (a RuntimeError) when the page navigates mid-evaluate.
+      Results come back by value (deep-serialized), never as handles.  A JS
+      exception raises BrowserJSError with the page's stack trace preserved.
 
   tab.click(selector, *, button='left', click_count=1)       → Receipt
-      selector may be an (x, y) / 'x,y' viewport point (CSS px): nothing is resolved or
-      waited for, for a canvas or remote-screen viewer with no DOM; the receipt names
-      the element under the point, and click_count=2 is two counted presses (dblclick).
-      Mouse click: arrives (mouseMoved) then Input.dispatchMouseEvent
-      (mousePressed + mouseReleased).  The arrival matters beyond hover
-      styling — Chromium's native click synthesis can silently fail without
-      it on some pages (drag-capable elements are the confirmed case);
-      Playwright's own mouse implementation always moves before pressing
-      for the same reason.  Produces isTrusted=true events.  Auto-waits up
-      to 2s for the element, then for visible/enabled/stable
+      Auto-waits up to 2s for the element, then for visible/enabled/stable
       (actionability).  Resolution searches the top frame plus every nested
-      same-process iframe (any depth, cross-origin included).  Strict
-      resolution: a selector matching >1 element — in one frame, or once
-      each in more than one frame — with no single visible winner raises
-      with a candidate digest instead of guessing.  The Receipt names what
-      the click actually hit ("clicked: <button…> — #save (412,133)").  When
-      an unrelated element intercepts the point, a plain left-click switches
-      to element.click() on the resolved target (the coordinate path can
-      start a drag on a pan layer; the DOM click reaches it the way
-      assistive tech does — isTrusted=false, and the receipt says so);
-      modified clicks keep the coordinate dispatch plus a warning.
+      same-process iframe (any depth, cross-origin included).  Strict: a
+      selector matching >1 element (in one frame, or once each in several)
+      with no single visible winner raises with a candidate digest instead of
+      guessing.  The Receipt names what the click actually hit
+      ("clicked: <button...> - #save (412,133)").  Events are isTrusted=true.
+      Occluded target: when an unrelated element intercepts the point, a plain
+      left-click switches to element.click() on the resolved target
+      (isTrusted=false, and the receipt says so), since the coordinate path
+      can start a drag on a pan layer; modified clicks keep the coordinate
+      dispatch plus a warning.
+      Point form: selector may be an (x, y) / 'x,y' viewport point (CSS px).
+      Nothing is resolved or waited for (a canvas or remote-screen viewer has
+      no DOM); the receipt names the element under the point, and
+      click_count=2 is two counted presses (dblclick).
 
   tab.plan_click(selector, *, button='left', click_count=1)  → Action
-      Resolve and hit-test a click like tab.click() but press nothing: the
-      pointer moves onto the target, and the Action holds the dispatch.
-      action.description / .point / .kind ('click' | 'click_point') / .warning
-      say what it will do; `await action.run()` performs it at the planned
-      point and returns the Receipt.  run() never re-resolves, so a page that
-      moved in between is clicked where it was.
+      Resolves and hit-tests like click() and moves the pointer onto the
+      target, but presses nothing.  action.description / .point / .kind
+      ('click' | 'click_point') / .warning say what it will do.
+      `await action.run()` clicks at the planned point and returns the
+      Receipt; it never re-resolves, so a page that moved in between is
+      clicked where it was.
       `await action.gate(prompt=None, *, default=None, timeout=None, on_open=None)`
-      holds it behind a confirm gate (the tab's pill when pinned), then runs it;
-      a "no" raises ActionDeclined with nothing dispatched. on_open(gate_id) is
-      called once the gate is answerable, for a viewer that shows the action
-      against exactly that gate.
+      holds it behind a confirm gate (the tab's pill when pinned), then runs
+      it; a "no" raises ActionDeclined with nothing dispatched.
+      on_open(gate_id) is called once the gate is answerable, for a viewer
+      that shows the action against exactly that gate.
 
   tab.type_text(selector, text, *, delay_ms=0, press_enter=False)  → Receipt
-      Focus element, select-all existing content, type character-by-character
-      via Input.dispatchKeyEvent.  Auto-waits + actionability like click.
-      Verifies the value landed; if the keystrokes changed nothing (a
-      framework-controlled input reverting them), falls back to the native
-      prototype value setter + bubbled input/change events and re-verifies —
-      the Receipt says which path the text took.
-      delay_ms adds a pause between keystrokes (in milliseconds).
-      press_enter sends an Enter key after the text (after verification).
+      Selects all existing content, then types character by character.  If
+      the keystrokes changed nothing (a framework-controlled input reverting
+      them) it falls back to the native prototype value setter + bubbled
+      input/change events and re-verifies; the Receipt says which path the
+      text took.  press_enter is sent after verification.
 
   tab.select_option(selector, option)                        → Receipt
-      Select an option in a dropdown.  Native <select>: finds the option by
-      label (else value), sets it via the prototype setter + input/change
-      events.  Custom widgets (react-select-style): clicks the field, waits
-      for a role=option matching the name (exact, then substring), clicks
-      it.  When the click focuses an element declaring aria-autocomplete,
-      the option text is typed in first and resolution runs against the
-      filtered listbox — reaches options a virtualized list hasn't rendered.
-      A miss lists the visible options' accessible names.
+      Native <select>: matches the option by label, else value.  Custom
+      widgets (react-select-style): clicks the field and waits for a
+      role=option matching the name, exact then substring.  A field that
+      declares aria-autocomplete gets the option text typed in first, and
+      resolution runs against the filtered listbox.
 
   tab.hover(selector)                                        → Receipt
-      Move the mouse over an element — or an (x, y) / 'x,y' point — and
-      leave it parked there: :hover styling and mouseenter-revealed UI
-      (menus, toolbars, tooltips) stay up for a following click, and the
-      observation's changes: section reports what the hover revealed.
-      The selector form resolves strictly + waits visible/stable like
-      click.  Coordinates are the route to visual-only targets whose
-      accessible proxy sits elsewhere (SVG diagram nodes): hover has no
-      element.click()-style fallback, so a proxy hover parks on the proxy.
+      The observation's changes: section reports what the hover revealed.
+      Coordinates are the route to visual-only targets whose accessible proxy
+      sits elsewhere (SVG diagram nodes): hover has no element.click()-style
+      fallback, so a selector hover parks on the proxy.
 
   tab.drag(source, to, *, steps=12, duration_ms=400, dwell_ms=150)  → Receipt
-      Mouse drag in one call: press on source, paced mouseMoved events with
-      the button held, dwell at the drop point, release on to.  Endpoints
-      are selectors (strictly resolved, scrolled into view) or (x, y)
-      tuples / 'x,y' strings.  The first moves are 2px micro-steps, so a
-      small origin (a 10px SVG port) arms its drag-slop threshold before
-      the pointer leaves it.  dwell_ms holds the pointer at the drop point
-      with repeated same-position moves before releasing — a debounced
-      drop handler needs move events to see the pointer as hovered before
-      a release counts as a drop; 0 disables it for gestures where it's
-      pure overhead (sliders, whole-node moves).  A drop target that only
-      appears once the drag starts is re-resolved mid-gesture.  Covers
-      pointer/mouse-event drag (SVG editors, sliders, drag libraries);
-      native HTML5 draggable=true DnD rides a different browser pipeline
-      these events don't start — an observation saying "changes: none"
-      after dragging one is the tell.  The Receipt names both endpoints
-      and warns if the drop point was occluded.
+      The first moves are 2px micro-steps, so a small origin (a 10px SVG
+      port) arms its drag-slop threshold before the pointer leaves it.
+      dwell_ms holds the pointer at the drop point with repeated
+      same-position moves before releasing: a debounced drop handler needs
+      move events to see the pointer as hovered before a release counts as a
+      drop.  Pass 0 where it is pure overhead (sliders, whole-node moves).
+      A drop target that only appears once the drag starts is re-resolved
+      mid-gesture.  The Receipt warns if the drop point was occluded.
+      Covers pointer/mouse-event drag (SVG editors, sliders, drag libraries).
+      Native HTML5 draggable=true DnD rides a different browser pipeline
+      these events don't start; an observation saying "changes: none" after
+      dragging one is the tell.
 
   tab.key(key)                                               → None
-      Dispatch one key press: named keys ("Enter", "Backspace", "ArrowLeft",
-      "F5", "Space"), printable characters ("a"), and Ctrl/Alt/Shift/Cmd
-      combos ("Ctrl+A", "Shift+Tab"; trailing "+" is the plus key).  Carries
-      the virtual key code, so editing actions actually happen — Backspace
-      deletes, arrows move the caret — and Enter/Space carry their character
-      so native button/form activation fires.
+      A trailing "+" is the plus key.  Enter and Space carry their
+      character, so native button/form activation fires.
 
-  tab.keys(keys, *, delay_ms=0)                              → None
-      A sequence of key()/combo presses in one call — one round trip for a
-      keyboard flow ("Ctrl+A", "Backspace", "ArrowDown", "Enter") instead of
-      one per keypress.  delay_ms pauses between presses for apps that
-      debounce key handling.
-
-  tab.tap(selector_or_x, y=None)                             → Receipt
-      Touch tap via Input.dispatchTouchEvent (touchstart/touchend).
-      Accepts a selector string OR (x, y) coordinates.  The selector form
-      resolves strictly and waits for visible/stable like click.
-      3s timeout — raises TimeoutError if the page's touch handler blocks
-      (common on complex apps like Messenger/React).
-
-  tab.set_viewport(width, height)                             → None
-      Emulate a fixed viewport at deviceScaleFactor 1
-      (Emulation.setDeviceMetricsOverride), so screenshot coordinates are
-      page pixels with no multiplier math.  browser_open's viewport= param
-      calls this on open.  Use a fresh tab per distinct size.
-
-  tab.front()                                                 → None
-      Bring this tab's window to the front (Page.bringToFront).
-      click/tap/type_text/key already call this automatically when Chrome
-      has the tab backgrounded — coordinate/key input silently does nothing
-      on a hidden tab otherwise (Chrome drops it, no error). Call directly
-      to raise a tab for its own sake, or to skip the per-call visibility
-      check in a script doing a lot of input against one tab.
-
-  tab.auto_front = False                                      (default True)
-      Never raise this tab's window, for one whose window belongs to someone
-      else (a lent tab): input and screenshot() skip the fronting. Kept on
-      the tab's session, so later get()s of it keep it.
-
-  tab.swipe(x1, y1, x2, y2, *, steps=10, duration_ms=300)   → None
-      Touch swipe: touchStart → touchMove × steps → touchEnd.
-      For scrolling on mobile Chrome via ADB.
-
-  tab.scroll(selector, dy=0, dx=0, *, steps=10, duration_ms=300) → None
-      Touch-scroll a container by (dx, dy) pixels. Sugar over swipe() —
-      resolves selector to its center, swipes the opposite direction
-      (scrollBy semantics: positive dy scrolls down, positive dx scrolls
-      right). Auto-waits up to 2s for the element.
+  tab.front()  /  tab.auto_front = False                      (default True)
+      Chrome silently drops coordinate and key input on a hidden tab, and
+      throttles its screenshots, with no error.  So every input method
+      (click, plan_click, type_text, select_option, hover, drag, key, keys,
+      tap, swipe, scroll, wheel) and screenshot() raise the tab's window
+      first when it is backgrounded.  Call tab.front() to raise a tab for its
+      own sake.  auto_front = False never raises the window, for one that
+      belongs to someone else (a lent tab); it is kept on the tab's session,
+      so later get()s of the tab keep it.
 
   tab.tree(mode='aria', *, at=None, in_crop=None)             → list[str]
-      Accessibility snapshot as text lines.  mode='aria' (default): Playwright
-      ariaSnapshot with [ref=eN] handles, reusable as aria-ref=eN selectors
-      in click/type_text until the next snapshot, navigation, or reattach.
-      mode='ax': the raw CDP accessibility tree, recursing into a
-      same-process iframe (any depth) via DOM.describeNode's frameId + a
-      fresh Accessibility.getFullAXTree per frame — no refs, but the only
-      mode that reliably sees inside a same-process *cross-origin* iframe
-      (mode='aria' evaluates JS in the top frame's own execution context,
-      and same-origin policy blocks that from reaching a cross-origin
-      iframe's DOM regardless of process — it still pierces a same-origin
-      nested iframe fine, via the engine's own recursion). Both modes
-      cross OOPIF iframes the other way — discovers attached iframe
-      children via DOM.getFrameOwner, inlines their trees. A tree
-      stopping flat at a bare Iframe leaf under mode='aria' is this gap;
-      retry with mode='ax'.
-      Standalone read (no settle, no observation pipeline).
+      A standalone read: no settle, no observation pipeline.
+      mode='aria' refs ([ref=eN], used as aria-ref=eN selectors) live until
+      the next snapshot, navigation, or reattach.  It cannot see inside a
+      same-process cross-origin iframe; a tree stopping flat at a bare Iframe
+      leaf is that gap, and mode='ax' (no refs) is the retry.  Both modes
+      cross out-of-process iframes.  Why: "Tree across frames" in
+      repld://docs/browser-internals.
       at=(x, y) / 'x,y' hit-tests that point instead (ignores mode) and
       returns a small elided tree rooted at the nearest meaningful ancestor
-      of the hit — for "what's actually here" from a coordinate rather than
-      a selector.  Rendered through the same engine as mode='aria', so its
-      nodes carry real [ref=eN] handles too.  Always also captures a
-      screenshot cropped to the hit (path in the result's `screenshot` key)
-      — the tree's text isn't always enough to disambiguate (visual-only
+      of the hit, with real [ref=eN] handles.  It always also captures a
+      screenshot cropped to the hit (path in the result's `screenshot` key),
+      since the tree's text isn't always enough to disambiguate (visual-only
       state, near-identical rows).  A hit on an iframe reports the redirect
       (target id + translated local coordinate) instead of a tree.
-      in_crop=<path> reinterprets at= as a pixel *within* an earlier seed's
-      screenshot instead of a page coordinate — the crop embeds its own
-      translation, so no scale/offset math is needed: pass the point you
-      see in the image straight through.
+      in_crop=<path> reinterprets at= as a pixel within an earlier crop
+      rather than a page coordinate.  The crop embeds its own translation:
+      pass the point you see in the image straight through.
 
   tab.fetch(url, *, method='GET', body=None, headers=None)    → dict
-      In-page JS fetch() — inherits the browser's cookies, session, and CORS
+      In-page JS fetch(): inherits the browser's cookies, session, and CORS
       origin.  NOT a separate HTTP call.
-      Returns: {"status": int, "ok": bool, "body": Any, "base64Encoded": bool}
-      body is auto-parsed as JSON whenever it's valid JSON, regardless of
-      content-type (plenty of real APIs mislabel JSON as text/plain or
-      text/html).  A non-JSON text body is returned as-is.
-      Auto-sets Content-Type: application/json for a dict body,
-      application/x-www-form-urlencoded for a string body.
-      Caller headers override auto-set headers (e.g. for raw JSON text).
-      Raises RuntimeError (via BrowserJSError) on network errors.
-
-  tab.navigate(url)                                           → None
-      Navigate to URL.  Waits for ready signal after page load.
-
-  tab.reload()                                                → None
-      Reload page.  Waits for ready signal after load.
-
-  tab.close()                                                 → None
-      Close this tab (Target.closeTarget).  Session cleanup follows from the
-      resulting Target.targetDestroyed event, same as a user closing it.
-
-  tab.wait_for(selector, *, timeout=5.0)                      → None
-      Wait for element to appear.  Polls every 100ms.
-      Same selector syntax as click/type_text.
-
-  tab.wait_for_idle(*, timeout=5.0, quiet=0.5)                → int
-      Wait for network idle.  Returns settle time in ms.
-      See "Settle loop" in repld://docs/browser-internals for what "idle" means.
-
-  tab.dismiss_dialog(accept=True, prompt_text=None)           → str
-      Answer the dialog open on this tab, else pre-arm the next one. A dialog
-      your own action opens is auto-dismissed already (see "Native JS dialogs"
-      below) - this overrides the default for one dialog, e.g. to make a
-      confirm() return true. It also answers a dialog left open for the human.
-
-  tab.take() / tab.release()                                  → str
-      Switch the tab to `agent` / `shared` (see "Tab mode" below). tab.mode
-      reads it.
-
-  tab.set_files(paths)                                        → str
-      Resolve the most recent unanswered native file-chooser prompt on
-      this tab (see "Native file choosers, HTTP auth, and permissions"
-      below). Empty paths cancels it. Raises if none is open.
-
-  tab.expect_file_chooser(paths)                              → str
-      Pre-arm the files for the next file-chooser prompt — like
-      dismiss_dialog, but for a file input.
-
-  tab.expect_auth(username, password)                         → str
-      Pre-arm credentials for the next HTTP Basic/Digest auth challenge.
-
-  tab.grant_permissions(permissions, origin=None)             → str
-      Pre-authorize camera/mic/geolocation/notifications/etc for this
-      tab's origin. Must be called before the page asks.
+      body in the result is parsed as JSON whenever it is valid JSON,
+      whatever the content-type (plenty of real APIs mislabel JSON as
+      text/plain or text/html); other text is returned as-is.
+      Sends Content-Type: application/json for a dict body,
+      application/x-www-form-urlencoded for a string body; caller headers
+      override (e.g. for raw JSON text).  A network error raises
+      BrowserJSError (a RuntimeError).
 
   tab.screenshot(*, full_page=False, force=False, path=None)  → dict
-      Capture a native-resolution PNG. Returns {path, width, height, bytes}.
-      Raises if the capture exceeds the vision API's token budget instead
-      of silently shrinking it — pass force=True to send it natively
-      anyway, or crop to a smaller region instead (browser_tree(at=...)
-      does this). Budget is checked against the PNG's real pixel
-      dimensions, which diverge from the CSS-pixel viewport size by the
+      Raises if the capture exceeds the vision API's token budget instead of
+      silently shrinking it.  Pass force=True to send it anyway, or crop
+      (tab.tree(at=...) does).  The budget is checked against the PNG's real
+      pixel dimensions, which differ from the CSS-pixel viewport by the
       device pixel ratio.
 
-  tab.cookies()                                               → list[dict]
-      All cookies for this tab via Network.getCookies.
-
   tab.http_client(*, base_url=None, **kwargs)                 → httpx.AsyncClient
-      Copy this tab's current cookies into a plain httpx.AsyncClient.
-      Requires the `http` extra (RuntimeError with an install hint if
-      missing). base_url defaults to the tab's own origin. Use this once a
-      site's data lives behind cookie-authenticated JSON — the tab is only
-      needed to establish the session; every read after that is a plain
-      concurrent-safe HTTP call, no shared-tab-state races and no per-call
-      CDP round trip the way tab.fetch() pays.
-
-  tab.wheel(x, y, *, dy=0.0, dx=0.0)                         → Receipt
-      Scroll wheel at a viewport point (mouseMoved, then mouseWheel). A real wheel event,
-      so it reaches whatever listens at that point (canvas, map, remote-screen viewer);
-      tab.scroll()'s touch gesture does not.
-
-  tab.cdp(method, **params)                                   → dict
-      Raw CDP passthrough — escape hatch for anything not wrapped.
+      base_url defaults to the tab's own origin.  Use it once a site's data
+      lives behind cookie-authenticated JSON: the tab is only needed to
+      establish the session, and every read after that is a plain
+      concurrent-safe HTTP call with no shared-tab-state races and no
+      per-call CDP round trip the way tab.fetch() pays.
 
   tab.screencast(handler, format="jpeg", quality=60, max_width=, max_height=, every_nth_frame=1)  → Screencast
       Stream the tab's repaints to handler(Frame), sync or async; Frame has .data
@@ -860,6 +733,11 @@ on an already-attached tab still reports the original attach's value.
       sc.stop() ends it; it survives navigation and a Chrome reconnect (sc.active,
       sc.error say if it could not resume). A backgrounded tab does not repaint:
       `await tab.front()` first.
+
+  Native prompts (tab.dismiss_dialog, tab.take / tab.release, tab.set_files,
+  tab.expect_file_chooser, tab.expect_auth, tab.grant_permissions) are covered
+  under "Tab mode", "Native JS dialogs" and "Native file choosers, HTTP auth,
+  and permissions" below.
 
 === Pin + gate bridge ===
 
@@ -901,54 +779,36 @@ but origin matches).
 Cross-origin navigation: pin broken, pushes pin_lost channel, heartbeat exits.
 3 consecutive heartbeat exceptions also exit the loop.
 
-== Tab API (sync, DuckDB-backed) ==
+== Tab queries (sync, DuckDB-backed) ==
 
-  tab.network(url=, method=, status=, type=, since=, include_assets=False)
-      → Rows (list[Row])
-      Query captured requests from the HAR summary view.
-      url uses LIKE matching — "*" becomes "%".
-      Assets excluded by default (is_asset=false); pass include_assets=True
-      to see them.  Returns max 500 rows, ordered newest-first.
+Signatures: repld://help/browser.  since= on network/console/sse/lifecycle is
+epoch seconds: pass time.time().  The underlying CDP clocks differ (epoch s /
+epoch ms / monotonic); the conversion is done for you.
 
-  tab.console(level=, source=, since=)  → Rows
-      Query console messages.  Returns max 200 rows.
+  tab.network(...)   → Rows
+      url uses LIKE matching: "*" becomes "%".  Assets are excluded unless
+      include_assets=True.  Max 500 rows, newest first.
 
-  tab.sse(url=, event_name=, since=)    → Rows
-      Query SSE (EventSource) messages.  Each row has: request_id,
-      event_name, event_id, data, timestamp.  Chrome parses the stream
-      and fires Network.eventSourceMessageReceived per message — no
-      manual parsing needed.  Returns max 500 rows, newest-first.
-      NOTE: only captures EventSource API connections, not fetch()-based
+  tab.console(...)   → Rows
+      Max 200 rows.
+
+  tab.sse(...)       → Rows
+      Chrome parses the stream and fires one event per message, so no manual
+      parsing is needed.  Max 500 rows, newest first.
+      NOTE: only EventSource API connections are captured, not fetch()-based
       SSE streams (common in modern apps for POST/custom-header SSE).
 
-  tab.request(request_id)               → dict
-      Full HAR entry as a dict: request/response headers, postData, auth
-      scheme, timing, initiator — everything except the response body.
+  tab.body(request_id)  → dict
+      Checks DuckDB first (captured bodies), then falls back to a
+      Network.getResponseBody CDP call.
+      Returns {"body": str, "base64Encoded": bool}, or {"error": "..."}.
 
-  tab.body(request_id)                  → dict
-      Response body for a request.  Checks DuckDB first (captured bodies),
-      falls back to Network.getResponseBody CDP call.
-      Returns: {"body": str, "base64Encoded": bool}
-      If unavailable: {"error": "..."}
-
-  row.body()                            → dict
-      Shortcut — calls tab.body(self.request_id) on the row's session.
-
-  tab.lifecycle(name=, since=)           → Rows
-
-  since= is epoch seconds on all four — pass time.time(). The underlying
-  CDP clocks differ (epoch s / epoch ms / monotonic); the conversion is
-  done for you, so one base is all you need.
-      Query Page.lifecycleEvent events.  Each row has: frame_id, loader_id,
-      name, timestamp.  Requires Page.setLifecycleEventsEnabled (auto-enabled
-      on attach).  Chrome replays already-fired events on late attach.
-      Event names: init, DOMContentLoaded, load, firstPaint,
-      firstContentfulPaint, firstImagePaint, firstMeaningfulPaintCandidate,
-      firstMeaningfulPaint, networkAlmostIdle, networkIdle, InteractiveTime,
-      commit (catch-up only).
-
-  tab.clear()                           → None
-      Clear all captured events for this tab.
+  tab.lifecycle(...)  → Rows
+      Page.lifecycleEvent events (enabled on attach; Chrome replays
+      already-fired events on a late attach).  Names: init, DOMContentLoaded,
+      load, firstPaint, firstContentfulPaint, firstImagePaint,
+      firstMeaningfulPaintCandidate, firstMeaningfulPaint, networkAlmostIdle,
+      networkIdle, InteractiveTime, commit (catch-up only).
 
 === Row fields ===
 
@@ -1521,6 +1381,29 @@ inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
 BrowserSession.attach() tracks in-flight attaches via an _attaching set.  If
 attach() is called concurrently for the same target_id, the second call
 returns None immediately.
+
+=== Click dispatch ===
+
+tab.click() sends mouseMoved to the point, then Input.dispatchMouseEvent
+mousePressed + mouseReleased.  The arrival matters beyond hover styling:
+Chromium's native click synthesis can silently fail without it on some pages
+(drag-capable elements are the confirmed case), and Playwright's own mouse
+implementation always moves before pressing for the same reason.
+type_text/key go through Input.dispatchKeyEvent with the virtual key code, so
+editing keys act (Backspace deletes, arrows move the caret); tab.tap() is
+Input.dispatchTouchEvent (touchstart/touchend).
+
+=== Tree across frames ===
+
+mode='aria' is Playwright's ariaSnapshot, evaluated as JS in the top frame's
+execution context.  Its own recursion pierces a same-origin nested iframe,
+but same-origin policy blocks it from a cross-origin iframe's DOM whatever
+process that iframe runs in.  mode='ax' is the raw CDP accessibility tree: it
+recurses into a same-process iframe (any depth) via DOM.describeNode's
+frameId and a fresh Accessibility.getFullAXTree per frame, which is why it is
+the mode that sees inside a same-process cross-origin iframe.  Both modes
+cross out-of-process iframes the other way: attached iframe children are
+discovered via DOM.getFrameOwner and their trees inlined.
 """
 
 
@@ -2050,13 +1933,13 @@ Tab (async unless noted):
   tab.wait_captcha(timeout=600)                 → list[Captcha] (polls until no captcha needs a human; TimeoutError naming what is still unsolved)
   tab.click(selector_or_x_y, button=, click_count=) → Receipt (strict resolve + actionability wait; names what was hit; 'x,y' clicks a viewport point with no DOM to resolve)
   tab.plan_click(selector_or_x_y, button=, click_count=) → Action (resolves and hit-tests, presses nothing; action.run() clicks at the planned point, action.gate() holds it behind a confirm gate and raises ActionDeclined on no)
-  tab.wheel(x, y, dy=, dx=)                        → Receipt (a real wheel event at a viewport point; positive dy scrolls down)
+  tab.wheel(x, y, dy=, dx=)                        → Receipt (a real wheel event at a viewport point, reaching canvas/map listeners tab.scroll's touch gesture does not; positive dy scrolls down)
   tab.tap(selector_or_x, y=)                       → Receipt (touch event, 3s timeout)
-  tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px)
-  tab.front()                                      → None (Page.bringToFront; click/tap/type_text/key auto-call this on a hidden tab)
+  tab.set_viewport(width, height)                  → None (fixed viewport at scale 1 — screenshot px == page px; browser_open's viewport= calls it)
+  tab.front()                                      → None (Page.bringToFront; every input method and screenshot() auto-call this on a hidden tab)
   tab.auto_front                                   → bool (settable; False never raises this tab's window, e.g. a lent tab; default True)
   tab.swipe(x1, y1, x2, y2, steps=, duration_ms=)  → None (touch scroll)
-  tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container)
+  tab.scroll(selector, dy=, dx=, steps=, duration_ms=) → None (touch-scroll container; positive dy scrolls down, dx right)
   tab.type_text(selector, text, delay_ms=, press_enter=)  → Receipt (clears first; verifies value, native-setter fallback for controlled inputs)
   tab.select_option(selector, option)                     → Receipt (native <select> or custom listbox; types into an aria-autocomplete filter to reach virtualized options; a miss lists the options)
   tab.hover(selector)                                     → Receipt (park the pointer on an element or 'x,y' point; hover-revealed UI stays up)

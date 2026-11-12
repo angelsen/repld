@@ -4,10 +4,10 @@ Also the two doc-drift guards, which split by who wrote the doc rather than by
 what they check.
 
 `phase_8_doc_surfaces` covers the agent-facing surfaces in `help.py`. CLAUDE.md
-names keeping them in sync as an invariant ("Never let the two drift"), and it
-was the one named invariant with nothing enforcing it — `BROWSER_GUIDE` and
-`_TOPICS["browser"]` are two independently hand-written prose blocks covering
-the same API, so nothing but a reader would have caught the next divergence.
+names keeping them in sync as an invariant, and it was the one named invariant
+with nothing enforcing it: `_TOPICS["browser"]` is the complete method list and
+`BROWSER_GUIDE` the behaviour on top of it, two hand-written blocks over one
+API, so nothing but a reader would have caught the next divergence.
 
 `phase_8_site_signatures` covers the human-facing ones: the site's browser
 pages and README, which duplicate those same signatures a third time with
@@ -104,8 +104,10 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
     1. A doc names a method that was renamed or removed. This is the one that
        actively misleads: the agent reads `instructions`/`repld help` and calls
        something that isn't there.
-    2. A method is documented on one browser surface but not the other.
-    3. A new public `Tab` method is documented on neither.
+    2. The browser guide or internals name a symbol the topic lacks. The topic
+       is the complete method list; the guide covers only behaviour a one-line
+       entry cannot carry, so it may omit a method but never add one.
+    3. A new public `Tab` method is missing from the topic.
     """
     import repld.help as h
 
@@ -159,27 +161,25 @@ def phase_8_doc_surfaces(_kernel: Kernel) -> None:
         "tab.*/browser.*/peer.*/peers.* API"
     )
 
-    # 2. The two browser surfaces cover the same symbols.
+    # 2. The topic is the complete list: the prose surfaces name nothing it lacks.
     prose = h.BROWSER_GUIDE + h.BROWSER_INTERNALS
     guide = set(re.findall(_ATTR_RE, prose))
     topic = set(re.findall(_ATTR_RE, h._TOPICS["browser"]))
     assert_eq(sorted(guide - topic), [], 'in BROWSER_GUIDE but not _TOPICS["browser"]')
-    assert_eq(sorted(topic - guide), [], 'in _TOPICS["browser"] but not BROWSER_GUIDE')
-    print(f"  ✓ BROWSER_GUIDE and _TOPICS['browser'] agree on {len(guide)} symbols")
-
-    # 3. Every public Tab method reaches both. Tab's internals are `_`-prefixed
-    # by convention, so a new name tripping this wants either the underscore or
-    # a doc line — which is the prompt this check exists to deliver.
-    undocumented = sorted(
-        m
-        for m in tab
-        if not m.startswith("_") and (m not in prose or m not in h._TOPICS["browser"])
-    )
-    assert_eq(
-        undocumented, [], "every public Tab method is documented on both surfaces"
-    )
     print(
-        f"  ✓ all {sum(1 for m in tab if not m.startswith('_'))} public Tab methods documented on both surfaces"
+        f"  ✓ BROWSER_GUIDE names {len(guide)} symbols, all among "
+        f"_TOPICS['browser']'s {len(topic)}"
+    )
+
+    # 3. Every public Tab method reaches the topic. Tab's internals are
+    # `_`-prefixed by convention, so a new name tripping this wants either the
+    # underscore or a topic line, which is the prompt this check exists to deliver.
+    undocumented = sorted(
+        m for m in tab if not m.startswith("_") and m not in h._TOPICS["browser"]
+    )
+    assert_eq(undocumented, [], "every public Tab method is in the browser topic")
+    print(
+        f"  ✓ all {sum(1 for m in tab if not m.startswith('_'))} public Tab methods are in the browser topic"
     )
 
     # 4. The peers guide and topic cover every public Peer / _Peers member, so a
