@@ -9,9 +9,10 @@ description: Every signature of the peers builtin, the Peer handle, its errors, 
 peers.list()                          # [{name, cwd, pid, socket_path, started_at, self}]
 peer = peers.get(target)              # a path, or the basename of one live kernel
 peer = peers.get(target, start=True)  # a call may start it if it is not running
+peer = peers.get("host:target")       # the same on another machine, over ssh
 ```
 
-`peers.get` is synchronous. `target` is a path (it contains a `/` or starts with `.` or `~`) or a bare name that matches exactly one live kernel's directory. The handle is cached per project directory.
+`peers.get` is synchronous. `target` is a path (it contains a `/` or starts with `.` or `~`) or a bare name that matches exactly one live kernel's directory. The handle is cached per project directory. `"host:target"` names a kernel on another machine: `host` is anything `ssh` accepts and `target` is resolved there.
 
 ## The handle
 
@@ -19,6 +20,7 @@ peer = peers.get(target, start=True)  # a call may start it if it is not running
 peer.cwd    # the resolved project directory
 peer.name   # its basename
 peer.start  # whether a call may start it
+peer.host   # the ssh destination of a remote peer, else None
 
 await peer.call(target, /, *args, **kwargs)  # the JSON value the target returned
 await peer.info()                            # identity and callable surface

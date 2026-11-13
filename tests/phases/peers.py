@@ -667,6 +667,236 @@ def _cold_peer(a: Bridge, tmp: Path) -> None:
     )
 
 
+_FAKE_SSH = textwrap.dedent("""\
+    #!/bin/sh
+    # Stands in for ssh: runs the remote command here, and serves `-O forward`
+    # with a relay process in place of the control master.
+    here="$(dirname "$0")"
+    echo "$*" >> "$here/log"
+    ctl=""; fwd=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -o) shift 2 ;;
+        -O) ctl="$2"; shift 2 ;;
+        -L) fwd="$2"; shift 2 ;;
+        -*) shift ;;
+        *) break ;;
+      esac
+    done
+    host="$1"; shift
+    if [ "$host" = down ]; then
+      echo "ssh: connect to host down: Connection refused" >&2
+      exit 255
+    fi
+    if [ -n "$ctl" ]; then
+      [ "$host" = nofwd ] && exit 255
+      pidfile="$here/$(basename "${fwd%%:*}").pid"
+      if [ "$ctl" = cancel ]; then
+        kill "$(cat "$pidfile")" 2>/dev/null
+        exit 0
+      fi
+      setsid python3 "$here/relay.py" "${fwd%%:*}" "${fwd#*:}" "$pidfile" >/dev/null 2>&1 &
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        [ -S "${fwd%%:*}" ] && exit 0
+        sleep 0.1
+      done
+      exit 255
+    fi
+    # The PATH prefix would find the developer's installed repld, not this checkout's.
+    cmd="$*"
+    exec sh -c "${cmd#PATH=* }"
+""")
+
+_RELAY = textwrap.dedent("""\
+    import os, socket, sys, threading
+
+    local, remote, pidfile = sys.argv[1:]
+    open(pidfile, "w").write(str(os.getpid()))
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(local)
+    server.listen(64)
+
+
+    def pump(src, dst):
+        try:
+            while chunk := src.recv(65536):
+                dst.sendall(chunk)
+        except OSError:
+            pass
+        for sock in (src, dst):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+    while True:
+        client, _ = server.accept()
+        far = socket.socket(socket.AF_UNIX)
+        try:
+            far.connect(remote)
+        except OSError:
+            client.close()
+            continue
+        threading.Thread(target=pump, args=(client, far), daemon=True).start()
+        threading.Thread(target=pump, args=(far, client), daemon=True).start()
+""")
+
+
+def _pipe_runs(bindir: Path) -> int:
+    """How many times the stand-in ssh was asked to run `repld peer-pipe`."""
+    return (bindir / "log").read_text().count("peer-pipe")
+
+
+def _over_ssh(a: Bridge, tmp: Path, b_path: Path) -> None:
+    """A `host:target` peer, with a stand-in `ssh` that runs `repld peer-pipe` here."""
+    bindir = tmp / "sshbin"
+    bindir.mkdir()
+    (bindir / "ssh").write_text(_FAKE_SSH)
+    (bindir / "relay.py").write_text(_RELAY)
+    (bindir / "repld").write_text(
+        f'#!/bin/sh\nexec uv run --project {REPO} repld "$@"\n'
+    )
+    for name in ("ssh", "repld"):
+        (bindir / name).chmod(0o755)
+    cold = tmp / "cold-ssh"
+    (cold / "gists").mkdir(parents=True)
+    _run(
+        a,
+        f"global pp_path\npp_path = os.environ['PATH']\nos.environ['PATH'] = {str(bindir)!r} + ':' + pp_path",
+    )
+    try:
+        out = _run(
+            a,
+            f"byname = peers.get('fake:svc-peer')\nbypath = peers.get('fake:' + {str(b_path)!r})\n"
+            "print(json.dumps([byname.host, await byname.call('svc.add', 2, b=3), await bypath.call('svc.slow', 0), "
+            "(await byname.call('svc.whoami'))['pid_verified'], (await byname.info())['kernel']['cwd']]))",
+            timeout=60,
+        )
+        host, added, slow, verified, cwd = _last_json(out)
+        assert_eq([host, added, slow], ["fake", 5, "ok"], "values by name and by path")
+        assert_eq(verified, False, "a caller behind ssh is never pid-verified")
+        assert_eq(os.path.realpath(cwd), os.path.realpath(str(b_path)), "info over ssh")
+
+        out = _run(
+            a,
+            "r = []\n"
+            "for target, exc in (('fake:svc-peer', peers.PeerCallError), ('fake:no-such-peer', peers.PeerNotFound), "
+            "('down:svc-peer', peers.PeerUnavailable)):\n"
+            "    try:\n        await peers.get(target).call('svc.boom')\n"
+            "    except exc as e:\n        r.append([type(e).__name__, str(e)[:300]])\n"
+            "print(json.dumps(r))",
+            timeout=60,
+        )
+        ran, missing, down = _last_json(out)
+        assert_true(
+            ran[0] == "PeerCallError" and "bad wav" in ran[1], f"a remote raise ({ran})"
+        )
+        assert_eq(
+            missing[0],
+            "PeerNotFound",
+            "an unknown name is resolved, and refused, over there",
+        )
+        assert_true(
+            down[0] == "PeerUnavailable" and "Connection refused" in down[1],
+            f"a failed ssh never ran and says why ({down})",
+        )
+
+        out = _run(
+            a,
+            "t = time.monotonic()\n"
+            "await asyncio.gather(*(peers.get('fake:svc-peer').call('svc.slow', 2) for _ in range(4)))\n"
+            "print(json.dumps(time.monotonic() - t))",
+            timeout=60,
+        )
+        assert_true(_last_json(out) < 6.0, f"gather over ssh is concurrent ({out})")
+
+        out = _run(
+            a,
+            "await pp_peer.call('svc.reset')\n"
+            "try:\n    async with asyncio.timeout(5):\n        await peers.get('fake:svc-peer').call('svc.wait_forever')\n"
+            "except TimeoutError:\n    pass\nawait asyncio.sleep(1.5)\nprint(json.dumps(await pp_peer.call('svc.cancelled')))",
+            timeout=60,
+        )
+        assert_eq(_last_json(out), True, "a cancelled await hangs up through ssh")
+
+        out = _run(
+            a,
+            f"cold = 'fake:' + {str(cold)!r}\n"
+            "try:\n    await peers.get(cold).call('os.getcwd')\nexcept peers.PeerUnavailable as e:\n    print(json.dumps(str(e)))\n"
+            "print(json.dumps(await peers.get(cold, start=True).call('os.getcwd')))",
+            timeout=120,
+        )
+        lines = out.strip().splitlines()
+        assert_true(
+            "no kernel is running" in lines[-2], f"a cold remote peer ({lines[-2]})"
+        )
+        assert_eq(
+            os.path.realpath(json.loads(lines[-1])),
+            os.path.realpath(str(cold)),
+            "start=True starts it on the far side",
+        )
+
+        before = _pipe_runs(bindir)
+        out = _run(
+            a,
+            "p = peers.get('fake:svc-peer')\n"
+            "r = [await p.call('svc.add', i) for i in range(5)]\n"
+            "print(json.dumps([r, p._forward is not None, os.path.basename(p._forward[0]).startswith(str(os.getpid()) + '-fwd-')]))",
+            timeout=60,
+        )
+        assert_eq(
+            _last_json(out), [[1, 2, 3, 4, 5], True, True], "calls through the forward"
+        )
+        assert_eq(_pipe_runs(bindir), before, "a forwarded call starts no peer-pipe")
+
+        out = _run(
+            a,
+            "p = peers.get('fake:svc-peer')\nos.unlink(p._forward[0])\n"
+            "print(json.dumps([await p.call('svc.add', 1), p._forward is not None]))",
+            timeout=60,
+        )
+        assert_eq(_last_json(out), [2, True], "a vanished forward socket is rebuilt")
+
+        stop_kernel_at(cold)
+        out = _run(
+            a,
+            f"p = peers.get('fake:' + {str(cold)!r})\nhad = p._forward is not None\n"
+            "print(json.dumps([had, await p.call('os.getpid') > 0, p._forward is not None]))",
+            timeout=120,
+        )
+        assert_eq(
+            _last_json(out),
+            [True, True, True],
+            "a forward to a stopped kernel is probed dead before the request, then re-resolved",
+        )
+
+        out = _run(
+            a,
+            "p = peers.get('nofwd:svc-peer')\n"
+            "print(json.dumps([await p.call('svc.add', 1), await p.call('svc.add', 2), p._forward, p._forward_off]))",
+            timeout=60,
+        )
+        assert_eq(
+            _last_json(out), [2, 3, None, True], "a refused forward stays on peer-pipe"
+        )
+    finally:
+        _run(a, "os.environ['PATH'] = pp_path")
+        stop_kernel_at(cold)
+        shutil.rmtree(runtime_dir_for(cold), ignore_errors=True)
+        for pidfile in bindir.glob("*.pid"):
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGTERM)
+            except OSError, ValueError:
+                pass
+    print(
+        "  ✓ peers over ssh: name and path targets, typed errors, a failed ssh never ran, gather, hangup cancel, start=True"
+    )
+    print(
+        "  ✓ peers over ssh: later calls ride a socket forward, a dead one is probed before the request and rebuilt, a refused one is not retried"
+    )
+
+
 def phase_19_peers(kernel: Kernel) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="repld-peers-"))
     b_path = _project(tmp, "svc-peer", {"svc.py": _SVC}, _INIT)
@@ -685,6 +915,7 @@ def phase_19_peers(kernel: Kernel) -> None:
         _cycles(a, kernel)
         _nested_identity(a, b_path, c_path)
         _stubs(a, kernel, b_path)
+        _over_ssh(a, tmp, b_path)
         _death(a, tmp)
         _cold_peer(a, tmp)
     finally:

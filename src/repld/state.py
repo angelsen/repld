@@ -183,7 +183,8 @@ def sweep_dead_pid_files(directory: Path) -> int:
     `$XDG_RUNTIME_DIR` the accumulation is tmpfs, i.e. RAM held until logout;
     under the `/tmp/repld-{uid}` fallback it is forever.
 
-    Only files are considered, and only ones a *dead* pid owns. A recycled pid
+    Only files and sockets (a remote peer's forward) are considered, and only
+    ones a *dead* pid owns. A recycled pid
     makes this conservative (a file is kept that could have gone), never
     destructive; a live kernel's own output is untouchable by construction.
     """
@@ -197,7 +198,9 @@ def sweep_dead_pid_files(directory: Path) -> int:
         if m is None:
             continue
         try:
-            if not entry.is_file() or pid_alive(int(m.group(1))):
+            if not (entry.is_file() or entry.is_socket()):
+                continue
+            if pid_alive(int(m.group(1))):
                 continue
             entry.unlink()
         except OSError:

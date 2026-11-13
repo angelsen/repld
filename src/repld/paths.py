@@ -54,6 +54,7 @@ and owned by another local user. ``ensure_runtime_dir()`` is what puts the
 import hashlib
 import os
 import stat
+import sys
 from pathlib import Path
 
 # -- Module-level constants --------------------------------------------------
@@ -211,8 +212,8 @@ PROJECT_SOCKET_CONFLICT = (
     "repld: --project/--project-git and --socket are mutually exclusive"
 )
 
-# Linux `sun_path` is 108 bytes including its NUL.
-SOCKET_PATH_MAX = 107
+# `sun_path` including its NUL is 108 bytes on Linux, 104 on macOS.
+SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
 
 
 def resolve_socket_path(argv: list[str]) -> tuple[Path, list[str]]:

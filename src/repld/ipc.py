@@ -77,8 +77,19 @@ def connect_to_kernel(lock_path: Path) -> tuple[socket.socket, dict] | str:
     return sock, lock
 
 
+# macOS <sys/un.h>; the `socket` module exposes neither.
+_SOL_LOCAL = 0
+_LOCAL_PEERPID = 0x002
+
+
 def _resolve_peer_pid(sock: socket.socket) -> int | None:
-    """The connecting process's pid via SO_PEERCRED; None where unavailable."""
+    """The connecting process's pid from the kernel; None where unavailable."""
+    if sys.platform == "darwin":
+        try:
+            (pid,) = struct.unpack("i", sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERPID, 4))
+        except OSError:
+            return None
+        return pid or None
     opt = getattr(socket, "SO_PEERCRED", None)
     if opt is None:
         return None

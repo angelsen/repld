@@ -11,6 +11,12 @@ one call at a time and queue a cancel behind the call it should stop. A fresh
 connection makes concurrency, cancellation (closing the writer) and death (EOF)
 fall out of the socket itself.
 
+A target written `host:rest` is a kernel on another machine: the same protocol
+over the stdio of `ssh host repld peer-pipe rest` (`peer_pipe_cmd.py`), which
+resolves `rest` there and relays to that kernel's socket. That first call also
+learns the far socket's path, and later calls dial it through a forward on the
+same ssh connection, with no process started over there.
+
 A call is never retried once its request is written; reconnecting before that
 is fine. What came back tells you whether it ran: `PeerRefused` and
 `PeerUnavailable` never ran, `PeerCallError` ran and raised, `PeerDisconnected`
@@ -23,13 +29,16 @@ cannot afford what it drags in).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import json
 import os
+import shlex
 import socket as _socket
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import ipc, paths, sessions, tasks
 from .core_schemas import (
@@ -50,6 +59,14 @@ _READ_LIMIT = PEER_MAX_PAYLOAD_BYTES + 256 * 1024
 _MAX_IN_FLIGHT = 32
 _START_TIMEOUT = 60.0
 _REQUEST_ID = 1
+
+# The one line `repld peer-pipe` writes before it relays anything.
+PIPE_STATUS_METHOD = "repld/peer_pipe"
+# A handshake plus a cold `repld` start on the far side.
+_PIPE_STATUS_TIMEOUT = 30.0
+_FORWARD_TIMEOUT = 10.0
+_PROBE_TIMEOUT = 5.0
+_PROBE_ID = 0
 
 # Env a spawned target kernel must not inherit: they would leave it unbound to
 # its own project, point it at this kernel's socket or owner, or leak this
@@ -159,6 +176,18 @@ def _is_path_like(target: str) -> bool:
     return os.sep in target or target.startswith((".", "~"))
 
 
+def parse_remote(target: str) -> tuple[str, str] | None:
+    """Split `host:rest` into its two parts, or None for a local target.
+
+    A local path may hold a colon, so the part before the first colon names a
+    host only when it is not itself path-like: write `./a:b` for such a path.
+    """
+    host, sep, rest = target.partition(":")
+    if not sep or not host or not rest or _is_path_like(host):
+        return None
+    return host, rest
+
+
 def resolve_cwd(target: str, live: list[dict]) -> str:
     """The project directory `target` names.
 
@@ -204,6 +233,15 @@ def pick_session(cwd: str, live: list[dict]) -> dict | None:
     return mine[0]
 
 
+def resolve_socket(cwd: str) -> str | None:
+    """Where the kernel for the project at `cwd` listens now, or None."""
+    row = pick_session(cwd, sessions.list_sessions())
+    if row is not None:
+        return str(row["socket_path"])
+    canonical = paths.socket_path(Path(cwd))
+    return str(canonical) if canonical.exists() else None
+
+
 def build_caller() -> dict | None:
     """The `_meta.caller` dict for outgoing calls, or None outside a kernel.
 
@@ -227,7 +265,12 @@ def build_caller() -> dict | None:
         "project_dir"
     )
     kind = getattr(origin, "claude_session_kind", None) or inherited.get("session_kind")
-    kernel = {"cwd": os.getcwd(), "pid": os.getpid(), "socket": sock}
+    kernel = {
+        "cwd": os.getcwd(),
+        "pid": os.getpid(),
+        "socket": sock,
+        "host": _socket.gethostname(),
+    }
     hop = {**kernel, "claude_session_id": session_id, "task_id": task_id}
     return {
         "kernel": kernel,
@@ -343,6 +386,99 @@ def clean_env(environ: dict[str, str], dotenv_keys: set[str]) -> dict[str, str]:
     }
 
 
+def start_command(cwd: str) -> list[str]:
+    """The argv that starts a headless kernel for the project at `cwd`."""
+    return [sys.executable, "-m", "repld", "--project", cwd, "start"]
+
+
+def _control_path() -> str:
+    """The ssh control socket shared by every call to one host."""
+    return f"ControlPath={paths.RUNTIME_DIR}/ssh-%C"
+
+
+def forward_path(host: str, target: str, remote: str) -> str:
+    """The local socket one handle forwards to `remote` on `host`.
+
+    Carries this process's pid like all scratch under `RUNTIME_DIR`, so the
+    boot sweep reclaims it after a dead kernel. `target` keeps two handles
+    that resolve to one kernel (a name and a path) off each other's socket.
+    """
+    digest = hashlib.sha256(f"{host}\0{target}\0{remote}".encode()).hexdigest()[:12]
+    return str(paths.RUNTIME_DIR / f"{os.getpid()}-fwd-{digest}.sock")
+
+
+def build_forward_argv(
+    host: str, local: str, remote: str, *, cancel: bool = False
+) -> list[str]:
+    """The `ssh` argv that asks the shared connection to forward `local` to
+    the socket `remote` on `host`, or to stop doing so."""
+    return [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        _control_path(),
+        "-O",
+        "cancel" if cancel else "forward",
+        "-L",
+        f"{local}:{remote}",
+        host,
+    ]
+
+
+def build_ssh_argv(host: str, target: str, *, start: bool) -> list[str]:
+    """The `ssh` argv that runs `repld peer-pipe` for `target` on `host`.
+
+    The control socket makes every call after the first a channel on one
+    connection instead of a handshake of its own.
+    """
+    remote = ["repld", "peer-pipe", *(["--start"] if start else []), target]
+    # A non-interactive ssh shell gets the system PATH only (on macOS not even
+    # Homebrew), so `uv tool install`'s bin dir is added for the lookup.
+    command = f'PATH="$HOME/.local/bin:$PATH" {shlex.join(remote)}'
+    return [
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=600",
+        "-o",
+        _control_path(),
+        host,
+        command,
+    ]
+
+
+def parse_pipe_status(line: bytes, host: str, stderr: str) -> str:
+    """The far kernel's socket path from `repld peer-pipe`'s `ready` status
+    (empty from a version that does not report it), raising on any other.
+
+    Nothing was written to the far kernel in any of these, so the call never
+    ran: no status line at all means `ssh` or the remote `repld` failed.
+    """
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        msg = {}
+    params = msg.get("params") if isinstance(msg, dict) else None
+    if not isinstance(params, dict) or msg.get("method") != PIPE_STATUS_METHOD:
+        detail = stderr.strip()[-1000:] or "no output"
+        raise PeerUnavailable(
+            f"ssh {host} did not reach `repld peer-pipe` (is repld on that "
+            f"host's non-interactive PATH?): {detail}"
+        )
+    status = params.get("status")
+    text = f"{host}: {params.get('message', '')}"
+    if status == "not_found":
+        raise PeerNotFound(text, params.get("candidates"))
+    if status != "ready":
+        raise PeerUnavailable(text)
+    return str(params.get("socket") or "")
+
+
 def _parse_reply(rfile: object, request_id: int) -> dict:
     """Read lines from `rfile` until one carries the expected JSON-RPC reply."""
     for line in rfile:  # type: ignore[attr-defined]
@@ -389,6 +525,36 @@ def request_sync(
 # ---------------------------------------------------------------------------
 
 
+class _Link(NamedTuple):
+    """One call's connection: a unix socket, or the stdio of an `ssh` process.
+
+    `path` is the socket connected to, empty for a remote peer.
+    """
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    path: str
+    proc: asyncio.subprocess.Process | None
+
+    async def close(self) -> None:
+        """Hang up, and reap the `ssh` process of a remote link."""
+        self.writer.close()
+        if self.proc is None:
+            return
+        # Shielded: a cancelled call must still not leave an `ssh` behind.
+        await asyncio.shield(self._reap(self.proc))
+
+    @staticmethod
+    async def _reap(proc: asyncio.subprocess.Process) -> None:
+        """Wait for `proc` to end on the stdin EOF, killing it past a second."""
+        try:
+            async with asyncio.timeout(1.0):
+                await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+
+
 class Peer:
     """Another project's kernel, obtained via `peers.get(...)`.
 
@@ -400,18 +566,30 @@ class Peer:
     cwd: str
     name: str
     start: bool
+    host: str | None
 
-    def __init__(self, cwd: str, *, start: bool = False) -> None:
-        """Bind to a project directory, optionally auto-starting its kernel."""
+    def __init__(
+        self, cwd: str, *, start: bool = False, host: str | None = None
+    ) -> None:
+        """Bind to a project directory, optionally auto-starting its kernel.
+
+        With `host`, `cwd` is the name or path that machine resolves itself.
+        """
         self.cwd = cwd
-        self.name = os.path.basename(cwd)
+        self.name = os.path.basename(cwd.rstrip(os.sep)) or cwd
         self.start = start
+        self.host = host
         self._semaphore: asyncio.Semaphore | None = None
         self._start_lock: asyncio.Lock | None = None
+        # (local, remote) socket paths of the live forward to a remote peer.
+        self._forward: tuple[str, str] | None = None
+        self._forward_lock: asyncio.Lock | None = None
+        self._forward_off = False
 
     def __repr__(self) -> str:
-        """Show the name and project directory."""
-        return f"<Peer {self.name} {self.cwd}>"
+        """Show the name and project directory, with the host of a remote one."""
+        where = f"{self.host}:{self.cwd}" if self.host else self.cwd
+        return f"<Peer {self.name} {where}>"
 
     def _socket_path(self) -> str | None:
         """Where this project's kernel listens now, or None.
@@ -419,11 +597,7 @@ class Peer:
         Re-read on every connect: a restarted kernel may have come back
         somewhere else.
         """
-        row = pick_session(self.cwd, sessions.list_sessions())
-        if row is not None:
-            return str(row["socket_path"])
-        canonical = paths.socket_path(Path(self.cwd))
-        return str(canonical) if canonical.exists() else None
+        return resolve_socket(self.cwd)
 
     async def _ensure_started(self) -> None:
         """Spawn the peer's kernel if no socket is reachable yet."""
@@ -436,12 +610,7 @@ class Peer:
 
             env = clean_env(dict(os.environ), DOTENV_KEYS)
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "repld",
-                "--project",
-                self.cwd,
-                "start",
+                *start_command(self.cwd),
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -459,11 +628,11 @@ class Peer:
                     f"`repld --project {self.cwd} start` failed: {text}"
                 )
 
-    async def _connect(
-        self,
-    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
-        """Open a unix connection to the peer, spawning it on the first miss
-        when `start` is set."""
+    async def _connect(self) -> _Link:
+        """Open a connection to the peer, spawning it on the first miss when
+        `start` is set."""
+        if self.host is not None:
+            return await self._connect_ssh(self.host)
         for attempt in range(2):
             path = await asyncio.to_thread(self._socket_path)
             if path is not None:
@@ -471,7 +640,7 @@ class Peer:
                     reader, writer = await asyncio.open_unix_connection(
                         path, limit=_READ_LIMIT
                     )
-                    return reader, writer, path
+                    return _Link(reader, writer, path, None)
                 except FileNotFoundError, ConnectionRefusedError:
                     pass
             if attempt == 0 and self.start:
@@ -480,6 +649,80 @@ class Peer:
             f"no kernel is running for {self.cwd}: run "
             f"`repld --project {self.cwd} start`, or peers.get(..., start=True)"
         )
+
+    async def _connect_ssh(self, host: str) -> _Link:
+        """Reach the kernel on `host`: through the forward once there is one,
+        else through `repld peer-pipe`, which also sets the forward up.
+
+        Either way nothing has reached the far kernel's dispatcher but a
+        `ping` when this returns, so a failure here never ran.
+        """
+        link = await self._connect_forward(host)
+        if link is not None:
+            return link
+        paths.ensure_runtime_dir()
+        proc = await asyncio.create_subprocess_exec(
+            *build_ssh_argv(host, self.cwd, start=self.start),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=_READ_LIMIT,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+        assert proc.stderr is not None
+        link = _Link(proc.stdout, proc.stdin, "", proc)
+        try:
+            async with asyncio.timeout(_PIPE_STATUS_TIMEOUT):
+                line = await proc.stdout.readline()
+                stderr = b"" if line else await proc.stderr.read()
+            remote = parse_pipe_status(line, host, stderr.decode("utf-8", "replace"))
+            if remote:
+                await self._ensure_forward(host, remote)
+        except TimeoutError:
+            await link.close()
+            raise PeerUnavailable(
+                f"ssh {host} gave no answer in {_PIPE_STATUS_TIMEOUT:.0f} s"
+            ) from None
+        except BaseException:
+            await link.close()
+            raise
+        return link
+
+    async def _connect_forward(self, host: str) -> _Link | None:
+        """A probed connection through the forward, or None with it dropped."""
+        forward = self._forward
+        if forward is None:
+            return None
+        link = await _probe_forward(forward[0])
+        if link is None and self._forward is forward:
+            self._forward = None
+            await _cancel_forward(host, forward)
+        return link
+
+    async def _ensure_forward(self, host: str, remote: str) -> None:
+        """Forward a local socket to `remote` on `host` for the calls after
+        this one. A call that finds another already at it does not wait.
+
+        The far kernel is known to be up here, so a forward that fails its
+        probe now is one the far sshd refuses, and is not tried again.
+        """
+        if self._forward_lock is None:
+            self._forward_lock = asyncio.Lock()
+        if self._forward_off or self._forward or self._forward_lock.locked():
+            return
+        async with self._forward_lock:
+            forward = (forward_path(host, self.cwd, remote), remote)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(forward[0])
+            link = None
+            if await _run_ssh_control(build_forward_argv(host, *forward)):
+                link = await _probe_forward(forward[0])
+            if link is None:
+                self._forward_off = True
+                await _cancel_forward(host, forward)
+                return
+            await link.close()
+            self._forward = forward
 
     async def _read_reply(self, reader: asyncio.StreamReader) -> tuple[dict, bool]:
         """Read lines until the reply arrives; return it with its goodbye flag.
@@ -507,8 +750,9 @@ class Peer:
             self._semaphore = asyncio.Semaphore(_MAX_IN_FLIGHT)
         line = self._encode_request(method, params)
         async with self._semaphore:
-            reader, writer, path = await self._connect()
-            if path == str(_own_socket()):
+            link = await self._connect()
+            reader, writer = link.reader, link.writer
+            if link.path and link.path == str(_own_socket()):
                 writer.close()
                 raise PeerRefused(
                     "a kernel cannot call itself; use the function directly",
@@ -533,7 +777,7 @@ class Peer:
             finally:
                 # On cancellation this close is the hangup the callee's reader
                 # thread polls for to cancel the running target.
-                writer.close()
+                await link.close()
 
     def _encode_request(self, method: str, params: dict) -> str:
         """Serialize a JSON-RPC request and enforce the payload limit."""
@@ -590,6 +834,68 @@ class Peer:
         return msg["result"]
 
 
+async def _probe_forward(local: str) -> _Link | None:
+    """Connect to the forward socket `local` and `ping` the far kernel; None
+    unless it answered.
+
+    The round trip comes before any request: a forward whose ssh connection
+    or far kernel is gone accepts the connect and only then hangs up, which
+    after a request would read as "unknown".
+    """
+    try:
+        reader, writer = await asyncio.open_unix_connection(local, limit=_READ_LIMIT)
+    except FileNotFoundError, ConnectionRefusedError:
+        return None
+    try:
+        probe = {"jsonrpc": "2.0", "id": _PROBE_ID, "method": "ping"}
+        writer.write((json.dumps(probe) + "\n").encode("utf-8"))
+        async with asyncio.timeout(_PROBE_TIMEOUT):
+            await writer.drain()
+            line = await reader.readline()
+    except OSError, TimeoutError:
+        line = b""
+    except BaseException:
+        writer.close()
+        raise
+    if _is_probe_reply(line):
+        return _Link(reader, writer, "", None)
+    writer.close()
+    return None
+
+
+async def _cancel_forward(host: str, forward: tuple[str, str]) -> None:
+    """Ask the shared connection to stop `forward` and remove its socket."""
+    await _run_ssh_control(build_forward_argv(host, *forward, cancel=True))
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(forward[0])
+
+
+def _is_probe_reply(line: bytes) -> bool:
+    """Whether `line` is the kernel's answer to the forward probe."""
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(msg, dict) and msg.get("id") == _PROBE_ID and "result" in msg
+
+
+async def _run_ssh_control(argv: list[str]) -> bool:
+    """Run one `ssh -O` request against the shared connection; True on exit 0."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        async with asyncio.timeout(_FORWARD_TIMEOUT):
+            return await proc.wait() == 0
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return False
+
+
 def _own_socket() -> str:
     """This kernel's socket path, or empty outside a kernel."""
     try:
@@ -641,12 +947,20 @@ class _Peers:
         A path need not be running. `start=True` makes the first call spawn that
         project's kernel (bound to its own venv) if none is up; without it a
         stopped peer is a `PeerUnavailable`.
+
+        `host:target` is a kernel on another machine, reached over `ssh host`;
+        `target` is resolved there.
         """
-        cwd = resolve_cwd(target, sessions.list_sessions())
+        remote = parse_remote(target)
+        if remote is None:
+            key = cwd = resolve_cwd(target, sessions.list_sessions())
+        else:
+            key, cwd = target, remote[1]
         with self._lock:
-            handle = self._handles.get(cwd)
+            handle = self._handles.get(key)
             if handle is None:
-                handle = self._handles[cwd] = Peer(cwd, start=start)
+                host = remote[0] if remote else None
+                handle = self._handles[key] = Peer(cwd, start=start, host=host)
             elif start:
                 handle.start = True
             return handle

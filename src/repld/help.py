@@ -1435,6 +1435,8 @@ cached per project directory, so peers.get() twice returns the same object.
 
 A Peer has .cwd (the resolved project directory) and .name.
 
+"host:target" is a kernel on another machine, see "A peer on another machine".
+
 == Calling ==
 
   await peer.call(target, /, *args, **kwargs)
@@ -1538,6 +1540,7 @@ Every call carries who asked, in the peer's terms:
    "claude_session_id", "project_dir", "session_kind",   # who started it all
    "task_id",                                            # the calling task
    "chain": [{kernel, claude_session_id, task_id}, ...], # every hop, this one last
+   # kernel also carries "host", the caller's hostname
    "pid_verified", "peer_pid"}                           # added by the peer
 
 Inside a function called this way, `import repld; repld.peer_caller()` returns
@@ -1551,7 +1554,8 @@ shows from=peer:<project>/<session>, and get_task returns it as `caller`.
 
 Only pid_verified is checked: the peer compares the claimed kernel pid with the
 connecting process (SO_PEERCRED). The Claude session id and everything else is a
-claim by a same-user process, for attribution, not authorization.
+claim by a same-user process, for attribution, not authorization. A caller on
+another machine is never pid_verified: the connecting process is the relay.
 
 A peer call made from inside a peer call keeps the originating Claude session and
 extends the chain, so a three-kernel path still names the human's session.
@@ -1565,6 +1569,8 @@ a call to your own kernel ("self") and a chain 8 kernels deep ("depth"). A -> B 
 fails in B with PeerRefused, which A sees as PeerCallError(remote_type
 "PeerRefused"). These calls would not deadlock (each side awaits, nothing blocks a
 loop); refusing keeps every chain a simple path, so "who asked" is never ambiguous.
+A kernel is itself only on its own host: the same socket path on another machine
+is another kernel.
 
 == A peer that is not running ==
 
@@ -1584,6 +1590,40 @@ name, since a name is looked up in the live registry.
 
 Use a path for services you start deliberately; a worktree path is a different
 project from its main checkout.
+
+== A peer on another machine ==
+
+  mac = peers.get("mac:ios-app")              # a live kernel named ios-app, there
+  mac = peers.get("me@10.0.0.5:/Users/me/ios-app", start=True)
+  await mac.call("build.archive", scheme="App")
+
+Everything before the first ":" is what you would hand to ssh (a config alias,
+user@host); the rest is a name or path resolved on that machine. peer.host is
+that first part, None for a local peer. Write "./a:b" for a local path whose
+first part has a colon.
+
+The first call runs `ssh host repld peer-pipe target`, a relay between its stdio
+and that kernel's socket, so the callee cannot tell it from a local call and
+call, info, inspect, gather, timeouts and cancellation all behave the same. That
+call also learns where the far kernel listens, and repld forwards a local socket
+to it over the same ssh connection (kept for 10 minutes idle): later calls dial
+the forward and start nothing over there, a few tens of ms instead of a few
+hundred. A forward that has died (the ssh connection expired, the far kernel
+moved) is noticed by a ping before the request is sent, and that call goes
+through peer-pipe again and rebuilds it. A host that refuses socket forwarding
+just stays on peer-pipe. ssh runs with BatchMode: keys or an agent, never a
+password prompt. The remote lookup adds ~/.local/bin to PATH, where
+`uv tool install repld-tool` puts repld; both ends need a repld with peer-pipe.
+
+The did-it-run answer holds: an ssh that cannot connect, a missing remote repld
+and a stopped kernel are all PeerUnavailable (nothing was sent), an unknown name
+is PeerNotFound, and a connection lost after the request went out is
+PeerDisconnected. start=True starts the kernel on the far side, as a child of the
+ssh session: on macOS that kernel is outside the login (GUI) session and cannot
+use the keychain, so a kernel that signs or installs iOS builds must be started
+from a terminal or LaunchAgent on the Mac itself, not with start=True.
+
+peers.list() and `repld gist stub` are local only.
 
 == Typed shims (stubs) ==
 
@@ -1642,8 +1682,9 @@ Any process of the same user can call any dotted name in a kernel. This is exact
 exec's reach, nothing more and nothing less: the kernel's unix socket was already
 that door, and peers is a typed way through it. Caller identity is a claim; only
 the kernel pid is verified. Do not treat a peer call as authenticated to a Claude
-session. There is no remote access: the socket is local and uid-protected, and
-this adds no TCP surface.
+session. The socket stays local and uid-protected and nothing listens on TCP: a
+"host:target" peer is reached through ssh, so whoever can ssh in as that user
+can call that kernel, and nobody else. A remote caller's identity is all claim.
 
 == Not in scope ==
 
@@ -1657,7 +1698,7 @@ gist to its own service, repld://docs/production.
 == Reference ==
 
   peers.list() -> list[dict]
-  peers.get(target, *, start=False) -> Peer
+  peers.get(target, *, start=False) -> Peer    target: name | path | "host:name" | "host:path"
   await peer.call(target, /, *args, **kwargs) -> JSON value
   await peer.info() -> dict
   await peer.inspect(target) -> dict
@@ -2265,10 +2306,12 @@ current_session_id()
     "peers": """\
 peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]
 peers.get(target, *, start=False)             -> Peer    sync; a path, or the basename of one live kernel
+peers.get("host:target")                      -> Peer    the same on another machine, over `ssh host`
 await peer.call(target, /, *args, **kwargs)   -> JSON value; runs the dotted name in THEIR kernel
 await peer.info()                             -> {peer_protocol, kernel, gists, main}
 await peer.inspect(target)                    -> {target, kind, signature, async, doc, module, file}
 peer.cwd, peer.name, peer.start               the resolved directory, its basename, whether a call may start it
+peer.host                                     the ssh destination of a remote peer, else None
 
 Errors, all PeerError (also reachable as peers.PeerCallError, ...):
   PeerNotFound(candidates)  PeerUnavailable   never ran (no/many live kernels; none running)
@@ -2284,7 +2327,7 @@ repld.peer_caller() -> dict | None     who called this kernel, inside a peer cal
 repld gist stub <peer> <gist>[.fn,...] [--as NAME] [--global] [--start] [--force]
 repld gist stub --check [NAME...]      typed async shims; --check reports drift (exit 1)
 
-Resolution, errors, identity, cold peers, stubs and the security note:
+Resolution, errors, identity, cold peers, remote peers, stubs and the security note:
 repld://docs/peers.
 """,
 }

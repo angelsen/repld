@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import time
@@ -199,6 +200,10 @@ def phase_5_sweep(kernel: Kernel) -> None:
     ]
     for s in sentinels:
         s.write_text("stale")
+    forward = paths.RUNTIME_DIR / f"{dead}-fwd-sweeptest.sock"
+    with socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(str(forward))
+    sentinels.append(forward)
 
     live_pid = json.loads(kernel.lock_path.read_text())["pid"]
     live_spills = set(_live_spills(kernel))

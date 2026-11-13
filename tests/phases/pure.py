@@ -4,6 +4,8 @@ import ast
 import asyncio
 import contextlib
 import io
+import json
+import os
 import re
 import subprocess
 import threading
@@ -1970,6 +1972,96 @@ def _peer_resolution() -> None:
     print("  ✓ peers: name/path resolution, ambiguity, canonical-socket preference")
 
 
+def _peer_remote() -> None:
+    assert_eq(peer.parse_remote("mac:ios-app"), ("mac", "ios-app"), "alias and name")
+    assert_eq(peer.parse_remote("u@h:/p/q"), ("u@h", "/p/q"), "user@host and path")
+    assert_eq(peer.parse_remote("mac:a:b"), ("mac", "a:b"), "first colon splits")
+    for local in ("name", "/p/a:b", "./a:b", "~/a:b", ":x", "mac:"):
+        assert_eq(peer.parse_remote(local), None, f"{local!r} is local")
+
+    handle = peer.peers.get("mac:/srv/ios-app")
+    assert_eq(
+        (handle.host, handle.cwd, handle.name),
+        ("mac", "/srv/ios-app", "ios-app"),
+        "remote handle",
+    )
+    assert_true(peer.peers.get("mac:/srv/ios-app") is handle, "one handle per target")
+
+    argv = peer.build_ssh_argv("mac", "my proj", start=True)
+    assert_eq(argv[0], "ssh", "runs ssh")
+    assert_eq(argv[-2], "mac", "host precedes the remote command")
+    assert_true(
+        argv[-1].endswith("repld peer-pipe --start 'my proj'"),
+        f"quoted remote command (got {argv[-1]})",
+    )
+    assert_true("BatchMode=yes" in argv, "never prompts")
+
+    status = lambda **params: json.dumps(
+        {"method": peer.PIPE_STATUS_METHOD, "params": params}
+    ).encode()
+    ready = status(status="ready", message="/p")
+    assert_eq(peer.parse_pipe_status(ready, "mac", ""), "", "a ready with no socket")
+    ready = status(status="ready", message="/p", socket="/run/k/kernel.sock")
+    assert_eq(
+        peer.parse_pipe_status(ready, "mac", ""), "/run/k/kernel.sock", "the far socket"
+    )
+    local = peer.forward_path("mac", "ios", "/run/k/kernel.sock")
+    assert_true(
+        Path(local).name.startswith(f"{os.getpid()}-fwd-")
+        and Path(local).parent == paths.RUNTIME_DIR,
+        f"forward socket is this pid's scratch ({local})",
+    )
+    assert_true(len(local.encode()) <= paths.SOCKET_PATH_MAX, "and fits a unix socket")
+    for other in (("other", "ios"), ("mac", "/srv/ios")):
+        assert_true(
+            local != peer.forward_path(*other, "/run/k/kernel.sock"),
+            f"its own socket per host and target ({other})",
+        )
+    fwd = peer.build_forward_argv("mac", local, "/run/k/kernel.sock")
+    assert_eq(
+        fwd[-5:],
+        ["-O", "forward", "-L", f"{local}:/run/k/kernel.sock", "mac"],
+        "forward request",
+    )
+    assert_eq(
+        peer.build_forward_argv("mac", local, "/r", cancel=True)[-4],
+        "cancel",
+        "cancel request",
+    )
+    assert_true(
+        peer._is_probe_reply(b'{"jsonrpc": "2.0", "id": 0, "result": {}}\n'),
+        "probe reply",
+    )
+    for line in (
+        b"",
+        b"junk\n",
+        b'{"id": 1, "result": {}}\n',
+        b'{"id": 0, "error": {}}\n',
+    ):
+        assert_true(not peer._is_probe_reply(line), f"not a probe reply: {line!r}")
+    err = _expect(
+        peer.PeerNotFound,
+        peer.parse_pipe_status,
+        status(status="not_found", message="no live kernel", candidates=["/a", "/b"]),
+        "mac",
+        "",
+    )
+    assert_eq(err.candidates, ["/a", "/b"], "candidates travel")
+    _expect(
+        peer.PeerUnavailable,
+        peer.parse_pipe_status,
+        status(status="unavailable", message="no kernel"),
+        "mac",
+        "",
+    )
+    for line in (b"", b"not json\n", b'{"id": 1, "result": {}}\n'):
+        err = _expect(
+            peer.PeerUnavailable, peer.parse_pipe_status, line, "mac", "refused"
+        )
+        assert_true("refused" in str(err), "ssh's own stderr is in the message")
+    print("  ✓ peers: remote target parsing, ssh argv, pipe status mapping")
+
+
 def _socket_path_length() -> None:
     fits = "/" + "s" * (paths.SOCKET_PATH_MAX - 1)
     assert_eq(
@@ -1997,26 +2089,19 @@ def _peer_host_vetting() -> None:
 
     own = "/run/me/kernel.sock"
     hop = lambda n: {"socket": f"/run/k{n}/kernel.sock"}
-    assert_eq(peer_host.check_chain(None, own), None, "no caller")
-    assert_eq(peer_host.check_chain({"chain": [hop(1)]}, own), None, "unrelated chain")
+    check = lambda caller: peer_host.check_chain(caller, own, "here")
+    assert_eq(check(None), None, "no caller")
+    assert_eq(check({"chain": [hop(1)]}), None, "unrelated chain")
+    assert_eq(check({"chain": [hop(1), {"socket": own}]}), "cycle", "in chain")
+    assert_eq(check({"kernel": {"socket": own}}), "cycle", "caller is us")
+    assert_eq(check({"kernel": {"socket": own, "host": "here"}}), "cycle", "same host")
     assert_eq(
-        peer_host.check_chain({"chain": [hop(1), {"socket": own}]}, own),
-        "cycle",
-        "in chain",
-    )
-    assert_eq(
-        peer_host.check_chain({"kernel": {"socket": own}}, own), "cycle", "caller is us"
-    )
-    assert_eq(
-        peer_host.check_chain({"chain": [hop(i) for i in range(7)]}, own),
+        check({"chain": [{"socket": own, "host": "there"}]}),
         None,
-        "7 is fine",
+        "the same socket path on another host is another kernel",
     )
-    assert_eq(
-        peer_host.check_chain({"chain": [hop(i) for i in range(8)]}, own),
-        "depth",
-        "8 is full",
-    )
+    assert_eq(check({"chain": [hop(i) for i in range(7)]}), None, "7 is fine")
+    assert_eq(check({"chain": [hop(i) for i in range(8)]}), "depth", "8 is full")
 
     def two(a, b=1): ...
 
@@ -2785,6 +2870,7 @@ def phase_2_pure() -> None:
     _lease_routes()
     _stop_flushes_inflight_reply()
     _peer_resolution()
+    _peer_remote()
     _socket_path_length()
     _peer_host_vetting()
     _peer_responses()

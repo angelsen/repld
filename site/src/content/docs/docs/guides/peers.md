@@ -134,9 +134,26 @@ repld gist stub --check
 
 It names the functions whose signature changed or vanished, and exits 1 if any stub is stale. A peer that is not running is reported as `unchecked`, never `ok`. Regenerate with `repld gist stub ... --force`, which only ever overwrites an existing stub, never a hand-written gist.
 
+## A peer on another machine
+
+```python
+mac = peers.get("mac:ios-app")  # a live kernel named ios-app on the host `mac`
+await mac.call("build.archive", scheme="App")
+```
+
+Everything before the first `:` is what you would hand to `ssh` (a config alias, `user@host`); the rest is a name or path resolved on that machine. The first call runs `ssh host repld peer-pipe target`, a relay to that kernel's socket, so `call`, `info`, `inspect`, `gather`, timeouts and cancellation behave as they do locally. It also learns where the far kernel listens, and repld forwards a local socket to it over the same ssh connection. Later calls dial that forward and start nothing on the far side: a few tens of milliseconds instead of a few hundred. A forward that has died is noticed by a ping before the request is sent; that call goes through `peer-pipe` again and rebuilds it.
+
+What you need: key or agent login (ssh runs with `BatchMode`, it never prompts), and a repld with `peer-pipe` on both machines. The remote lookup adds `~/.local/bin` to `PATH`, where `uv tool install repld-tool` puts it.
+
+The errors keep their meaning. An ssh that cannot connect, a missing remote repld and a stopped kernel are `PeerUnavailable`: nothing was sent. An unknown name is `PeerNotFound`. A connection lost after the request went out is `PeerDisconnected`.
+
+`start=True` starts the kernel on the far side as a child of the ssh session. On macOS such a kernel is outside the login session and cannot use the keychain, so a kernel that signs or installs iOS builds has to be started on the Mac itself (a terminal or a LaunchAgent).
+
+`peers.list()` and `repld gist stub` are local only.
+
 ## Security
 
-Any process of the same user can call any dotted name in a kernel. That is exactly `exec`'s reach: the kernel's unix socket was already that door, and peers are a typed way through it. Caller identity is a claim. There is no TCP surface and no remote access.
+Any process of the same user can call any dotted name in a kernel. That is exactly `exec`'s reach: the kernel's unix socket was already that door, and peers are a typed way through it. Caller identity is a claim. Nothing listens on TCP: a `host:target` peer is reached through ssh, so whoever can ssh in as that user can call that kernel, and nobody else.
 
 ## Not covered
 

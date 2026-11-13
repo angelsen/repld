@@ -49,6 +49,11 @@ _SUBCOMMANDS = {
         "run_rebind",
         "SessionStart hook: re-key this pane's connection after /clear or a resume",
     ),
+    "peer-pipe": (
+        "peer_pipe_cmd",
+        "run_peer_pipe",
+        'far end of a peer call over ssh (run by peers.get("host:name"))',
+    ),
     "help": ("help", "run_help", "agent/human docs"),
     "gist": (
         "gist_cmd",

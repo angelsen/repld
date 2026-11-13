@@ -125,16 +125,21 @@ def _build_unresolved(message: str, exc: BaseException | None = None) -> TargetE
     return TargetError(PEER_ERR_UNRESOLVED, message, data)
 
 
-def check_chain(caller: dict | None, own_socket: str) -> str | None:
+def check_chain(caller: dict | None, own_socket: str, own_host: str) -> str | None:
     """`"cycle"` if this kernel is already in the call chain, `"depth"` if the
-    chain is too long to extend, else `None`. A refused call never runs."""
+    chain is too long to extend, else `None`. A refused call never runs.
+
+    A hop is this kernel when its socket matches and its host does too; a hop
+    that names no host (a kernel that predates remote peers) matches on the
+    socket alone.
+    """
     caller = caller or {}
     chain = [e for e in (caller.get("chain") or []) if isinstance(e, dict)]
-    sockets = {str(e.get("socket")) for e in chain}
-    own = (caller.get("kernel") or {}).get("socket")
-    if own is not None:
-        sockets.add(str(own))
-    if own_socket in sockets:
+    hops = [*chain, caller.get("kernel") or {}]
+    if any(
+        str(e.get("socket")) == own_socket and e.get("host") in (None, own_host)
+        for e in hops
+    ):
         return "cycle"
     if len(chain) >= PEER_MAX_DEPTH:
         return "depth"

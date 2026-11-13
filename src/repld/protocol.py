@@ -1442,7 +1442,9 @@ class Dispatcher(BrowserDispatchMixin):
             or (caller is not None and not isinstance(caller, dict))
         ):
             return _error(rid, -32602, "args must be a list, kwargs an object")
-        reason = peer_host.check_chain(caller, str(ipc.socket_path()))
+        reason = peer_host.check_chain(
+            caller, str(ipc.socket_path()), socket.gethostname()
+        )
         if reason is not None:
             raise peer_host.refusal(reason, caller)
         # Same wait the other lazy-spawn triggers take: the first call may be
