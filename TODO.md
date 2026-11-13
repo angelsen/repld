@@ -182,7 +182,8 @@ infinite scroll.
   a mid-call `cancel`, and `repld gist stub voice-api <gist>`.
 - [ ] **Remote peers (`host:target`), leftovers from 0.23.0/0.23.1** (recap 66f074dd; live runs
   against the Mac, fredrik@192.168.3.92, macOS 27.2, 2026-11-13):
-  - [ ] A kernel does not cancel its `ssh -O forward` sockets on shutdown: a stopped kernel left
+  - [x] (fixed 2026-11-13: `kernel._shutdown` runs `peers.close_forwards()`; a SIGKILLed kernel
+    still leaves them to the boot sweep) A kernel does not cancel its `ssh -O forward` sockets on shutdown: a stopped kernel left
     `{pid}-fwd-*.sock` under `RUNTIME_DIR` (seen 2026-11-13), and the shared ssh connection keeps
     forwarding it until `ControlPersist` ends. The next boot sweep reclaims the file; nothing
     cancels the forward.

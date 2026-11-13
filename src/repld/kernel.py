@@ -1339,12 +1339,16 @@ async def _drain_loop_tasks() -> None:
 
 
 def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
-    """Drain loop tasks within a 2s budget, stop the loop, and close IPC."""
-    if loop.is_running():
+    """Drain loop tasks and cancel peer forwards within a 2s budget each, stop
+    the loop, and close IPC."""
+    from . import peer
+
+    # Forwards go after the drain: a call still in flight could set one up.
+    for closing in (_drain_loop_tasks, peer.peers.close_forwards):
+        if not loop.is_running():
+            break
         try:
-            asyncio.run_coroutine_threadsafe(_drain_loop_tasks(), loop).result(
-                timeout=2.0
-            )
+            asyncio.run_coroutine_threadsafe(closing(), loop).result(timeout=2.0)
         except concurrent.futures.TimeoutError, RuntimeError:
             pass  # loop wedged or already stopping, best effort
     loop.call_soon_threadsafe(loop.stop)

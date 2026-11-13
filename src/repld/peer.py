@@ -1031,5 +1031,16 @@ class _Peers:
                 handle.start = True
             return handle
 
+    async def close_forwards(self) -> None:
+        """Cancel every socket forward this kernel's handles hold; without it
+        the shared ssh connection keeps forwarding for a kernel that is gone."""
+        with self._lock:
+            held = [(h.host, h._forward) for h in self._handles.values()]
+            for handle in self._handles.values():
+                handle._forward = None
+        await asyncio.gather(
+            *(_cancel_forward(host, fwd) for host, fwd in held if host and fwd)
+        )
+
 
 peers = _Peers()

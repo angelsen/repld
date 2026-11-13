@@ -833,6 +833,12 @@ def _over_ssh(a: Bridge, a_cwd: Path, tmp: Path, b_path: Path) -> None:
         (bindir / name).chmod(0o755)
     cold = tmp / "cold-ssh"
     (cold / "gists").mkdir(parents=True)
+    (cold / "gists" / "fwd.py").write_text(
+        "import repld\n\n\nasync def make() -> str:\n"
+        "    p = repld.peers.get('fake:svc-peer')\n"
+        "    await p.call('svc.add', 1)\n    await p.call('svc.add', 1)\n"
+        "    return p._forward[0]\n"
+    )
     _run(
         a,
         f"global pp_path\npp_path = os.environ['PATH']\nos.environ['PATH'] = {str(bindir)!r} + ':' + pp_path",
@@ -953,6 +959,24 @@ def _over_ssh(a: Bridge, a_cwd: Path, tmp: Path, b_path: Path) -> None:
             _last_json(out), [2, 3, None, True], "a refused forward stays on peer-pipe"
         )
         _stubs_over_ssh(a, a_cwd, bindir, b_path)
+
+        out = _run(
+            a,
+            f"p = peers.get('fake:' + {str(cold)!r}, start=True)\n"
+            "print(json.dumps(await p.call('fwd.make')))",
+            timeout=120,
+        )
+        held = Path(_last_json(out))
+        assert_true(held.is_socket(), f"the far-side kernel holds a forward ({held})")
+        stop_kernel_at(cold)
+        assert_true(not held.exists(), "a stopping kernel removes its forward socket")
+        assert_true(
+            any(
+                "-O cancel" in line and str(held) in line
+                for line in (bindir / "log").read_text().splitlines()
+            ),
+            "and asks the shared ssh connection to stop forwarding it",
+        )
     finally:
         _run(a, "os.environ['PATH'] = pp_path")
         stop_kernel_at(cold)
@@ -966,7 +990,7 @@ def _over_ssh(a: Bridge, a_cwd: Path, tmp: Path, b_path: Path) -> None:
         "  ✓ peers over ssh: name and path targets, typed errors, a failed ssh never ran, gather, hangup cancel, start=True"
     )
     print(
-        "  ✓ peers over ssh: later calls ride a socket forward, a dead one is probed before the request and rebuilt, a refused one is not retried"
+        "  ✓ peers over ssh: later calls ride a socket forward, a dead one is probed before the request and rebuilt, a refused one is not retried, a stopping kernel cancels its own"
     )
 
 
