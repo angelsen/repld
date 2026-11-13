@@ -180,6 +180,29 @@ infinite scroll.
 - [ ] **Peers live check against a real service.** Phase 19 uses throwaway kernels. Run
   `peers.get("voice-api")` from this project against the real `voice-api` kernel once: a real call,
   a mid-call `cancel`, and `repld gist stub voice-api <gist>`.
+- [ ] **Remote peers (`host:target`), leftovers from 0.23.0/0.23.1** (recap 66f074dd; live runs
+  against the Mac, fredrik@192.168.3.92, macOS 27.2, 2026-11-13):
+  - [ ] A kernel does not cancel its `ssh -O forward` sockets on shutdown: a stopped kernel left
+    `{pid}-fwd-*.sock` under `RUNTIME_DIR` (seen 2026-11-13), and the shared ssh connection keeps
+    forwarding it until `ControlPersist` ends. The next boot sweep reclaims the file; nothing
+    cancels the forward.
+  - [ ] `peers.list()` has no remote form.
+  - [ ] `/proc`-based claude ancestry (`ipc._resolve_ancestry`, `_is_claude_process`) returns
+    nothing on macOS, so rebind-by-process-tree does not work on a kernel there.
+  - [ ] Unverified: whether a kernel started over ssh on a Mac can codesign. One 2026 write-up
+    says no (`errSecInternalComponent`, needs the GUI session via `launchctl asuser` or a
+    LaunchAgent); `PEERS_GUIDE` warns, nothing was tested. docduty note:
+    codesign-over-ssh-on-a-headless-mac.
+  - [ ] macOS `ulimit -n` is 256 in the ssh shell; a kernel started there that opens many fds
+    may hit it. Not documented.
+  - [ ] An idle forward does not keep the ssh connection alive: after `ControlPersist=600` the
+    first call pays about 0.9 s again. Measured, accepted. One multiplexed relay
+    (Mitogen-style framing) is the route to single-digit ms; not planned.
+  - [ ] Forwarded-call latency was 61 to 157 ms median in one run with ping to the Mac at 6 to
+    120 ms; wifi power saving on the Mac is the guess, not confirmed.
+  - [x] `start=True` against the real Mac: run live 2026-11-13, started the far kernel and
+    answered in 0.43 s.
+  - [x] `repld gist stub host:target` and `--check` on a `host:/cwd` marker: shipped in 0.23.1.
 - [ ] **Native-prompt backlog, ordered.** (1) ~~`set_files` readability probe hangs on a
   `hidden` tab~~ (shipped). (2) `DeviceAccess` + `BluetoothEmulation` as an agent-mode record/push/select feature, only
   if a hardware-web use appears. Skipped: FedCm (flag-gated, rare); USB/serial/HID have no CDP
