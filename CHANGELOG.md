@@ -12,9 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+### Removed
+
+## [0.23.2] - 2026-11-13
+
+### Fixed
+
 - A kernel that stops now cancels the ssh socket forwards it set up for `host:target` peers. Before, the `{pid}-fwd-*.sock` file stayed until the next kernel booted and the shared ssh connection kept forwarding it.
 
-### Removed
 
 ## [0.23.1] - 2026-11-13
 
