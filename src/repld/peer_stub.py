@@ -78,6 +78,15 @@ def select_functions(
     return entry, [fns[n] for n in names]
 
 
+def peer_label(ref: str) -> str:
+    """The short name a stub's peer is shown by: the project directory's
+    basename, behind `host:` for a `host:/path` peer."""
+    host, sep, rest = ref.partition(":")
+    remote = bool(sep) and bool(host) and "/" not in host
+    base = (rest if remote else ref).rstrip("/").rsplit("/", 1)[-1]
+    return f"{host}:{base}" if remote else base
+
+
 def render_params(params: list[dict]) -> str:
     """Format a parameter list as a Python signature string.
 
@@ -134,8 +143,7 @@ def render_stub(
         "gist": gist,
         "functions": {f["name"]: function_hash(f) for f in functions},
     }
-    peer_name = peer_cwd.rstrip("/").rsplit("/", 1)[-1]
-    doc = f"{gist_doc or gist} (peer stub for {peer_name})."
+    doc = f"{gist_doc or gist} (peer stub for {peer_label(peer_cwd)})."
     start_arg = ", start=True" if start else ""
     head = (
         f"{json.dumps(doc)}\n"
@@ -217,8 +225,8 @@ def check(
 ) -> tuple[str, list[str]]:
     """``(status, details)`` for one stub: ``ok``, ``stale``, or ``unchecked``.
 
-    *fetch_surface* takes the peer's cwd and returns a `peer/list` body,
-    or None if no kernel is up there.
+    *fetch_surface* takes the marker's peer (a cwd, or `host:/cwd`) and returns
+    a `peer/list` body, or None if no kernel is up there.
     """
     marker = read_stub(path)
     if marker is None:

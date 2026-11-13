@@ -423,17 +423,8 @@ def _gist_stub(argv: list[str]) -> int:
         print(f"error: '{name}' is not a valid Python identifier")
         return 2
 
-    from . import sessions
-
     try:
-        cwd = peer.resolve_cwd(peer_arg, sessions.list_sessions())
-        surface = _live_surface(cwd)
-        if surface is None:
-            print(
-                f"error: no kernel is running for {cwd}\n"
-                f"       start one with `repld --project {cwd} start`"
-            )
-            return 1
+        cwd, surface = _live_surface(peer_arg)
         entry, functions = peer_stub.select_functions(surface, gist, wanted)
     except (peer.PeerError, LookupError) as e:
         print(f"error: {e}")
@@ -505,7 +496,7 @@ def _gist_stub_check(names: list[str]) -> int:
     failed = 0
     for path in stubs:
         try:
-            status, details = peer_stub.check(path, _live_surface)
+            status, details = peer_stub.check(path, lambda ref: _live_surface(ref)[1])
         except peer.PeerError as e:
             status, details = "unchecked", [str(e)]
         if status != "ok":
@@ -519,17 +510,29 @@ def _gist_stub_check(names: list[str]) -> int:
     return 1 if failed else 0
 
 
-def _live_surface(peer_cwd: str) -> dict | None:
-    """The `peer/list` body of the kernel running for *peer_cwd*, or None when
-    none is reachable. Anything else wrong with the peer raises `PeerError`."""
+def _live_surface(peer_ref: str) -> tuple[str, dict]:
+    """The peer `peer_ref` names (a project path, a live kernel's name, or
+    `host:target`) in its canonical form, with its kernel's `peer/list` body.
+    Raises `PeerError` when there is no kernel to ask."""
     from . import peer, sessions
 
-    row = peer.pick_session(peer.resolve_cwd(peer_cwd, []), sessions.list_sessions())
+    remote = peer.parse_remote(peer_ref)
+    if remote is not None:
+        host, target = remote
+        cwd, msg = peer.request_sync_ssh(host, target, PEER_LIST_METHOD, {})
+        peer.raise_for_error(msg, peer_ref)
+        return f"{host}:{cwd}", msg["result"]
+    live = sessions.list_sessions()
+    cwd = peer.resolve_cwd(peer_ref, live)
+    row = peer.pick_session(cwd, live)
     if row is None:
-        return None
+        raise peer.PeerUnavailable(
+            f"no kernel is running for {cwd}: start one with "
+            f"`repld --project {cwd} start`"
+        )
     msg = peer.request_sync(str(row["socket_path"]), PEER_LIST_METHOD, {})
-    peer.raise_for_error(msg, Path(peer_cwd).name)
-    return msg["result"]
+    peer.raise_for_error(msg, Path(cwd).name)
+    return cwd, msg["result"]
 
 
 def _gist_add(argv: list[str]) -> int:
@@ -751,7 +754,7 @@ def _print_local_section(gists_dir: Path) -> list[str]:
         gist_path = gists_dir / f"{name}.py"
         stub = peer_stub.read_stub(gist_path)
         if stub is not None:
-            peer_name = Path(stub["peer"]).name
+            peer_name = peer_stub.peer_label(stub["peer"])
             fns = ", ".join(stub["functions"])
             print(f"  {name:<20} stub -> {peer_name} ({stub['gist']}): {fns}")
             continue
@@ -821,6 +824,8 @@ _GIST_COMMANDS = {
         (
             "The shim forwards each call to the peer (see repld://docs/peers), so\n"
             "its dependencies stay in the peer's own venv.\n"
+            "<peer> is a project path, a live kernel's name, or host:target for\n"
+            "one on another machine (reached over ssh, here and by the stub).\n"
             "flags: --as NAME, --global, --start (the stub starts a stopped peer),\n"
             "--force (regenerate an existing stub; never a hand-written gist).\n"
             "--check reports stubs that have drifted from their peer; exit 1 if any."

@@ -1633,6 +1633,7 @@ gist whose functions forward to the peer:
   repld gist stub voice-api voice                      # all public functions
   repld gist stub voice-api voice.transcribe,detect    # just these
   repld gist stub voice-api voice --as vo --start      # name it; its calls start a stopped peer
+  repld gist stub mac:voice-api voice                  # a peer on another machine, over ssh
 
   import voice
   text = await voice.transcribe("/tmp/a.wav", lang="en")
@@ -1652,7 +1653,10 @@ stub carries a __repld_peer_stub__ marker and a header: regenerate, do not edit.
 
 --check re-reads each stub's peer and names the functions whose signature changed
 or vanished ("transcribe: signature changed"); exit 1 if any stub is stale. A
-peer that is not running is "unchecked", never "ok". Regenerate with
+peer that is not running is "unchecked", never "ok"; so is a remote one whose
+host ssh cannot reach. A remote stub records "host:/path/there", the directory the
+far side resolved the name to, so it keeps working with that kernel stopped
+(--start) or renamed. Regenerate with
 `repld gist stub ... --force`; --force overwrites only an existing stub, never a
 hand-written gist. `repld gist list` marks stubs ("stub -> voice-api (voice)").
 

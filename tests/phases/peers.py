@@ -476,10 +476,16 @@ def _nested_identity(a: Bridge, b_path: Path, c_path: Path) -> None:
     print("  ✓ peers: a nested call keeps the originating session and the whole chain")
 
 
-def _gist_cli(a_cwd: Path, *args: str) -> subprocess.CompletedProcess:
+def _gist_cli(
+    a_cwd: Path, *args: str, path_first: Path | None = None
+) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    if path_first is not None:
+        env["PATH"] = f"{path_first}:{env['PATH']}"
     return subprocess.run(
         ["uv", "run", "--project", str(REPO), "repld", "gist", *args],
         cwd=str(a_cwd),
+        env=env,
         capture_output=True,
         text=True,
         timeout=90,
@@ -748,7 +754,73 @@ def _pipe_runs(bindir: Path) -> int:
     return (bindir / "log").read_text().count("peer-pipe")
 
 
-def _over_ssh(a: Bridge, tmp: Path, b_path: Path) -> None:
+def _stubs_over_ssh(a: Bridge, a_cwd: Path, bindir: Path, b_path: Path) -> None:
+    """`repld gist stub` against a `host:target` peer, through the stand-in `ssh`."""
+    stub_path = a_cwd / "gists" / "rstub.py"
+    far = os.path.realpath(str(b_path))
+    cli = lambda *args: _gist_cli(a_cwd, "stub", *args, path_first=bindir)
+    log = bindir / "log"
+    before = len(log.read_text().splitlines())
+    try:
+        r = cli("fake:svc-peer", "svc", "--as", "rstub")
+        assert_eq(r.returncode, 0, f"gist stub over ssh exits 0 ({r.stdout}{r.stderr})")
+        assert_true(
+            f"'peer': 'fake:{far}'" in stub_path.read_text(),
+            "the marker holds host and the far cwd",
+        )
+        r = cli("--check", "rstub")
+        assert_true(
+            r.returncode == 0 and "ok" in r.stdout,
+            f"--check reads a remote peer ({r.stdout}{r.stderr})",
+        )
+        added = log.read_text().splitlines()[before:]
+        assert_eq(
+            [sum(w in line for line in added) for w in ("peer-pipe", "-O forward")],
+            [2, 0],
+            f"the CLI rides peer-pipe and builds no forward ({added})",
+        )
+        out = _run(
+            a,
+            "import sys\nsys.modules.pop('rstub', None)\nimport rstub\n"
+            "print(json.dumps(await rstub.add(2, b=3)))",
+            timeout=60,
+        )
+        assert_eq(_last_json(out), 5, "a remote stub forwards over ssh")
+        listing = _gist_cli(a_cwd, "list").stdout
+        assert_true(
+            "stub -> fake:svc-peer (svc)" in listing,
+            f"gist list names the host ({listing[:300]})",
+        )
+
+        r = cli("down:svc-peer", "svc", "--as", "rdown")
+        assert_true(
+            r.returncode == 1 and "Connection refused" in r.stdout,
+            f"a failed ssh is an error that says why ({r.stdout}{r.stderr})",
+        )
+        r = cli("fake:nosuchpeer", "svc", "--as", "rdown")
+        assert_true(
+            r.returncode == 1 and "no live kernel named" in r.stdout,
+            f"an unknown remote name ({r.stdout}{r.stderr})",
+        )
+        assert_true(not (a_cwd / "gists" / "rdown.py").exists(), "nothing is written")
+
+        stub_path.write_text(
+            stub_path.read_text().replace(f"fake:{far}", f"down:{far}")
+        )
+        r = cli("--check", "rstub")
+        assert_true(
+            r.returncode == 1 and "unchecked" in r.stdout,
+            f"an unreachable host is unchecked, never ok ({r.stdout})",
+        )
+    finally:
+        stub_path.unlink(missing_ok=True)
+        a.exec("import sys\nsys.modules.pop('rstub', None)")
+    print(
+        "  ✓ peers over ssh: gist stub writes a host:/cwd marker, forwards, --check reads the remote peer, an unreachable host is unchecked"
+    )
+
+
+def _over_ssh(a: Bridge, a_cwd: Path, tmp: Path, b_path: Path) -> None:
     """A `host:target` peer, with a stand-in `ssh` that runs `repld peer-pipe` here."""
     bindir = tmp / "sshbin"
     bindir.mkdir()
@@ -880,6 +952,7 @@ def _over_ssh(a: Bridge, tmp: Path, b_path: Path) -> None:
         assert_eq(
             _last_json(out), [2, 3, None, True], "a refused forward stays on peer-pipe"
         )
+        _stubs_over_ssh(a, a_cwd, bindir, b_path)
     finally:
         _run(a, "os.environ['PATH'] = pp_path")
         stop_kernel_at(cold)
@@ -915,7 +988,7 @@ def phase_19_peers(kernel: Kernel) -> None:
         _cycles(a, kernel)
         _nested_identity(a, b_path, c_path)
         _stubs(a, kernel, b_path)
-        _over_ssh(a, tmp, b_path)
+        _over_ssh(a, kernel.cwd, tmp, b_path)
         _death(a, tmp)
         _cold_peer(a, tmp)
     finally:

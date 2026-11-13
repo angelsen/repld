@@ -35,7 +35,9 @@ import json
 import os
 import shlex
 import socket as _socket
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -454,7 +456,13 @@ def build_ssh_argv(host: str, target: str, *, start: bool) -> list[str]:
 
 def parse_pipe_status(line: bytes, host: str, stderr: str) -> str:
     """The far kernel's socket path from `repld peer-pipe`'s `ready` status
-    (empty from a version that does not report it), raising on any other.
+    (empty from a version that does not report it), raising on any other."""
+    return str(parse_pipe_ready(line, host, stderr).get("socket") or "")
+
+
+def parse_pipe_ready(line: bytes, host: str, stderr: str) -> dict:
+    """The params of `repld peer-pipe`'s `ready` status: `message` is the far
+    project directory, `socket` its kernel's socket. Raises on any other status.
 
     Nothing was written to the far kernel in any of these, so the call never
     ran: no status line at all means `ssh` or the remote `repld` failed.
@@ -476,7 +484,7 @@ def parse_pipe_status(line: bytes, host: str, stderr: str) -> str:
         raise PeerNotFound(text, params.get("candidates"))
     if status != "ready":
         raise PeerUnavailable(text)
-    return str(params.get("socket") or "")
+    return params
 
 
 def _parse_reply(rfile: object, request_id: int) -> dict:
@@ -518,6 +526,64 @@ def request_sync(
     finally:
         sock.close()
     raise PeerDisconnected(f"{socket_path} closed without replying", clean=False)
+
+
+def request_sync_ssh(
+    host: str, target: str, method: str, params: dict, timeout: float = 30.0
+) -> tuple[str, dict]:
+    """One blocking round trip to `target` on `host`, for the CLI: the far
+    project directory and the raw reply message.
+
+    Raises as `Peer._connect_ssh` does before the request is written
+    (`PeerNotFound`, `PeerUnavailable`: never ran) and `PeerDisconnected` after.
+    It sets up no forward: one would outlive this process on the shared ssh
+    connection.
+    """
+    paths.ensure_runtime_dir()
+    expired = threading.Event()
+
+    def expire() -> None:
+        expired.set()
+        proc.kill()
+
+    # stderr goes to a file, not a pipe: a `ControlPersist` master started by
+    # this ssh can keep the pipe open long after the client has exited.
+    with tempfile.TemporaryFile() as errfile:
+        proc = subprocess.Popen(
+            build_ssh_argv(host, target, start=False),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errfile,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+        timer = threading.Timer(timeout, expire)
+        timer.start()
+        try:
+            line = proc.stdout.readline()
+            if expired.is_set():
+                raise PeerUnavailable(f"ssh {host} gave no answer in {timeout:.0f} s")
+            if not line:
+                proc.wait()
+                errfile.seek(0)
+            stderr = b"" if line else errfile.read()
+            ready = parse_pipe_ready(line, host, stderr.decode("utf-8", "replace"))
+            req = {"jsonrpc": "2.0", "id": _REQUEST_ID, "method": method}
+            proc.stdin.write(json.dumps({**req, "params": params}).encode() + b"\n")
+            proc.stdin.flush()
+            msg = _parse_reply(proc.stdout, _REQUEST_ID)
+        except OSError as exc:
+            raise PeerDisconnected(f"ssh {host}: {exc}", clean=False) from exc
+        finally:
+            timer.cancel()
+            proc.kill()
+            proc.wait()
+            # A write the dead ssh refused is still buffered, and close retries it.
+            with contextlib.suppress(OSError):
+                proc.stdin.close()
+            proc.stdout.close()
+    if not msg:
+        raise PeerDisconnected(f"ssh {host} closed without replying", clean=False)
+    return str(ready.get("message") or target), msg
 
 
 # ---------------------------------------------------------------------------

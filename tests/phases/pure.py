@@ -2005,6 +2005,9 @@ def _peer_remote() -> None:
     assert_eq(
         peer.parse_pipe_status(ready, "mac", ""), "/run/k/kernel.sock", "the far socket"
     )
+    assert_eq(
+        peer.parse_pipe_ready(ready, "mac", "")["message"], "/p", "the far project dir"
+    )
     local = peer.forward_path("mac", "ios", "/run/k/kernel.sock")
     assert_true(
         Path(local).name.startswith(f"{os.getpid()}-fwd-")
@@ -2304,6 +2307,16 @@ def _peer_stubs() -> None:
         "/nowhere/peer", "g", "Sample gist.", fns, date="2026-01-01", start=True
     )
     assert_true("\u2014" not in code, "generated stubs stay ASCII")
+    far = peer_stub.render_stub("mac:/Users/x/ios", "g", "", fns, date="2026-01-01")
+    assert_true(
+        "_peers.get('mac:/Users/x/ios')" in far and "(peer stub for mac:ios)" in far,
+        "a remote stub dials host:/cwd and names the host",
+    )
+    assert_eq(
+        [peer_stub.peer_label(r) for r in ("/a/b", "mac:/a/b", "/a:b/c", "u@h:/a/b/")],
+        ["b", "mac:b", "c", "u@h:b"],
+        "peer labels",
+    )
     ns: dict = {}
     exec(compile(code, "<stub>", "exec"), ns)  # noqa: S102
 

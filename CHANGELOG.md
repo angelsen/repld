@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld gist stub host:target <gist>` stubs a gist of a peer on another machine, read over `ssh host repld peer-pipe`. The stub records `host:/path/there`, so its calls and `repld gist stub --check` reach the same project whether or not the name still resolves; an unreachable host reads `unchecked`, and `repld gist list` shows `stub -> host:name`.
+
 ### Changed
 
 ### Fixed
