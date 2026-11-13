@@ -8,16 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Peers on another machine: `peers.get("host:target")` calls a kernel reached over `ssh host`, with the same `call`/`info`/`inspect`, `gather`, timeouts, cancellation and typed errors as a local peer. `host` is anything `ssh` accepts and `target` is a name or path resolved there; `start=True` starts the kernel on the far side. It runs the new `repld peer-pipe` subcommand on the remote, so both machines need this version. Calls share one ssh connection, and after the first they go through a socket forward on it instead of starting a process on the far side. No TCP listener is added.
-
 ### Changed
+
+### Fixed
+
+### Removed
+
+## [0.23.0] - 2026-11-13
+
+### Added
+
+- Peers on another machine: `peers.get("host:target")` calls a kernel reached over `ssh host`, with the same `call`/`info`/`inspect`, `gather`, timeouts, cancellation and typed errors as a local peer. `host` is anything `ssh` accepts and `target` is a name or path resolved there; `start=True` starts the kernel on the far side. It runs the new `repld peer-pipe` subcommand on the remote, so both machines need this version. Calls share one ssh connection, and after the first they go through a socket forward on it instead of starting a process on the far side. No TCP listener is added.
 
 ### Fixed
 
 - macOS: a `--socket` path of 104 to 107 bytes is refused up front (the limit there is 103, not Linux's 107) instead of failing at bind.
 - macOS: the kernel now learns a connecting process's pid (`LOCAL_PEERPID`), so `pid_verified` on peer calls and cancelling an `exec` from the client work there.
 
-### Removed
 
 ## [0.22.1] - 2026-11-12
 
