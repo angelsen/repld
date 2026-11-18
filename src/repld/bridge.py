@@ -689,6 +689,8 @@ class Bridge:
                 if cache
                 else core_schemas.CORE_TOOLS + bridge_tools.SCHEMAS
             )
+            if self._code_mode:
+                tools = core_schemas.strip_output_schemas(tools)
             self._to_client(_response(rid, {"tools": tools}))
             return True
 

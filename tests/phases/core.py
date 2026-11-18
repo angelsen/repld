@@ -378,6 +378,60 @@ def phase_3_code_mode(kernel: Kernel) -> None:
             where=lambda m: m["params"]["meta"].get("task_id") == task_id,
         )
         print("  ✓ REPLD_CODE_MODE: JSON values, null, JSON nudge; plain untouched")
+
+        get = {"name": "get_task", "arguments": {"task_id": task_id}}
+        resp = scripted.call("tools/call", get)
+        assert_true(
+            "structuredContent" not in resp["result"],
+            "code mode: get_task carries no structuredContent",
+        )
+        assert_eq(
+            json.loads(content_text(resp))["done"], True, "its text is the snapshot"
+        )
+        assert_true(
+            "structuredContent" in plain.call("tools/call", get)["result"],
+            "plain: get_task keeps structuredContent",
+        )
+
+        def schemas(b: Bridge) -> list[str]:
+            tools = b.call("tools/list")["result"]["tools"]
+            return [t["name"] for t in tools if "outputSchema" in t]
+
+        assert_eq(schemas(scripted), [], "code mode: no tool declares an outputSchema")
+        assert_eq(schemas(plain), ["get_task"], "plain: get_task declares its schema")
+
+        cancel = {"name": "cancel", "arguments": {"task_id": task_id}}
+        assert_eq(
+            json.loads(content_text(scripted.call("tools/call", cancel))),
+            {"task_id": task_id, "cancelled": False},
+            "code mode: cancel answers as JSON",
+        )
+        assert_eq(
+            content_text(plain.call("tools/call", cancel)),
+            f"cancel task={task_id}: no-op",
+            "plain: cancel stays prose",
+        )
+
+        big = "[{'i': i, 's': 'x' * 40} for i in range(400)]"
+        pointer = json.loads(content_text(scripted.exec(big)))
+        assert_eq(pointer["truncated"], True, "code mode: big output is a pointer")
+        spilled = Path(pointer["spill_path"]).read_text()
+        assert_eq(len(spilled.encode()), pointer["bytes"], "the pointer sizes the file")
+        assert_eq(len(json.loads(spilled)), 400, "the file is the whole value as JSON")
+        assert_true(
+            "[full output: " in content_text(plain.exec(big)),
+            "plain: big output stays a preview with its marker",
+        )
+        resp = scripted.exec(big + "; 1/0")
+        assert_eq(
+            resp["result"]["isError"], True, "code mode: a raise is still an error"
+        )
+        assert_true(
+            "ZeroDivisionError" in content_text(resp), "and still carries the traceback"
+        )
+        print(
+            "  ✓ REPLD_CODE_MODE: get_task/cancel as JSON text, no outputSchema, big output a pointer"
+        )
     finally:
         scripted.close()
         plain.close()

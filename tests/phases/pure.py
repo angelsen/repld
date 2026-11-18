@@ -179,6 +179,21 @@ def _display_as_json() -> None:
     )
 
 
+def _strip_output_schemas() -> None:
+    stripped = core_schemas.strip_output_schemas(core_schemas.CORE_TOOLS)
+    assert_eq(
+        [t["name"] for t in stripped],
+        [t["name"] for t in core_schemas.CORE_TOOLS],
+        "same tools, same order",
+    )
+    assert_true(all("outputSchema" not in t for t in stripped), "no schema left")
+    assert_true(
+        any("outputSchema" in t for t in core_schemas.CORE_TOOLS),
+        "the shared list is not mutated",
+    )
+    print("  ✓ strip_output_schemas: drops the key on a copy")
+
+
 def _preview() -> None:
     assert_eq(tasks._make_preview(""), ("", False), "empty")
     small = "x\n" * 10
@@ -2872,6 +2887,7 @@ def phase_2_pure() -> None:
     _answer_split()
     _preview()
     _display_as_json()
+    _strip_output_schemas()
     _render()
     _format_args()
     _envelopes()

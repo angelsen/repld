@@ -24,7 +24,12 @@ The result is text. The task id is in that line, not a field, and a value is sho
 | No output, no value  | `(no output)`                    | `null`                                                     |
 | Cell past `timeout`  | the `[task <id> ...]` line       | the JSON text `{"task_id": "...", "done": false}`, nothing else |
 
-`print()` output is untouched, so a cell that prints and also returns a value is still mixed text, and output past the preview size is still a head+tail preview.
+| Output past the preview size | head+tail preview and the path | `{"truncated": true, "spill_path": "/path", "bytes": N}` |
+| `cancel`             | `cancel task=<id>: accepted`     | `{"task_id": "...", "cancelled": true}`                    |
+
+A cell that raises is the same in both: the call fails with the traceback text. `get_task`, `cancel` and gist tools answer such a session in JSON text alone, with no `structuredContent` and no `outputSchema` in `tools/list`, because a script receives `structuredContent` as a string and JSON text as an object. `print()` output is untouched, so a cell that prints and also returns a value is still mixed text.
+
+To await a backgrounded cell from a script, run `repld tasks wait <task_id> --json` through its shell helper (with `--project DIR` first when outside the project). It blocks until the task ends, exits 0 (1 if it raised) and prints the `get_task` snapshot, where `text` is the output preview: parse it, or read `spill_path` when `truncated` is true.
 
 The variable is a promise by whoever sets it. repld cannot see whether Code Mode is really on (Claude Code can refuse it at start-up with the variable set), and an ordinary session with it set is shown `{"task_id": ..., "done": false}` with no sentence. Set it only for an interactive Code Mode launch, never for `claude -p` or `--bg`.
 

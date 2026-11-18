@@ -117,6 +117,16 @@ CAPABILITIES: dict = {
 
 # -- Core tools --------------------------------------------------------------
 
+
+def strip_output_schemas(tools: list[dict]) -> list[dict]:
+    """Return `tools` with no `outputSchema`, for a session answered in JSON text alone.
+
+    A declared `outputSchema` obliges every result to carry `structuredContent`,
+    which a `BRIDGE_CODE_MODE_KEY` session never gets.
+    """
+    return [{k: v for k, v in t.items() if k != "outputSchema"} for t in tools]
+
+
 CORE_TOOLS: list[dict] = [
     {
         "name": "exec",

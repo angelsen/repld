@@ -1917,8 +1917,21 @@ exec(code, timeout=2.0)
     no output    the text `null`, not `(no output)`
     past timeout the text {"task_id": "...", "done": false}, which the script
                  receives parsed; no sentence, no output so far
+    big output   {"truncated": true, "spill_path": "/path", "bytes": N} in
+                 place of the head+tail preview; the file holds all of it,
+                 so a lone value there is still one line of JSON to parse
+    a raise      unchanged: the call throws with the traceback text
+  get_task, cancel and gist tools answer such a session in JSON text alone
+  (no structuredContent, no outputSchema in tools/list): a script receives
+  structuredContent as a string, and JSON text as an object.
   print() output is untouched, so a cell that prints and returns is still
-  mixed text. Output past the preview size is still a head+tail preview.
+  mixed text.
+  To await a backgrounded cell from a script, run through its shell helper
+    repld tasks wait <task_id> --json      (--project DIR first, outside the project)
+  which blocks until the task ends, exits 0 (1 if it raised), and prints the
+  get_task snapshot: {"done": true, "text": "{\"answer\": 42}\n",
+  "spill_path": ..., "exception": null, ...}. `text` is the output preview,
+  so JSON.parse it, or read spill_path when "truncated" is true.
   The variable is a promise by whoever sets it: repld cannot see whether
   Code Mode is really on, and an ordinary session with it set reads
   {"task_id": ..., "done": false} with no sentence. Leave it unset for

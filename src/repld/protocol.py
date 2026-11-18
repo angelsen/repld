@@ -38,6 +38,7 @@ from .core_schemas import (
     RESOURCE_TEMPLATES,
     STATIC_RESOURCES,
     check_arguments,
+    strip_output_schemas,
 )
 from .core_schemas import (
     error as _error,
@@ -878,7 +879,7 @@ class Dispatcher(BrowserDispatchMixin):
         if method == "ping":
             return None if rid is None else _response(rid, {})
         if method == "tools/list":
-            return self._tools_list(rid)
+            return self._tools_list(rid, session)
         if method == "tools/call":
             return self._tools_call(rid, params, session)
         if method == "resources/list":
@@ -967,14 +968,31 @@ class Dispatcher(BrowserDispatchMixin):
     # tools/list, tools/call
     # ------------------------------------------------------------------
 
-    def _tools_list(self, rid) -> dict:
+    def _tools_list(self, rid, session: ipc.Session | None = None) -> dict:
         """Return the full tool catalogue including bridge and gist tools."""
         if tool_listing_state() != _gist_tools_state:
             refresh_gist_tools_on_loop(self.ctx.loop)
-        return _response(rid, {"tools": _build_tools()})
+        tools = _build_tools()
+        if session is not None and session.code_mode:
+            tools = strip_output_schemas(tools)
+        return _response(rid, {"tools": tools})
 
     def _tools_call(
         self, rid, params: dict, session: ipc.Session | None = None
+    ) -> dict | None:
+        """Answer a `tools/call`; `None` once the client cancelled an `exec`.
+
+        A Code Mode session's result never carries `structuredContent`: Claude
+        Code hands a script that as a string, and parses the JSON text block
+        every handler sends beside it.
+        """
+        resp = self._route_tool_call(rid, params, session)
+        if resp is not None and session is not None and session.code_mode:
+            resp.get("result", {}).pop("structuredContent", None)
+        return resp
+
+    def _route_tool_call(
+        self, rid, params: dict, session: ipc.Session | None
     ) -> dict | None:
         """Route a `tools/call` to the matching handler; `None` once the client cancelled an `exec`."""
         name = params.get("name")
@@ -995,7 +1013,7 @@ class Dispatcher(BrowserDispatchMixin):
         if name == "get_task":
             return self._get_task(rid, args)
         if name == "cancel":
-            return self._cancel(rid, args)
+            return self._cancel(rid, args, session)
         if name in _bridge_tool_names():
             # We advertise these but never serve them: the bridge answers them
             # on the way in. Arriving here means the client is talking to the
@@ -1053,6 +1071,8 @@ class Dispatcher(BrowserDispatchMixin):
         if finished:
             # A Code Mode script parses the text: no output and no value is `null`.
             text = _format_spill(snap, "null" if code_mode else "(no output)")
+            if code_mode and snap["truncated"] and not snap["exception"]:
+                text = _format_spill_pointer(snap["spill_path"])
             return _response(
                 rid,
                 {
@@ -1098,17 +1118,19 @@ class Dispatcher(BrowserDispatchMixin):
             },
         )
 
-    def _cancel(self, rid, args: dict) -> dict:
-        """Cancel a running task by id."""
+    def _cancel(self, rid, args: dict, session: ipc.Session | None = None) -> dict:
+        """Cancel a running task by id; a Code Mode session reads the outcome as JSON."""
         tid = args["task_id"]
         accepted = self.ctx.cancel_task(tid)
+        meta = {"task_id": tid, "cancelled": accepted}
         status = "accepted" if accepted else "no-op"
+        text = (
+            json.dumps(meta)
+            if session is not None and session.code_mode
+            else f"cancel task={tid}: {status}"
+        )
         return _response(
-            rid,
-            {
-                "content": [{"type": "text", "text": f"cancel task={tid}: {status}"}],
-                "_meta": {"task_id": tid, "cancelled": accepted},
-            },
+            rid, {"content": [{"type": "text", "text": text}], "_meta": meta}
         )
 
     # ------------------------------------------------------------------
@@ -1507,6 +1529,21 @@ def _format_spill(sp: dict, fallback: str) -> str:
     if sp["truncated"]:
         parts.append(spill_marker(sp["spill_path"]))
     return "\n".join(parts) or fallback
+
+
+def _format_spill_pointer(spill_path: str) -> str:
+    """Format the JSON a Code Mode script gets for output past the preview size.
+
+    A head+tail preview is neither the data nor parseable; this names the file
+    holding all of it, which the script reads itself.
+    """
+    return json.dumps(
+        {
+            "truncated": True,
+            "spill_path": spill_path,
+            "bytes": os.path.getsize(spill_path),
+        }
+    )
 
 
 def _unknown_task_text(tid: str) -> str:
