@@ -22,6 +22,7 @@ import __main__
 from . import ipc
 from .browser_dispatch import BrowserDispatchMixin
 from .core_schemas import (
+    BRIDGE_CODE_MODE_KEY,
     BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_SESSION_ID_KEY,
@@ -940,6 +941,7 @@ class Dispatcher(BrowserDispatchMixin):
                 not elicitation or "form" in elicitation
             )
             session.elicit_url = isinstance(elicitation, dict) and "url" in elicitation
+            session.code_mode = params.get(BRIDGE_CODE_MODE_KEY) is True
         if session is not None and claude_id is not None:
             ipc.register_claude_session(
                 session,
@@ -1047,8 +1049,10 @@ class Dispatcher(BrowserDispatchMixin):
             if finished:
                 snap = self.ctx.snapshot(task_id)
                 assert snap is not None
+        code_mode = session is not None and session.code_mode
         if finished:
-            text = _format_spill(snap, "(no output)")
+            # A Code Mode script parses the text: no output and no value is `null`.
+            text = _format_spill(snap, "null" if code_mode else "(no output)")
             return _response(
                 rid,
                 {
@@ -1066,13 +1070,15 @@ class Dispatcher(BrowserDispatchMixin):
         msg = f"[task {task_id} still running after {timeout}s; completion will arrive via channel]"
         if preview:
             msg += "\n" + preview
-        return _response(
-            rid,
-            {
-                "content": [{"type": "text", "text": msg}],
-                "_meta": {"task_id": task_id, "done": False},
-            },
-        )
+        body: dict = {
+            "content": [{"type": "text", "text": msg}],
+            "_meta": {"task_id": task_id, "done": False},
+        }
+        # Code Mode sessions only: Claude Code shows a model structuredContent
+        # in place of the text, so an ordinary session would lose the sentence.
+        if code_mode:
+            body["structuredContent"] = {"task_id": task_id, "done": False}
+        return _response(rid, body)
 
     def _get_task(self, rid, args: dict) -> dict:
         """Return a task snapshot as `structuredContent`."""

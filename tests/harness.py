@@ -213,6 +213,7 @@ class Bridge:
         # A `bg` test bridge would stamp the developer session's own inbox and
         # deliver its gate pushes there; a test that wants one passes `env=`.
         proc_env.pop("CLAUDE_CODE_MESSAGING_SOCKET", None)
+        proc_env.pop("REPLD_CODE_MODE", None)
         for k, v in (env or {}).items():
             if v is None:
                 proc_env.pop(k, None)

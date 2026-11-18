@@ -802,7 +802,9 @@ async def _run_cell(task_id: str, src: str, n: int, *, wait_ready: bool = True) 
             return
 
         try:
-            await runtime.run_cell(compiled, __main__.__dict__, n)
+            origin = task["origin"]
+            as_json = origin is not None and origin.code_mode
+            await runtime.run_cell(compiled, __main__.__dict__, n, as_json=as_json)
         except BaseException as exc:
             task["exception"] = type(exc).__name__
 

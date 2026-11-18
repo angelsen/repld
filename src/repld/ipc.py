@@ -260,6 +260,9 @@ class Session:
         self.elicit_form = False
         # Same for URL mode, which a client declares separately from form.
         self.elicit_url = False
+        # Whether the bridge stamped `core_schemas.BRIDGE_CODE_MODE_KEY`: this
+        # session's `exec` results are shaped for a script, not a reader.
+        self.code_mode = False
         # Set on the first `peer/*` request: a kernel-to-kernel call connection,
         # one per call, that never sends `initialize`. It is not a session
         # anything can be pushed to, so `post_channel` refuses and the

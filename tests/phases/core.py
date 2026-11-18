@@ -89,6 +89,16 @@ def phase_3(kernel: Kernel) -> None:
         )
         meta = resp["result"]["_meta"]
         assert_eq(meta["done"], False, "nudge exec meta.done")
+        # Claude Code shows structuredContent in place of the text, so a plain
+        # session must never get it: the sentence is all the model reads.
+        assert_true(
+            "structuredContent" not in resp["result"],
+            "a plain session's nudge carries no structuredContent",
+        )
+        assert_true(
+            content_text(resp).startswith(f"[task {meta['task_id']} still running"),
+            f"a plain session's nudge is the sentence (got {content_text(resp)!r})",
+        )
         task_id = meta["task_id"]
         assert_true(task_id, "nudge has task_id")
         print(f"  ✓ nudged exec: task_id={task_id}")
@@ -327,6 +337,51 @@ def _phase_3_client_cancel(b: Bridge) -> None:
     )
     assert_eq(b.call("ping", {})["result"], {}, "an unknown cancelled id is ignored")
     print("  ✓ notifications/cancelled: the cell stops, no reply, unknown ids ignored")
+
+
+def phase_3_code_mode(kernel: Kernel) -> None:
+    """A bridge started with `REPLD_CODE_MODE=1` gets script-shaped exec results; its neighbour does not."""
+    scripted = Bridge(kernel.cwd, env={"REPLD_CODE_MODE": "1"})
+    plain = Bridge(kernel.cwd)
+    try:
+        scripted.handshake()
+        plain.handshake()
+        for code, value in (
+            ("'ae44'", "ae44"),
+            ("{'a': [1, True, None]}", {"a": [1, True, None]}),
+            ("1 + 1", 2),
+            ("x = 5", None),
+        ):
+            got = json.loads(content_text(scripted.exec(code)))
+            assert_eq(got, value, f"code mode: `{code}` parses to its value")
+        assert_eq(
+            content_text(scripted.exec("{1}")), "{1}", "no JSON form stays the repr"
+        )
+        assert_eq(content_text(plain.exec("'ae44'")), "'ae44'", "plain stays the repr")
+        assert_eq(content_text(plain.exec("x = 5")), "(no output)", "plain: no output")
+
+        resp = scripted.exec("import time; time.sleep(0.6)", timeout=0.1)
+        task_id = resp["result"]["_meta"]["task_id"]
+        assert_eq(
+            resp["result"]["structuredContent"],
+            {"task_id": task_id, "done": False},
+            "code mode: a nudge carries the id as structuredContent",
+        )
+        assert_true(
+            content_text(resp).startswith(f"[task {task_id} still running"),
+            "code mode: the sentence rides along",
+        )
+        scripted.wait_notification(
+            "notifications/claude/channel",
+            kind="task_done",
+            where=lambda m: m["params"]["meta"].get("task_id") == task_id,
+        )
+        print(
+            "  ✓ REPLD_CODE_MODE: JSON values, null, structuredContent nudge; plain untouched"
+        )
+    finally:
+        scripted.close()
+        plain.close()
 
 
 def phase_3_argv_and_registry(_kernel: Kernel) -> None:

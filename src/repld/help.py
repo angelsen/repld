@@ -1909,6 +1909,19 @@ exec(code, timeout=2.0)
   One session's calls (exec, get_task, cancel, tools) run one at a time on
   its connection: concurrent calls (a script's Promise.all) run in sequence,
   and an exec with a long timeout holds the others until it returns.
+
+  REPLD_CODE_MODE=1 in the bridge's environment (read once, at bridge start)
+  shapes that session's exec results for a script (Claude Code's Code Mode):
+    value        printed as JSON when json.dumps accepts it (str, bool, None
+                 inside containers, dict, list), else its repr as before
+    no output    the text `null`, not `(no output)`
+    past timeout the same line plus structuredContent {task_id, done: false}
+  print() output is untouched, so a cell that prints and returns is still
+  mixed text. Output past the preview size is still a head+tail preview.
+  The variable is a promise by whoever sets it: repld cannot see whether
+  Code Mode is really on, and an ordinary session with it set is shown
+  {"task_id": ..., "done": false} with no sentence. Leave it unset for
+  `claude -p` and `--bg`.
   Spill: $XDG_RUNTIME_DIR/repld/{pid}-{tid}.out
   Preview: head+tail + [full output: /path]
 

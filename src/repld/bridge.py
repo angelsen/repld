@@ -54,6 +54,7 @@ from . import (
     state,
 )
 from .core_schemas import (
+    BRIDGE_CODE_MODE_KEY,
     BRIDGE_GOODBYE_METHOD,
     BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
@@ -279,6 +280,7 @@ class Bridge:
         self._claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         self._claude_session_kind = "bg" if os.environ.get("CLAUDE_JOB_DIR") else None
         self._claude_inbox_socket = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
+        self._code_mode = os.environ.get("REPLD_CODE_MODE") == "1"
         self._inflight: set[object] = set()
         # Ids of requests the kernel sent to the client (`elicitation/create`),
         # awaiting the client's reply. Disjoint from `_inflight` by direction.
@@ -793,6 +795,7 @@ class Bridge:
             and self._claude_project_dir is None
             and self._claude_session_kind is None
             and self._claude_inbox_socket is None
+            and not self._code_mode
         ):
             return msg
         stamped = dict(msg)
@@ -805,6 +808,8 @@ class Bridge:
             params[BRIDGE_SESSION_KIND_KEY] = self._claude_session_kind
         if self._claude_inbox_socket is not None:
             params[BRIDGE_INBOX_SOCKET_KEY] = self._claude_inbox_socket
+        if self._code_mode:
+            params[BRIDGE_CODE_MODE_KEY] = True
         stamped["params"] = params
         return stamped
 

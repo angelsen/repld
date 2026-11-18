@@ -9,6 +9,7 @@ import ast
 import asyncio
 import gc
 import inspect
+import json
 import sys
 import traceback
 from typing import Any
@@ -82,8 +83,19 @@ def unwrap_display(result: Any) -> tuple[Any, bool]:
     return result, False
 
 
-def print_display(result: Any) -> None:
-    """Print `result` the way a cell's auto-displayed trailing expression does."""
+def print_display(result: Any, *, as_json: bool = False) -> None:
+    """Print `result` the way a cell's auto-displayed trailing expression does.
+
+    `as_json` prints it as one line of strict JSON when it has such a form
+    (a caller that parses the output gets a typed value), else falls back to
+    the repr below.
+    """
+    if as_json:
+        try:
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            return
+        except TypeError, ValueError, RecursionError:
+            pass
     if isinstance(result, str) and "\n" in result:
         print(result)
     else:
@@ -178,8 +190,12 @@ def _unwrap_assigned(ns: dict[str, Any], names: set[str]) -> None:
             ns[name] = val.value
 
 
-async def run_cell(compiled: tuple, ns: dict[str, Any], n: int) -> Any:
+async def run_cell(
+    compiled: tuple, ns: dict[str, Any], n: int, *, as_json: bool = False
+) -> Any:
     """Execute a compiled cell and return the last-expression value (or None).
+
+    `as_json` is `print_display`'s: the displayed value as JSON where it has one.
 
     On success, binds `_` and `_{n}` in `ns` to the returned result (when
     not None).  Coroutines from `PyCF_ALLOW_TOP_LEVEL_AWAIT` are awaited.
@@ -205,7 +221,7 @@ async def run_cell(compiled: tuple, ns: dict[str, Any], n: int) -> Any:
         if tag in ("eval", "exec_eval") and result is not None:
             result, quiet = unwrap_display(result)
             if not quiet:
-                print_display(result)
+                print_display(result, as_json=as_json)
             # Shift history: _ -> __, __ -> ___.  Matches IPython convention.
             ns["___"] = ns.get("__")
             ns["__"] = ns.get("_")

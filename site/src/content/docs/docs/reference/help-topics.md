@@ -14,6 +14,20 @@ Execute Python in the shared `__main__`. Returns inline within timeout; otherwis
 
 The result is text. The task id is in that line, not a field, and a value is shown as its Python repr, so `print(json.dumps(x))` when the caller will parse it. One session's calls (`exec`, `get_task`, `cancel`, gist and browser tools) run one at a time on its connection: concurrent calls run in sequence, and an `exec` with a long timeout holds the others until it returns.
 
+### Code Mode sessions
+
+`REPLD_CODE_MODE=1` in the bridge's environment, read once at bridge start, shapes that session's `exec` results for a script instead of a reader (Claude Code's Code Mode, where a script calls `await mcp__repld__exec({code})`):
+
+| Result               | Unset                            | `REPLD_CODE_MODE=1`                                        |
+| -------------------- | -------------------------------- | ---------------------------------------------------------- |
+| A cell's value       | Python repr                      | JSON when `json.dumps` accepts it, else the repr           |
+| No output, no value  | `(no output)`                    | `null`                                                     |
+| Cell past `timeout`  | the `[task <id> ...]` line       | the same line plus `structuredContent {task_id, done: false}` |
+
+`print()` output is untouched, so a cell that prints and also returns a value is still mixed text, and output past the preview size is still a head+tail preview.
+
+The variable is a promise by whoever sets it. repld cannot see whether Code Mode is really on (Claude Code can refuse it at start-up with the variable set), and an ordinary session with it set is shown `{"task_id": ..., "done": false}` with no sentence. Set it only for an interactive Code Mode launch, never for `claude -p` or `--bg`.
+
 Output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1. The inline response carries a head+tail preview and the spill path.
 
 ### Result history

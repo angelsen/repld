@@ -65,6 +65,10 @@ BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
 # `--bg` worker drops channel pushes but accepts a line there, so the kernel
 # delivers `bg` sessions' pushes through it (`ipc.Session._write_inbox`).
 BRIDGE_INBOX_SOCKET_KEY = "_claude_inbox_socket"
+# True when the bridge's own REPLD_CODE_MODE is "1": whoever launched it
+# promises a client whose scripts consume `exec` results (Claude Code's Code
+# Mode). Nothing the client sends at `initialize` tells the two apart.
+BRIDGE_CODE_MODE_KEY = "_repld_code_mode"
 CHANNEL_METHOD = "notifications/claude/channel"
 # Kernel to bridge only, consumed by the bridge and never relayed to the
 # client: `ipc.rebind_claude_session` telling it the id to stamp from now on.
@@ -125,7 +129,9 @@ CORE_TOOLS: list[dict] = [
             "on completion. A value displays as its Python repr, so "
             "print(json.dumps(x)) when the caller will parse the result. One "
             "session's repld calls run one at a time: a long timeout holds its "
-            "other calls behind it. "
+            "other calls behind it. A bridge started with REPLD_CODE_MODE=1 "
+            "returns JSON values and {task_id, done:false} instead (`repld "
+            "help exec`). "
             "Use defer() for background work that should outlive the response."
         ),
         "inputSchema": {

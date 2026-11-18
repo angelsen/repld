@@ -155,6 +155,30 @@ def _answer_split() -> None:
     print("  ✓ _split_answer: nothing past `answer <id>` reaches a flag parser")
 
 
+def _display_as_json() -> None:
+    def shown(value: object, *, as_json: bool) -> str:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            runtime.print_display(value, as_json=as_json)
+        return buf.getvalue()
+
+    for value in ("ae44", {"a": [1, True, None]}, False, "two\nlines", 2):
+        assert_eq(
+            json.loads(shown(value, as_json=True)), value, f"{value!r} round-trips"
+        )
+    assert_eq(
+        shown({1, 2}, as_json=True), "{1, 2}\n", "no JSON form falls back to repr"
+    )
+    assert_eq(shown(float("nan"), as_json=True), "nan\n", "nan is not strict JSON")
+    assert_eq(shown("ae44", as_json=False), "'ae44'\n", "default stays the repr")
+    assert_eq(
+        shown("two\nlines", as_json=False), "two\nlines\n", "default multi-line str"
+    )
+    print(
+        "  ✓ print_display: JSON where the value has one, repr otherwise and by default"
+    )
+
+
 def _preview() -> None:
     assert_eq(tasks._make_preview(""), ("", False), "empty")
     small = "x\n" * 10
@@ -2847,6 +2871,7 @@ def phase_2_pure() -> None:
     _elicitation_pure()
     _answer_split()
     _preview()
+    _display_as_json()
     _render()
     _format_args()
     _envelopes()
