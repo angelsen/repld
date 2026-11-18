@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The `exec` tool description, the server instructions and `repld help exec` said a cell past its timeout returns `{task_id, done:false}`. It returns the text `[task <id> still running after <timeout>s; completion will arrive via channel]`, and they now say so. They also say that a value is shown as its Python repr (print JSON for a caller that parses the result) and that one session's calls run one at a time.
+
 ### Removed
 
 ## [0.23.2] - 2026-11-13

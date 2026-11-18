@@ -118,8 +118,14 @@ CORE_TOOLS: list[dict] = [
         "name": "exec",
         "title": "Run Python",
         "description": (
-            "Run Python in shared __main__. Returns inline within timeout; "
-            "otherwise {task_id, done:false} with channel push on completion. "
+            "Run Python in shared __main__. Returns the cell's output as text "
+            "within timeout; otherwise the line `[task <id> still running "
+            "after <timeout>s; completion will arrive via channel]` (the id is "
+            "in that text, not a field), any output so far, and a channel push "
+            "on completion. A value displays as its Python repr, so "
+            "print(json.dumps(x)) when the caller will parse the result. One "
+            "session's repld calls run one at a time: a long timeout holds its "
+            "other calls behind it. "
             "Use defer() for background work that should outlive the response."
         ),
         "inputSchema": {

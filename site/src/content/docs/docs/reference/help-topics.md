@@ -10,7 +10,9 @@ slug: docs/reference/exec
 exec(code, timeout=2.0)
 ```
 
-Execute Python in the shared `__main__`. Returns inline within timeout; otherwise returns `{task_id, done: false}` and pushes a channel notification on completion.
+Execute Python in the shared `__main__`. Returns inline within timeout; otherwise returns the line `[task <id> still running after <timeout>s; completion will arrive via channel]`, followed by any output so far, and pushes a channel notification on completion.
+
+The result is text. The task id is in that line, not a field, and a value is shown as its Python repr, so `print(json.dumps(x))` when the caller will parse it. One session's calls (`exec`, `get_task`, `cancel`, gist and browser tools) run one at a time on its connection: concurrent calls run in sequence, and an `exec` with a long timeout holds the others until it returns.
 
 Output spills to `$XDG_RUNTIME_DIR/repld/{pid}-{tid}.out` from byte 1. The inline response carries a head+tail preview and the spill path.
 

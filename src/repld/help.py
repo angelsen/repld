@@ -45,7 +45,8 @@ INSTRUCTIONS_BUDGET = 4096
 _EXEC_MODEL = (
     "Execution model: "
     "exec runs code in shared __main__ (top-level await, _ / _N history). Past "
-    "`timeout` it returns {task_id, done:false} and pushes a channel message on "
+    "`timeout` it returns the text `[task <id> still running after <timeout>s; "
+    "completion will arrive via channel]` and pushes a channel message on "
     "completion, but a session that ends its turn may never see the push "
     "(`claude -p` never does; an idle `claude --bg` worker only sometimes), so "
     "poll get_task(task_id) before finishing if you need the result. "
@@ -1530,7 +1531,7 @@ to completion. If B must survive the caller going away, have the target defer()
 the work inside B and return a handle.
 
 A long peer call from an exec cell defers the cell like any slow cell: the
-{task_id, done:false} reply, then a channel push with the value.
+`[task <id> still running ...]` reply, then a channel push with the value.
 
 == Identity ==
 
@@ -1901,7 +1902,13 @@ Topics:
 _TOPICS: dict[str, str] = {
     "exec": """\
 exec(code, timeout=2.0)
-  Inline within timeout; else {task_id, done:false} + channel push.
+  Inline within timeout; else this line, any output so far, + channel push:
+    [task <id> still running after <timeout>s; completion will arrive via channel]
+  The result is text. The task id is in that line, not a field; a value is
+  its Python repr, so print(json.dumps(x)) for a caller that parses it.
+  One session's calls (exec, get_task, cancel, tools) run one at a time on
+  its connection: concurrent calls (a script's Promise.all) run in sequence,
+  and an exec with a long timeout holds the others until it returns.
   Spill: $XDG_RUNTIME_DIR/repld/{pid}-{tid}.out
   Preview: head+tail + [full output: /path]
 
@@ -2406,7 +2413,9 @@ REPL session — import libraries, build up objects, iterate.
 === Timing and deferred tasks ===
 
 If code finishes within timeout (default 2s), result is returned inline.
-Otherwise exec returns {task_id, done:false} and pushes a channel
+Otherwise exec returns the line
+`[task <id> still running after <timeout>s; completion will arrive via channel]`
+(the task id is in that text, not a field) and pushes a channel
 notification when done. Output spills to a file; the inline response
 shows a head+tail preview with a path to the full output. Use Read/Grep
 on that path for the full result.
