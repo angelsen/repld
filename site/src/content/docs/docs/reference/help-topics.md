@@ -27,7 +27,7 @@ The result is text. The task id is in that line, not a field, and a value is sho
 | Output past the preview size | head+tail preview and the path | `{"truncated": true, "spill_path": "/path", "bytes": N}` |
 | `cancel`             | `cancel task=<id>: accepted`     | `{"task_id": "...", "cancelled": true}`                    |
 
-A cell that raises is the same in both: the call fails with the traceback text. `get_task`, `cancel` and gist tools answer such a session in JSON text alone, with no `structuredContent` and no `outputSchema` in `tools/list`, because a script receives `structuredContent` as a string and JSON text as an object. `print()` output is untouched, so a cell that prints and also returns a value is still mixed text.
+A cell that raises is the same in both: the call fails with the traceback text. `get_task`, `cancel` and gist tools answer such a session in JSON text alone, with no `structuredContent` and no `outputSchema` in `tools/list`, because a script receives `structuredContent` as a string and JSON text as an object. A gist tool's output past the preview size is the same `{"truncated": true, ...}` pointer. The `browser_*` tools stay prose meant for a model; a script that wants browser data calls `exec` on the `browser` object (`(await browser.get('x')).network()`) and gets a JSON value. `print()` output is untouched, so a cell that prints and also returns a value is still mixed text.
 
 To await a backgrounded cell from a script, run `repld tasks wait <task_id> --json` through its shell helper (with `--project DIR` first when outside the project). It blocks until the task ends, exits 0 (1 if it raised) and prints the `get_task` snapshot, where `text` is the output preview: parse it, or read `spill_path` when `truncated` is true.
 

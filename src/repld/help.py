@@ -1923,7 +1923,10 @@ exec(code, timeout=2.0)
     a raise      unchanged: the call throws with the traceback text
   get_task, cancel and gist tools answer such a session in JSON text alone
   (no structuredContent, no outputSchema in tools/list): a script receives
-  structuredContent as a string, and JSON text as an object.
+  structuredContent as a string, and JSON text as an object. A gist tool's
+  big output is the same {"truncated": true, ...} pointer. browser_* tools
+  stay prose for a model; a script wanting browser data runs exec on the
+  browser object, e.g. exec("(await browser.get('x')).network()").
   print() output is untouched, so a cell that prints and returns is still
   mixed text.
   To await a backgrounded cell from a script, run through its shell helper

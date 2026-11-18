@@ -356,6 +356,27 @@ def _oversized_result_spills(b: Bridge, gists_dir: Path) -> None:
         assert_eq(len(full), 10000, "spill file holds the untruncated result")
         print(f"  ✓ oversized gist tool result spilled to {spill_path}")
 
+        scripted = Bridge(gists_dir.parent, env={"REPLD_CODE_MODE": "1"})
+        try:
+            scripted.handshake()
+            pointer = json.loads(
+                content_text(_call(scripted, "smoke_big", {"size": 10000}))
+            )
+            assert_eq(
+                pointer["truncated"], True, "code mode: a big gist result is a pointer"
+            )
+            assert_eq(pointer["bytes"], 10000, "the pointer sizes the spill file")
+            assert_eq(
+                Path(pointer["spill_path"]).read_text(),
+                "x" * 10000,
+                "the file is all of it",
+            )
+            small = content_text(_call(scripted, "smoke_big", {"size": 10}))
+            assert_eq(small, "x" * 10, "code mode: a small result is inline as before")
+        finally:
+            scripted.close()
+        print("  ✓ oversized gist tool result: code mode answers a JSON pointer")
+
 
 def _image_result(b: Bridge, gists_dir: Path) -> None:
     """A handler returning repld.Image, alone or in a list with str/dict, gets

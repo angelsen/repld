@@ -8,7 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `REPLD_CODE_MODE=1` in the bridge's environment shapes that session's `exec` results for a script (Claude Code's Code Mode): a cell's value is printed as JSON where it has a JSON form, a cell with no output answers `null`, and a cell past its timeout answers the JSON text `{"task_id": "...", "done": false}` in place of the usual line, output past the preview size answers `{"truncated": true, "spill_path": ..., "bytes": N}`, and `get_task`, `cancel` and gist tools answer in JSON text with no `structuredContent`. Unset, nothing changes. The variable is a promise by whoever sets it: repld cannot tell whether Code Mode is really on.
+- `REPLD_CODE_MODE=1` in the bridge's environment shapes that session's `exec` results for a script (Claude Code's Code Mode): a cell's value is printed as JSON where it has a JSON form, a cell with no output answers `null`, and a cell past its timeout answers the JSON text `{"task_id": "...", "done": false}` in place of the usual line, output past the preview size (from `exec` or a gist tool) answers `{"truncated": true, "spill_path": ..., "bytes": N}`, and `get_task`, `cancel` and gist tools answer in JSON text with no `structuredContent`. Unset, nothing changes. The variable is a promise by whoever sets it: repld cannot tell whether Code Mode is really on.
 
 ### Changed
 

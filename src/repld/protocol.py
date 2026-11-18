@@ -1035,7 +1035,7 @@ class Dispatcher(BrowserDispatchMixin):
         self.ctx.wait_ready()
         if name.startswith("browser_"):
             return self._browser_tool(rid, name, args, session=session)
-        return self._gist_tool(rid, name, args)
+        return self._gist_tool(rid, name, args, session)
 
     def _exec(self, rid, args: dict, session: ipc.Session | None = None) -> dict | None:
         """Run a cell and return inline or defer with a task_id; `None` once the client cancelled it."""
@@ -1137,7 +1137,9 @@ class Dispatcher(BrowserDispatchMixin):
     # Gist tool dispatch
     # ------------------------------------------------------------------
 
-    def _gist_tool(self, rid, name: str, args: dict) -> dict:
+    def _gist_tool(
+        self, rid, name: str, args: dict, session: ipc.Session | None = None
+    ) -> dict:
         """Dispatch to a gist-registered tool handler.
 
         Handlers return str or JSON-serializable data; the text block goes
@@ -1146,6 +1148,8 @@ class Dispatcher(BrowserDispatchMixin):
         exec cell. `structuredContent` carries the dict as-is, it has no
         text-shaped preview to spill. A `content.Image`, or a list holding
         one, becomes one content block per item; an image is never spilled.
+        A Code Mode session gets a spilled block as `_format_spill_pointer`'s
+        JSON, as `exec` does, since a cut preview parses as nothing.
         """
         from .content import Image
 
@@ -1200,9 +1204,12 @@ class Dispatcher(BrowserDispatchMixin):
                     and not sp["truncated"]
                 ):
                     body["structuredContent"] = item
-                body["content"].append(
-                    {"type": "text", "text": _format_spill(sp, text)}
+                shown = (
+                    _format_spill_pointer(sp["spill_path"])
+                    if sp["truncated"] and session is not None and session.code_mode
+                    else _format_spill(sp, text)
                 )
+                body["content"].append({"type": "text", "text": shown})
             return _response(rid, body)
         except Exception as exc:
             return _tool_error(rid, f"{name}: {exc}")
