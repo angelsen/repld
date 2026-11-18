@@ -1915,11 +1915,12 @@ exec(code, timeout=2.0)
     value        printed as JSON when json.dumps accepts it (str, bool, None
                  inside containers, dict, list), else its repr as before
     no output    the text `null`, not `(no output)`
-    past timeout the same line plus structuredContent {task_id, done: false}
+    past timeout the text {"task_id": "...", "done": false}, which the script
+                 receives parsed; no sentence, no output so far
   print() output is untouched, so a cell that prints and returns is still
   mixed text. Output past the preview size is still a head+tail preview.
   The variable is a promise by whoever sets it: repld cannot see whether
-  Code Mode is really on, and an ordinary session with it set is shown
+  Code Mode is really on, and an ordinary session with it set reads
   {"task_id": ..., "done": false} with no sentence. Leave it unset for
   `claude -p` and `--bg`.
   Spill: $XDG_RUNTIME_DIR/repld/{pid}-{tid}.out

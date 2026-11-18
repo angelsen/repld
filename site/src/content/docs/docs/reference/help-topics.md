@@ -22,7 +22,7 @@ The result is text. The task id is in that line, not a field, and a value is sho
 | -------------------- | -------------------------------- | ---------------------------------------------------------- |
 | A cell's value       | Python repr                      | JSON when `json.dumps` accepts it, else the repr           |
 | No output, no value  | `(no output)`                    | `null`                                                     |
-| Cell past `timeout`  | the `[task <id> ...]` line       | the same line plus `structuredContent {task_id, done: false}` |
+| Cell past `timeout`  | the `[task <id> ...]` line       | the JSON text `{"task_id": "...", "done": false}`, nothing else |
 
 `print()` output is untouched, so a cell that prints and also returns a value is still mixed text, and output past the preview size is still a head+tail preview.
 

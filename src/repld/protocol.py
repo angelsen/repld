@@ -1066,19 +1066,19 @@ class Dispatcher(BrowserDispatchMixin):
                     },
                 },
             )
-        preview = snap["text"].rstrip()
-        msg = f"[task {task_id} still running after {timeout}s; completion will arrive via channel]"
-        if preview:
-            msg += "\n" + preview
-        body: dict = {
-            "content": [{"type": "text", "text": msg}],
-            "_meta": {"task_id": task_id, "done": False},
-        }
-        # Code Mode sessions only: Claude Code shows a model structuredContent
-        # in place of the text, so an ordinary session would lose the sentence.
+        meta = {"task_id": task_id, "done": False}
         if code_mode:
-            body["structuredContent"] = {"task_id": task_id, "done": False}
-        return _response(rid, body)
+            # As JSON in the text block, never structuredContent: Claude Code
+            # hands a Code Mode script that as a string, and parses JSON text.
+            msg = json.dumps(meta)
+        else:
+            preview = snap["text"].rstrip()
+            msg = f"[task {task_id} still running after {timeout}s; completion will arrive via channel]"
+            if preview:
+                msg += "\n" + preview
+        return _response(
+            rid, {"content": [{"type": "text", "text": msg}], "_meta": meta}
+        )
 
     def _get_task(self, rid, args: dict) -> dict:
         """Return a task snapshot as `structuredContent`."""

@@ -363,22 +363,21 @@ def phase_3_code_mode(kernel: Kernel) -> None:
         resp = scripted.exec("import time; time.sleep(0.6)", timeout=0.1)
         task_id = resp["result"]["_meta"]["task_id"]
         assert_eq(
-            resp["result"]["structuredContent"],
+            json.loads(content_text(resp)),
             {"task_id": task_id, "done": False},
-            "code mode: a nudge carries the id as structuredContent",
+            "code mode: the nudge text parses to the id",
         )
+        # Claude Code hands a Code Mode script structuredContent as a string.
         assert_true(
-            content_text(resp).startswith(f"[task {task_id} still running"),
-            "code mode: the sentence rides along",
+            "structuredContent" not in resp["result"],
+            "code mode: the nudge carries no structuredContent",
         )
         scripted.wait_notification(
             "notifications/claude/channel",
             kind="task_done",
             where=lambda m: m["params"]["meta"].get("task_id") == task_id,
         )
-        print(
-            "  ✓ REPLD_CODE_MODE: JSON values, null, structuredContent nudge; plain untouched"
-        )
+        print("  ✓ REPLD_CODE_MODE: JSON values, null, JSON nudge; plain untouched")
     finally:
         scripted.close()
         plain.close()
