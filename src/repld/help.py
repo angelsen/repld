@@ -1703,6 +1703,7 @@ gist to its own service, repld://docs/production.
 
   peers.list() -> list[dict]
   peers.get(target, *, start=False) -> Peer    target: name | path | "host:name" | "host:path"
+  await peers.close_forwards() -> None         cancel the ssh socket forwards of "host:" peers (the kernel does this as it stops)
   await peer.call(target, /, *args, **kwargs) -> JSON value
   await peer.info() -> dict
   await peer.inspect(target) -> dict
@@ -2311,6 +2312,7 @@ current_session_id()
 peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]
 peers.get(target, *, start=False)             -> Peer    sync; a path, or the basename of one live kernel
 peers.get("host:target")                      -> Peer    the same on another machine, over `ssh host`
+await peers.close_forwards()                  -> None    cancel the ssh socket forwards of host: peers; run at kernel stop
 await peer.call(target, /, *args, **kwargs)   -> JSON value; runs the dotted name in THEIR kernel
 await peer.info()                             -> {peer_protocol, kernel, gists, main}
 await peer.inspect(target)                    -> {target, kind, signature, async, doc, module, file}
