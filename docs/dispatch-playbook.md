@@ -21,10 +21,10 @@ specific change touches.
   - **Not bare `ruff format --check`**: this repo's `align-comments` pass re-widens trailing-`#` comments that `ruff format` collapses, so a plain `--check` fails on an untouched master. The chain above runs the real fix sequence and diffs against it instead.
   - **The `git add -A` before the fixers is load-bearing, not `git diff --exit-code` alone**: a dispatch worktree's own fix is itself an uncommitted diff, so an unstaged-only `git diff --exit-code` would fail on that fix regardless of its quality. Staging it first means the post-fixer `git diff --exit-code` (unstaged) only ever catches drift the fixers themselves introduce.
 - Setup step (`SETUP`): none for the default gate. `make injected` (rebuilds the vendored Playwright engine) only matters for `src/repld/browser/injected_source.py`-adjacent work and is never run implicitly — hand-edit is refused (see CLAUDE.md).
-- Review skills (`ALIGN_SINCE`): none — no `/arch-align`/`/bits-align` equivalent here.
+- Review skills (`ALIGN_SINCE`: the branch's base): `trace-align` and `claims-align`, named by `dispatch.align` in `.claude/devstack.json`; CLAUDE.md's "Committing and landing" is the one place that says how a round commits and lands.
 - Commit conventions:
   - **Check the live session's attribution system-reminder before every commit.** `feedback_no_coauthored.md` (no trailer) is a fallback only — a session-level reminder saying "this replaces any earlier attribution guidance" always wins. Confirmed to matter: five commits on 2026-09-09 went out without a trailer an in-context reminder had already required from message one.
-  - Never commit or push without being asked. When asked to land work, this project's own pattern (used across five 2026-09-07/09 sessions) is: branch off master, commit, `git checkout master && git merge --ff-only <branch> && git branch -d <branch>`, then push — never a direct commit on `master`.
+  - Never commit or push without being asked. When asked to land work, this project's own pattern (used across five 2026-09-07/09 sessions) is: branch off master, commit, `git checkout master && git merge --ff-only <branch> && git branch -d <branch>`, then push — never a direct commit on `master`. That is the by-hand path; a round run from a kernel commits and lands as CLAUDE.md's "Committing and landing" says.
   - Commit messages explain *why*, not *what changed* (the diff already shows that).
 
 ## Gists

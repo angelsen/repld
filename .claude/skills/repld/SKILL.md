@@ -17,7 +17,7 @@ REPO = "/home/fredrik/Projects/private/repld"
 BASE = "master"
 CHECK_ARGV = ["bash", "-c", "ruff check && ruff format --check && basedpyright && uv run tests/smoketest.py --phase 5"]
 SETUP = None
-ALIGN_SINCE = None
+ALIGN_SINCE = BASE  # the branch's base: `dispatch.align` names trace-align and claims-align
 ```
 
 `CHECK_ARGV` stops at phase 5 — phase 6+ needs a live Chrome on
