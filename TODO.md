@@ -10,6 +10,11 @@
 - [ ] `site/src/content/docs/**` has never been audited line by line against `help.py`: only the `py3.12` path and the channel kinds table were compared (recaps 01e56d59, a5fb7c4e). `guides/getting-started.md` keeps its own `load_dotenv` passage, a second copy of the `.env` rules outside `help.py` (recap 5eda672b).
 - [ ] `repld://docs/browser`'s `== Behavior recap ==` (3.6 KB) still restates the `browser` topic and the tool descriptions, and `REPLD_BROWSER_ACTION_GRACE_S` and the 600 s `wait_captcha` limit are named only in passing (recap 665cf1dd).
 
+## Rebind
+
+- [ ] `Server._claude_ids` (r51) has no case for the pending path's record lookup (`rebind_claude_session` with a record and no connection under the claude) or for `_find_replaced_id_locked`'s live-holder refusal; the `via_cmd` leg of `_rebind_carries_owed_pushes` covers the matched path only.
+- [ ] `_claude_ids` entries outlive their `claude`: a reused pid's first `resume` rebind on the pending path would inherit a dead claude's last id. Key the record on the claude's `/proc/<pid>/stat` start time as well.
+
 ## Gist deps tooling
 
 - [x] (decided 2026-11-06: no runtime warning, the changelog line stands; the 3.14 floor makes `py3.12`/`py3.13` dead too, same note; measured here: no gist dep re-prompts because httpx, websockets and pillow come from the project venv) **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**

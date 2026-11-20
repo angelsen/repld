@@ -2343,7 +2343,9 @@ current_session_id()
   `claude --resume`/`--continue` pane can carry a throwaway id there, and
   nothing on the MCP wire names the resumed conversation, so a SessionStart
   hook (source resume or clear) must re-key it: `repld rebind` does it from the
-  hook payload, or call ipc.rebind_claude_session(new_id, pid) directly.
+  hook payload, or call ipc.rebind_claude_session(new_id, pid) directly; a push owed to
+  the id the pane's connection carried before is handed to new_id when
+  repld still has that id on record.
 """,
     "peers": """\
 peers.list()                                  -> [{name, cwd, pid, socket_path, started_at, self}]

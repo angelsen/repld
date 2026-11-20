@@ -203,6 +203,7 @@ class Bridge:
         global_args: tuple[str, ...] = (),
         nested: bool = False,
         under: Path | None = None,
+        restart_as: str | None = None,
     ):
         # A None value deletes the key rather than setting it — the ambient
         # environment this test process itself runs under (e.g. when this
@@ -222,8 +223,16 @@ class Bridge:
         # `nested` puts a non-exec'd shell between this process and the bridge,
         # so its process tree is one level deeper than a plain bridge's.
         # `under` is a copy of sh named `claude`, so the bridge has a claude ancestor.
+        # `restart_as` (with `under`) starts the bridge a second time under the
+        # same claude once the first dies, carrying that session id in its env:
+        # Claude Code restarting a stale MCP server on the same pipes.
         shell = str(under) if under is not None else "sh"
-        launcher = [shell, "-c", '"$@"; exit $?', "sh"] if nested or under else []
+        script = '"$@"; exit $?'
+        if restart_as is not None:
+            assert under is not None, "restart_as needs under"
+            proc_env["RESTART_AS"] = restart_as
+            script = '"$@"; CLAUDE_CODE_SESSION_ID="$RESTART_AS" "$@"; exit $?'
+        launcher = [shell, "-c", script, "sh"] if nested or under else []
         self.proc = subprocess.Popen(
             [
                 *launcher,
@@ -369,6 +378,25 @@ class Bridge:
                 return msg
             self._notifs.append(msg)
         raise TimeoutError(f"no {method} notification (kind={kind}) within {timeout}s")
+
+    def kill_bridge(self) -> None:
+        """SIGTERM the bridge under this `claude` (its subtree), not the claude.
+
+        SIGKILL leaves the kernel holding the connection for tens of seconds.
+        """
+
+        def descendants(pid: int) -> list[int]:
+            try:
+                kids = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+            except OSError:
+                return []
+            return [c for k in kids for c in (int(k), *descendants(int(k)))]
+
+        for pid in descendants(self.proc.pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     def close(self, timeout: float = 3) -> None:
         try:

@@ -35,6 +35,7 @@ Handler = Callable[[dict, "Session"], dict | None]
 
 # How long a rebind that found no connection waits for its bridge to register.
 _PENDING_REBIND_TTL = 300.0
+_CLAUDE_IDS_MAX = 256
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +542,11 @@ class Server:
         # replaced claude_session_id -> the id a rebind put in its place; same
         # lock. Acyclic: `_succeed` drops the new id's own entry.
         self._successors: dict[str, str] = {}
+        # (`claude` pid, session kind) -> (id its newest connection carries, the
+        # id before it); same lock. A `bg` agent's bridge under a pane's claude
+        # keeps its own entry. What a rebind that finds the new id already
+        # registered replaces; bounded by `_CLAUDE_IDS_MAX`.
+        self._claude_ids: dict[tuple[int, str | None], tuple[str, str | None]] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
         # reply the shutdown drain just unblocked (a cancelled peer call) reach the wire
@@ -681,6 +687,7 @@ class Server:
                     f" from live pid {holder.peer_pid}, which loses targeted pushes\n"
                 )
             self._claude_sessions[session_id] = session
+            self._note_claude_id_locked(session, session_id)
         if stale_id != session_id:
             self._drain_outbox(stale_id, session)
         self._drain_outbox(session_id, session)
@@ -702,8 +709,11 @@ class Server:
         rebind delivered to the successor (0 when nothing was held, or when the
         park timeout had already delivered them). Pushes owed to the replaced
         id, now or later, go to `new_id`; that holds for a refused rebind too
-        when `old_id` is given and a connection under that claude carries
-        `new_id` or none is connected yet. The match is the connected
+        when a connection under that claude carries `new_id` or none is
+        connected yet. The replaced id is `old_id`, else the matched
+        connection's own id, else (it already carries `new_id`, or none is
+        connected) the one `_claude_ids` records for that claude when nothing
+        live carries it. The match is the connected
         session whose bridge shares the nearest ancestor with `pid`, the one
         closest to that ancestor if several do; the walk never passes `pid`'s
         own `claude` process. Raises LookupError on no match and ValueError
@@ -758,7 +768,10 @@ class Server:
                 # One hold: a bridge that takes the pending id must find the
                 # moved pushes in `_outbox[new_id]` when it drains.
                 with self.sessions_lock:
-                    self._succeed_locked(old_id, new_id)
+                    self._succeed_locked(
+                        old_id or self._find_replaced_id_locked(ancestor, None, new_id),
+                        new_id,
+                    )
                     self._pending_rebinds[ancestor] = _PendingRebind(
                         new_id, time.monotonic() + _PENDING_REBIND_TTL
                     )
@@ -781,7 +794,18 @@ class Server:
                 del self._claude_sessions[old_id]
             session.claude_session_id = new_id
             self._claude_sessions[new_id] = session
-        self._succeed(old_id, new_id)
+            # Already carrying `new_id` (a restarted bridge): the id it replaced is the record's.
+            replaced = (
+                old_id
+                if old_id != new_id
+                else self._find_replaced_id_locked(
+                    session.claude_pid, session.claude_session_kind, new_id
+                )
+            )
+            self._note_claude_id_locked(session, new_id)
+            self._succeed_locked(replaced, new_id)
+        if replaced is not None:
+            old_id = replaced
         # Release before posting anything: a park held for the handoff this
         # rebind completes must flush to the successor, and unconditionally
         # calling it costs nothing when nothing was parked (unpark() no-ops).
@@ -808,6 +832,33 @@ class Server:
                 if session.peer_pid == peer_pid and task_id is not None:
                     return session, task_id
         return None
+
+    def _note_claude_id_locked(self, session: Session, session_id: str) -> None:
+        """Record `session_id` as its claude's newest id for this kind, keeping the one it displaces."""
+        if session.claude_pid is None:
+            return
+        key = (session.claude_pid, session.claude_session_kind)
+        cur = self._claude_ids.pop(key, (None, None))
+        self._claude_ids[key] = (
+            (session_id, cur[1]) if cur[0] == session_id else (session_id, cur[0])
+        )
+        while len(self._claude_ids) > _CLAUDE_IDS_MAX:
+            del self._claude_ids[next(iter(self._claude_ids))]
+
+    def _find_replaced_id_locked(
+        self, claude_pid: int | None, kind: str | None, new_id: str
+    ) -> str | None:
+        """The id that claude's connection of this kind carried before `new_id`, when nothing live still carries it."""
+        if claude_pid is None:
+            return None
+        cur, prev = self._claude_ids.get((claude_pid, kind), (None, None))
+        old = prev if cur == new_id else cur
+        if old is None or old == new_id:
+            return None
+        holder = self._claude_sessions.get(old)
+        if holder is not None and not holder.closed:
+            return None
+        return old
 
     def _succeed(self, old_id: str | None, new_id: str) -> None:
         """Make `new_id` the heir of pushes owed to `old_id`: the outbox's now, `_owe`'s later."""
@@ -899,6 +950,7 @@ class Server:
             self._outbox.clear()
             self._pending_rebinds.clear()
             self._successors.clear()
+            self._claude_ids.clear()
         for s in sessions:
             s.say_goodbye()
             s.close()

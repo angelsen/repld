@@ -27,7 +27,8 @@ from harness import (
 )
 
 from phases.core import _phase_3_jsonrpc_edges
-from repld import core_schemas, state
+from repld import core_schemas, paths, state
+from repld.exec_cmd import _call, _connect
 
 
 def _handshake(b: Bridge) -> dict:
@@ -1055,20 +1056,24 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
         shutil.rmtree(fake.parent, ignore_errors=True)
 
 
-def _rebind_carries_owed_pushes(tmp: Path) -> None:
+def _rebind_carries_owed_pushes(tmp: Path, via_cmd: bool = False) -> None:
     """A push owed to the id a rebind replaced reaches the connection carrying
     the new id when the old connection is gone and the successor's bridge
     registered under the new id by itself: for a push the outbox already
-    holds, and for a task that ends after the rebind."""
+    holds, and for a task that ends after the rebind. `via_cmd` makes the
+    rebind the `repld rebind` hook's `sessions/rebind` call, which names no `old_id`."""
     fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
     shutil.copy(shutil.which("sh") or "/bin/sh", fake)
     opened: list[Bridge] = []
 
-    def bridge(session_id: str, under: Path | None = None) -> Bridge:
+    def bridge(
+        session_id: str, under: Path | None = None, restart_as: str | None = None
+    ) -> Bridge:
         b = Bridge(
             tmp,
             env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": session_id},
             under=under,
+            restart_as=restart_as,
         )
         opened.append(b)
         _handshake(b)
@@ -1110,7 +1115,8 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
 
     try:
         obs = bridge("succ-obs")
-        old = bridge("succ-old", under=fake)
+        # The hook's case is one claude whose bridge restarts: same pid, new id.
+        old = bridge("succ-old", under=fake, restart_as="succ-new" if via_cmd else None)
         # Gated on state, not sleeps: `early` ending before the old bridge's
         # EOF reads `written`, `late` ending before the rebind never reaches
         # `_owe`'s chain.
@@ -1120,27 +1126,60 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
             old,
             "(_s := ipc.find_claude_session('succ-old')) is None or _s.closed",
         )
-        old.close()
+        if via_cmd:
+            old.kill_bridge()
+        else:
+            old.close()
         deadline = time.monotonic() + 10
         while push_state(obs, early) == "none" and time.monotonic() < deadline:
             time.sleep(0.2)
         assert_eq(push_state(obs, early), "queued", "the old id's push is queued")
 
-        new = bridge("succ-new", under=fake)
-        out = content_text(
-            obs.exec(
-                "from repld import ipc\n"
-                "try:\n"
-                f"    ipc.rebind_claude_session('succ-new', {new.proc.pid}, 'succ-old')\n"
-                "except LookupError as e:\n"
-                "    print('LookupError', e)",
-                call_timeout=40,
+        if via_cmd:
+            new = old
+            _handshake(new)
+        else:
+            new = bridge("succ-new", under=fake)
+        if via_cmd:
+            # What `repld rebind` sends (`rebind_cmd._rebind`), with the claude's
+            # pid in place of the command's own: the command is a descendant of it.
+            conn = _connect(paths.lock_for(paths.socket_path(tmp)), label="r51")
+            assert conn is not None
+            sock, rfile, wfile, _lock = conn
+            try:
+                resp = _call(
+                    rfile,
+                    wfile,
+                    "sessions/rebind",
+                    {"session_id": "succ-new", "pid": new.proc.pid},
+                )
+            finally:
+                sock.close()
+            assert_true(
+                resp is not None and "result" in resp,
+                f"the hook's rebind call answers (got {resp!r})",
             )
-        )
-        assert_true(
-            "LookupError" in out and "(it carries succ-new)" in out,
-            f"the rebind still refuses as a repeat (got {out!r})",
-        )
+            assert resp is not None
+            assert_eq(
+                resp["result"].get("old_id"),
+                "succ-old",
+                "the kernel names the id the restart replaced",
+            )
+        else:
+            out = content_text(
+                obs.exec(
+                    "from repld import ipc\n"
+                    "try:\n"
+                    f"    ipc.rebind_claude_session('succ-new', {new.proc.pid}, 'succ-old')\n"
+                    "except LookupError as e:\n"
+                    "    print('LookupError', e)",
+                    call_timeout=40,
+                )
+            )
+            assert_true(
+                "LookupError" in out and "(it carries succ-new)" in out,
+                f"the rebind still refuses as a repeat (got {out!r})",
+            )
         assert_eq(push_state(obs, late), "none", "the late task is still running")
         assert_true(
             got_push(new, early, 3),
@@ -2197,6 +2236,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _deferred_rebind(tmp)
         _repeat_rebind_arms_nothing(tmp)
         _rebind_carries_owed_pushes(tmp)
+        _rebind_carries_owed_pushes(tmp, via_cmd=True)
         _rebind_cmd(tmp)
         _id_collision_warning(tmp)
         _bg_inbox_fallback(tmp)
