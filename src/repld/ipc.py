@@ -755,11 +755,18 @@ class Server:
                         f"no session under pid {pid}'s claude ({ancestor}) carries id {old_id!r}"
                         f" (it carries {', '.join(carried)})"
                     )
+                # One hold: a bridge that takes the pending id must find the
+                # moved pushes in `_outbox[new_id]` when it drains.
                 with self.sessions_lock:
+                    self._succeed_locked(old_id, new_id)
                     self._pending_rebinds[ancestor] = _PendingRebind(
                         new_id, time.monotonic() + _PENDING_REBIND_TTL
                     )
-                self._succeed(old_id, new_id)
+                    heir = self._claude_sessions.get(new_id)
+                # This claude's bridge registered `new_id` after the snapshot and
+                # drained before the move; another claude's holder is not the heir.
+                if heir is not None and not heir.closed and heir.claude_pid == ancestor:
+                    self._drain_outbox(new_id, heir)
                 raise LookupError(
                     f"no connected Claude Code session under pid {pid}'s own claude ({ancestor})"
                 )
@@ -804,14 +811,18 @@ class Server:
 
     def _succeed(self, old_id: str | None, new_id: str) -> None:
         """Make `new_id` the heir of pushes owed to `old_id`: the outbox's now, `_owe`'s later."""
+        with self.sessions_lock:
+            self._succeed_locked(old_id, new_id)
+
+    def _succeed_locked(self, old_id: str | None, new_id: str) -> None:
+        """`_succeed` for a caller holding `sessions_lock`."""
         if old_id is None or old_id == new_id:
             return
-        with self.sessions_lock:
-            self._successors.pop(new_id, None)
-            self._successors[old_id] = new_id
-            owed = self._outbox.pop(old_id, [])
-            if owed:
-                self._outbox.setdefault(new_id, []).extend(owed)
+        self._successors.pop(new_id, None)
+        self._successors[old_id] = new_id
+        owed = self._outbox.pop(old_id, [])
+        if owed:
+            self._outbox.setdefault(new_id, []).extend(owed)
 
     def _take_pending_rebind(self, session: Session) -> str | None:
         """Pop the unexpired pending rebind keyed on an ancestor of `session`'s bridge."""

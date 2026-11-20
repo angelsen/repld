@@ -1074,12 +1074,15 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
         _handshake(b)
         return b
 
-    def start(b: Bridge, seconds: float) -> str:
+    def start(b: Bridge, until: str) -> str:
         out = content_text(
             b.exec(
-                "import asyncio\n"
+                "import asyncio, time\n"
+                "from repld import ipc\n"
                 "async def _succ():\n"
-                f"    await asyncio.sleep({seconds})\n"
+                "    end = time.monotonic() + 90\n"
+                f"    while not ({until}) and time.monotonic() < end:\n"
+                "        await asyncio.sleep(0.05)\n"
                 "    print('succ done')\n"
                 "print('tid=' + defer(_succ(), 'succ'))",
                 call_timeout=40,
@@ -1108,8 +1111,15 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
     try:
         obs = bridge("succ-obs")
         old = bridge("succ-old", under=fake)
-        early = start(old, 0.3)
-        late = start(old, 6.0)
+        # Gated on state, not sleeps: `early` ending before the old bridge's
+        # EOF reads `written`, `late` ending before the rebind never reaches
+        # `_owe`'s chain.
+        obs.exec("_succ_go = False", call_timeout=40)
+        late = start(old, "_succ_go")
+        early = start(
+            old,
+            "(_s := ipc.find_claude_session('succ-old')) is None or _s.closed",
+        )
         old.close()
         deadline = time.monotonic() + 10
         while push_state(obs, early) == "none" and time.monotonic() < deadline:
@@ -1131,6 +1141,7 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
             "LookupError" in out and "(it carries succ-new)" in out,
             f"the rebind still refuses as a repeat (got {out!r})",
         )
+        assert_eq(push_state(obs, late), "none", "the late task is still running")
         assert_true(
             got_push(new, early, 3),
             "the push the outbox held for the old id reaches the successor",
@@ -1140,8 +1151,9 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
             "  ✓ a rebind hands the old id's queued push to the connection carrying the new id"
         )
 
+        obs.exec("_succ_go = True", call_timeout=40)
         assert_true(
-            got_push(new, late, 12),
+            got_push(new, late, 10),
             "a task of the old id ending after the rebind pushes to the successor",
         )
         assert_eq(push_state(obs, late), "written", "and reads written")
@@ -1150,9 +1162,14 @@ def _rebind_carries_owed_pushes(tmp: Path) -> None:
             "  ✓ a task of the old id that ends after the rebind pushes to the successor"
         )
     finally:
-        for b in opened:
-            b.close()
-        shutil.rmtree(fake.parent, ignore_errors=True)
+        try:
+            # Releases `late` early on a failed case; its own deadline is the bound.
+            if opened:
+                opened[0].exec("_succ_go = True", call_timeout=40)
+        finally:
+            for b in opened:
+                b.close()
+            shutil.rmtree(fake.parent, ignore_errors=True)
 
 
 def _rebind_cmd(tmp: Path) -> None:
