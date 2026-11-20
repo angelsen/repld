@@ -1055,6 +1055,106 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
         shutil.rmtree(fake.parent, ignore_errors=True)
 
 
+def _rebind_carries_owed_pushes(tmp: Path) -> None:
+    """A push owed to the id a rebind replaced reaches the connection carrying
+    the new id when the old connection is gone and the successor's bridge
+    registered under the new id by itself: for a push the outbox already
+    holds, and for a task that ends after the rebind."""
+    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
+    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    opened: list[Bridge] = []
+
+    def bridge(session_id: str, under: Path | None = None) -> Bridge:
+        b = Bridge(
+            tmp,
+            env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": session_id},
+            under=under,
+        )
+        opened.append(b)
+        _handshake(b)
+        return b
+
+    def start(b: Bridge, seconds: float) -> str:
+        out = content_text(
+            b.exec(
+                "import asyncio\n"
+                "async def _succ():\n"
+                f"    await asyncio.sleep({seconds})\n"
+                "    print('succ done')\n"
+                "print('tid=' + defer(_succ(), 'succ'))",
+                call_timeout=40,
+            )
+        )
+        return out.split("tid=", 1)[1].split()[0]
+
+    def push_state(b: Bridge, task_id: str) -> str:
+        resp = b.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": task_id}}
+        )
+        return resp["result"]["structuredContent"]["push_state"]
+
+    def got_push(b: Bridge, task_id: str, timeout: float) -> bool:
+        try:
+            b.wait_notification(
+                "notifications/claude/channel",
+                kind="task_done",
+                timeout=timeout,
+                where=lambda n: n["params"]["meta"].get("task_id") == task_id,
+            )
+        except TimeoutError:
+            return False
+        return True
+
+    try:
+        obs = bridge("succ-obs")
+        old = bridge("succ-old", under=fake)
+        early = start(old, 0.3)
+        late = start(old, 6.0)
+        old.close()
+        deadline = time.monotonic() + 10
+        while push_state(obs, early) == "none" and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert_eq(push_state(obs, early), "queued", "the old id's push is queued")
+
+        new = bridge("succ-new", under=fake)
+        out = content_text(
+            obs.exec(
+                "from repld import ipc\n"
+                "try:\n"
+                f"    ipc.rebind_claude_session('succ-new', {new.proc.pid}, 'succ-old')\n"
+                "except LookupError as e:\n"
+                "    print('LookupError', e)",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "LookupError" in out and "(it carries succ-new)" in out,
+            f"the rebind still refuses as a repeat (got {out!r})",
+        )
+        assert_true(
+            got_push(new, early, 3),
+            "the push the outbox held for the old id reaches the successor",
+        )
+        assert_eq(push_state(obs, early), "written", "and reads written")
+        print(
+            "  ✓ a rebind hands the old id's queued push to the connection carrying the new id"
+        )
+
+        assert_true(
+            got_push(new, late, 12),
+            "a task of the old id ending after the rebind pushes to the successor",
+        )
+        assert_eq(push_state(obs, late), "written", "and reads written")
+        assert_true(not got_push(obs, late, 1), "nobody else gets it")
+        print(
+            "  ✓ a task of the old id that ends after the rebind pushes to the successor"
+        )
+    finally:
+        for b in opened:
+            b.close()
+        shutil.rmtree(fake.parent, ignore_errors=True)
+
+
 def _rebind_cmd(tmp: Path) -> None:
     """`repld rebind` re-keys a connection from a SessionStart payload on stdin:
     `resume` and `clear` rebind, `startup` and a malformed payload do not."""
@@ -2079,6 +2179,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _rebind_stops_at_own_claude(tmp)
         _deferred_rebind(tmp)
         _repeat_rebind_arms_nothing(tmp)
+        _rebind_carries_owed_pushes(tmp)
         _rebind_cmd(tmp)
         _id_collision_warning(tmp)
         _bg_inbox_fallback(tmp)

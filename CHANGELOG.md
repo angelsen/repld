@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A task's completion push was lost when Claude Code restarted the bridge on `/clear` (it does for an MCP server it marks stale, e.g. in a session that entered a worktree). The new bridge registered the new session id by itself, the SessionStart hook's `ipc.rebind_claude_session(new, pid, old_id=)` refused as a repeat, and the push stayed `queued` under the old id until it expired. A rebind that names `old_id` now makes `new_id` its heir whether it re-keys, arms a pending id or refuses as that repeat: pushes the outbox holds for the old id move to the new one, and a task of the old id that ends later pushes there. The refusal itself is unchanged.
+
 ### Removed
 
 ## [0.23.3] - 2026-11-18

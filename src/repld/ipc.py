@@ -538,6 +538,9 @@ class Server:
         self._outbox: dict[str, list[_Owed]] = {}
         # pane `claude` pid -> id its bridge takes when it registers; same lock.
         self._pending_rebinds: dict[int, _PendingRebind] = {}
+        # replaced claude_session_id -> the id a rebind put in its place; same
+        # lock. Acyclic: `_succeed` drops the new id's own entry.
+        self._successors: dict[str, str] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
         # reply the shutdown drain just unblocked (a cancelled peer call) reach the wire
@@ -664,6 +667,8 @@ class Server:
         session.claude_pid = _resolve_claude_pid(session.peer_pid)
         session.inbox_socket = _check_inbox_socket(inbox_socket)
         with self.sessions_lock:
+            # A connection carrying the id itself ends any succession from it.
+            self._successors.pop(session_id, None)
             holder = self._claude_sessions.get(session_id)
             if (
                 holder is not None
@@ -695,7 +700,10 @@ class Server:
 
         Returns the id it replaced and how many parked or outbox pushes the
         rebind delivered to the successor (0 when nothing was held, or when the
-        park timeout had already delivered them). The match is the connected
+        park timeout had already delivered them). Pushes owed to the replaced
+        id, now or later, go to `new_id`; that holds for a refused rebind too
+        when `old_id` is given and a connection under that claude carries
+        `new_id` or none is connected yet. The match is the connected
         session whose bridge shares the nearest ancestor with `pid`, the one
         closest to that ancestor if several do; the walk never passes `pid`'s
         own `claude` process. Raises LookupError on no match and ValueError
@@ -715,6 +723,7 @@ class Server:
                 if ancestor in chain
             ]
             carried = sorted(str(s.claude_session_id) for s, _ in hits)
+            under = [s for s, _ in hits]
             connected = connected or bool(hits)
             if old_id is not None:
                 hits = [(s, d) for s, d in hits if s.claude_session_id == old_id]
@@ -736,6 +745,12 @@ class Server:
                 # A connection already under this claude that `old_id` filtered
                 # out is a repeat rebind; arming would re-key a later nested bridge.
                 if connected:
+                    # The bridge was restarted and registered `new_id` by itself:
+                    # nothing to re-key, but the old id's pushes are still its.
+                    heir = self.find_claude_session(new_id)
+                    if old_id is not None and heir in under:
+                        self._succeed(old_id, new_id)
+                        self._drain_outbox(new_id, heir)
                     raise LookupError(
                         f"no session under pid {pid}'s claude ({ancestor}) carries id {old_id!r}"
                         f" (it carries {', '.join(carried)})"
@@ -744,6 +759,7 @@ class Server:
                     self._pending_rebinds[ancestor] = _PendingRebind(
                         new_id, time.monotonic() + _PENDING_REBIND_TTL
                     )
+                self._succeed(old_id, new_id)
                 raise LookupError(
                     f"no connected Claude Code session under pid {pid}'s own claude ({ancestor})"
                 )
@@ -758,6 +774,7 @@ class Server:
                 del self._claude_sessions[old_id]
             session.claude_session_id = new_id
             self._claude_sessions[new_id] = session
+        self._succeed(old_id, new_id)
         # Release before posting anything: a park held for the handoff this
         # rebind completes must flush to the successor, and unconditionally
         # calling it costs nothing when nothing was parked (unpark() no-ops).
@@ -784,6 +801,17 @@ class Server:
                 if session.peer_pid == peer_pid and task_id is not None:
                     return session, task_id
         return None
+
+    def _succeed(self, old_id: str | None, new_id: str) -> None:
+        """Make `new_id` the heir of pushes owed to `old_id`: the outbox's now, `_owe`'s later."""
+        if old_id is None or old_id == new_id:
+            return
+        with self.sessions_lock:
+            self._successors.pop(new_id, None)
+            self._successors[old_id] = new_id
+            owed = self._outbox.pop(old_id, [])
+            if owed:
+                self._outbox.setdefault(new_id, []).extend(owed)
 
     def _take_pending_rebind(self, session: Session) -> str | None:
         """Pop the unexpired pending rebind keyed on an ancestor of `session`'s bridge."""
@@ -859,6 +887,7 @@ class Server:
             self._claude_sessions.clear()
             self._outbox.clear()
             self._pending_rebinds.clear()
+            self._successors.clear()
         for s in sessions:
             s.say_goodbye()
             s.close()
@@ -948,6 +977,8 @@ class Server:
         if item.until is not None and item.until <= time.monotonic():
             return Post.FAILED
         with self.sessions_lock:
+            while session_id in self._successors:
+                session_id = self._successors[session_id]
             target = self._claude_sessions.get(session_id)
             if target is None or target.closed or target not in self.sessions:
                 self._outbox.setdefault(session_id, []).append(item)
