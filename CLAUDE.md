@@ -109,6 +109,12 @@ Phases:
 
 Full per-case rationale for every phase (why each specific assertion exists, not just what it covers) lives in `CLAUDE-ARCHIVE.md` — read it before extending a phase, not every session.
 
+## Committing and landing
+
+A round's commit is `verdict.commit_aligned(worktree, paths, message_file, push=False)` from supervise's jobs, called in a kernel, on a branch `agent-<name>` in a worktree under `.claude/worktrees/`. `dispatch.align` in `.claude/devstack.json` names the two reviews it runs over the paths: `.claude/skills/trace-align` traces source and tests (lock holds, interleavings, the base, the case that covers each changed path) and `.claude/skills/claims-align` checks prose against the code (this file, `CHANGELOG.md`, `help.py`, docstrings, comments, House style). In each only a blocking finding refuses the commit; the should-fix findings come back in the result and are fixed or given a home in `TODO.md`. `verdict.commit_plain` refuses a repo that ships an `*-align` skill, so it is no longer a path here.
+
+The commit runs no suite, since `dispatch` names no `commit_check`: a round that changed `src/` or `tests/` runs `uv run python tests/smoketest.py --phase 19` on its tree before it commits. The land is `verdict.integrate(repo, branch, name, align_since=<the branch's base>)`, which runs the same two reviews and the check on the merged tree before it pushes.
+
 ## Key subsystems
 
 All source lives under `src/repld/`. Individual files are self-describing; what matters is how they connect. Each rule below states the invariant only — what went wrong, the measurements, and the rejected alternatives are in `CLAUDE-ARCHIVE.md` under the same heading. Read that entry before changing code a rule names.
