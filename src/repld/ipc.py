@@ -544,8 +544,9 @@ class Server:
         self._successors: dict[str, str] = {}
         # (`claude` pid, session kind) -> (id its newest connection carries, the
         # id before it); same lock. A `bg` agent's bridge under a pane's claude
-        # keeps its own entry. What a rebind that finds the new id already
-        # registered replaces; bounded by `_CLAUDE_IDS_MAX`.
+        # keeps its own entry. Read by a rebind whose matched connection already
+        # carries the new id and by the pending path (kind None); bounded by
+        # `_CLAUDE_IDS_MAX`.
         self._claude_ids: dict[tuple[int, str | None], tuple[str, str | None]] = {}
         self._stop = False
         # Requests between "handler called" and "reply written", so `stop` can let a
@@ -712,8 +713,9 @@ class Server:
         when a connection under that claude carries `new_id` or none is
         connected yet. The replaced id is `old_id`, else the matched
         connection's own id, else (it already carries `new_id`, or none is
-        connected) the one `_claude_ids` records for that claude when nothing
-        live carries it. The match is the connected
+        connected) the one `_claude_ids` records for that claude's pane
+        connection (kind None; the matched connection's kind on the re-key
+        path) when nothing live carries it. The match is the connected
         session whose bridge shares the nearest ancestor with `pid`, the one
         closest to that ancestor if several do; the walk never passes `pid`'s
         own `claude` process. Raises LookupError on no match and ValueError
