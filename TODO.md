@@ -792,6 +792,15 @@ rather than an architectural one — the exact pattern already exists twice in t
   does not need it, or a smaller `max_size` with chunked reads. Unmeasured: the frame's size and
   which tab it came from. The routing half (a holderless block should reach the master, not every
   session) is supervise's, in its `TODO.md` under `src/supervise/routing.py`.
+- [ ] **A holderless kernel push has no owner session to go to** — `_push_holder` (`kernel.py`)
+  scopes `loop_blocked`/`loop_kill`/`loop_unblocked` to the holder's origin session and, with
+  none (a loop callback holds no task), sets `fallback_broadcast=True`: every connected session
+  gets it, and on 2026-11-21 each idle armed seat spent a turn answering one that was not its
+  own. The kernel cannot tell who should hear it. An opt-in owner session for kernel-level
+  events (a setting the project's supervisor fills, a master's seat in supervise's case) would
+  let a holderless push reach it alone and keep the broadcast as the default where none is set.
+  Unbuilt: whether an owner is a session id, a gist-registered callback or an env value, and
+  whether a wedge that stalls every session should still reach all of them.
 
 ## Infra
 
