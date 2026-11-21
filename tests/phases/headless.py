@@ -1143,7 +1143,7 @@ def _rebind_carries_owed_pushes(tmp: Path, via_cmd: bool = False) -> None:
         if via_cmd:
             # What `repld rebind` sends (`rebind_cmd._rebind`), with the claude's
             # pid in place of the command's own: the command is a descendant of it.
-            conn = _connect(paths.lock_for(paths.socket_path(tmp)), label="r51")
+            conn = _connect(paths.lock_for(paths.socket_path(tmp)), label="rebind")
             assert conn is not None
             sock, rfile, wfile, _lock = conn
             try:

@@ -36,6 +36,7 @@ Handler = Callable[[dict, "Session"], dict | None]
 # How long a rebind that found no connection waits for its bridge to register.
 _PENDING_REBIND_TTL = 300.0
 _CLAUDE_IDS_MAX = 256
+_SUCCESSORS_MAX = 256
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +541,8 @@ class Server:
         # pane `claude` pid -> id its bridge takes when it registers; same lock.
         self._pending_rebinds: dict[int, _PendingRebind] = {}
         # replaced claude_session_id -> the id a rebind put in its place; same
-        # lock. Acyclic: `_succeed` drops the new id's own entry.
+        # lock. Acyclic: `_succeed` drops the new id's own entry. Bounded by
+        # `_SUCCESSORS_MAX`.
         self._successors: dict[str, str] = {}
         # (`claude` pid, session kind) -> (id its newest connection carries, the
         # id before it); same lock. A `bg` agent's bridge under a pane's claude
@@ -708,18 +710,20 @@ class Server:
 
         Returns the id it replaced and how many parked or outbox pushes the
         rebind delivered to the successor (0 when nothing was held, or when the
-        park timeout had already delivered them). Pushes owed to the replaced
-        id, now or later, go to `new_id`; that holds for a refused rebind too
-        when a connection under that claude carries `new_id` or none is
-        connected yet. The replaced id is `old_id`, else the matched
-        connection's own id, else (it already carries `new_id`, or none is
-        connected) the one `_claude_ids` records for that claude's pane
-        connection (kind None; the matched connection's kind on the re-key
-        path) when nothing live carries it. The match is the connected
-        session whose bridge shares the nearest ancestor with `pid`, the one
-        closest to that ancestor if several do; the walk never passes `pid`'s
-        own `claude` process. Raises LookupError on no match and ValueError
-        when two are equally close.
+        park timeout had already delivered them). Raises LookupError on no
+        match and ValueError when two are equally close.
+
+        The match is the connected session whose bridge shares the nearest
+        ancestor with `pid`, the one closest to that ancestor if several do;
+        the walk never passes `pid`'s own `claude` process.
+
+        Pushes owed to the replaced id, now or later, go to `new_id`, also on
+        a refusal when a connection under that claude carries `new_id` or none
+        is connected yet. The replaced id is `old_id`, else the matched
+        connection's own. When that connection already carries `new_id`, or
+        none is connected, it is the one `_claude_ids` records (the matched
+        connection's kind, else the pane's, kind None), and only while nothing
+        live carries it.
         """
         with self.sessions_lock:
             candidates = [
@@ -873,6 +877,9 @@ class Server:
             return
         self._successors.pop(new_id, None)
         self._successors[old_id] = new_id
+        # An evicted id's later pushes wait in `_outbox` until they expire.
+        while len(self._successors) > _SUCCESSORS_MAX:
+            del self._successors[next(iter(self._successors))]
         owed = self._outbox.pop(old_id, [])
         if owed:
             self._outbox.setdefault(new_id, []).extend(owed)

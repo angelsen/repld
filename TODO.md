@@ -14,9 +14,7 @@
 
 - [ ] `Server._claude_ids` (r51) has no case for the pending path's record lookup (`rebind_claude_session` with a record and no connection under the claude) or for `_find_replaced_id_locked`'s live-holder refusal; the `via_cmd` leg of `_rebind_carries_owed_pushes` covers the matched path only.
 - [ ] `_claude_ids` entries outlive their `claude`: a reused pid's first `resume` rebind on the pending path would inherit a dead claude's last id. Key the record on the claude's `/proc/<pid>/stat` start time as well.
-
-## Rebind: r51 align leftovers
-
+- [ ] `_successors`' `_SUCCESSORS_MAX` eviction has no case.
 - [ ] No case fails without the re-key path's `_note_claude_id_locked(session, new_id)` in `rebind_claude_session`: rebind A->B on a kept bridge, a restart registering C, then the hook's rebind(C) would read A, not B, as the replaced id and B's owed push would stay queued.
 - [ ] A hook rebind processed before the old bridge's EOF finds the old id still live, records no succession (`_find_replaced_id_locked` refuses a live holder), and the old id's later pushes sit in `_outbox` until expiry; same as before r51. Shape: record a deferred succession applied when the old connection closes unless the id re-registered.
 - [ ] The known ordering (a rebind arrives before the restarted bridge registers while a background agent's bridge sits under that claude) has no case for the hook's no-`old_id` call, which re-keys the other connection instead of refusing.
