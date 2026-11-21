@@ -782,6 +782,16 @@ rather than an architectural one — the exact pattern already exists twice in t
   pair. Off by default; a sibling with no dashboard or no readable token keeps the keys
   absent, never `0`, so a reader can tell "idle" from "unknown". Requested by the same
   viewer, which Tab-cycles every live kernel (27 on the requester's machine).
+- [ ] **A large CDP frame's `permessage_deflate` decode holds the shared loop** — seen
+  2026-11-21: a `loop_blocked` pair (21.7 s, holder "a loop callback", no task id) whose frames
+  were websockets' `data_received` → `permessage_deflate.decode`, pushed to every connected
+  session because no task holds the loop. The connection is `BrowserSession`'s CDP socket
+  (`browser/session.py`, `websockets.connect(..., max_size=64 * 1024 * 1024)`): the library
+  inflates each frame inside the loop's protocol callback, so one multi-MB frame (a snapshot or
+  screenshot) blocks everything. Options: `compression=None` on that connect, if Chrome's CDP
+  does not need it, or a smaller `max_size` with chunked reads. Unmeasured: the frame's size and
+  which tab it came from. The routing half (a holderless block should reach the master, not every
+  session) is supervise's, in its `TODO.md` under `src/supervise/routing.py`.
 
 ## Infra
 
