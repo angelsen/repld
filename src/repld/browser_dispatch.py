@@ -217,8 +217,7 @@ class BrowserDispatchMixin:
 
         Handlers run on the IPC reader thread, and most reach the browser
         through `_run_async`, so they land on the loop by construction. `clear`
-        did not: it resets `_event_count` and empties `_inflight`, which settle
-        reads from the loop, and a write to loop-owned state belongs on the
+        did not: it empties `_inflight`, which settle reads from the loop, and a write to loop-owned state belongs on the
         loop.
 
         Not for the DuckDB query methods. `tab.network()`, `console()`,

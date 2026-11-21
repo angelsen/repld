@@ -1361,13 +1361,15 @@ error raises CDPCommandError, a RuntimeError that keeps the JSON-RPC `code`.
 Each attached tab has its own in-memory DuckDB connection.  All CDP events are
 inserted synchronously on the asyncio loop (DuckDB inserts are microseconds).
 
-  Event table: (event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR)
+  `events` is a view over two generation tables, with columns
+  (rowid BIGINT, event JSON, method VARCHAR, request_id VARCHAR, target VARCHAR).
+  rowid counts up per tab and is never reused.
 
   HAR views (har_entries, har_summary), console_entries, sse_entries, and
   lifecycle_entries are SQL views created on CDPSession init.
 
-  FIFO prune: every 1000 event inserts, checks if count > 50,000.  If so,
-  deletes the oldest batch (at least 5000 events).
+  Rotation: when the newer generation reaches 25,000 events the older one is
+  dropped whole, so a tab holds its newest 25,000 to 50,000 events.
 
   Events survive reconnect (DuckDB is on the CDPSession object, which is
   preserved).  Events do NOT survive tab close + re-attach — new attachment

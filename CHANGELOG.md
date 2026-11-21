@@ -10,8 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Each browser tab's DuckDB runs 4 threads instead of a pool sized to the machine (15 OS threads per tab on 16 cores).
+
 ### Fixed
 
+- A browser tab's event store grew without bound. The FIFO prune deleted rows, but an in-memory DuckDB keeps deleted rows allocated, so a tab left on a page with steady traffic (a dev server with HMR) took memory until the kernel swapped: +640 MB after 500,000 events with the row count held at 50,000. The store now keeps two generation tables and drops the older whole, which frees at once; a tab holds its newest 25,000 to 50,000 events. `events` is a view with the same columns plus `rowid`, which counts up per tab.
 - A task's completion push was lost when Claude Code restarted the bridge on `/clear` (it does for an MCP server it marks stale, e.g. in a session that entered a worktree). The new bridge registered the new session id by itself, so the push stayed `queued` under the old id until it expired. A rebind (the SessionStart hook's `repld rebind`, or `ipc.rebind_claude_session`) now makes the new id the heir of the id that claude's previous connection carried: pushes the outbox holds for the old id move to the new one, and a task of the old id that ends later pushes there. This holds when the rebind re-keys a connection, arms a pending id, or refuses as a repeat while a connection under that claude already carries the new id; the refusal itself is unchanged. With no `old_id` given, the kernel uses its own record of the previous id, and only while no live connection carries it. Not covered: a rebind that arrives before the restarted bridge registers while another connection sits under that claude.
 
 ### Removed

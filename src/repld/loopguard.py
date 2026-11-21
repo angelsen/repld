@@ -7,7 +7,7 @@ the rule structural:
   * `LoopOwned`: a dict whose every iteration is a snapshot and whose every
     mutation must come from the owning loop.
   * `loop_only`: the same check for methods writing state a dict cannot wrap
-    (e.g. `CDPSession._event_count`).
+    (e.g. `CDPSession._seq`).
 
 Stdlib only and imports nothing from repld, so every browser module can use it.
 """

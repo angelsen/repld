@@ -35,10 +35,10 @@ __all__ = ["CDPSession"]
 
 logger = logging.getLogger(__name__)
 
-# Event storage limits
+# The store holds between `GENERATION_EVENTS` and `MAX_EVENTS` rows: two
+# generation tables, the older dropped whole when the newer fills.
 MAX_EVENTS = 50_000
-PRUNE_BATCH_SIZE = 5_000
-PRUNE_CHECK_INTERVAL = 1_000
+GENERATION_EVENTS = MAX_EVENTS // 2
 
 # Backstop for requests that never report a terminal event. The bound that
 # matters is the longest deadline any *caller* gives settle, not the 5s default
@@ -868,14 +868,17 @@ class CDPSession:
         self.closing: bool = False
 
         # In-memory DuckDB. The main connection is written only from the
-        # asyncio loop thread (`store_event`/`_async_prune`); `query`/
+        # asyncio loop thread (`store_event`); `query`/
         # `fetch_body`/`clear_events` may run on IPC reader threads, so they
         # open a per-call cursor, a duplicated connection sharing this
         # in-memory DB (DuckDB's sanctioned cross-thread pattern; MVCC
         # isolates readers from the loop-thread writer).
         import duckdb
 
-        self.db = duckdb.connect(":memory:")
+        # One database per target, and by default each starts a worker pool
+        # sized to the machine (15 OS threads on 16 cores). Four threads keep
+        # the HAR views at that pool's speed; one triples their time.
+        self.db = duckdb.connect(":memory:", config={"threads": 4})
         self._setup_schema()
 
         # Guards the per-call cursors against `cleanup()` closing the
@@ -887,16 +890,6 @@ class CDPSession:
         # See `_cursor`.
         self._db_lock = threading.Lock()
         self._db_closed = False
-
-        # Event count for FIFO pruning, maintained by `store_event` so it
-        # covers *every* insert (capture.py's synthetic body rows included,
-        # which dominate the store's memory at up to `_MAX_BODY_SIZE` each).
-        self._event_count = 0
-        # Next count at which `_handle_event` checks whether a prune is due.
-        # A threshold rather than modulo: body captures advance the counter
-        # too, so it can step by more than one between checks and skip an
-        # exact multiple entirely.
-        self._next_prune_check = PRUNE_CHECK_INTERVAL
 
         # In-flight requestIds to the monotonic time they were opened.
         # Maintained by `_handle_event`, read by `observe.settle()` via
@@ -1022,22 +1015,40 @@ class CDPSession:
         self._screencast: screencast.Screencast | None = None
 
     def _setup_schema(self) -> None:
-        """Create events table, indexes, and HAR views."""
+        """Create the two event generations, the `events` view over them, and the HAR views."""
+        for gen in (0, 1):
+            self._create_generation(gen)
+        # `events.rowid`. Assigned by `store_event` because `events` is a view
+        # and its ids must stay monotonic across a rotation.
+        self._seq = 0
+        # The generation `store_event` writes to, and the rows it holds.
+        self._gen = 0
+        self._gen_rows = 0
+        # `rowid` is a column of the view, so `ORDER BY rowid` and the HAR
+        # views' ids read it as they would a table's.
         self.db.execute(
-            """CREATE TABLE IF NOT EXISTS events (
+            "CREATE VIEW events AS "
+            "SELECT seq AS rowid, event, method, request_id, target FROM events_0 "
+            "UNION ALL "
+            "SELECT seq AS rowid, event, method, request_id, target FROM events_1"
+        )
+        _create_views(self.db.execute)
+
+    def _create_generation(self, gen: int) -> None:
+        """Create the empty table `events_<gen>` with its two indexes."""
+        self.db.execute(
+            f"""CREATE TABLE events_{gen} (
+                seq BIGINT,
                 event JSON,
                 method VARCHAR,
                 request_id VARCHAR,
                 target VARCHAR
             )"""
         )
+        self.db.execute(f"CREATE INDEX idx_events_method_{gen} ON events_{gen}(method)")
         self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_events_method ON events(method)"
+            f"CREATE INDEX idx_events_request_id_{gen} ON events_{gen}(request_id)"
         )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id)"
-        )
-        _create_views(self.db.execute)
 
     @property
     def route_to(self) -> Session | None:
@@ -1359,20 +1370,43 @@ class CDPSession:
     def store_event(self, event: dict, method: str, request_id: str | None) -> None:
         """Insert an event row into this session's DuckDB event store.
 
-        Counts the row as well as writing it. `capture.py` stores its synthetic
-        body rows through here, and those have to age out of the FIFO like
-        anything else.
+        Rotates the generations when this row fills the current one.
+        `capture.py` stores its synthetic body rows through here, and those
+        have to age out with everything else.
         """
+        self._seq += 1
         self.db.execute(
-            "INSERT INTO events (event, method, request_id, target) VALUES (?, ?, ?, ?)",
+            f"INSERT INTO events_{self._gen} (seq, event, method, request_id, target)"
+            " VALUES (?, ?, ?, ?, ?)",
             [
+                self._seq,
                 _json_dumps_safe(event),
                 method,
                 request_id,
                 self.target_info.get("targetId", ""),
             ],
         )
-        self._event_count += 1
+        self._gen_rows += 1
+        if self._gen_rows >= GENERATION_EVENTS:
+            self._rotate()
+
+    def _rotate(self) -> None:
+        """Drop the older generation whole and start an empty one in its place.
+
+        A `DELETE` only marks rows, and an in-memory DuckDB frees them at a
+        `CHECKPOINT`, which rewrites every live row and blocks the loop's
+        inserts meanwhile (140 ms at `MAX_EVENTS`, from a worker thread too).
+        `DROP TABLE` frees at once and takes about a millisecond.
+        """
+        older = self._gen ^ 1
+        # One transaction: a reader binds `events` to both tables, so it must
+        # never see the moment between the drop and the create.
+        self.db.execute("BEGIN")
+        self.db.execute(f"DROP TABLE events_{older}")
+        self._create_generation(older)
+        self.db.execute("COMMIT")
+        self._gen = older
+        self._gen_rows = 0
 
     def _track_inflight(
         self, method: str, params: dict, request_id: str | None
@@ -1461,9 +1495,7 @@ class CDPSession:
                 screencast.on_frame(self, params)
                 return
 
-            # Synchronous insert -- microseconds, no contention. store_event
-            # owns the counter (see there); the prune trigger stays here so it
-            # is driven by real CDP traffic rather than by a body-capture task.
+            # Synchronous insert -- microseconds, no contention.
             #
             # Guarded separately from the dispatches below, which is the whole
             # point: everything after this is *control flow*, not recording.
@@ -1515,47 +1547,8 @@ class CDPSession:
             if method == "Runtime.exceptionThrown":
                 _push_exception(params, target_id, self.port, self._loop, self.route_to)
 
-            # Periodic pruning -- async task to avoid blocking the recv loop
-            if self._event_count >= self._next_prune_check:
-                self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
-                if self._event_count > MAX_EVENTS:
-                    bg.spawn(self._async_prune(), name="repld-prune")
-
         except Exception as exc:
             logger.debug("_handle_event error: %s", exc)
-
-    async def _async_prune(self) -> None:
-        """FIFO prune oldest events, on the loop (deliberately, see below).
-
-        `create_task` only gets this out of the recv *handler*; the SQL still
-        runs on the shared loop. That is fine here, and measured: the delete is
-        a rowid-range op on a columnar store, so it costs ~7 ms flat at
-        `MAX_EVENTS`, independent of row width (checked at 2 KB/event), and
-        fires at most once per `PRUNE_CHECK_INTERVAL` events (under 10 us
-        amortised per event). That is at the level the observation pipeline was
-        *optimised down to*, not above it, so `to_thread` here would buy
-        single-digit milliseconds in exchange for a second writer to the event
-        store (its own cursor, since `store_event` holds the main connection)
-        plus an in-flight guard, because the loop keeps counting past
-        `MAX_EVENTS` while a thread works and would spawn a concurrent delete
-        over the same rows. Not worth it. Re-measure before assuming otherwise.
-        """
-        excess = self._event_count - MAX_EVENTS
-        delete_count = max(excess, PRUNE_BATCH_SIZE)
-        try:
-            self.db.execute(
-                "DELETE FROM events WHERE rowid IN "
-                "(SELECT rowid FROM events ORDER BY rowid LIMIT ?)",
-                [delete_count],
-            )
-            row = self.db.execute("SELECT COUNT(*) FROM events").fetchone()
-            self._event_count = row[0] if row else 0
-            self._next_prune_check = self._event_count + PRUNE_CHECK_INTERVAL
-            logger.debug(
-                "Pruned %d events; %d remaining", delete_count, self._event_count
-            )
-        except Exception as exc:
-            logger.debug("Prune error: %s", exc)
 
     # ------------------------------------------------------------------
     # Query interface
@@ -1573,8 +1566,8 @@ class CDPSession:
         alternative is closing the connection out from under a live cursor.
 
         It does *not* serialize against the loop's own writes. `store_event`
-        and `_async_prune` go through `self.db` directly, and so does
-        `cleanup()`. All three run on the loop, so they are already ordered
+        goes through `self.db` directly, and so does `cleanup()`. Both run on
+        the loop, so they are already ordered
         with respect to each other, and DuckDB's MVCC isolates this cursor
         from that writer. Only the off-loop readers need the guard.
         """
@@ -1691,41 +1684,27 @@ class CDPSession:
             self._inflight.pop(rid, None)
         return len(self._inflight)
 
-    @loop_only
-    def _reset_counters(self) -> None:
-        """Loop-owned half of `clear_events`. Only ever run on the loop."""
-        self._event_count = 0
-        self._next_prune_check = PRUNE_CHECK_INTERVAL
-        self._inflight.clear()
-
     def clear_events(self) -> None:
         """Delete all stored events. Cursor per call; may run on IPC threads.
 
-        The delete is deliberately off-loop-safe; the counters are not, and the
-        two halves are reached differently for that reason. `_event_count`,
-        `_next_prune_check` and `_inflight` are written by `store_event` and
-        `_handle_event` from the recv handler, and `self._event_count += 1` is
-        a read-modify-write that a foreign thread's `= 0` can land inside and
-        lose, leaving the FIFO prune trigger describing a store it no longer
-        matches.
+        The delete is off-loop-safe; emptying `_inflight` is not, since
+        `settle` reads it on the loop, so that half hops there unless the
+        caller is already on it. `browser_dispatch._run_sync_on_loop` puts the
+        MCP `browser_clear` path on the loop, but a `browser.clear()` typed
+        into a pure-sync exec cell runs in `asyncio.to_thread`, and the
+        dashboard reaches `tab.clear()` the same way.
 
-        `browser_dispatch._run_sync_on_loop` already puts the MCP `browser_clear`
-        path on the loop, but that is not the only caller: a `browser.clear()`
-        typed into a pure-sync exec cell runs in `asyncio.to_thread`, and the
-        dashboard reaches `tab.clear()` the same way. Routing here rather than at
-        each entry point is what makes the rule hold for all of them.
-
-        The scheduled reset can miss events that arrive between the delete and
-        it (the count drifts low by however many, never high), and
-        `_async_prune` recounts with `SELECT COUNT(*)` on its next sweep, so the
-        drift is bounded and self-correcting. A lost increment is not.
+        `_seq` and the generation counters are left alone: ids stay monotonic
+        for cutoffs taken before the clear, and the deleted rows are freed as
+        their generations rotate out.
         """
         with self._cursor() as cur:
-            cur.execute("DELETE FROM events")
+            cur.execute("DELETE FROM events_0")
+            cur.execute("DELETE FROM events_1")
         if self._loop is None or on_loop(self._loop):
-            self._reset_counters()
+            self._inflight.clear()
         else:
-            self._loop.call_soon_threadsafe(self._reset_counters)
+            self._loop.call_soon_threadsafe(self._inflight.clear)
 
     def cleanup(self) -> None:
         """Close the DuckDB connection and cancel lingering async tasks.

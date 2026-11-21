@@ -780,16 +780,28 @@ rather than an architectural one — the exact pattern already exists twice in t
   pair. Off by default; a sibling with no dashboard or no readable token keeps the keys
   absent, never `0`, so a reader can tell "idle" from "unknown". Requested by the same
   viewer, which Tab-cycles every live kernel (27 on the requester's machine).
-- [ ] **A large CDP frame's `permessage_deflate` decode holds the shared loop** — seen
-  2026-11-21: a `loop_blocked` pair (21.7 s, holder "a loop callback", no task id) whose frames
-  were websockets' `data_received` → `permessage_deflate.decode`, pushed to every connected
-  session because no task holds the loop. The connection is `BrowserSession`'s CDP socket
-  (`browser/session.py`, `websockets.connect(..., max_size=64 * 1024 * 1024)`): the library
-  inflates each frame inside the loop's protocol callback, so one multi-MB frame (a snapshot or
-  screenshot) blocks everything. Options: `compression=None` on that connect, if Chrome's CDP
-  does not need it, or a smaller `max_size` with chunked reads. Unmeasured: the frame's size and
-  which tab it came from. The routing half (a holderless block should reach the master, not every
-  session) is supervise's, in its `TODO.md` under `src/supervise/routing.py`.
+- [ ] **A kernel mostly in swap stalls for seconds, and the watchdog blames the frame it was on** — seen
+  2026-11-21 on the supervise kernel: two `loop_blocked` pairs (21.7 s and 10.0 s, holder "a loop
+  callback") whose frames were websockets' `data_received` → `permessage_deflate.decode` on
+  `BrowserSession`'s CDP socket. The decode is not the cause. Measured on websockets 16.0 and 17.4:
+  one 60 MB frame through that connect holds the loop 1.4 s with compression and 0.1 s without
+  (base64 payload; 0.15 s for JSON), and `max_size` refuses anything larger. The kernel itself
+  (pid 8820) read `VmRSS` 158 MB, `VmSwap` 1.69 GB, `VmHWM` 1.67 GB and 5.6 M major faults the
+  same evening, and both `loop_blocked` pushes went out at the end of the wedge (15 s and 5 s
+  late), so the watchdog thread was stalled too: a process paging itself back in. Two things
+  follow. (1) `_Pressure.overloaded` reads machine-wide load and swap over 80% only (swap was at
+  35%), so the push said "likely sync I/O"; the process's own `VmSwap` against `VmRSS`, or its
+  `majflt` delta across the wedge, would name it. (2) What took that kernel to
+  1.67 GB is most likely the event store's unreclaimed deletes, fixed since by rotation (the live kernel was not inspected). `compression=None` on a local-port connect is still a cheap 10x on big frames, but it
+  would not have prevented either wedge. The routing half (a holderless block should reach the
+  master, not every session) is supervise's, in its `TODO.md` under `src/supervise/routing.py`.
+- [ ] **Move captured bodies out of DuckDB into a byte-capped map keyed by request id** — the
+  `Network.responseBodyCaptured` rows `capture.py` inserts are blobs read back by id
+  (`CDPSession.fetch_body`), so the event store adds nothing for them, and they are what makes
+  it large: about 350 MiB per tab at 1,000 bodies of 200 KB, with no byte ceiling since the bound is `MAX_EVENTS` rows. Shape: a per-session
+  ordered map with a total-bytes budget, evicting oldest first; `fetch_body` reads it and keeps
+  its `Network.getResponseBody` fallback. Check first what else reads those rows (`har.py`'s
+  views, `tab_query`), and whether body rows should still count toward a generation.
 - [ ] **A holderless kernel push has no owner session to go to** — `_push_holder` (`kernel.py`)
   scopes `loop_blocked`/`loop_kill`/`loop_unblocked` to the holder's origin session and, with
   none (a loop callback holds no task), sets `fallback_broadcast=True`: every connected session

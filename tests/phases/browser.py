@@ -1449,15 +1449,15 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
     watchdog probes the loop once a second — hence the *idle* loop here, with
     nothing else scheduled to wake it.
 
-    `CDPSession.clear_events` wrote `_event_count` / `_next_prune_check` /
-    `_inflight` from whatever thread called it, racing `store_event`'s
-    `+=` on the loop. Asserted by blocking the loop: the reset must still be
-    pending, which is the observable difference from writing them in place.
+    `CDPSession.clear_events` emptied `_inflight` from whatever thread called
+    it, under the loop that owns it. Asserted by blocking the loop: the reset
+    must still be pending, which is the observable difference from writing it
+    in place.
     """
     import threading
 
     from repld import bg
-    from repld.browser.cdp import PRUNE_CHECK_INTERVAL, CDPSession
+    from repld.browser.cdp import CDPSession
     from repld.loopguard import LoopOwnershipError
 
     loop = asyncio.new_event_loop()
@@ -1509,7 +1509,7 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
                     pass
                 else:
                     raise AssertionError(f"off-loop {label} write was not refused")
-            assert_eq(session._event_count, 3, "a refused write changes nothing")
+            assert_eq(session._seq, 3, "a refused write changes nothing")
             print("  ✓ loopguard refuses off-loop writes to loop-owned state")
 
             gate = threading.Event()
@@ -1522,40 +1522,108 @@ def phase_6_offloop_writes(_kernel: Kernel) -> None:
                     "the delete does not wait on the loop (per-call cursor)",
                 )
                 assert_eq(
-                    session._event_count,
-                    3,
-                    "the counter reset is queued on the loop, not written here",
+                    len(session._inflight),
+                    1,
+                    "the `_inflight` reset is queued on the loop, not written here",
                 )
             finally:
                 gate.set()
 
             deadline = time.monotonic() + 2.0
-            while session._event_count != 0 and time.monotonic() < deadline:
+            while len(session._inflight) != 0 and time.monotonic() < deadline:
                 time.sleep(0.01)
-            assert_eq(session._event_count, 0, "counters reset once the loop runs")
-            assert_eq(
-                session._next_prune_check,
-                PRUNE_CHECK_INTERVAL,
-                "prune threshold reset with it",
-            )
-            assert_eq(session._inflight, {}, "_inflight cleared with it")
+            assert_eq(session._inflight, {}, "_inflight cleared once the loop runs")
 
             # On the loop, it stays synchronous — browser_dispatch's
             # _run_sync_on_loop path must not become fire-and-forget.
             async def _on_loop_clear() -> int:
-                session.store_event({"method": "X", "params": {}}, "X", "9")
+                session._inflight["r9"] = time.monotonic()
                 session.clear_events()
-                return session._event_count
+                return len(session._inflight)
 
             assert_eq(
                 asyncio.run_coroutine_threadsafe(_on_loop_clear(), loop).result(2),
                 0,
                 "an on-loop caller sees the reset immediately",
             )
-            print("  ✓ clear_events resets loop-owned counters on the loop")
+            print("  ✓ clear_events empties loop-owned `_inflight` on the loop")
         finally:
             session.cleanup()
     finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
+def phase_6_store_rotation(_kernel: Kernel) -> None:
+    """The event store's memory stays flat as generations rotate. No Chrome.
+
+    A FIFO `DELETE` held the row count while DuckDB kept every deleted row
+    allocated, so a tab left on a page with steady traffic grew without bound.
+    Asserted on DuckDB's own accounting across many rotations, with a reader
+    on this thread querying through them.
+    """
+    import threading
+
+    from repld.browser import cdp as cdp_module
+    from repld.browser.cdp import CDPSession
+
+    gen_events = 500
+    saved = cdp_module.GENERATION_EVENTS
+    cdp_module.GENERATION_EVENTS = gen_events
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    try:
+        session = CDPSession(
+            send=None,
+            session_id="s1",
+            target_info={"targetId": "t" * 32, "type": "page"},
+            port=9222,
+            loop=loop,
+        )
+        try:
+            pad = "x" * 2000
+
+            async def _store(generations: int) -> int:
+                for i in range(generations * gen_events):
+                    session.store_event(
+                        {"method": "X", "params": {"pad": pad}}, "X", str(i)
+                    )
+                    if i % 100 == 0:
+                        await asyncio.sleep(0)
+                return session.db.execute(
+                    "SELECT SUM(memory_usage_bytes) FROM duckdb_memory()"
+                ).fetchall()[0][0]
+
+            early = asyncio.run_coroutine_threadsafe(_store(4), loop).result(60)
+            storing = asyncio.run_coroutine_threadsafe(_store(36), loop)
+            reads = 0
+            while not storing.done():
+                session.query("SELECT COUNT(*) FROM har_entries")
+                session.query("SELECT COALESCE(MAX(rowid), 0) FROM events")
+                reads += 1
+            storing.result()
+            # Sampled with no reader running: a query in flight counts its own
+            # working memory and keeps the generation it read alive.
+            late = asyncio.run_coroutine_threadsafe(_store(2), loop).result(60)
+
+            rows, low, high = session.query(
+                "SELECT COUNT(*), MIN(rowid), MAX(rowid) FROM events"
+            )[0]
+            assert_true(
+                gen_events <= rows <= 2 * gen_events,
+                f"the store holds one to two generations (got {rows} rows)",
+            )
+            assert_eq(high, 42 * gen_events, "ids keep counting across rotations")
+            assert_eq(low, high - rows + 1, "the rows kept are the newest, unbroken")
+            assert_true(reads > 0, "the reader ran while generations rotated")
+            assert_true(
+                late < 2 * early,
+                f"memory is flat across 38 more generations ({early} then {late} bytes)",
+            )
+            print("  ✓ event store: memory flat and ids monotonic across rotations")
+        finally:
+            session.cleanup()
+    finally:
+        cdp_module.GENERATION_EVENTS = saved
         loop.call_soon_threadsafe(loop.stop)
 
 

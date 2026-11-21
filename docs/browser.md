@@ -79,9 +79,9 @@ Single WebSocket to `/devtools/browser/<id>`, derived from `http://localhost:{po
 Per-attached-target. Receives routed events from BrowserSession, writes to DuckDB, dispatches registered handlers.
 
 **Keep:**
-- Store-as-is philosophy. One `events` table, JSON column, indexed on `(method, request_id, target)`.
+- Store-as-is philosophy. One `events` relation (a view over two generation tables), JSON column, indexed on `(method, request_id, target)`.
 - Surrogate sanitization regex (DuckDB JSON rejects lone `\uD800-\uDFFF` — webtap's regex is a real bug fix, port verbatim).
-- Periodic FIFO prune at ~50k events.
+- FIFO at ~50k events, by dropping a whole generation table: a `DELETE` frees nothing in an in-memory DuckDB until a checkpoint.
 - `has_body_capture()` / `fetch_body()` — lazy body fetch that checks captured store first, falls back to `Network.getResponseBody`.
 
 **Drop:**
@@ -269,7 +269,7 @@ after it was written. See the reference for those. What's worth recording here
 is the four names in the original draft that did *not* ship:
 
 - **`tab.ws` / `tab.ws_frames`.** WebSockets are in the HAR view — connection, handshake, close, and per-connection `frames_sent` / `frames_received` counts — so `tab.network()` already shows one and a dedicated method earned nothing. Individual frame *payloads* are the exception: they are stored as events, but with no public SQL surface nothing exposes them. That is a real gap rather than a decision. The two query methods that did earn their own signature, `tab.sse()` and `tab.lifecycle()`, are ones this draft never anticipated.
-- **`preserve_log`.** Not a toggle. Events are always kept, bounded only by the FIFO prune at `MAX_EVENTS`, and cleared explicitly with `tab.clear()` / `browser.clear()`. They survive more than the draft assumed: `reattach_session` re-attaches *in place*, so the same `CDPSession` and the same DuckDB carry through navigation, HMR and a WebSocket reconnect alike. A fresh store appears only with a genuinely new target.
+- **`preserve_log`.** Not a toggle. Events are always kept, bounded only by the generation rotation at `MAX_EVENTS`, and cleared explicitly with `tab.clear()` / `browser.clear()`. They survive more than the draft assumed: `reattach_session` re-attaches *in place*, so the same `CDPSession` and the same DuckDB carry through navigation, HMR and a WebSocket reconnect alike. A fresh store appears only with a genuinely new target.
 - **`tab.events.query(sql)` / `.subscribe()`.** The raw-SQL escape hatch is deliberately not public. `CDPSession.query` exists and takes a per-call cursor precisely so it can run off the loop, but exposing it would make the view schema a compatibility surface — and those views get reshaped for performance (the `ORDER BY` removal, the `har_summary` delta). `tab.cdp` is the escape hatch that shipped.
 - **`capture_pending`.** No public counter. See the backpressure note under Fetch capture.
 

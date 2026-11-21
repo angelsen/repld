@@ -1113,16 +1113,16 @@ def _snapshot_max_ids(tabs: list[Tab]) -> dict[str, int]:
     Read from `events` rather than from `har_entries` / `console_entries`,
     which is both cheaper and sufficient. Cheaper because those are views
     over a CTE chain: `MAX(id)` on them evaluates the whole thing (measured
-    22 ms at 2k events, 82 ms at 40k) where `MAX(rowid)` on the base table
-    is a counter read (~1.5 ms flat). This runs synchronously on the kernel
+    22 ms at 2k events, 82 ms at 40k) where `MAX(rowid)` on `events`
+    reads one column of the two generation tables (~0.3 ms). This runs synchronously on the kernel
     loop, once per tab *and* once per iframe child, before every observed
     mutation, so a page with three iframes was stalling the loop for a fifth
     of a second before the click even fired.
 
     Sufficient because both views derive their `id` from `events.rowid`
     (`har_entries` as `rh.rowid` / `ws.first_rowid`, `console_entries` as
-    `rowid`), and rowids are monotonic: the FIFO prune deletes the oldest
-    rows and DuckDB does not reuse their ids. So an events-level cutoff sits
+    `rowid`), and those ids are `CDPSession._seq`, which only counts up: a
+    rotation drops the oldest generation and no id is reused. So an events-level cutoff sits
     at or above either view's own max, and `WHERE id > cutoff` selects
     exactly the rows added after the snapshot. No pre-existing row can be
     above it, and no new row can be below it. One query now covers both
