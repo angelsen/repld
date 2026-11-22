@@ -1693,10 +1693,45 @@ session. The socket stays local and uid-protected and nothing listens on TCP: a
 "host:target" peer is reached through ssh, so whoever can ssh in as that user
 can call that kernel, and nobody else. A remote caller's identity is all claim.
 
+== Callbacks: a peer that tells you later ==
+
+There is no subscribe call. A service that must tell a project when something
+happens calls that project back as a peer, at the path the project registered
+from:
+
+  # the service's gist
+  import repld
+  SUBSCRIBERS = {}
+
+  def subscribe(route):
+      SUBSCRIBERS[route] = repld.peer_caller()["kernel"]["cwd"]
+
+  async def publish(route, payload):
+      project = repld.peers.get(SUBSCRIBERS[route], start=True)
+      return await project.call("phone.on_call", payload)
+
+  # the project
+  await peers.get("voice-api").call("svc.subscribe", "2")
+
+publish() must start from work the service kernel began itself: a webhook
+handler, an @every tick, one of its own cells. Called inside the registering
+call, or from a defer() that call started, it carries that call's chain and the
+project refuses it as a cycle (PeerRefused).
+
+start=True wakes a stopped project. The registered path is the caller's own
+machine's: a "host:" caller cannot be called back by it.
+
+The handler runs with no Claude session. Its notify() reaches the sessions
+connected at that moment and is dropped when there are none, so a handler whose
+event must survive stores it before it notifies. The service retries on
+PeerRefused and PeerUnavailable (the handler never ran) and not on
+PeerDisconnected (it may have).
+
 == Not in scope ==
 
-No cross-kernel event subscription: a peer cannot be told when something happens
-in another kernel. Poll with @every, or have the callee notify() its own sessions.
+No cross-kernel event stream: nothing holds a connection open to be told when
+something happens in another kernel. Use a callback (above), poll with @every,
+or have the callee notify() its own sessions.
 Live objects do not cross; return the data, or a path to it.
 
 A callee that must answer with no kernel running is not a peer: graduate the

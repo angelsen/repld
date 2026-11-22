@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld://docs/peers` has a Callbacks section: a service calls a project back at the path it registered from (`peer_caller()["kernel"]["cwd"]`, `start=True`), and such a call must start from the service's own work, since one made inside the registering call or a `defer()` it started is refused as a cycle.
+
 ### Changed
 
 - Each browser tab's DuckDB runs 4 threads instead of a pool sized to the machine (15 OS threads per tab on 16 cores).

@@ -104,6 +104,27 @@ _SVC = textwrap.dedent('''
 
     def shape(a, /, b, *rest, k=1, **extra):
         return [a, b, list(rest), k, extra]
+
+    def subscribe():
+        STATE["subscriber"] = repld.peer_caller()["kernel"]["cwd"]
+        return True
+
+    async def publish(payload):
+        return await repld.peers.get(STATE["subscriber"]).call("pp_on_event", payload)
+
+    def subscribe_then_defer(payload):
+        subscribe()
+        repld.defer(_publish_recorded(payload), "publish")
+        return True
+
+    async def _publish_recorded(payload):
+        try:
+            STATE["deferred"] = await publish(payload)
+        except repld.peers.PeerRefused as e:
+            STATE["deferred"] = ["PeerRefused", "cycle" in str(e)]
+
+    def deferred():
+        return STATE.get("deferred")
 ''')
 
 _INIT = textwrap.dedent("""
@@ -474,6 +495,50 @@ def _nested_identity(a: Bridge, b_path: Path, c_path: Path) -> None:
         "the first hop is the original caller",
     )
     print("  ✓ peers: a nested call keeps the originating session and the whole chain")
+
+
+def _callback(a: Bridge, b_path: Path) -> None:
+    """B calls A back by the path A registered with, on a chain of B's own.
+
+    The same callback from a `defer()` the registering call started carries
+    that call's chain, so A refuses it as a cycle.
+    """
+    a.exec(
+        "pp_events = []\ndef pp_on_event(payload):\n    pp_events.append(payload)\n    return len(pp_events)"
+    )
+    out = _run(a, "print(json.dumps(await pp_peer.call('svc.subscribe')))")
+    assert_eq(_last_json(out), True, "A registered with B")
+    b = Bridge(b_path)
+    try:
+        b.handshake()
+        resp = b.exec("import svc\nprint(await svc.publish('ring'))", timeout=20)
+        assert_eq(
+            content_text(resp).strip().splitlines()[-1],
+            "1",
+            "B's own cell called A's handler and got its return",
+        )
+    finally:
+        b.close()
+    out = _run(a, "print(json.dumps(pp_events))")
+    assert_eq(_last_json(out), ["ring"], "the payload reached A's __main__")
+
+    _run(a, "await pp_peer.call('svc.subscribe_then_defer', 'late')")
+    refused = None
+    for _ in range(40):
+        refused = _last_json(
+            _run(a, "print(json.dumps(await pp_peer.call('svc.deferred')))")
+        )
+        if refused is not None:
+            break
+        time.sleep(0.25)
+    assert_eq(
+        refused,
+        ["PeerRefused", True],
+        "a callback deferred from the registering call is refused as a cycle",
+    )
+    print(
+        "  ✓ peers: a callee calls its caller back on its own chain; deferred from the registering call it is a cycle"
+    )
 
 
 def _gist_cli(
@@ -1011,6 +1076,7 @@ def phase_19_peers(kernel: Kernel) -> None:
         _async_behaviour(a, b_path)
         _cycles(a, kernel)
         _nested_identity(a, b_path, c_path)
+        _callback(a, b_path)
         _stubs(a, kernel, b_path)
         _over_ssh(a, kernel.cwd, tmp, b_path)
         _death(a, tmp)

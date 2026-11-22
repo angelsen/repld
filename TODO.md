@@ -185,7 +185,9 @@ infinite scroll.
   Claude session. `kernel.events` is a per-project NDJSON log, not a bus, and nothing has checked
   whether its records are structured enough to react to. Design a subscribe call on the same
   per-call-connection model before building (a long-lived stream breaks the one-request-per-connection
-  assumption `peer/call` leans on).
+  assumption `peer/call` leans on). Until then the documented route is a callback peer call
+  (`PEERS_GUIDE` "Callbacks", phase 19 `_callback`). Its gap: the handler's `notify()` is a broadcast,
+  dropped with no session connected; only task results are owed.
 - [ ] **Peers live check against a real service.** Phase 19 uses throwaway kernels. Run
   `peers.get("voice-api")` from this project against the real `voice-api` kernel once: a real call,
   a mid-call `cancel`, and `repld gist stub voice-api <gist>`.
