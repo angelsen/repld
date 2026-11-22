@@ -225,6 +225,18 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
     Reuses the existing `POST /api {"method": "state"}` with the token from the
     0600 hint file, so no new IPC surface is needed for a read-only status line.
     """
+    body = _post_api(lock, hint_path, "state")
+    return body.get("result") if body else None
+
+
+def _post_api(lock: dict, hint_path: Path, method: str) -> dict | None:
+    """The dashboard's JSON-RPC envelope for `method`, None when unreachable.
+
+    The envelope, not just `result`: `POST /api` always answers HTTP 200
+    (`dashboard._handle_api`), so a kernel that predates `method` comes back
+    as `{"error": {...}}`, which a caller must be able to tell from a
+    transport failure.
+    """
     port = lock.get("dashboard_port")
     if not port:
         return None
@@ -233,7 +245,7 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
         return None
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/api",
-        data=json.dumps({"method": "state"}).encode(),
+        data=json.dumps({"method": method}).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
@@ -245,6 +257,8 @@ def _live_state(lock: dict, hint_path: Path) -> dict | None:
             body = json.loads(resp.read())
     except urllib.error.URLError, OSError, json.JSONDecodeError, ValueError:
         return None
+    return body if isinstance(body, dict) else None
+
     return body.get("result") if isinstance(body, dict) else None
 
 

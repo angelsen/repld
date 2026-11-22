@@ -246,7 +246,6 @@ class Session:
         # `parked` is set; see `park()`.
         self.parked = False
         self.parked_queue: list[_Owed] = []
-        self.park_deadline: float | None = None
         self._park_timer: threading.Timer | None = None
         self._closed = False
         # Set by Server.register_claude_session once `initialize` carries the
@@ -338,7 +337,6 @@ class Session:
             if self._closed or self.parked:
                 return
             self.parked = True
-            self.park_deadline = time.monotonic() + timeout_s
             timer = threading.Timer(timeout_s, self._unpark_and_flush)
             timer.daemon = True
             self._park_timer = timer
@@ -465,7 +463,6 @@ class Session:
             if self._closed or not self.parked:
                 return 0
             self.parked = False
-            self.park_deadline = None
             if self._park_timer is not None:
                 self._park_timer.cancel()
                 self._park_timer = None

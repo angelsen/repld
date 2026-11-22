@@ -1957,11 +1957,11 @@ def _tasks_version_skew(tmp: Path) -> None:
     """A kernel predating `repld tasks` names itself in the error, not just
     "could not reach the dashboard" — `POST /api` answers an unknown method
     with HTTP 200 + a JSON-RPC error body (`dashboard._handle_api`), which
-    `_fetch`'s old bare-`None`-on-anything-but-success return collapsed into
-    the same message as a genuinely unreachable dashboard. A real kernel's
-    lock/hint files are needed to reach `_fetch` at all; only the RPC result
-    is faked — `_fetch` monkeypatched to whatever a 0.6.2 kernel's dashboard
-    would answer for an unknown method."""
+    a bare `None` would collapse into the same message as a genuinely
+    unreachable dashboard. A real kernel's lock/hint files are needed to reach
+    the round trip at all; only the RPC result is faked — `tasks_cmd._post_api`
+    (the name `run_tasks` resolves) monkeypatched to whatever a 0.6.2 kernel's
+    dashboard would answer for an unknown method."""
     from repld import paths, tasks_cmd
 
     b = Bridge(tmp)
@@ -1969,8 +1969,8 @@ def _tasks_version_skew(tmp: Path) -> None:
         b.handshake()
         b.exec("1")  # force the lazy spawn so a lock/hint file exists
 
-        real_fetch = tasks_cmd._fetch
-        tasks_cmd._fetch = lambda lock, hint_path: {
+        real_post = tasks_cmd._post_api
+        tasks_cmd._post_api = lambda lock, hint_path, method: {
             "jsonrpc": "2.0",
             "id": None,
             "error": {"code": -32000, "message": "Unknown method: tasks"},
@@ -1986,7 +1986,7 @@ def _tasks_version_skew(tmp: Path) -> None:
                 f"(got {err.getvalue()!r})",
             )
         finally:
-            tasks_cmd._fetch = real_fetch
+            tasks_cmd._post_api = real_post
         print("  ✓ repld tasks names a pre-`tasks` kernel instead of 'could not reach'")
     finally:
         b.close()

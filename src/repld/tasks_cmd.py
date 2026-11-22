@@ -3,7 +3,7 @@ plus `wait`/`cancel` on one by id.
 
 `repld status` reduces the listing to a count; this is the detail behind it.
 Listing reuses the same dashboard HTTP round trip `repld status` already makes
-for its live counts (`lifecycle_cmd._live_state()`) rather than opening a
+for its live counts (`lifecycle_cmd._post_api()`) rather than opening a
 second IPC path. `wait`/`cancel` need the kernel itself (a `threading.Event`
 to block on, `cancel_task` to call), so they go over the same Unix-socket
 JSON-RPC path `repld gate` uses, via `exec_cmd._connect`/`_call`.
@@ -11,13 +11,11 @@ JSON-RPC path `repld gate` uses, via `exec_cmd._connect`/`_call`.
 
 import json
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from . import cli_args, paths, state
 from .exec_cmd import _call, _connect
-from .lifecycle_cmd import _uptime
+from .lifecycle_cmd import _post_api, _uptime
 from .render import BOLD, DIM, GREEN, RED, RESET, YELLOW, short_task
 
 _USAGE = """\
@@ -50,41 +48,6 @@ def _print_error(err: dict) -> int:
         return 1
     _err(err.get("message", "unknown error"))
     return 1
-
-
-def _fetch(lock: dict, hint_path: Path) -> dict | None:
-    """Ask the dashboard for the per-task/per-ticker listing.
-
-    Same round trip as `lifecycle_cmd._live_state()`, a different RPC method:
-    kept off `"state"` so the dashboard page's frequent poll stays a count.
-
-    Returns the raw JSON-RPC envelope, not just `result`: `POST /api` always
-    answers HTTP 200 (`dashboard._handle_api`), so a kernel that predates this
-    method comes back as `{"error": {...}}`, not a transport failure. The
-    caller has to see that to tell "dashboard unreachable" from "kernel is
-    just older than this command" apart, rather than reporting both alike.
-    """
-    port = lock.get("dashboard_port")
-    if not port:
-        return None
-    token = state.dashboard_token(hint_path)
-    if not token:
-        return None
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api",
-        data=json.dumps({"method": "tasks"}).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-            "Host": f"127.0.0.1:{port}",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.URLError, OSError, json.JSONDecodeError, ValueError:
-        return None
-    return body if isinstance(body, dict) else None
 
 
 def _peer_origin(caller: dict) -> str:
@@ -141,7 +104,7 @@ def _list(sock_path: Path, rest: list[str], as_json: bool) -> int:
         )
         return 1
 
-    body = _fetch(lock, paths.hint_for(sock_path))
+    body = _post_api(lock, paths.hint_for(sock_path), "tasks")
     if body is None:
         print(f"{_LABEL}: could not reach the dashboard", file=sys.stderr)
         return 1
