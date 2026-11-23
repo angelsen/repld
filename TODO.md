@@ -40,6 +40,23 @@
   pin, since fixed in `b6b2758e`). A static scan of installed `.so` files' `cpython-NNN`
   tags against the actually-running interpreter's version would catch this class of bug
   before it manifests as a confusing runtime import error for a compiled extension.
+- [ ] **No test story for gist authors outside a kernel** (Fredrik's question 2026-11-23, from
+  voice-api's `phonecall` and `phoneloop` wiring gists; nothing built). `repld` is a global
+  tool, so a project's pytest venv has no `repld` and a gist that does `import repld` and
+  decorates with `@repld.tool` cannot even be imported there. Where it is installed, only
+  `tool` and `Image` are real: `notify`, `defer`, `every`, `confirm`, `ask` and `choose` are
+  `TYPE_CHECKING` stubs resolved inside a kernel, so calling one outside is an AttributeError,
+  not a message that says why. voice-api works around it with a 20-line stand-in
+  (`tests/fakes.py::fake_repld`: `confirm` records its prompt and answers from a list,
+  `notify` and `defer` record their calls, `defer` closes the coroutine it is handed, `tool`
+  is the identity decorator), which is enough to test that a declined gate runs nothing and
+  that a ring pushes a notification. Proposal: (1) ship the stand-in as `repld.testing`, a
+  module and a pytest fixture with the real signatures, so wiring tests need not reinvent it;
+  (2) make the kernel-only builtins raise one clear "not in a kernel" error outside one;
+  (3) say in `repld://help/gists` that pure logic is tested directly and wiring with the
+  stand-in (the two-layer portable-gist rule already points that way); (4) maybe have
+  `repld gist new` scaffold a test that uses it. Related, not the same: "Gist durable state"
+  below, where a hook subprocess that cannot import repld must find a path without a kernel.
 
 ## Browser
 
