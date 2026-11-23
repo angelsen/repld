@@ -207,9 +207,13 @@ infinite scroll.
     forwarding it until `ControlPersist` ends. The next boot sweep reclaims the file; nothing
     cancels the forward.
   - [ ] `peers.list()` has no remote form.
-  - [ ] `/proc`-based claude ancestry (`ipc._resolve_ancestry`, `_is_claude_process`) returns
-    nothing on macOS, so rebind-by-process-tree does not work on a kernel there.
-    `SUPERVISE_SEAT_PID` claims a hosted seat's `claude` where the tree shows none; measured on
+  - [x] Claude ancestry (`ipc._resolve_ancestry`, `_is_claude_process`) reads `ps` on macOS:
+    `comm` there reads `claude` for a Claude Code started through its symlink (measured on
+    2.1.270); a Homebrew wrapper's `comm` is unmeasured. `register_claude_session` (an
+    `initialize` carrying a session id) and `rebind_claude_session` (every registered
+    connection's chain plus its own) fork `ps` per hop and per `comm` check on the connection's
+    reader thread, outside `sessions_lock`, each fork bounded at 2 s; caching is open.
+  - [ ] `SUPERVISE_SEAT_PID` claims a hosted seat's `claude` where the tree shows none; measured on
     the Mac only with the tree reads emptied, not in a live seat's `/clear`, through
     `bind.rebind_exec`'s re-exec, or for a pending id taken by a restarted bridge.
   - [ ] Unverified: whether a kernel started over ssh on a Mac can codesign. One 2026 write-up

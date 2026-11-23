@@ -19,6 +19,7 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -105,16 +106,23 @@ def _resolve_peer_pid(sock: socket.socket) -> int | None:
 
 
 def _resolve_ancestry(pid: int) -> list[int]:
-    """`pid` and its ancestors, nearest first, via /proc; [] if unreadable."""
+    """`pid` and its ancestors, nearest first, via /proc (`ps` on macOS); as far as they read.
+
+    Forks `ps` once per hop on macOS: never call it under `sessions_lock`.
+    """
+    parent_of = _read_parent_ps if sys.platform == "darwin" else _read_parent_proc
+    return _walk_ancestry(pid, parent_of)
+
+
+def _walk_ancestry(pid: int, parent_of: Callable[[int], int | None]) -> list[int]:
+    """`pid` and its ancestors, nearest first, as far as `parent_of` reads them."""
     chain: list[int] = []
     while pid > 1 and pid not in chain:
         chain.append(pid)
-        try:
-            stat = Path(f"/proc/{pid}/stat").read_text()
-        except OSError:
+        parent = parent_of(pid)
+        if parent is None:
             break
-        # comm (field 2) may itself contain spaces and parens; split after the last ')'.
-        pid = int(stat.rsplit(")", 1)[1].split()[1])
+        pid = parent
     return chain
 
 
@@ -140,11 +148,50 @@ def _caller_chain(pid: int, seat_pid: int | None) -> list[int]:
 
 
 def _is_claude_process(pid: int) -> bool:
-    """True if `pid` is a Claude Code process (`comm` is `claude`); False if unreadable."""
+    """True if `pid` is a Claude Code process (`comm`'s basename is `claude`); False if unreadable."""
+    if sys.platform == "darwin":
+        comm = _read_comm_ps(pid)
+        return comm is not None and os.path.basename(comm) == "claude"
     try:
         return Path(f"/proc/{pid}/comm").read_text().strip() == "claude"
     except OSError:
         return False
+
+
+def _read_parent_proc(pid: int) -> int | None:
+    """`pid`'s parent from /proc; None if unreadable."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # comm (field 2) may itself contain spaces and parens; split after the last ')'.
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def _read_parent_ps(pid: int) -> int | None:
+    """`pid`'s parent from `ps`, where there is no /proc (macOS); None if unreadable."""
+    ppid = _read_ps_field(pid, "ppid")
+    return int(ppid) if ppid is not None and ppid.isdigit() else None
+
+
+def _read_comm_ps(pid: int) -> str | None:
+    """`pid`'s `comm` from `ps`: the name it was exec'd as, a path on macOS."""
+    return _read_ps_field(pid, "comm")
+
+
+def _read_ps_field(pid: int, field: str) -> str | None:
+    """One `ps -o <field>=` column for `pid`; None when `ps` fails or finds no such process."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", f"{field}=", "-p", str(pid)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
 
 
 def _resolve_claude_pid(pid: int | None) -> int | None:
@@ -691,20 +738,27 @@ class Server:
         shows no `claude` above the bridge, it is taken as that `claude`,
         claimed and not verified (`Session.claude_pid_claimed`).
         """
-        claude_pid = _resolve_claude_pid(session.peer_pid)
+        # Walked first: on macOS this forks `ps`, and the pending id is popped, assigned and
+        # installed in one hold, so a rebind cannot land between them.
+        chain = (
+            _resolve_ancestry(session.peer_pid) if session.peer_pid is not None else []
+        )
+        claude_pid = next((p for p in chain if _is_claude_process(p)), None)
         claimed = False
         if claude_pid is None and type(seat_pid) is int and seat_pid > 1:
             claude_pid, claimed = seat_pid, True
+            if seat_pid not in chain:
+                chain.append(seat_pid)
         session.claude_pid, session.claude_pid_claimed = claude_pid, claimed
-        stale_id = session_id
-        pending_id = self._take_pending_rebind(session)
-        if pending_id is not None:
-            session_id = pending_id
-        session.claude_session_id = session_id
-        session.claude_project_dir = project_dir
-        session.claude_session_kind = session_kind
         session.inbox_socket = _check_inbox_socket(inbox_socket)
+        stale_id = session_id
         with self.sessions_lock:
+            pending_id = self._pop_pending_rebind_locked(chain)
+            if pending_id is not None:
+                session_id = pending_id
+            session.claude_session_id = session_id
+            session.claude_project_dir = project_dir
+            session.claude_session_kind = session_kind
             # A connection carrying the id itself ends any succession from it.
             self._successors.pop(session_id, None)
             holder = self._claude_sessions.get(session_id)
@@ -763,11 +817,12 @@ class Server:
         live carries it.
         """
         with self.sessions_lock:
-            candidates = [
-                (s, _bridge_chain(s))
+            registered = [
+                s
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
+        candidates = [(s, _bridge_chain(s)) for s in registered]
         connected = False
         for ancestor in _caller_chain(pid, seat_pid):
             hits = [
@@ -921,16 +976,13 @@ class Server:
         if owed:
             self._outbox.setdefault(new_id, []).extend(owed)
 
-    def _take_pending_rebind(self, session: Session) -> str | None:
-        """Pop the unexpired pending rebind keyed on an ancestor of `session`'s bridge."""
-        if session.peer_pid is None:
-            return None
+    def _pop_pending_rebind_locked(self, chain: list[int]) -> str | None:
+        """Pop the unexpired pending rebind keyed on an ancestor in `chain` (a bridge's), under `sessions_lock`."""
         now = time.monotonic()
-        with self.sessions_lock:
-            for ancestor in _bridge_chain(session):
-                pending = self._pending_rebinds.pop(ancestor, None)
-                if pending is not None and pending.until > now:
-                    return pending.new_id
+        for ancestor in chain:
+            pending = self._pending_rebinds.pop(ancestor, None)
+            if pending is not None and pending.until > now:
+                return pending.new_id
         return None
 
     def list_claude_sessions(self) -> list[tuple[str | None, str | None, str | None]]:

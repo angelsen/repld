@@ -549,7 +549,9 @@ def _fixture_branch(testing) -> None:
 
     stub = types.ModuleType("pytest")
     stub.fixture = lambda fn: fn
-    spec = importlib.util.spec_from_file_location("repld._w1_testing_copy", testing.__file__)
+    spec = importlib.util.spec_from_file_location(
+        "repld._w1_testing_copy", testing.__file__
+    )
     copy = importlib.util.module_from_spec(spec)
     saved = sys.modules.get("pytest")
     sys.modules["pytest"] = stub
@@ -684,7 +686,9 @@ def _testing_standin() -> None:
     with testing.installed() as scratch:
         main = sys.modules["__main__"]
         main.__dict__["_w1_standin"] = scratch
-    assert_true(sys.modules.get("__main__") is main, "a module present before the block stays")
+    assert_true(
+        sys.modules.get("__main__") is main, "a module present before the block stays"
+    )
     del main.__dict__["_w1_standin"]
     assert_true(
         _raises_value(lambda: testing.StandIn().notify("x", **{"bad-key": 1})),
@@ -696,7 +700,7 @@ def _testing_standin() -> None:
     src = (Path(kernel.__file__)).read_text()
     helpers = set(
         re.findall(
-            r'^        "(\w+)": ', src[src.index("_helpers = {") :].split("}")[0], re.M
+            r'^        "(\w+)": ', src[src.index("_helpers = {") :].split("}")[0], re.MULTILINE
         )
     )
     assert_eq(
@@ -2971,6 +2975,94 @@ def _seat_pid_claims() -> None:
     print("  ✓ seat pid claims: bridge and hook gates, caller chain")
 
 
+def _ps_ancestry() -> None:
+    """`ps` reads the parent chain and `comm` over a real process tree under a `claude`."""
+    import shutil
+    import signal
+    import tempfile
+
+    from repld import ipc
+
+    with tempfile.TemporaryDirectory() as d:
+        # A copy of a system binary is killed on macOS; a symlink keeps the name.
+        fake = Path(d) / "claude"
+        if sys.platform == "darwin":
+            fake.symlink_to(shutil.which("sh") or "/bin/sh")
+        else:
+            shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+        proc = subprocess.Popen(
+            [str(fake), "-c", "sleep 30 & echo $!; wait"],
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert proc.stdout is not None
+            child = int(proc.stdout.readline())
+            # `echo $!` runs before the child's exec, when its comm is still the fake's.
+            deadline = time.monotonic() + 5
+            while (
+                os.path.basename(ipc._read_comm_ps(child) or "") != "sleep"
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.02)
+            chain = ipc._walk_ancestry(child, ipc._read_parent_ps)
+            assert_eq(
+                chain[:2], [child, proc.pid], "ps reads the child, then its parent"
+            )
+            assert_true(
+                len(chain) > 2 and chain[-1] != proc.pid,
+                "and keeps walking past it toward init",
+            )
+            comm = ipc._read_comm_ps(proc.pid)
+            assert_true(
+                comm is not None and os.path.basename(comm) == "claude",
+                f"comm names the exec'd file (got {comm!r})",
+            )
+            assert_eq(
+                next(
+                    p
+                    for p in chain
+                    if os.path.basename(ipc._read_comm_ps(p) or "") == "claude"
+                ),
+                proc.pid,
+                "the nearest claude above the child is the fake one",
+            )
+            assert_true(
+                ipc._is_claude_process(proc.pid) and not ipc._is_claude_process(child),
+                "the platform's own reads tell the fake claude from its child",
+            )
+            assert_eq(
+                ipc._resolve_claude_pid(child), proc.pid, "and find it above the child"
+            )
+            # /proc must not answer inside the patch, or Linux passes without the darwin branch.
+            with (
+                unittest.mock.patch.object(ipc.sys, "platform", "darwin"),
+                unittest.mock.patch.object(
+                    ipc, "_read_parent_proc", side_effect=AssertionError("/proc read")
+                ),
+                unittest.mock.patch.object(
+                    ipc.Path, "read_text", side_effect=AssertionError("/proc read")
+                ),
+            ):
+                assert_eq(
+                    ipc._resolve_ancestry(child)[:2],
+                    [child, proc.pid],
+                    "the darwin branch walks through ps",
+                )
+                assert_true(
+                    ipc._is_claude_process(proc.pid)
+                    and not ipc._is_claude_process(child),
+                    "and tells the fake claude from its child",
+                )
+            assert_eq(ipc._read_parent_ps(2**22 + 1), None, "an absent pid reads None")
+            assert_eq(ipc._read_comm_ps(2**22 + 1), None, "and has no comm")
+        finally:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+    print("  ✓ ps-based ancestry finds the claude above a process (the macOS reads)")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -3153,6 +3245,7 @@ def phase_2_pure() -> None:
     _channel_meta_keys()
     _ws_ping_policy()
     _seat_pid_claims()
+    _ps_ancestry()
     _reconnect_waiters()
     _cli_args()
     _json_types()
