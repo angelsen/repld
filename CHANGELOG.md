@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `repld.testing`: a stand-in for the kernel's `repld` module (`StandIn`, `installed()`, and a `repld_standin` pytest fixture, loaded through a `pytest11` entry point) with the kernel's signatures for the gates, `notify`, `defer`, `every` and `no_display`, so a gist's wiring is testable in a venv with no kernel. Gates answer from queued values and record their prompts; `notify`, `defer` and `every` record their calls, `defer` closes the coroutine it is handed.
+- The kernel-only builtins (`notify`, `defer`, `every`, `ask`, `confirm`, `choose`, `form`, `peers`, `browser`, ...) read as an attribute of `repld` outside a kernel now raise `repld.NotInKernelError`, an `AttributeError` that says so and names `repld.testing` (`from repld import notify` still fails as an `ImportError`, and `repld.browser` is the subpackage once anything imports it).
 - `repld://docs/peers` has a Callbacks section: a service calls a project back at the path it registered from (`peer_caller()["kernel"]["cwd"]`, `start=True`), and such a call must start from the service's own work, since one made inside the registering call or a `defer()` it started is refused as a cycle.
 
 ### Changed

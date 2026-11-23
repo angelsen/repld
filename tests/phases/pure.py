@@ -3,14 +3,17 @@
 import ast
 import asyncio
 import contextlib
+import inspect
 import io
 import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import traceback
+import types
 import unittest.mock
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
@@ -529,6 +532,180 @@ def _instruction_budget() -> None:
     assert_eq(h._gist_listing(rows, 10), None, "no room, no listing")
     print(
         "  ✓ help: instructions fit Claude Code's 4096-character cut; the gist listing is elastic"
+    )
+
+
+def _raises_value(fn) -> bool:
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
+def _fixture_branch(testing) -> None:
+    """Run testing.py's pytest-only branch against a stub `pytest`, which the dev venv lacks."""
+    import importlib.util
+
+    stub = types.ModuleType("pytest")
+    stub.fixture = lambda fn: fn
+    spec = importlib.util.spec_from_file_location("repld._w1_testing_copy", testing.__file__)
+    copy = importlib.util.module_from_spec(spec)
+    saved = sys.modules.get("pytest")
+    sys.modules["pytest"] = stub
+    try:
+        spec.loader.exec_module(copy)
+    finally:
+        if saved is None:
+            del sys.modules["pytest"]
+        else:
+            sys.modules["pytest"] = saved
+    gen = copy.repld_standin()
+    standin = next(gen)
+    assert_true(sys.modules["repld"] is standin, "the fixture installs a stand-in")
+    gen.close()
+    assert_true(sys.modules["repld"] is not standin, "the fixture restores on teardown")
+
+
+def _testing_standin() -> None:
+    import repld
+    from repld import testing
+
+    for name in ("notify", "confirm", "peers"):
+        try:
+            getattr(repld, name)
+        except repld.NotInKernelError as exc:
+            assert_true(
+                "repld.testing" in str(exc), f"{name}: the error points at the stand-in"
+            )
+        else:
+            raise AssertionError(f"repld.{name} resolved outside a kernel")
+    assert_true(
+        not hasattr(repld, "notify"),
+        "NotInKernelError still reads as a missing attribute",
+    )
+
+    async def wiring() -> None:
+        with testing.installed(confirms=[False, True]) as standin:
+            import repld as r
+
+            async def gate_then_ring() -> None:
+                if await r.confirm("ring?"):
+                    r.notify("ringing", kind="call")
+                    r.defer(asyncio.sleep(0), "ring")
+
+            await gate_then_ring()
+            assert_eq(standin.notified, [], "a declined gate pushes nothing")
+            await gate_then_ring()
+            assert_eq(
+                standin.notified,
+                [("ringing", {"kind": "call"})],
+                "an accepted gate pushes",
+            )
+            assert_eq(
+                standin.deferred,
+                ["ring"],
+                "defer records its label and closes the coroutine",
+            )
+            assert_eq(standin.asked, ["ring?", "ring?"], "each prompt is recorded")
+            assert_eq(await r.confirm("again?"), False, "an empty queue declines")
+            try:
+                await r.ask("name?")
+            except r.GateDeclined:
+                pass
+            else:
+                raise AssertionError("ask with nothing queued must raise GateDeclined")
+            assert_eq(
+                await r.ask("name?", default="x"),
+                "x",
+                "a default answers an empty queue",
+            )
+            assert_true(
+                r.tool(title="t")(wiring) is wiring, "tool is the identity decorator"
+            )
+            coro = asyncio.sleep(0)
+            r.defer(coro)
+            assert_eq(
+                inspect.getcoroutinestate(coro),
+                "CORO_CLOSED",
+                "defer closes the coroutine",
+            )
+            built = []
+            r.defer(lambda: built.append(1), "thunk")
+            assert_eq(built, [], "defer records a callable and never calls it")
+
+            async def fn() -> None: ...
+
+            for bad in (fn, 3):
+                try:
+                    r.defer(bad)
+                except TypeError:
+                    pass
+                else:
+                    raise AssertionError(f"defer({bad!r}) must raise TypeError")
+
+            @r.every(5, label="tick", tab="t")
+            def tick() -> None: ...
+
+            assert_eq(
+                standin.tickers,
+                [(5, {"label": "tick", "delay": 0.0, "tab": "t"})],
+                "every records",
+            )
+            standin.choices, standin.forms = ["b"], [{"n": 1}]
+            assert_eq(
+                await r.choose("pick", ["a", "b"]), "b", "choose answers the queue"
+            )
+            assert_eq(await r.form("f", {"n": int}), {"n": 1}, "form answers the queue")
+            assert_eq(r.no_display(7), 7, "no_display is the identity")
+            assert_eq(
+                r.notify("x", session="s"), True, "a targeted notify reads delivered"
+            )
+            try:
+                r.peers
+            except repld.NotInKernelError as exc:
+                assert_true(
+                    "standin.peers" in str(exc),
+                    "an unfaked builtin says how to supply it",
+                )
+            else:
+                raise AssertionError("StandIn.peers must raise")
+        assert_true(
+            sys.modules["repld"] is not standin, "installed() restores the module"
+        )
+
+    for style in ("module", "from-import"):
+        with testing.installed() as scratch:
+            mod = types.ModuleType("_w1_gist")
+            bound = scratch if style == "module" else scratch.notify
+            mod.__dict__["repld" if style == "module" else "notify"] = bound
+            sys.modules["_w1_gist"] = mod
+        assert_true("_w1_gist" not in sys.modules, f"{style} binding is forgotten")
+    with testing.installed() as scratch:
+        main = sys.modules["__main__"]
+        main.__dict__["_w1_standin"] = scratch
+    assert_true(sys.modules.get("__main__") is main, "a module present before the block stays")
+    del main.__dict__["_w1_standin"]
+    assert_true(
+        _raises_value(lambda: testing.StandIn().notify("x", **{"bad-key": 1})),
+        "notify refuses a meta key the kernel refuses",
+    )
+    _fixture_branch(testing)
+
+    asyncio.run(wiring())
+    src = (Path(kernel.__file__)).read_text()
+    helpers = set(
+        re.findall(
+            r'^        "(\w+)": ', src[src.index("_helpers = {") :].split("}")[0], re.M
+        )
+    )
+    assert_eq(
+        helpers | {"browser"},
+        set(repld._KERNEL_ONLY),
+        "_KERNEL_ONLY is the kernel's injected set",
+    )
+    print(
+        "  ✓ repld.testing: stand-in gates and records; kernel-only builtins name the cause outside a kernel"
     )
 
 
@@ -2895,6 +3072,7 @@ def phase_2_pure() -> None:
     _field_property_subset()
     _tool_name_rules()
     _instruction_budget()
+    _testing_standin()
     _channel_meta_keys()
     _ws_ping_policy()
     _reconnect_waiters()

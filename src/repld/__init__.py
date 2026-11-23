@@ -1,6 +1,6 @@
 """Public surface of the `repld` package: re-exports, TYPE_CHECKING stubs for builtins, and lazy accessors.
 
-`Image`, `tool` and `main` are imported eagerly (stdlib cost only).
+`Image`, `tool`, `main` and `NotInKernelError` are imported eagerly (stdlib cost only).
 Everything else is resolved lazily through `__getattr__` so the bridge
 import stays cheap.
 """
@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from .cli import main
 from .content import Image, tool
+from .kernel_only import _KERNEL_ONLY, NotInKernelError
 
 if TYPE_CHECKING:
     __version__: str
@@ -86,7 +87,7 @@ __all__ = ["Image", "load_dotenv", "main", "socket_path", "tool"]
 
 
 def __getattr__(name: str) -> object:
-    """Resolve `load_dotenv`, `socket_path` and `__version__` lazily, off the bridge's import.
+    """Resolve `load_dotenv`, `socket_path` and `__version__` lazily, off the bridge's import; raise `NotInKernelError` for a kernel-only builtin.
 
     `repld/__init__.py` is imported by every `repld bridge`, which is spawned
     once per Claude Code session and deliberately stays cheap; pulling in
@@ -114,4 +115,9 @@ def __getattr__(name: str) -> object:
         from .ipc import socket_path
 
         return socket_path
+    if name in _KERNEL_ONLY:
+        raise NotInKernelError(
+            f"repld.{name} is injected by a running repld kernel and is not available here; "
+            "in a test use `repld.testing` (the `repld_standin` fixture)"
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

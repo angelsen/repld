@@ -19,6 +19,9 @@ dependencies = []
 [project.scripts]
 repld = "repld:main"
 
+[project.entry-points.pytest11]
+"repld.testing" = "repld.testing"
+
 [project.optional-dependencies]
 pretty = [
     "rich>=15.0.0",

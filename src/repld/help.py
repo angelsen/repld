@@ -2272,6 +2272,27 @@ Dependencies:
   the project venv, which `uv sync` would prune. It goes on sys.path *after*
   the project's own packages, so a project install always shadows a gist dep.
 
+Testing (outside a kernel):
+  notify/defer/every/ask/confirm/choose/form/peers/browser are injected by a
+  running kernel: `repld.notify` anywhere else raises NotInKernelError (an
+  AttributeError; `from repld import notify` is a plain ImportError, and
+  `repld.browser` is the module once anything imports repld.browser). Test the
+  pure logic by importing it directly. Test the wiring (a declined gate runs
+  nothing, a ring pushes) against the stand-in, which needs repld-tool as a dev
+  dependency of the project's venv:
+    from repld.testing import installed
+    with installed(confirms=[False]) as standin:
+        import my_gist                  # import the gist inside the block
+        ...  # standin.asked, .notified, .deferred, .tickers record the calls
+  Modules first imported inside the block and bound to the stand-in (`import
+  repld`, `from repld import notify`) are dropped from sys.modules when it ends.
+  Under pytest the `repld_standin` fixture does the same; an installed
+  repld-tool registers it as a pytest plugin (with PYTEST_DISABLE_PLUGIN_AUTOLOAD
+  set, name it in `pytest_plugins = ["repld.testing"]`). Queue answers by
+  setting `standin.confirms`, `.asks_queue`, `.choices`, `.forms` lists. A gate with
+  nothing queued declines (confirm returns False, the rest raise GateDeclined)
+  unless given default=. peers, peer_caller, browser and the session helpers are not faked.
+
 Linting:
   repld gist lint [name...]   Check gist(s) for common authoring gaps
   Rules: firstline (module docstring's first line must stand alone),
