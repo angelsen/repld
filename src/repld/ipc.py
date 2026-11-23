@@ -118,6 +118,27 @@ def _resolve_ancestry(pid: int) -> list[int]:
     return chain
 
 
+def _bridge_chain(session: Session) -> list[int]:
+    """The bridge's ancestry, with a claimed `claude` pid appended when the tree does not show it."""
+    chain = _resolve_ancestry(session.peer_pid) if session.peer_pid is not None else []
+    if session.claude_pid_claimed and session.claude_pid not in chain:
+        assert session.claude_pid is not None
+        chain.append(session.claude_pid)
+    return chain
+
+
+def _caller_chain(pid: int, seat_pid: int | None) -> list[int]:
+    """`pid`'s ancestry, plus the caller's claimed `claude` pid when the tree shows no `claude`."""
+    chain = _resolve_ancestry(pid)
+    if (
+        seat_pid is not None
+        and seat_pid not in chain
+        and not any(_is_claude_process(p) for p in chain)
+    ):
+        chain.append(seat_pid)
+    return chain
+
+
 def _is_claude_process(pid: int) -> bool:
     """True if `pid` is a Claude Code process (`comm` is `claude`); False if unreadable."""
     try:
@@ -257,6 +278,8 @@ class Session:
         self.inbox_socket: str | None = None
         # The `claude` above the bridge, resolved at register (peer_pid alone is the bridge).
         self.claude_pid: int | None = None
+        # `claude_pid` came from the bridge's say-so (`SUPERVISE_SEAT_PID`), not the process tree.
+        self.claude_pid_claimed = False
         # Whether the client's `initialize` declared form-mode elicitation.
         self.elicit_form = False
         # Same for URL mode, which a client declares separately from form.
@@ -650,6 +673,7 @@ class Server:
         project_dir: str | None,
         session_kind: str | None = None,
         inbox_socket: str | None = None,
+        seat_pid: object = None,
     ) -> None:
         """Bind a Claude Code session id to this connection.
 
@@ -662,7 +686,16 @@ class Server:
         A rebind that found no connection under this bridge's `claude`
         (`rebind_claude_session`) wins over `session_id`, the stale id the
         bridge stamps from its env, and the bridge is told to stamp it from now on.
+
+        `seat_pid` is the bridge's `SUPERVISE_SEAT_PID`: where the process tree
+        shows no `claude` above the bridge, it is taken as that `claude`,
+        claimed and not verified (`Session.claude_pid_claimed`).
         """
+        claude_pid = _resolve_claude_pid(session.peer_pid)
+        claimed = False
+        if claude_pid is None and type(seat_pid) is int and seat_pid > 1:
+            claude_pid, claimed = seat_pid, True
+        session.claude_pid, session.claude_pid_claimed = claude_pid, claimed
         stale_id = session_id
         pending_id = self._take_pending_rebind(session)
         if pending_id is not None:
@@ -670,7 +703,6 @@ class Server:
         session.claude_session_id = session_id
         session.claude_project_dir = project_dir
         session.claude_session_kind = session_kind
-        session.claude_pid = _resolve_claude_pid(session.peer_pid)
         session.inbox_socket = _check_inbox_socket(inbox_socket)
         with self.sessions_lock:
             # A connection carrying the id itself ends any succession from it.
@@ -697,13 +729,21 @@ class Server:
             )
 
     def rebind_claude_session(
-        self, new_id: str, pid: int, old_id: str | None = None
+        self,
+        new_id: str,
+        pid: int,
+        old_id: str | None = None,
+        seat_pid: int | None = None,
     ) -> Rebind:
         """Re-register the Claude Code session sharing `pid`'s process tree under `new_id`.
 
         `old_id` names the connection being replaced; it disambiguates a pid
         whose nearest shared ancestor also carries a subagent's own connection.
         It must still share `pid`'s tree, else LookupError.
+
+        `seat_pid` is the caller's own `SUPERVISE_SEAT_PID`: where `pid`'s tree
+        shows no `claude`, the walk continues at it, so a connection that
+        claimed it at register matches, and it ends the walk like a `claude`.
 
         Returns the id it replaced and how many parked or outbox pushes the
         rebind delivered to the successor (0 when nothing was held, or when the
@@ -724,12 +764,12 @@ class Server:
         """
         with self.sessions_lock:
             candidates = [
-                (s, _resolve_ancestry(s.peer_pid))
+                (s, _bridge_chain(s))
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
         connected = False
-        for ancestor in _resolve_ancestry(pid):
+        for ancestor in _caller_chain(pid, seat_pid):
             hits = [
                 (s, chain.index(ancestor))
                 for s, chain in candidates
@@ -754,7 +794,7 @@ class Server:
                 break
             # Past the pane's own `claude` the only ancestors left are shared
             # (tmux, the login session): another pane's bridge would match.
-            if _is_claude_process(ancestor):
+            if ancestor == seat_pid or _is_claude_process(ancestor):
                 # A connection already under this claude that `old_id` filtered
                 # out is a repeat rebind; arming would re-key a later nested bridge.
                 if connected:
@@ -887,7 +927,7 @@ class Server:
             return None
         now = time.monotonic()
         with self.sessions_lock:
-            for ancestor in _resolve_ancestry(session.peer_pid):
+            for ancestor in _bridge_chain(session):
                 pending = self._pending_rebinds.pop(ancestor, None)
                 if pending is not None and pending.until > now:
                     return pending.new_id
@@ -1198,15 +1238,18 @@ def register_claude_session(
     project_dir: str | None,
     session_kind: str | None = None,
     inbox_socket: str | None = None,
+    seat_pid: object = None,
 ) -> None:
     """Bind a Claude Code session id to a connection (delegates to the server)."""
     if _server is not None:
         _server.register_claude_session(
-            session, session_id, project_dir, session_kind, inbox_socket
+            session, session_id, project_dir, session_kind, inbox_socket, seat_pid
         )
 
 
-def rebind_claude_session(new_id: str, pid: int, old_id: str | None = None) -> Rebind:
+def rebind_claude_session(
+    new_id: str, pid: int, old_id: str | None = None, seat_pid: int | None = None
+) -> Rebind:
     """Re-key a live connection under `new_id`.
 
     For a SessionStart hook after `/clear`, which keeps the MCP connection
@@ -1214,7 +1257,7 @@ def rebind_claude_session(new_id: str, pid: int, old_id: str | None = None) -> R
     """
     if _server is None:
         raise LookupError("no IPC server in this process")
-    return _server.rebind_claude_session(new_id, pid, old_id)
+    return _server.rebind_claude_session(new_id, pid, old_id, seat_pid)
 
 
 def park_pushes(session_id: str, timeout_s: float = 300) -> bool:
@@ -1275,7 +1318,8 @@ def list_claude_sessions() -> list[tuple[str | None, str | None, str | None]]:
 def list_claude_connections() -> list[tuple[int | None, str | None, str | None]]:
     """All connected non-peer sessions as (claude_pid, session_id, kind) tuples.
 
-    `claude_pid` is the `claude` process above the connection's bridge, None
+    `claude_pid` is the `claude` process above the connection's bridge (the
+    bridge's claimed `SUPERVISE_SEAT_PID` where the tree shows none), None
     when none is found or the connection never registered an id. Lets a
     supervisor map a seat's pid to the id its connection currently carries.
     """

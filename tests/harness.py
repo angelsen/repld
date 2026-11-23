@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -189,6 +190,21 @@ def _is_flock_held(cwd: Path) -> bool:
         os.close(fd)
 
 
+def fake_claude(directory: Path) -> Path:
+    """A shell named `claude` in `directory`, for a bridge to run under.
+
+    A copy of a system binary is killed on macOS (its signature no longer
+    verifies), so there it is a symlink, whose exec'd name is still `claude`.
+    """
+    fake = directory / "claude"
+    sh = shutil.which("sh") or "/bin/sh"
+    if sys.platform == "darwin":
+        fake.symlink_to(sh)
+    else:
+        shutil.copy(sh, fake)
+    return fake
+
+
 class Bridge:
     """Subprocess wrapper. One bridge = one MCP session.
 
@@ -204,6 +220,8 @@ class Bridge:
         nested: bool = False,
         under: Path | None = None,
         restart_as: str | None = None,
+        seat_pid: bool = False,
+        direct: bool = False,
     ):
         # A None value deletes the key rather than setting it — the ambient
         # environment this test process itself runs under (e.g. when this
@@ -215,6 +233,9 @@ class Bridge:
         # deliver its gate pushes there; a test that wants one passes `env=`.
         proc_env.pop("CLAUDE_CODE_MESSAGING_SOCKET", None)
         proc_env.pop("REPLD_CODE_MODE", None)
+        # A suite run from a seat's kernel inherits the seat's own pid claim.
+        proc_env.pop("SUPERVISE_SEAT_PID", None)
+        proc_env.pop("REPLD_PRE_EXEC_PPID", None)
         for k, v in (env or {}).items():
             if v is None:
                 proc_env.pop(k, None)
@@ -227,20 +248,27 @@ class Bridge:
         # same claude once the first dies, carrying that session id in its env:
         # Claude Code restarting a stale MCP server on the same pipes.
         shell = str(under) if under is not None else "sh"
+        # `seat_pid` exports the launching shell's pid as a supervise host
+        # would export its forked `claude`'s (the bridge's parent).
         script = '"$@"; exit $?'
+        if seat_pid:
+            script = 'SUPERVISE_SEAT_PID=$$ "$@"; exit $?'
         if restart_as is not None:
             assert under is not None, "restart_as needs under"
             proc_env["RESTART_AS"] = restart_as
             script = '"$@"; CLAUDE_CODE_SESSION_ID="$RESTART_AS" "$@"; exit $?'
         launcher = [shell, "-c", script, "sh"] if nested or under else []
+        # `uv run` stays resident above the bridge; a claim needs the bridge's
+        # parent to be the launching shell, so run the venv's script directly.
+        runner = (
+            [str(REPO / ".venv" / "bin" / "repld")]
+            if seat_pid or direct
+            else ["uv", "run", "--project", str(REPO), "repld"]
+        )
         self.proc = subprocess.Popen(
             [
                 *launcher,
-                "uv",
-                "run",
-                "--project",
-                str(REPO),
-                "repld",
+                *runner,
                 *global_args,
                 "bridge",
                 *extra_args,

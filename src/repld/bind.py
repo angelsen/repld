@@ -36,6 +36,7 @@ from pathlib import Path
 # Set across the re-exec. `uv run ... repld bridge` re-enters the same entry
 # point, so without a sentinel the bind check would fire again and fork-bomb.
 SENTINEL = "REPLD_BOUND"
+PRE_EXEC_PPID = "REPLD_PRE_EXEC_PPID"
 
 # pyproject's `requires-python`, as a tuple; phase 16 pins the two together.
 # A constant rather than importlib.metadata so the bridge's import stays
@@ -284,6 +285,10 @@ def rebind_exec(argv: list[str]) -> None:
         )
         return
     os.environ[SENTINEL] = "1"
+    # `uv run` stays resident above the re-exec'd bridge; `bridge._seat_pid` reads (and pops) the
+    # parent from before it. Only a bridge sets it: a kernel started here would pass it to its children.
+    if "bridge" in argv:
+        os.environ[PRE_EXEC_PPID] = str(os.getppid())
     try:
         os.execvp(cmd[0], cmd)
     except OSError as e:

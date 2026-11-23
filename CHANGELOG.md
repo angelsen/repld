@@ -14,6 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- A hosted seat's `/clear` rebinds where the kernel can read no process tree (macOS). The bridge sends `SUPERVISE_SEAT_PID` in its handshake when that pid is its own parent (or was before the venv re-exec), the kernel takes it as the connection's `claude_pid` where the tree shows no `claude`, and `repld rebind` sends it as `seat_pid` when it equals the hook's `CLAUDE_PID` and `CLAUDE_JOB_DIR` is unset. Where the process tree shows a `claude`, it is read first and nothing changes.
 - Each browser tab's DuckDB runs 4 threads instead of a pool sized to the machine (15 OS threads per tab on 16 cores).
 
 ### Fixed

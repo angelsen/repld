@@ -209,6 +209,9 @@ infinite scroll.
   - [ ] `peers.list()` has no remote form.
   - [ ] `/proc`-based claude ancestry (`ipc._resolve_ancestry`, `_is_claude_process`) returns
     nothing on macOS, so rebind-by-process-tree does not work on a kernel there.
+    `SUPERVISE_SEAT_PID` claims a hosted seat's `claude` where the tree shows none; measured on
+    the Mac only with the tree reads emptied, not in a live seat's `/clear`, through
+    `bind.rebind_exec`'s re-exec, or for a pending id taken by a restarted bridge.
   - [ ] Unverified: whether a kernel started over ssh on a Mac can codesign. One 2026 write-up
     says no (`errSecInternalComponent`, needs the GUI session via `launchctl asuser` or a
     LaunchAgent); `PEERS_GUIDE` warns, nothing was tested. docduty note:

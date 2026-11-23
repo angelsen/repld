@@ -25,6 +25,7 @@ from .core_schemas import (
     BRIDGE_CODE_MODE_KEY,
     BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
+    BRIDGE_SEAT_PID_KEY,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
     CAPABILITIES,
@@ -950,6 +951,7 @@ class Dispatcher(BrowserDispatchMixin):
                 params.get(BRIDGE_PROJECT_DIR_KEY),
                 params.get(BRIDGE_SESSION_KIND_KEY),
                 params.get(BRIDGE_INBOX_SOCKET_KEY),
+                params.get(BRIDGE_SEAT_PID_KEY),
             )
         return _response(
             rid,
@@ -1423,8 +1425,11 @@ class Dispatcher(BrowserDispatchMixin):
         session_id, pid = params.get("session_id"), params.get("pid")
         if not isinstance(session_id, str) or not isinstance(pid, int):
             return _error(rid, -32602, "need session_id (str) and pid (int)")
+        seat_pid = params.get("seat_pid")
+        if type(seat_pid) is not int:
+            seat_pid = None
         try:
-            rebind = ipc.rebind_claude_session(session_id, pid)
+            rebind = ipc.rebind_claude_session(session_id, pid, seat_pid=seat_pid)
         except LookupError as exc:
             return _response(rid, {"rebound": False, "message": str(exc)})
         except ValueError as exc:

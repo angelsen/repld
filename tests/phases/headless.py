@@ -22,6 +22,7 @@ from harness import (
     assert_eq,
     assert_true,
     content_text,
+    fake_claude,
     lock_path_for,
     stop_kernel_at,
 )
@@ -1054,6 +1055,128 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
     finally:
         a.close()
         shutil.rmtree(fake.parent, ignore_errors=True)
+
+
+def _seat_pid_claim(tmp: Path) -> None:
+    """With the kernel's process-tree reads emptied (macOS: no /proc), a bridge
+    whose parent is `SUPERVISE_SEAT_PID` is claimed as its connection's claude and
+    a rebind naming that pid lands; a bridge inheriting a pid that is not its
+    parent claims nothing, and a rebind without the pid finds nothing."""
+    fake = fake_claude(Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")))
+    ctl = Bridge(tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": None})
+    seat = other = None
+    try:
+        _handshake(ctl)
+        content_text(
+            ctl.exec(
+                "from repld import ipc\n"
+                "_real = (ipc._resolve_ancestry, ipc._is_claude_process)\n"
+                "ipc._resolve_ancestry = lambda pid: [pid]\n"
+                "ipc._is_claude_process = lambda pid: False",
+                call_timeout=40,
+            )
+        )
+        env = {"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "seat-old"}
+        seat = Bridge(tmp, env=env, under=fake, seat_pid=True)
+        _handshake(seat)
+        other = Bridge(
+            tmp,
+            env={
+                **env,
+                "CLAUDE_CODE_SESSION_ID": "sub-old",
+                "SUPERVISE_SEAT_PID": str(seat.proc.pid),
+            },
+            under=fake,
+            direct=True,
+        )
+        _handshake(other)
+        code = (
+            "from repld import ipc\n"
+            "print(sorted(ipc.list_claude_connections(), key=str))\n"
+            "try:\n"
+            "    print('old=', ipc.rebind_claude_session('seat-new', 1, seat_pid={seat}).old_id)\n"
+            "except LookupError as e:\n"
+            "    print('LookupError')"
+        )
+        out = content_text(ctl.exec(code.format(seat=seat.proc.pid), call_timeout=40))
+        assert_true(
+            f"({seat.proc.pid}, 'seat-old', None)" in out,
+            f"the seat's bridge is claimed (got {out!r})",
+        )
+        assert_true(
+            "(None, 'sub-old', None)" in out,
+            f"a bridge off another parent claims nothing (got {out!r})",
+        )
+        assert_true(
+            "old= seat-old" in out, f"the rebind names the seat's pid (got {out!r})"
+        )
+        out = content_text(ctl.exec(code.format(seat="None"), call_timeout=40))
+        assert_true(
+            "LookupError" in out, f"without the pid nothing is found (got {out!r})"
+        )
+
+        def hook(claude_pid: int, new_id: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(REPO / ".venv" / "bin" / "repld"), "rebind"],
+                cwd=str(tmp),
+                input=json.dumps({"source": "clear", "session_id": new_id}),
+                env={
+                    **{k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"},
+                    "SUPERVISE_SEAT_PID": str(seat.proc.pid),
+                    "CLAUDE_PID": str(claude_pid),
+                },
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+        done = hook(seat.proc.pid, "hook-new")
+        carried = content_text(ctl.exec("print([s for s, _, _ in claude_sessions()])"))
+        assert_true(
+            done.returncode == 0 and "hook-new" in carried,
+            f"`repld rebind` as the seat's own hook rebinds ({done.stderr!r}, {carried!r})",
+        )
+        done = hook(seat.proc.pid + 1, "hook-bad")
+        carried = content_text(ctl.exec("print([s for s, _, _ in claude_sessions()])"))
+        assert_true(
+            "hook-bad" not in carried and "hook-new" in carried,
+            f"a hook whose CLAUDE_PID is not the seat's claims nothing ({carried!r})",
+        )
+        out = content_text(
+            ctl.exec(
+                "from repld import ipc\n"
+                "try:\n"
+                "    ipc.rebind_claude_session('pend-new', 1, seat_pid=424242)\n"
+                "except LookupError:\n"
+                "    pass\n"
+                "print(ipc._server._pending_rebinds.pop(424242, None) is not None)",
+                call_timeout=40,
+            )
+        )
+        assert_true(
+            "True" in out, f"a rebind under a claimed pid arms a pending id ({out!r})"
+        )
+        print("  ✓ a seat pid claims the claude where no process tree is readable")
+    finally:
+        try:
+            # Not suppressed: a kernel left with emptied tree reads would fail later cases
+            # with the cause hidden; a failure here chains onto the case's own.
+            restored = content_text(
+                ctl.exec(
+                    "from repld import ipc\n"
+                    "ipc._resolve_ancestry, ipc._is_claude_process = _real\n"
+                    "print('restored')",
+                    call_timeout=40,
+                )
+            )
+            assert_true("restored" in restored, f"tree reads restored ({restored!r})")
+        finally:
+            for b in (seat, other, ctl):
+                if b is not None:
+                    with contextlib.suppress(Exception):
+                        b.close()
+            shutil.rmtree(fake.parent, ignore_errors=True)
 
 
 def _rebind_carries_owed_pushes(tmp: Path, via_cmd: bool = False) -> None:
@@ -2235,6 +2358,7 @@ def phase_15_headless(_kernel: Kernel) -> None:
         _rebind_stops_at_own_claude(tmp)
         _deferred_rebind(tmp)
         _repeat_rebind_arms_nothing(tmp)
+        _seat_pid_claim(tmp)
         _rebind_carries_owed_pushes(tmp)
         _rebind_carries_owed_pushes(tmp, via_cmd=True)
         _rebind_cmd(tmp)

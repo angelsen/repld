@@ -2894,6 +2894,83 @@ def _lease_routes() -> None:
     print("  ✓ lease open route: derived from a /cdp/<lease> url, nothing else")
 
 
+def _seat_pid_claims() -> None:
+    from unittest import mock
+
+    from repld import bind, bridge, ipc, rebind_cmd
+
+    pid = os.getpid()
+    with mock.patch.dict(os.environ, {"SUPERVISE_SEAT_PID": str(pid)}):
+        assert_eq(
+            bridge._seat_pid(),
+            None,
+            "a bridge whose parent is not the seat claims nothing",
+        )
+    with mock.patch.dict(os.environ, {"SUPERVISE_SEAT_PID": str(os.getppid())}):
+        assert_eq(bridge._seat_pid(), os.getppid(), "a bridge under the seat claims it")
+    with mock.patch.dict(
+        os.environ, {"SUPERVISE_SEAT_PID": "4242", bind.PRE_EXEC_PPID: "4242"}
+    ):
+        assert_eq(bridge._seat_pid(), 4242, "the parent from before the re-exec counts")
+    with mock.patch.dict(
+        os.environ, {"SUPERVISE_SEAT_PID": "4242", bind.PRE_EXEC_PPID: "4242"}
+    ):
+        bridge._seat_pid()
+        assert_true(
+            bind.PRE_EXEC_PPID not in os.environ,
+            "the pre-exec parent is consumed, so the kernel's children never inherit it",
+        )
+        assert_eq(
+            bridge._seat_pid(), None, "and a bridge with another parent claims nothing"
+        )
+    with mock.patch.dict(os.environ, {bind.PRE_EXEC_PPID: "4242"}, clear=False):
+        os.environ.pop("SUPERVISE_SEAT_PID", None)
+        bridge._seat_pid()
+        assert_true(
+            bind.PRE_EXEC_PPID not in os.environ, "consumed even with no seat pid"
+        )
+    with mock.patch.dict(os.environ, {"SUPERVISE_SEAT_PID": "x"}):
+        assert_eq(bridge._seat_pid(), None, "a malformed pid claims nothing")
+    with mock.patch.dict(os.environ, {"SUPERVISE_SEAT_PID": "77", "CLAUDE_PID": "77"}):
+        os.environ.pop("CLAUDE_JOB_DIR", None)
+        assert_eq(
+            rebind_cmd._own_seat_pid(),
+            77,
+            "a hook sends the pid it shares with CLAUDE_PID",
+        )
+    with mock.patch.dict(
+        os.environ,
+        {"SUPERVISE_SEAT_PID": "77", "CLAUDE_PID": "77", "CLAUDE_JOB_DIR": "/j"},
+    ):
+        assert_eq(rebind_cmd._own_seat_pid(), None, "a --bg worker's hook sends none")
+    with mock.patch.dict(os.environ, {"SUPERVISE_SEAT_PID": "77", "CLAUDE_PID": "78"}):
+        assert_eq(
+            rebind_cmd._own_seat_pid(),
+            None,
+            "a hook with another CLAUDE_PID sends none",
+        )
+    with (
+        mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p, 5]),
+        mock.patch.object(ipc, "_is_claude_process", lambda p: p == 5),
+    ):
+        assert_eq(
+            ipc._caller_chain(9, 77),
+            [9, 5],
+            "a tree that shows a claude gets no addition",
+        )
+    with (
+        mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p]),
+        mock.patch.object(ipc, "_is_claude_process", lambda p: False),
+    ):
+        assert_eq(
+            ipc._caller_chain(9, 77),
+            [9, 77],
+            "a tree that shows none gets the seat pid",
+        )
+        assert_eq(ipc._caller_chain(77, 77), [77], "and not twice")
+    print("  ✓ seat pid claims: bridge and hook gates, caller chain")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -3075,6 +3152,7 @@ def phase_2_pure() -> None:
     _testing_standin()
     _channel_meta_keys()
     _ws_ping_policy()
+    _seat_pid_claims()
     _reconnect_waiters()
     _cli_args()
     _json_types()

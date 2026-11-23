@@ -53,12 +53,14 @@ from . import (
     spawn,
     state,
 )
+from .bind import PRE_EXEC_PPID
 from .core_schemas import (
     BRIDGE_CODE_MODE_KEY,
     BRIDGE_GOODBYE_METHOD,
     BRIDGE_INBOX_SOCKET_KEY,
     BRIDGE_PROJECT_DIR_KEY,
     BRIDGE_REBIND_METHOD,
+    BRIDGE_SEAT_PID_KEY,
     BRIDGE_SESSION_ID_KEY,
     BRIDGE_SESSION_KIND_KEY,
     check_arguments,
@@ -213,6 +215,23 @@ def _build_minimal_instructions() -> str:
     return static_instructions()
 
 
+def _seat_pid() -> int | None:
+    """`SUPERVISE_SEAT_PID` when this bridge hangs directly off that process, else None.
+
+    A subagent's bridge inherits the variable but its parent is another `claude`,
+    and a forking wrapper's pid is not the `claude` above the bridge; both claim nothing.
+    The parent counts from before `bind.rebind_exec`, which leaves `uv run` above the bridge.
+    """
+    # Popped first, claim or not: the kernel this bridge spawns copies the environment, and a
+    # `claude` that kernel starts would pass the check with the seat's pre-exec parent.
+    pre_exec = os.environ.pop(PRE_EXEC_PPID, "")
+    seat = os.environ.get("SUPERVISE_SEAT_PID", "")
+    parents = {os.getppid(), int(pre_exec) if pre_exec.isdigit() else 0}
+    return (
+        int(seat) if seat.isdigit() and int(seat) > 1 and int(seat) in parents else None
+    )
+
+
 def _err(msg: str) -> None:
     """Print a diagnostic to stderr, prefixed with the program name."""
     print(f"repld bridge: {msg}", file=sys.stderr, flush=True)
@@ -280,6 +299,7 @@ class Bridge:
         self._claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         self._claude_session_kind = "bg" if os.environ.get("CLAUDE_JOB_DIR") else None
         self._claude_inbox_socket = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
+        self._seat_pid = _seat_pid()
         self._code_mode = os.environ.get("REPLD_CODE_MODE") == "1"
         self._inflight: set[object] = set()
         # Ids of requests the kernel sent to the client (`elicitation/create`),
@@ -797,6 +817,7 @@ class Bridge:
             and self._claude_project_dir is None
             and self._claude_session_kind is None
             and self._claude_inbox_socket is None
+            and self._seat_pid is None
             and not self._code_mode
         ):
             return msg
@@ -810,6 +831,8 @@ class Bridge:
             params[BRIDGE_SESSION_KIND_KEY] = self._claude_session_kind
         if self._claude_inbox_socket is not None:
             params[BRIDGE_INBOX_SOCKET_KEY] = self._claude_inbox_socket
+        if self._seat_pid is not None:
+            params[BRIDGE_SEAT_PID_KEY] = self._seat_pid
         if self._code_mode:
             params[BRIDGE_CODE_MODE_KEY] = True
         stamped["params"] = params

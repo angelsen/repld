@@ -81,9 +81,11 @@ def run_rebind(argv: list[str]) -> int:
 
 def _rebind(rfile, wfile, session_id: str) -> int:
     """Ask the kernel to re-key the connection under this process's `claude`."""
-    resp = _call(
-        rfile, wfile, "sessions/rebind", {"session_id": session_id, "pid": os.getpid()}
-    )
+    params: dict = {"session_id": session_id, "pid": os.getpid()}
+    seat_pid = _own_seat_pid()
+    if seat_pid is not None:
+        params["seat_pid"] = seat_pid
+    resp = _call(rfile, wfile, "sessions/rebind", params)
     if resp is None:
         _err("kernel disconnected")
         return 1
@@ -94,3 +96,18 @@ def _rebind(rfile, wfile, session_id: str) -> int:
     if not result["rebound"]:
         _err(result["message"])
     return 0
+
+
+def _own_seat_pid() -> int | None:
+    """`SUPERVISE_SEAT_PID` when it equals this hook's `CLAUDE_PID`, else None.
+
+    A `claude` run under a seat sets its own `CLAUDE_PID`, so only the seat's
+    own conversation sees the two equal; a subagent's hook claims nothing. A
+    `--bg` worker the seat started inherits `CLAUDE_PID` instead (`TODO.md`), so
+    `CLAUDE_JOB_DIR`, which the bridge reads the same way, refuses it; whether
+    a hook's environment carries that variable is unmeasured.
+    """
+    seat = os.environ.get("SUPERVISE_SEAT_PID", "")
+    if os.environ.get("CLAUDE_JOB_DIR") or seat != os.environ.get("CLAUDE_PID"):
+        return None
+    return int(seat) if seat.isdigit() else None
