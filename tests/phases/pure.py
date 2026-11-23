@@ -3226,6 +3226,36 @@ def _elicitation_pure() -> None:
     )
 
 
+def _nofile_limit() -> None:
+    """The boot-time soft `RLIMIT_NOFILE` target is clamped, never infinite, never lowered; the real raise sticks."""
+    import resource
+
+    inf = resource.RLIM_INFINITY
+    cap = kernel._NOFILE_CAP
+    assert_eq(kernel._nofile_target(256, inf, 10240), 10240, "per-proc ceiling bounds an unlimited hard limit")
+    assert_eq(kernel._nofile_target(256, inf, None), cap, "cap bounds an unlimited hard limit")
+    assert_eq(kernel._nofile_target(256, 4096, 10240), 4096, "hard limit bounds the target")
+    assert_eq(kernel._nofile_target(256, inf, 1 << 30), cap, "cap bounds a huge per-proc ceiling")
+    assert_eq(kernel._nofile_target(100000, 200000, None), 100000, "an already higher soft limit stays")
+    assert_true(kernel._nofile_target(256, inf, 10240) != inf, "never RLIM_INFINITY")
+
+    # A child, so the test's own limit is untouched.
+    code = (
+        "import resource; from repld import kernel; "
+        "kernel._raise_nofile_limit(); print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", f"import resource; resource.setrlimit(resource.RLIMIT_NOFILE, (256, resource.getrlimit(resource.RLIMIT_NOFILE)[1])); {code}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    want = kernel._nofile_target(256, hard, kernel._read_maxfilesperproc())
+    assert_eq(int(out.stdout), want, "a kernel boot from a 256 soft limit reads back the target")
+    assert_true(int(out.stdout) > 256 or hard <= 256, "the soft limit rose above 256")
+
+
 def phase_2_pure() -> None:
     _own_group_signal()
     _gate_coercion()
@@ -3246,6 +3276,7 @@ def phase_2_pure() -> None:
     _ws_ping_policy()
     _seat_pid_claims()
     _ps_ancestry()
+    _nofile_limit()
     _reconnect_waiters()
     _cli_args()
     _json_types()
