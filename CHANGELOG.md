@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- On macOS a register and a rebind each read the process tree from one `ps` snapshot. A rebind took one per connected session plus two, three when the caller named a seat pid the tree did not show (0.31 s with eight sessions and no seat pid, measured on macOS 27.2); it now takes one, 0.05 s on the same rig. Linux keeps its `/proc` reads.
+
 ### Fixed
 
 ### Removed

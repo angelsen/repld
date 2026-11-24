@@ -1071,7 +1071,7 @@ def _seat_pid_claim(tmp: Path) -> None:
             ctl.exec(
                 "from repld import ipc\n"
                 "_real = (ipc._resolve_ancestry, ipc._is_claude_process)\n"
-                "ipc._resolve_ancestry = lambda pid: [pid]\n"
+                "ipc._resolve_ancestry = lambda pid, table=None: [pid]\n"
                 "ipc._is_claude_process = lambda pid: False",
                 call_timeout=40,
             )

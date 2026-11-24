@@ -2957,8 +2957,10 @@ def _seat_pid_claims() -> None:
             "a hook with another CLAUDE_PID sends none",
         )
     with (
-        mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p, 5]),
-        mock.patch.object(ipc, "_find_claudes", lambda c: {p for p in c if p == 5}),
+        mock.patch.object(ipc, "_resolve_ancestry", lambda p, table=None: [p, 5]),
+        mock.patch.object(
+            ipc, "_find_claudes", lambda c, table=None: {p for p in c if p == 5}
+        ),
     ):
         assert_eq(
             ipc._caller_chain(9, 77),
@@ -2966,8 +2968,8 @@ def _seat_pid_claims() -> None:
             "a tree that shows a claude gets no addition",
         )
     with (
-        mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p]),
-        mock.patch.object(ipc, "_find_claudes", lambda c: set()),
+        mock.patch.object(ipc, "_resolve_ancestry", lambda p, table=None: [p]),
+        mock.patch.object(ipc, "_find_claudes", lambda c, table=None: set()),
     ):
         assert_eq(
             ipc._caller_chain(9, 77),
@@ -3124,6 +3126,7 @@ def _ps_ancestry() -> None:
         "garbage line\n",
         "",
     )
+    _one_snapshot_per_call(canned)
     with unittest.mock.patch.object(ipc.subprocess, "run", lambda *a, **k: canned):
         assert_eq(
             ipc._read_ps_table(),
@@ -3135,6 +3138,53 @@ def _ps_ancestry() -> None:
             "ps rows parse with a spaced comm, and a malformed line is skipped",
         )
     print("  ✓ ps-based ancestry finds the claude above a process (the macOS reads)")
+
+
+def _one_snapshot_per_call(canned: subprocess.CompletedProcess) -> None:
+    """A register and a rebind read `ps` once each on macOS, however many connections are registered."""
+    import socket
+    import tempfile
+
+    from repld import ipc
+
+    runs: list[object] = []
+
+    def counting_run(*a: object, **k: object) -> subprocess.CompletedProcess:
+        runs.append(a)
+        return canned
+
+    with tempfile.TemporaryDirectory() as d:
+        srv = ipc.Server(Path(d) / "k.sock", lambda msg, session: None)
+        pairs = [socket.socketpair() for _ in range(6)]
+        try:
+            with (
+                unittest.mock.patch.object(ipc.sys, "platform", "darwin"),
+                unittest.mock.patch.object(ipc.subprocess, "run", counting_run),
+            ):
+                for i, (ours, _theirs) in enumerate(pairs):
+                    session = ipc.Session(ours)
+                    # The canned table's fish (41) under its claude (40): every bridge hangs off it.
+                    session.peer_pid = 41
+                    with srv.sessions_lock:
+                        srv.sessions.add(session)
+                    runs.clear()
+                    srv.register_claude_session(session, f"pane-{i}", None)
+                    assert_eq(len(runs), 1, "a register reads ps once")
+                    assert_eq(session.claude_pid, 40, "and finds the claude above it")
+                runs.clear()
+                rebound = srv.rebind_claude_session("new", 41, "pane-3", seat_pid=77)
+                assert_eq(rebound.old_id, "pane-3", "the rebind re-keys the named one")
+                assert_eq(len(runs), 1, "a rebind over six connections reads ps once")
+                runs.clear()
+                assert_eq(
+                    ipc._resolve_claude_pid(41), 40, "the nearest claude resolves"
+                )
+                assert_eq(len(runs), 1, "from one ps read, walk and check together")
+        finally:
+            for ours, theirs in pairs:
+                ours.close()
+                theirs.close()
+    print("  ✓ macOS register and rebind take one ps snapshot per call")
 
 
 def _stop_flushes_inflight_reply() -> None:

@@ -33,6 +33,8 @@ from .core_schemas import notification as _notification
 from .state import read_lock
 
 Handler = Callable[[dict, "Session"], dict | None]
+# One `ps` snapshot: pid to (ppid, comm).
+type _PsTable = dict[int, tuple[int, str]]
 
 # How long a rebind that found no connection waits for its bridge to register.
 _PENDING_REBIND_TTL = 300.0
@@ -105,15 +107,15 @@ def _resolve_peer_pid(sock: socket.socket) -> int | None:
     return pid or None
 
 
-def _resolve_ancestry(pid: int) -> list[int]:
-    """`pid` and its ancestors, nearest first, via /proc (`ps` on macOS); as far as they read.
+def _resolve_ancestry(pid: int, table: _PsTable | None = None) -> list[int]:
+    """`pid` and its ancestors, nearest first, via /proc (`table` on macOS); as far as they read.
 
-    Forks `ps` once on macOS: never call it under `sessions_lock`.
+    With no `table` it forks `ps` for a snapshot of its own on macOS, so never call it that way under `sessions_lock`.
     """
     if sys.platform != "darwin":
         return _walk_ancestry(pid, _read_parent_proc)
-    table = _read_ps_table()
-    return _walk_ancestry(pid, lambda p: table[p][0] if p in table else None)
+    rows = table if table is not None else _read_ps_table()
+    return _walk_ancestry(pid, lambda p: rows[p][0] if p in rows else None)
 
 
 def _walk_ancestry(pid: int, parent_of: Callable[[int], int | None]) -> list[int]:
@@ -128,19 +130,29 @@ def _walk_ancestry(pid: int, parent_of: Callable[[int], int | None]) -> list[int
     return chain
 
 
-def _bridge_chain(session: Session) -> list[int]:
+def _bridge_chain(session: Session, table: _PsTable | None = None) -> list[int]:
     """The bridge's ancestry, with a claimed `claude` pid appended when the tree does not show it."""
-    chain = _resolve_ancestry(session.peer_pid) if session.peer_pid is not None else []
+    chain = (
+        _resolve_ancestry(session.peer_pid, table)
+        if session.peer_pid is not None
+        else []
+    )
     if session.claude_pid_claimed and session.claude_pid not in chain:
         assert session.claude_pid is not None
         chain.append(session.claude_pid)
     return chain
 
 
-def _caller_chain(pid: int, seat_pid: int | None) -> list[int]:
+def _caller_chain(
+    pid: int, seat_pid: int | None, table: _PsTable | None = None
+) -> list[int]:
     """`pid`'s ancestry, plus the caller's claimed `claude` pid when the tree shows no `claude`."""
-    chain = _resolve_ancestry(pid)
-    if seat_pid is not None and seat_pid not in chain and not _find_claudes(chain):
+    chain = _resolve_ancestry(pid, table)
+    if (
+        seat_pid is not None
+        and seat_pid not in chain
+        and not _find_claudes(chain, table)
+    ):
         chain.append(seat_pid)
     return chain
 
@@ -155,14 +167,12 @@ def _is_claude_process(pid: int) -> bool:
         return False
 
 
-def _find_claudes(chain: list[int]) -> set[int]:
-    """The pids of `chain` that are Claude Code processes; one `ps` on macOS, not one per pid."""
+def _find_claudes(chain: list[int], table: _PsTable | None = None) -> set[int]:
+    """The pids of `chain` that are Claude Code processes, read from `table` on macOS (its own snapshot with none)."""
     if sys.platform != "darwin":
         return {p for p in chain if _is_claude_process(p)}
-    table = _read_ps_table()
-    return {
-        p for p in chain if p in table and os.path.basename(table[p][1]) == "claude"
-    }
+    rows = table if table is not None else _read_ps_table()
+    return {p for p in chain if p in rows and os.path.basename(rows[p][1]) == "claude"}
 
 
 def _read_parent_proc(pid: int) -> int | None:
@@ -175,7 +185,7 @@ def _read_parent_proc(pid: int) -> int | None:
     return int(stat.rsplit(")", 1)[1].split()[1])
 
 
-def _read_ps_table() -> dict[int, tuple[int, str]]:
+def _read_ps_table() -> _PsTable:
     """Every process as `pid: (ppid, comm)` from one `ps`; empty when `ps` fails or times out.
 
     `comm` is the path as invoked on macOS and may hold spaces, so it is the line's remainder;
@@ -193,7 +203,7 @@ def _read_ps_table() -> dict[int, tuple[int, str]]:
         return {}
     if out.returncode != 0:
         return {}
-    table: dict[int, tuple[int, str]] = {}
+    table: _PsTable = {}
     for line in out.stdout.splitlines():
         fields = line.split(None, 2)
         if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
@@ -205,9 +215,18 @@ def _resolve_claude_pid(pid: int | None) -> int | None:
     """The nearest `claude` process at or above `pid`, else None."""
     if pid is None:
         return None
-    chain = _resolve_ancestry(pid)
-    claudes = _find_claudes(chain)
+    table = _read_tree()
+    chain = _resolve_ancestry(pid, table)
+    claudes = _find_claudes(chain, table)
     return next((p for p in chain if p in claudes), None)
+
+
+def _read_tree() -> _PsTable | None:
+    """The process tree for one whole call: a `ps` snapshot on macOS, None where /proc is read per pid.
+
+    Forks `ps` on macOS: never call it under `sessions_lock`.
+    """
+    return _read_ps_table() if sys.platform == "darwin" else None
 
 
 def _check_inbox_socket(path: object) -> str | None:
@@ -747,12 +766,15 @@ class Server:
         shows no `claude` above the bridge, it is taken as that `claude`,
         claimed and not verified (`Session.claude_pid_claimed`).
         """
-        # Walked first: on macOS the walk and the claude check fork `ps`, and the pending
-        # id is popped, assigned and installed in one hold, so a rebind cannot land between them.
+        # `_read_tree` first: on macOS it forks `ps`, and the pending id is popped, assigned and
+        # installed in one hold, so a rebind cannot land between them.
+        table = _read_tree()
         chain = (
-            _resolve_ancestry(session.peer_pid) if session.peer_pid is not None else []
+            _resolve_ancestry(session.peer_pid, table)
+            if session.peer_pid is not None
+            else []
         )
-        claudes = _find_claudes(chain)
+        claudes = _find_claudes(chain, table)
         claude_pid = next((p for p in chain if p in claudes), None)
         claimed = False
         if claude_pid is None and type(seat_pid) is int and seat_pid > 1:
@@ -832,10 +854,12 @@ class Server:
                 for s in self.sessions
                 if s.claude_session_id is not None and s.peer_pid is not None
             ]
-        candidates = [(s, _bridge_chain(s)) for s in registered]
+        # One snapshot for every chain below: a `ps` per connection would grow a rebind's cost with them.
+        table = _read_tree()
+        candidates = [(s, _bridge_chain(s, table)) for s in registered]
         connected = False
-        caller_chain = _caller_chain(pid, seat_pid)
-        claudes = _find_claudes(caller_chain)
+        caller_chain = _caller_chain(pid, seat_pid, table)
+        claudes = _find_claudes(caller_chain, table)
         for ancestor in caller_chain:
             hits = [
                 (s, chain.index(ancestor))
