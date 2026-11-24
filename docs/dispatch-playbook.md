@@ -8,8 +8,8 @@ evidence.
 
 ## Cold-start budget
 
-Read this file in full, then `CLAUDE.md`'s Testing section — that's the
-whole budget. `CLAUDE.md` itself is ~70KB and is the project's own design
+Read this file in full, then `CLAUDE.md`'s Testing section and `tests/phases/CLAUDE.md` — that's the
+whole budget. `CLAUDE.md` itself is ~63KB and is the project's own design
 reference; don't re-read it end to end per dispatch, only the sections a
 specific change touches.
 

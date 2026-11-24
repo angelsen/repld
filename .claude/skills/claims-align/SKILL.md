@@ -44,8 +44,8 @@ it takes the code at HEAD as given.
    `.claude/` are not in the wheel). A call whose shape changed is
    updated wherever the old shape is shown: grep `src/repld/help.py`,
    `README.md`, `docs/` and `site/src/content/docs/` for it. A case added
-   to a phase is named in that phase's line under `CLAUDE.md`'s
-   "Testing". A condition or outcome the diff adds that no changed
+   to a phase is named in that phase's line in
+   `tests/phases/CLAUDE.md`. A condition or outcome the diff adds that no changed
    sentence states is an omission.
 4. **The past is told where it belongs.** A comment, docstring or
    `CLAUDE.md` sentence that says what the code used to do, what was

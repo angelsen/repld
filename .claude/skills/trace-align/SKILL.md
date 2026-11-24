@@ -81,7 +81,7 @@ review traces the diff; it does not judge prose (that is `claims-align`).
    - `wait_notification` carries `where=` when more than one task, gate
      or ticker in the phase can push the same `kind=`.
    - it extends a phase through `harness.py`'s `Bridge`; a pure function
-     gets its cases in phase 2 (`CLAUDE.md`, "Testing").
+     gets its cases in phase 2 (`tests/phases/CLAUDE.md`).
 
 ## Severity
 
