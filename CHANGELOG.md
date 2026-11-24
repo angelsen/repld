@@ -10,11 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- On macOS a register or rebind reads the process tree through `ps -axwwo pid=,ppid=,comm=` snapshots (`ipc._read_ps_table`, one fork per walk and per `claude` check) instead of a `ps` fork per hop and per `comm` check. Linux keeps its `/proc` reads.
-
 ### Fixed
 
 ### Removed
+
+## [0.24.1] - 2026-11-24
+
+### Changed
+
+- On macOS a register or rebind reads the process tree through `ps -axwwo pid=,ppid=,comm=` snapshots (`ipc._read_ps_table`, one fork per walk and per `claude` check) instead of a `ps` fork per hop and per `comm` check. Linux keeps its `/proc` reads.
+
 
 ## [0.24.0] - 2026-11-24
 
