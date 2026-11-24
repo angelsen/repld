@@ -13,8 +13,10 @@ The devstack plugin's `/devstack:dispatch` skills are retired.
 A session working in this repo directly commits and lands as CLAUDE.md's
 "Committing and landing" states: a worktree under `.claude/worktrees/` on
 `agent-<name>`, then the supervise peer's `verdict.commit_aligned`,
-`verdict.verify` and `verdict.integrate`. The land's `check_argv` is the
-playbook's "Check suite" chain with `--phase 19` in place of `--phase 5`.
+`verdict.verify` and `verdict.integrate`. The land passes no `check_argv`:
+the cairn's routing skill supplies the check (`tests/smoketest.py --phase
+19`), and lint, format and types are the round's own step before the commit
+(`make fmt && basedpyright`).
 
 Anything discovered that a future session would need cold goes back into
 the playbook, not into this router.

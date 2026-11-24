@@ -3106,7 +3106,9 @@ def _ps_ancestry() -> None:
             ):
                 walked = ipc._resolve_ancestry(child)
                 ipc._find_claudes(walked)
-            assert_true(len(walked) >= 3, "the walk covers the child, the fake and above")
+            assert_true(
+                len(walked) >= 3, "the walk covers the child, the fake and above"
+            )
             assert_eq(
                 len(forks), 2, "one ps fork for the walk, one for the claude check"
             )
