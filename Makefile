@@ -4,7 +4,7 @@ ROOT := $(shell git rev-parse --show-toplevel)
 
 fmt:
 	ruff check --fix
-	ruff format . gists
+	ruff format . $(wildcard gists)
 	python3 scripts/align-comments.py --fix-all
 
 injected:

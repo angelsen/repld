@@ -32,9 +32,11 @@ specific change touches.
 This project's own `./gists/` (`alibaba.py`, `aliexpress.py`, `device.py`,
 `finn.py`, `prisjakt.py`, `shopify.py`, `speedybee.py`, `tiktok.py`,
 `yr.py`) is Fredrik's personal automation, unrelated to dispatch work —
-don't assume any of those names matter to a fix. The devstack gists
-(dispatch/verdict/transcripts/roster) come from the plugin via
-`repld_init.py`, already wired.
+don't assume any of those names matter to a fix. `gists/` is gitignored, so
+a worktree has none. `verdict` and `roster` are not importable in this
+kernel: they run in the supervise kernel, reached as a peer
+(`peers.get("supervise").call("verdict.commit_aligned", ...)` under
+`defer()`), as CLAUDE.md's "Committing and landing" states.
 
 ## Live verification — the sanctioned path
 
@@ -59,10 +61,9 @@ equivalent of `judge_repros`.
 
 ## Deploying
 
-The release path (`uv version --bump patch` → `uv build` → `git push --tags` → `uv publish`, optionally `make deploy` for the docs site) is entirely manual, no CI — see CLAUDE.md's Releasing section for the exact sequence. `uv publish`, `uv version --bump`, and `make deploy` are all gated in `.claude/devstack.json`'s `pane_deploy_patterns` — never run from a dispatched worker's pane; a release needs a live human go-ahead.
+The release path (`uv version --bump patch` → `uv build` → `git push --tags` → `uv publish`, optionally `make deploy` for the docs site) is entirely manual, no CI — see CLAUDE.md's Releasing section for the exact sequence. `uv publish`, `uv version --bump` and `make deploy` are never run from a dispatched worker's pane, and a release needs a live human go-ahead. No hook gates them; `~/.local/bin/guards/git` refuses `make deploy`'s forced `gh-pages` push.
 
 ## repld itself
 
-- `repld_init.py` exists, wired to the devstack dispatch-loop gists (`gists.add_search_dir` → the devstack checkout). devloop's line is present but commented out — see "Live verification" above for why.
-- `.claude/devstack.json`: `repld_roster: true` (this repo's kernel is real, already MCP-registered, and has had multiple sessions working against it over time — roster announces each to the others). `protected_repos: []` — repld hasn't dispatched into another repo's checkout yet; fill in if that changes.
+- The workflow layer lives in supervise. What is left here under the devstack name is `.claude/devstack.json`, which supervise still reads for its `dispatch` block, and nothing else: there is no project `repld_init.py`, and `.claude/hooks/cc-check-hook` is this repo's own copy of the hook wrapper (the cairn's `~/supervise/.claude/hooks/cc-check-hook` is the source).
 - Narration ratchet (`checks/narration.py`) baselined 2026-09-09 at 41 hits across 26 files — almost entirely legitimate "prior state" design-rationale prose in docstrings (CLAUDE.md and `src/repld/**/*.py` explain *why* by contrasting with what came before, which the project's own Invariant-comments style explicitly permits in design docs). The ratchet only refuses *growth* past that baseline, not the existing prose.

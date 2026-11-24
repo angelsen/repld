@@ -1398,7 +1398,7 @@ class Dispatcher(BrowserDispatchMixin):
         return _response(rid, {"task_id": tid, "cancelled": self.ctx.cancel_task(tid)})
 
     def _requests_cancel(self, rid, params: dict, session: ipc.Session) -> dict:
-        """Cancel the in-flight `exec` a bridge's client abandoned, found by request id.
+        """Cancel the in-flight `exec` a bridge's client abandoned, matched by request id.
 
         The bridge sends this on a connection of its own, since the one that
         carries the request is parked inside that `exec`. Scoping by

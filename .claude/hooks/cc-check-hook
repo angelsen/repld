@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#
+# cc-check-hook — run a project checker from a Claude Code hook.
+#
+#   "command": "cc-check-hook smoketest/check.sh"
+#
+# Claude Code blocks on exit 2 only; exit 1 is a non-blocking error that lets
+# the action through, so a checker's conventional exit 1 must be translated or
+# it enforces nothing. On exit 2 stdout is discarded and stderr is what reaches
+# the model, so findings go to stderr.
+
+set -uo pipefail
+
+cat >/dev/null 2>&1 || true # drain the hook's JSON on stdin so the writer never sees SIGPIPE
+
+if [[ $# -eq 0 ]]; then
+	echo "cc-check-hook: no checker command given" >&2
+	exit 2
+fi
+
+# Relative checker paths are written against the project root, not whatever
+# directory the tool call happened to touch.
+[[ -n ${CLAUDE_PROJECT_DIR:-} ]] && cd "$CLAUDE_PROJECT_DIR" || true
+
+key=$(printf '%s' "$PWD $*" | cksum | tr -d ' ')
+lock="${TMPDIR:-/tmp}/cc-check-hook-$key.lock"
+dirty="${TMPDIR:-/tmp}/cc-check-hook-$key.dirty"
+
+# A burst of Edit calls would otherwise start one suite per edit. A losing
+# instance marks the tree dirty and returns; the holder re-runs once if that
+# happened, so the last edit is still checked.
+exec 9>"$lock"
+if ! flock -n 9; then
+	: >"$dirty"
+	exit 0
+fi
+
+output=""
+rc=0
+attempt() {
+	output=$("$@" 2>&1)
+	rc=$?
+}
+
+rm -f "$dirty"
+attempt "$@"
+if [[ -f $dirty ]]; then
+	rm -f "$dirty"
+	attempt "$@"
+fi
+
+[[ $rc -eq 0 ]] && exit 0
+
+{
+	echo "Project checks failed (exit $rc): $*"
+	echo
+	printf '%s\n' "$output"
+} >&2
+exit 2
