@@ -27,7 +27,9 @@ from typing import IO, Any, Literal, overload
 # and the whole basis of sweep_dead_pid_files().
 _PID_PREFIX = re.compile(r"^(\d+)-")
 
-# macOS `struct kinfo_proc`: where `kp_proc.p_stat` sits on LP64, and its zombie value (`SZOMB`).
+# macOS `struct kinfo_proc` on LP64: `kp_proc.p_starttime` (a timeval) leads it, `kp_proc.p_stat`
+# sits at 36, and `SZOMB` is its zombie value.
+_KINFO_START_END = 16
 _KINFO_STAT_OFFSET = 36
 _KINFO_ZOMBIE = 5
 
@@ -130,7 +132,11 @@ def _is_zombie(pid: int) -> bool:
     survives a process called `foo) Z (bar`.
     """
     if sys.platform == "darwin":
-        return _read_kinfo_stat(pid) == _KINFO_ZOMBIE
+        record = _read_kinfo(pid)
+        return (
+            len(record) > _KINFO_STAT_OFFSET
+            and record[_KINFO_STAT_OFFSET] == _KINFO_ZOMBIE
+        )
     try:
         with open(f"/proc/{pid}/stat", "rb") as f:
             data = f.read()
@@ -143,12 +149,12 @@ def _is_zombie(pid: int) -> bool:
     return bool(fields) and fields[0] == b"Z"
 
 
-def _read_kinfo_stat(pid: int) -> int | None:
-    """macOS's `p_stat` for *pid*, None when the kernel names no such process or the read fails.
+def _read_kinfo(pid: int) -> bytes:
+    """macOS's `struct kinfo_proc` for *pid*, empty when the kernel names no such process or the read fails.
 
     A `sysctl` read, never a `ps` fork: `pid_alive` is called on the kernel's loop.
     """
-    # Imported here: every entry point imports this module, and only macOS needs ctypes.
+    # Imported here: the bridge and most commands import this module, and only macOS needs ctypes.
     import ctypes
 
     libc = ctypes.CDLL(None, use_errno=True)
@@ -157,10 +163,35 @@ def _read_kinfo_stat(pid: int) -> int | None:
     size = ctypes.c_size_t(len(buf))
     # A pid that is gone answers 0 with an empty record, not an error.
     if libc.sysctl(mib, 4, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+        return b""
+    return buf.raw[: size.value]
+
+
+def read_proc_start(pid: int) -> str | None:
+    """An opaque token for when *pid* started, None when it is gone or the platform has no reading.
+
+    Equal across reads of one process and different for a later holder of the
+    same pid, a zombie included: compare it, never interpret it.
+    """
+    if sys.platform == "darwin":
+        record = _read_kinfo(pid)
+        return (
+            record[:_KINFO_START_END].hex() if len(record) >= _KINFO_START_END else None
+        )
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
+    except OSError:
         return None
-    if size.value <= _KINFO_STAT_OFFSET:
-        return None
-    return buf.raw[_KINFO_STAT_OFFSET]
+    # comm (field 2) may contain spaces and parens; start time is field 22, after the last ')'.
+    return stat.rsplit(b")", 1)[1].split()[19].decode()
+
+
+def is_same_process(pid: int, born: str | None) -> bool:
+    """True while *pid* is alive and still the process `read_proc_start` named `born`.
+
+    With no `born` (a platform without the reading) this is `pid_alive` alone.
+    """
+    return pid_alive(pid) and (born is None or read_proc_start(pid) == born)
 
 
 def read_lock(lock_path: Path) -> dict | str:

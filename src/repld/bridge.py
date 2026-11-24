@@ -33,6 +33,7 @@ Two rules that fall out of running arbitrary user code:
   - stdout carries nothing but MCP messages. All diagnostics go to stderr.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -142,7 +143,7 @@ def _ephemeral_socket_path() -> Path:
     return d / "kernel.sock"
 
 
-def _teardown_ephemeral(sock_path: Path, pid: int | None) -> None:
+def _teardown_ephemeral(sock_path: Path, pid: int | None, born: str | None) -> None:
     """Kill the one-off kernel `--ephemeral` spawned, then remove its directory.
 
     SIGTERM first, so `_shutdown`'s `@every`/`defer()` drain gets its usual
@@ -155,22 +156,17 @@ def _teardown_ephemeral(sock_path: Path, pid: int | None) -> None:
     import shutil
     import signal
 
-    if pid is not None:
-        try:
+    # A reaped kernel's pid can be a stranger's: `born` is checked before each signal.
+    if pid is not None and state.is_same_process(pid, born):
+        with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pid = None
-
-    if pid is not None:
         for _ in range(WAIT_STEPS):
-            if not state.pid_alive(pid):
+            if not state.is_same_process(pid, born):
                 break
             time.sleep(WAIT_STEP_SECONDS)
-        else:
-            try:
+        if state.is_same_process(pid, born):
+            with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
 
     shutil.rmtree(sock_path.parent, ignore_errors=True)
 
@@ -285,6 +281,7 @@ class Bridge:
         self._ephemeral = ephemeral
         self._sock: socket.socket | None = None
         self._kernel_pid: int | None = None
+        self._kernel_born: str | None = None
         self._generation = 0
         self._client_init: dict | None = None
         self._client_initialized = False
@@ -354,7 +351,7 @@ class Bridge:
             except OSError:
                 pass
         if self._ephemeral:
-            _teardown_ephemeral(self.socket_path, self._kernel_pid)
+            _teardown_ephemeral(self.socket_path, self._kernel_pid, self._kernel_born)
         return 0
 
     def restart_kernel(self) -> tuple[int | None, int | None]:
@@ -381,18 +378,18 @@ class Bridge:
         import os
         import signal
 
-        old_pid = self._kernel_pid
-        if old_pid is not None:
+        old_pid, old_born = self._kernel_pid, self._kernel_born
+        if old_pid is not None and state.is_same_process(old_pid, old_born):
             try:
                 os.kill(old_pid, signal.SIGTERM)
             except OSError:
                 pass  # already gone; fall through to the reconnect ladder
             for _ in range(WAIT_STEPS):
-                if not state.pid_alive(old_pid):
+                if not state.is_same_process(old_pid, old_born):
                     break
                 time.sleep(WAIT_STEP_SECONDS)
         self._on_kernel_gone(expected=True)
-        if not self._reconnect(exclude_pid=old_pid):
+        if not self._reconnect(exclude_pid=old_pid, exclude_born=old_born):
             return old_pid, None
         return old_pid, self._kernel_pid
 
@@ -845,7 +842,9 @@ class Bridge:
         spawning a kernel if the lockfile is missing, stale, or unreachable.
         """
         if self._sock is not None:
-            if self._kernel_pid is not None and state.pid_alive(self._kernel_pid):
+            if self._kernel_pid is not None and state.is_same_process(
+                self._kernel_pid, self._kernel_born
+            ):
                 return True
             self._on_kernel_gone()
         return self._reconnect()
@@ -867,16 +866,18 @@ class Bridge:
         self._attach(*result)
         return True
 
-    def _reconnect(self, *, exclude_pid: int | None = None) -> bool:
+    def _reconnect(
+        self, *, exclude_pid: int | None = None, exclude_born: str | None = None
+    ) -> bool:
         """Attach to this project's kernel, spawning one if there is none.
 
-        `exclude_pid` is set by `restart_kernel` and refuses the kernel being
-        replaced. Refusing it has a consequence the plain path doesn't have:
+        `exclude_pid` and `exclude_born` are set by `restart_kernel` and refuse the
+        kernel being replaced. Refusing it has a consequence the plain path doesn't have:
         the first spawn is a no-op, because one kernel per project is enforced
         by an flock the dying kernel still holds, so the poll below has to keep
         asking. Once it lets go, nothing else is going to start one for us.
         """
-        result = self._connect_excluding(exclude_pid)
+        result = self._connect_excluding(exclude_pid, exclude_born)
         if not isinstance(result, str):
             self._attach(*result)
             return True
@@ -884,7 +885,7 @@ class Bridge:
         self._spawn_kernel()
         for step in range(WAIT_STEPS):
             time.sleep(WAIT_STEP_SECONDS)
-            result = self._connect_excluding(exclude_pid)
+            result = self._connect_excluding(exclude_pid, exclude_born)
             if not isinstance(result, str):
                 self._attach(*result)
                 return True
@@ -894,20 +895,25 @@ class Bridge:
         return False
 
     def _connect_excluding(
-        self, exclude_pid: int | None
+        self, exclude_pid: int | None, exclude_born: str | None = None
     ) -> tuple[socket.socket, dict] | str:
-        """Connect to the kernel, refusing one specific pid. Returns a reason on failure.
+        """Connect to the kernel, refusing one specific process. Returns a reason on failure.
 
         A kernel that has been SIGTERMed keeps both its pid and its bound
         socket for as long as `_shutdown` takes to drain `@every` and
         `defer()` finally blocks, so a plain connect during a restart hands
-        back the very process we just killed.
+        back the very process we just killed. A successor that drew the same
+        pid started at another time and is not refused.
         """
         result = ipc.connect_to_kernel(self.lock_path)
         if isinstance(result, str):
             return result
         sock, lock = result
-        if exclude_pid is not None and lock.get("pid") == exclude_pid:
+        if (
+            exclude_pid is not None
+            and lock.get("pid") == exclude_pid
+            and state.is_same_process(exclude_pid, exclude_born)
+        ):
             try:
                 sock.close()
             except OSError:
@@ -955,7 +961,11 @@ class Bridge:
                     pass
                 return
             self._sock = sock
-            self._kernel_pid = lock.get("pid")
+            pid = lock.get("pid")
+            self._kernel_pid = pid
+            self._kernel_born = (
+                state.read_proc_start(pid) if isinstance(pid, int) else None
+            )
             self._generation += 1
             gen = self._generation
         threading.Thread(
@@ -1039,6 +1049,7 @@ class Bridge:
                 return False
             sock, self._sock = self._sock, None
             pid, self._kernel_pid = self._kernel_pid, None
+            self._kernel_born = None
             orphans, self._inflight = self._inflight, set()
             asked, self._kernel_requests = self._kernel_requests, set()
             crashed = (

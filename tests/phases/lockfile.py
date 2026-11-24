@@ -88,14 +88,14 @@ def phase_5_zombie(_kernel: Kernel) -> None:
 
     from repld import state
 
+    if sys.platform not in ("linux", "darwin"):
+        print("  ~ zombie check skipped (no zombie reading on this platform)")
+        return
     proc = subprocess.Popen(["true"])  # exits immediately; deliberately not reaped
     try:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not state._is_zombie(proc.pid):
             time.sleep(0.02)
-        if sys.platform not in ("linux", "darwin"):
-            print("  ~ zombie check skipped (no zombie reading on this platform)")
-            return
         assert_true(state._is_zombie(proc.pid), "the unreaped child reads as a zombie")
         assert_true(
             os.kill(proc.pid, 0) is None,
@@ -106,6 +106,41 @@ def phase_5_zombie(_kernel: Kernel) -> None:
         proc.wait()
     assert_eq(state.pid_alive(proc.pid), False, "still dead once reaped")
     print("  ✓ pid_alive: a zombie reads as dead, not alive")
+
+
+def phase_5_proc_start(_kernel: Kernel) -> None:
+    """A pid plus its start time names one process: a later holder of the pid is not it."""
+    import sys
+
+    from repld import state
+
+    if sys.platform not in ("linux", "darwin"):
+        print("  ~ start-time check skipped (no start-time reading on this platform)")
+        return
+    first = subprocess.Popen(["sleep", "30"])
+    time.sleep(0.05)  # Linux's start time counts 10 ms ticks
+    second = subprocess.Popen(["sleep", "30"])
+    try:
+        born = state.read_proc_start(first.pid)
+        assert_true(born is not None, "a live process has a start time")
+        assert_eq(state.read_proc_start(first.pid), born, "two reads of it agree")
+        assert_true(
+            state.read_proc_start(second.pid) != born,
+            "a process started later reads differently",
+        )
+        assert_true(state.is_same_process(first.pid, born), "alive and the same")
+        assert_true(
+            not state.is_same_process(second.pid, born),
+            "another process is not it, though alive",
+        )
+        assert_true(state.is_same_process(first.pid, None), "no start time: pid alone")
+    finally:
+        for proc in (first, second):
+            proc.kill()
+            proc.wait()
+    assert_eq(state.read_proc_start(first.pid), None, "a reaped pid has none")
+    assert_true(not state.is_same_process(first.pid, born), "and is nobody")
+    print("  ✓ is_same_process: a pid is trusted only with its start time")
 
 
 def phase_5_spawn_reaps(_kernel: Kernel) -> None:

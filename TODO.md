@@ -215,12 +215,14 @@ infinite scroll.
     its symlink (measured on 2.1.270, and on the Homebrew cask's 2.1.319 through
     `/opt/homebrew/bin/claude`, each a `-p` run); an interactive session's is unmeasured. `register_claude_session` (an
     `initialize` carrying a session id) and `rebind_claude_session` (every registered
-    connection's chain plus its own) fork `ps -axwwo pid=,ppid=,comm=` once per walk and once per
-    `claude` check of a chain, on the connection's reader thread, outside `sessions_lock`, each
+    connection's chain plus its own) each fork `ps -axwwo pid=,ppid=,comm=` once per call
+    (`ipc._read_tree`), on the connection's reader thread, outside `sessions_lock`, the
     fork bounded at 2 s.
-  - [ ] The one-snapshot `ps` read (`ipc._read_ps_table`) is built and tested on Linux only (procps
-    `comm`, a canned macOS-shaped table); read it on the Mac: a rebind's fork count, the `comm`
-    column's path with spaces and one 68 to 79 characters long (`ww`), and that `-axwwo` lists the bridge's own ancestors under the same uid.
+  - [x] (measured on macOS 27.2, 2026-11-24: one snapshot is 766 processes in 0.029 s, a `comm`
+    path with a space and one of 122 characters come through whole, the native and the Homebrew
+    `claude` both resolve, and a rebind with 8 bridges each under its own `claude` re-keys every
+    one, 0.052 s median) The one-snapshot `ps` read (`ipc._read_ps_table`) was built and tested on Linux only (procps
+    `comm`, a canned macOS-shaped table).
   - [ ] `SUPERVISE_SEAT_PID` claims a hosted seat's `claude` where the tree shows none; measured on
     the Mac only with the tree reads emptied, not in a live seat's `/clear`, through
     `bind.rebind_exec`'s re-exec, or for a pending id taken by a restarted bridge. With the

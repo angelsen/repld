@@ -1757,16 +1757,6 @@ def _print_boot_failure() -> None:
         pass
 
 
-def _proc_start(pid: int) -> str | None:
-    """`pid`'s start time from /proc (field 22), or None if it's gone or unreadable."""
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
-        return None
-    # comm (field 2) may contain spaces and parens; split after the last ')'.
-    return stat.rsplit(")", 1)[1].split()[19]
-
-
 def _watch_owner(pid: int, stop: threading.Event) -> None:
     """Set `stop` once process `pid` exits (an --ephemeral kernel's bridge).
 
@@ -1776,13 +1766,9 @@ def _watch_owner(pid: int, stop: threading.Event) -> None:
     """
 
     def wait() -> None:
-        born = _proc_start(pid)
-        if born is None:
-            while state.pid_alive(pid):  # no /proc: best effort
-                time.sleep(2.0)
-        else:
-            while _proc_start(pid) == born:
-                time.sleep(2.0)
+        born = state.read_proc_start(pid)
+        while state.is_same_process(pid, born):
+            time.sleep(2.0)
         stop.set()
 
     threading.Thread(target=wait, daemon=True, name="repld-owner-watch").start()

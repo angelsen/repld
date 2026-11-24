@@ -253,12 +253,23 @@ def _bridge_served_tools(tmp: Path) -> None:
             isinstance(refused, str) and str(live_pid) in refused,
             f"the kernel being replaced is refused, not reattached (got {refused!r})",
         )
-        accepted = probe._connect_excluding(None)
+        born = state.read_proc_start(live_pid)
+        refused = probe._connect_excluding(live_pid, born)
         assert_true(
-            not isinstance(accepted, str), "the same kernel attaches unexcluded"
+            isinstance(refused, str), "refused by pid and start time together too"
         )
-        if not isinstance(accepted, str):  # narrowing: assert_true isn't a TypeGuard
-            accepted[0].close()
+        for label, accepted in (
+            ("the same kernel attaches unexcluded", probe._connect_excluding(None)),
+            (
+                "a kernel on the excluded pid that started at another time attaches",
+                probe._connect_excluding(live_pid, "another-start"),
+            ),
+        ):
+            assert_true(not isinstance(accepted, str), label)
+            if not isinstance(
+                accepted, str
+            ):  # narrowing: assert_true isn't a TypeGuard
+                accepted[0].close()
         print("  ✓ restart refuses to reattach to the kernel it is replacing")
     finally:
         b.close()
