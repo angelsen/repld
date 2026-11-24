@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.24.0] - 2026-11-24
+
+### Added
+
 - `repld.testing`: a stand-in for the kernel's `repld` module (`StandIn`, `installed()`, and a `repld_standin` pytest fixture, loaded through a `pytest11` entry point) with the kernel's signatures for the gates, `notify`, `defer`, `every` and `no_display`, so a gist's wiring is testable in a venv with no kernel. Gates answer from queued values and record their prompts; `notify`, `defer` and `every` record their calls, `defer` closes the coroutine it is handed.
 - The kernel-only builtins (`notify`, `defer`, `every`, `ask`, `confirm`, `choose`, `form`, `peers`, `browser`, ...) read as an attribute of `repld` outside a kernel now raise `repld.NotInKernelError`, an `AttributeError` that says so and names `repld.testing` (`from repld import notify` still fails as an `ImportError`, and `repld.browser` is the subpackage once anything imports it).
 - `repld://docs/peers` has a Callbacks section: a service calls a project back at the path it registered from (`peer_caller()["kernel"]["cwd"]`, `start=True`), and such a call must start from the service's own work, since one made inside the registering call or a `defer()` it started is refused as a cycle.
@@ -24,7 +34,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A browser tab's event store grew without bound. The FIFO prune deleted rows, but an in-memory DuckDB keeps deleted rows allocated, so a tab left on a page with steady traffic (a dev server with HMR) took memory until the kernel swapped: +640 MB after 500,000 events with the row count held at 50,000. The store now keeps two generation tables and drops the older whole, which frees at once; a tab holds its newest 25,000 to 50,000 events. `events` is a view with the same columns plus `rowid`, which counts up per tab.
 - A task's completion push was lost when Claude Code restarted the bridge on `/clear` (it does for an MCP server it marks stale, e.g. in a session that entered a worktree). The new bridge registered the new session id by itself, so the push stayed `queued` under the old id until it expired. A rebind (the SessionStart hook's `repld rebind`, or `ipc.rebind_claude_session`) now makes the new id the heir of the id that claude's previous connection carried: pushes the outbox holds for the old id move to the new one, and a task of the old id that ends later pushes there. This holds when the rebind re-keys a connection, arms a pending id, or refuses as a repeat while a connection under that claude already carries the new id; the refusal itself is unchanged. With no `old_id` given, the kernel uses its own record of the previous id, and only while no live connection carries it. Not covered: a rebind that arrives before the restarted bridge registers while another connection sits under that claude.
 
-### Removed
 
 ## [0.23.3] - 2026-11-18
 
