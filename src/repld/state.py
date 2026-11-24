@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import sys
 import time
 from pathlib import Path
@@ -27,9 +28,9 @@ from typing import IO, Any, Literal, overload
 # and the whole basis of sweep_dead_pid_files().
 _PID_PREFIX = re.compile(r"^(\d+)-")
 
-# macOS `struct kinfo_proc` on LP64: `kp_proc.p_starttime` (a timeval) leads it, `kp_proc.p_stat`
-# sits at 36, and `SZOMB` is its zombie value.
-_KINFO_START_END = 16
+# macOS `struct kinfo_proc` on LP64: `kp_proc.p_starttime` (a timeval, the format below) leads it,
+# `kp_proc.p_stat` sits at 36, and `SZOMB` is its zombie value.
+_KINFO_START = struct.Struct("qi")
 _KINFO_STAT_OFFSET = 36
 _KINFO_ZOMBIE = 5
 
@@ -175,9 +176,10 @@ def read_proc_start(pid: int) -> str | None:
     """
     if sys.platform == "darwin":
         record = _read_kinfo(pid)
-        return (
-            record[:_KINFO_START_END].hex() if len(record) >= _KINFO_START_END else None
-        )
+        if len(record) < _KINFO_START.size:
+            return None
+        seconds, micros = _KINFO_START.unpack_from(record)
+        return f"{seconds}.{micros:06d}"
     try:
         stat = Path(f"/proc/{pid}/stat").read_bytes()
     except OSError:
@@ -189,7 +191,8 @@ def read_proc_start(pid: int) -> str | None:
 def is_same_process(pid: int, born: str | None) -> bool:
     """True while *pid* is alive and still the process `read_proc_start` named `born`.
 
-    With no `born` (a platform without the reading) this is `pid_alive` alone.
+    With `born` None (no reading on this platform, or nothing to read when it
+    was taken) this is `pid_alive` alone.
     """
     return pid_alive(pid) and (born is None or read_proc_start(pid) == born)
 

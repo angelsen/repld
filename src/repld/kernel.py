@@ -1760,8 +1760,8 @@ def _print_boot_failure() -> None:
 def _watch_owner(pid: int, stop: threading.Event) -> None:
     """Set `stop` once process `pid` exits (an --ephemeral kernel's bridge).
 
-    Polls pid *and* start time: the kernel is a systemd unit, not the bridge's
-    child, and a bare pid check would be fooled by a recycled pid forever.
+    Polls pid *and* start time: under systemd the kernel is a unit, not the
+    bridge's child, and a bare pid check would be fooled by a recycled pid forever.
     Not `os.pidfd_open`, which some Python builds lack.
     """
 

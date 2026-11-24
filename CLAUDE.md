@@ -56,7 +56,7 @@ The readability judge (`.claude/workflows/readability.js`) checks these; lint ho
 7. House verbs, one meaning each: `resolve` (name to object), `ensure` (idempotent setup), `build` (compose a value), `parse` (text to value), `render` (to ANSI or markup), `format` (to plain text), `print` (stdout for a human), `push` (a channel message), `emit` (an event log entry), `handle`/`on_` (an incoming event), `is_`/`has_` (predicate), `check` (verify, raising or reporting), `sweep`/`prune` (cleanup), `spawn`/`start`/`stop` (a process or task).
 8. Delete, don't guard: no check for a state the annotations make impossible, no `try` around a path that cannot raise. Match the module's defensiveness; a guard the siblings lack is hedging.
 9. No structure for a use case that has not arrived: no base class, registry, hook or option with one user.
-10. ASCII only in code, strings, comments and docstrings. No em dashes, and no `--` standing in for one: reword with a comma, colon, full stop or parentheses. The one exception is the smoketest's pass mark (`✓`) in the suite's print lines, which run logs are grepped by.
+10. ASCII only in code, strings, comments and docstrings. No em dashes, and no `--` standing in for one: reword with a comma, colon, full stop or parentheses. The exception is the smoketest's own output: the pass mark (`✓`) and arrows in the suite's print lines.
 
 ## Releasing
 

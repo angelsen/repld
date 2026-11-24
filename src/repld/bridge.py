@@ -371,7 +371,7 @@ class Bridge:
 
         The wait is a budget, not a guarantee. A kernel draining a slow
         `finally` can outlast it, so the reattach is guarded by `exclude_pid`
-        rather than by the wait having succeeded. Without that guard a slow
+        and `exclude_born` rather than by the wait having succeeded. Without that guard a slow
         shutdown reports `pid N -> N`: the same process, replied to as the
         replacement, with the handshake replayed onto it on its way out.
         """

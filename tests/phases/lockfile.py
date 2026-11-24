@@ -143,6 +143,43 @@ def phase_5_proc_start(_kernel: Kernel) -> None:
     print("  ✓ is_same_process: a pid is trusted only with its start time")
 
 
+def phase_5_pid_strangers(_kernel: Kernel) -> None:
+    """A pid whose start time no longer matches is a stranger: never signalled, never waited on."""
+    import tempfile
+    import threading
+
+    from repld import bridge, kernel, state
+
+    stranger = subprocess.Popen(["sleep", "30"])
+    scratch = Path(tempfile.mkdtemp(prefix="repld-teardown-"))
+    try:
+        bridge._teardown_ephemeral(
+            scratch / "kernel.sock", stranger.pid, "another-start"
+        )
+        assert_eq(stranger.poll(), None, "the teardown signalled no stranger")
+        assert_true(not scratch.exists(), "and still reclaimed the directory")
+    finally:
+        stranger.kill()
+        stranger.wait()
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    owner = subprocess.Popen(["true"])  # exits immediately; deliberately not reaped
+    stop = threading.Event()
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not state._is_zombie(owner.pid):
+            time.sleep(0.02)
+        kernel._watch_owner(owner.pid, stop)
+        assert_true(
+            stop.wait(5.0), "the owner watch stops for an owner that is a zombie"
+        )
+    finally:
+        owner.wait()
+    print(
+        "  ✓ pid strangers: the teardown spares one, the owner watch is not held by a zombie"
+    )
+
+
 def phase_5_spawn_reaps(_kernel: Kernel) -> None:
     """A directly spawned kernel that exits is reaped while its spawner lives on."""
     import tempfile
