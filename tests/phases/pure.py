@@ -548,10 +548,11 @@ def _fixture_branch(testing) -> None:
     import importlib.util
 
     stub = types.ModuleType("pytest")
-    stub.fixture = lambda fn: fn
+    stub.fixture = lambda fn: fn  # pyright: ignore[reportAttributeAccessIssue]
     spec = importlib.util.spec_from_file_location(
         "repld._w1_testing_copy", testing.__file__
     )
+    assert spec is not None and spec.loader is not None
     copy = importlib.util.module_from_spec(spec)
     saved = sys.modules.get("pytest")
     sys.modules["pytest"] = stub
@@ -613,7 +614,7 @@ def _testing_standin() -> None:
             assert_eq(await r.confirm("again?"), False, "an empty queue declines")
             try:
                 await r.ask("name?")
-            except r.GateDeclined:
+            except r.GateDeclined:  # pyright: ignore[reportGeneralTypeIssues]
                 pass
             else:
                 raise AssertionError("ask with nothing queued must raise GateDeclined")
@@ -633,20 +634,20 @@ def _testing_standin() -> None:
                 "defer closes the coroutine",
             )
             built = []
-            r.defer(lambda: built.append(1), "thunk")
+            r.defer(lambda: built.append(1), "thunk")  # pyright: ignore[reportArgumentType]
             assert_eq(built, [], "defer records a callable and never calls it")
 
             async def fn() -> None: ...
 
             for bad in (fn, 3):
                 try:
-                    r.defer(bad)
+                    r.defer(bad)  # pyright: ignore[reportArgumentType]
                 except TypeError:
                     pass
                 else:
                     raise AssertionError(f"defer({bad!r}) must raise TypeError")
 
-            @r.every(5, label="tick", tab="t")
+            @r.every(5, label="tick", tab="t")  # pyright: ignore[reportCallIssue]
             def tick() -> None: ...
 
             assert_eq(
@@ -658,13 +659,13 @@ def _testing_standin() -> None:
             assert_eq(
                 await r.choose("pick", ["a", "b"]), "b", "choose answers the queue"
             )
-            assert_eq(await r.form("f", {"n": int}), {"n": 1}, "form answers the queue")
+            assert_eq(await r.form("f", {"n": int}), {"n": 1}, "form answers the queue")  # pyright: ignore[reportCallIssue]
             assert_eq(r.no_display(7), 7, "no_display is the identity")
             assert_eq(
                 r.notify("x", session="s"), True, "a targeted notify reads delivered"
             )
             try:
-                r.peers
+                _ = r.peers
             except repld.NotInKernelError as exc:
                 assert_true(
                     "standin.peers" in str(exc),
@@ -691,7 +692,7 @@ def _testing_standin() -> None:
     )
     del main.__dict__["_w1_standin"]
     assert_true(
-        _raises_value(lambda: testing.StandIn().notify("x", **{"bad-key": 1})),
+        _raises_value(lambda: testing.StandIn().notify("x", **{"bad-key": 1})),  # pyright: ignore[reportArgumentType]
         "notify refuses a meta key the kernel refuses",
     )
     _fixture_branch(testing)
@@ -700,7 +701,9 @@ def _testing_standin() -> None:
     src = (Path(kernel.__file__)).read_text()
     helpers = set(
         re.findall(
-            r'^        "(\w+)": ', src[src.index("_helpers = {") :].split("}")[0], re.MULTILINE
+            r'^        "(\w+)": ',
+            src[src.index("_helpers = {") :].split("}")[0],
+            re.MULTILINE,
         )
     )
     assert_eq(
@@ -3227,33 +3230,39 @@ def _elicitation_pure() -> None:
 
 
 def _nofile_limit() -> None:
-    """The boot-time soft `RLIMIT_NOFILE` target is clamped, never infinite, never lowered; the real raise sticks."""
+    """The boot-time soft `RLIMIT_NOFILE` target is capped, never infinite, never lowered; the real raise sticks."""
     import resource
 
     inf = resource.RLIM_INFINITY
     cap = kernel._NOFILE_CAP
-    assert_eq(kernel._nofile_target(256, inf, 10240), 10240, "per-proc ceiling bounds an unlimited hard limit")
-    assert_eq(kernel._nofile_target(256, inf, None), cap, "cap bounds an unlimited hard limit")
-    assert_eq(kernel._nofile_target(256, 4096, 10240), 4096, "hard limit bounds the target")
-    assert_eq(kernel._nofile_target(256, inf, 1 << 30), cap, "cap bounds a huge per-proc ceiling")
-    assert_eq(kernel._nofile_target(100000, 200000, None), 100000, "an already higher soft limit stays")
-    assert_true(kernel._nofile_target(256, inf, 10240) != inf, "never RLIM_INFINITY")
+    assert_eq(
+        kernel._nofile_target(256, inf), cap, "cap bounds an unlimited hard limit"
+    )
+    assert_eq(kernel._nofile_target(256, 4096), 4096, "hard limit bounds the target")
+    assert_eq(kernel._nofile_target(256, 1 << 30), cap, "cap bounds a huge hard limit")
+    assert_eq(
+        kernel._nofile_target(100000, 200000), 100000, "a higher soft limit stays"
+    )
 
     # A child, so the test's own limit is untouched.
     code = (
         "import resource; from repld import kernel; "
-        "kernel._raise_nofile_limit(); print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])"
+        "hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]; "
+        "resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard)); "
+        "kernel._raise_nofile_limit(); "
+        "print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])"
     )
     out = subprocess.run(
-        [sys.executable, "-c", f"import resource; resource.setrlimit(resource.RLIMIT_NOFILE, (256, resource.getrlimit(resource.RLIMIT_NOFILE)[1])); {code}"],
-        capture_output=True,
-        text=True,
-        check=True,
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    want = kernel._nofile_target(256, hard, kernel._read_maxfilesperproc())
-    assert_eq(int(out.stdout), want, "a kernel boot from a 256 soft limit reads back the target")
+    assert_eq(
+        int(out.stdout),
+        kernel._nofile_target(256, hard),
+        "a boot from a 256 soft limit reads back the target",
+    )
     assert_true(int(out.stdout) > 256 or hard <= 256, "the soft limit rose above 256")
+    print("  ✓ open-file limit: capped target, never lowered, the raise sticks")
 
 
 def phase_2_pure() -> None:

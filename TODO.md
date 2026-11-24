@@ -208,14 +208,17 @@ infinite scroll.
     cancels the forward.
   - [ ] `peers.list()` has no remote form.
   - [x] Claude ancestry (`ipc._resolve_ancestry`, `_is_claude_process`) reads `ps` on macOS:
-    `comm` there reads `claude` for a Claude Code started through its symlink (measured on
-    2.1.270); a Homebrew wrapper's `comm` is unmeasured. `register_claude_session` (an
+    `comm` there is the path as invoked and reads `claude` for a Claude Code started through
+    its symlink (measured on 2.1.270, and on the Homebrew cask's 2.1.319 through
+    `/opt/homebrew/bin/claude`, each a `-p` run); an interactive session's is unmeasured. `register_claude_session` (an
     `initialize` carrying a session id) and `rebind_claude_session` (every registered
     connection's chain plus its own) fork `ps` per hop and per `comm` check on the connection's
     reader thread, outside `sessions_lock`, each fork bounded at 2 s; caching is open.
   - [ ] `SUPERVISE_SEAT_PID` claims a hosted seat's `claude` where the tree shows none; measured on
     the Mac only with the tree reads emptied, not in a live seat's `/clear`, through
-    `bind.rebind_exec`'s re-exec, or for a pending id taken by a restarted bridge.
+    `bind.rebind_exec`'s re-exec, or for a pending id taken by a restarted bridge. With the
+    Homebrew `comm` measured as `claude`, no measured case reaches the claim: `ps -o comm=` of a
+    live seat's `claude` under supervise decides whether it is removed.
   - [ ] Unverified: whether a kernel started over ssh on a Mac can codesign. One 2026 write-up
     says no (`errSecInternalComponent`, needs the GUI session via `launchctl asuser` or a
     LaunchAgent); `PEERS_GUIDE` warns, nothing was tested. docduty note:

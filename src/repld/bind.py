@@ -287,7 +287,7 @@ def rebind_exec(argv: list[str]) -> None:
     os.environ[SENTINEL] = "1"
     # `uv run` stays resident above the re-exec'd bridge; `bridge._seat_pid` reads (and pops) the
     # parent from before it. Only a bridge sets it: a kernel started here would pass it to its children.
-    if "bridge" in argv:
+    if argv[:1] == ["bridge"]:
         os.environ[PRE_EXEC_PPID] = str(os.getppid())
     try:
         os.execvp(cmd[0], cmd)

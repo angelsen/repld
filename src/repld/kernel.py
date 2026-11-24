@@ -23,7 +23,6 @@ import re
 import resource
 import shutil
 import signal
-import subprocess
 import sys
 import sysconfig
 import threading
@@ -1459,48 +1458,6 @@ def _start_loop() -> tuple[asyncio.AbstractEventLoop, int]:
     return loop, thread.ident
 
 
-_NOFILE_CAP = 65536
-
-
-def _read_maxfilesperproc() -> int | None:
-    """macOS's `kern.maxfilesperproc`, the ceiling the kernel enforces below the hard limit; None elsewhere or on failure."""
-    if sys.platform != "darwin":
-        return None
-    try:
-        out = subprocess.run(
-            ["sysctl", "-n", "kern.maxfilesperproc"],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=2,
-        )
-        return int(out.stdout) if out.returncode == 0 else None
-    except OSError, subprocess.TimeoutExpired, ValueError:
-        return None
-
-
-def _nofile_target(soft: int, hard: int, per_proc: int | None, cap: int = _NOFILE_CAP) -> int:
-    """The soft `RLIMIT_NOFILE` to ask for: the lowest of `hard`, `per_proc` and `cap`, never below `soft`."""
-    # macOS refuses RLIM_INFINITY as a soft limit, so `cap` bounds an unlimited `hard`.
-    ceilings = [cap] + [n for n in (per_proc,) if n is not None]
-    if hard != resource.RLIM_INFINITY:
-        ceilings.append(hard)
-    return max(soft, min(ceilings))
-
-
-def _raise_nofile_limit() -> int | None:
-    """Raise this process's soft `RLIMIT_NOFILE`; the limit now in force, None when it could not be read or set."""
-    try:
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        target = _nofile_target(soft, hard, _read_maxfilesperproc())
-        if target != soft:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
-        return target
-    except OSError, ValueError:
-        print("repld: could not raise the open-file limit", file=sys.stderr)
-        return None
-
-
 def _boot_runtime(sock_path: Path, display: bool) -> None:
     """Event queue, event log, tee, .env, gists: everything before user code runs."""
     _raise_nofile_limit()
@@ -1578,6 +1535,29 @@ def _boot_runtime(sock_path: Path, display: bool) -> None:
     missing = _gist_deps.scan_deps()
     if missing:
         _gist_deps.install_deps(missing)
+
+
+_NOFILE_CAP = 65536
+
+
+def _raise_nofile_limit() -> None:
+    """Raise this process's soft `RLIMIT_NOFILE` toward `_NOFILE_CAP`; a failure prints one line and boots on."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = _nofile_target(soft, hard)
+        if target != soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except OSError, ValueError:
+        print("repld: could not raise the open-file limit", file=sys.stderr)
+
+
+def _nofile_target(soft: int, hard: int, cap: int = _NOFILE_CAP) -> int:
+    """The soft `RLIMIT_NOFILE` to ask for: the lower of `hard` and `cap`, never below `soft`."""
+    # Never `hard` itself when unlimited: macOS's setrlimit(2) documents RLIM_INFINITY as
+    # refused for a soft NOFILE (27.2 accepts it), and children inherit whatever is set.
+    # No clamp to `kern.maxfilesperproc`: macOS enforces it whatever the soft limit reads.
+    ceiling = cap if hard == resource.RLIM_INFINITY else min(hard, cap)
+    return max(soft, ceiling)
 
 
 def _inject_builtins(loop: asyncio.AbstractEventLoop) -> None:

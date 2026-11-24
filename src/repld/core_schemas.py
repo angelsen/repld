@@ -66,8 +66,9 @@ BRIDGE_SESSION_KIND_KEY = "_claude_session_kind"
 # delivers `bg` sessions' pushes through it (`ipc.Session._write_inbox`).
 BRIDGE_INBOX_SOCKET_KEY = "_claude_inbox_socket"
 # The bridge's SUPERVISE_SEAT_PID, sent only when that pid is the bridge's
-# parent (or its parent before `bind.rebind_exec`): the `claude` a supervise host forked. For a kernel with no process
-# ancestry to read (macOS), the claude above this connection, claimed.
+# parent (or its parent before `bind.rebind_exec`): the `claude` a supervise
+# host forked. For a kernel that reads no `claude` in the process tree, the
+# claude above this connection, claimed.
 BRIDGE_SEAT_PID_KEY = "_claude_seat_pid"
 # True when the bridge's own REPLD_CODE_MODE is "1": whoever launched it
 # promises a client whose scripts consume `exec` results (Claude Code's Code

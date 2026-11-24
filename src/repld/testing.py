@@ -221,9 +221,10 @@ def _is_bound_to(mod: types.ModuleType, standin: StandIn) -> bool:
     )
 
 
+# pytest is optional: without it the module stays usable and exports no fixture.
 try:
-    import pytest    # pyright: ignore[reportMissingImports]
-except ImportError:  # the module stays usable without pytest
+    import pytest  # pyright: ignore[reportMissingImports]
+except ImportError:
     pass
 else:
     __all__.append("repld_standin")

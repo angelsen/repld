@@ -183,7 +183,7 @@ def _read_ps_field(pid: int, field: str) -> str | None:
     """One `ps -o <field>=` column for `pid`; None when `ps` fails or finds no such process."""
     try:
         out = subprocess.run(
-            ["ps", "-o", f"{field}=", "-p", str(pid)],
+            ["/bin/ps", "-o", f"{field}=", "-p", str(pid)],
             capture_output=True,
             check=False,
             text=True,
