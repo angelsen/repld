@@ -2975,7 +2975,24 @@ def _seat_pid_claims() -> None:
             "a tree that shows none gets the seat pid",
         )
         assert_eq(ipc._caller_chain(77, 77), [77], "and not twice")
-    print("  ✓ seat pid claims: bridge and hook gates, caller chain")
+    for argv, want in ((["bridge"], str(os.getppid())), (["--socket", "bridge"], None)):
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(bind, "project_venv", lambda: Path("/nonexistent/.venv")),
+            mock.patch.object(bind, "is_bound", lambda venv: False),
+            mock.patch.object(bind, "venv_python_version", lambda venv: None),
+            mock.patch.object(bind, "uv_run_argv", lambda argv: ["uv"]),
+            mock.patch.object(os, "execvp", lambda file, args: None),
+        ):
+            os.environ.pop(bind.SENTINEL, None)
+            os.environ.pop(bind.PRE_EXEC_PPID, None)
+            bind.rebind_exec(argv)
+            assert_eq(
+                os.environ.get(bind.PRE_EXEC_PPID),
+                want,
+                f"the re-exec exports the pre-exec parent only for the bridge subcommand ({argv})",
+            )
+    print("  ✓ seat pid claims: bridge and hook gates, caller chain, pre-exec parent")
 
 
 def _ps_ancestry() -> None:
@@ -3057,6 +3074,17 @@ def _ps_ancestry() -> None:
                     ipc._is_claude_process(proc.pid)
                     and not ipc._is_claude_process(child),
                     "and tells the fake claude from its child",
+                )
+            # A `ps` first on PATH that names init as every parent must not be the one run.
+            (Path(d) / "ps").write_text("#!/bin/sh\necho 1\n")
+            (Path(d) / "ps").chmod(0o755)
+            with unittest.mock.patch.dict(
+                os.environ, {"PATH": d + os.pathsep + os.environ["PATH"]}
+            ):
+                assert_eq(
+                    ipc._read_parent_ps(child),
+                    proc.pid,
+                    "ps is read at /bin/ps, not PATH",
                 )
             assert_eq(ipc._read_parent_ps(2**22 + 1), None, "an absent pid reads None")
             assert_eq(ipc._read_comm_ps(2**22 + 1), None, "and has no comm")
