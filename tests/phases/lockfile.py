@@ -79,11 +79,11 @@ def _a_dead_pid() -> int:
 def phase_5_zombie(_kernel: Kernel) -> None:
     """A zombie is not alive, however cheerfully os.kill(pid, 0) answers.
 
-    repld manufactures these: `spawn.spawn_headless` never waits on the kernel
-    it starts, so a kernel that dies before its bridge sits unreaped. Counting
-    one as alive made `repld stop` report a false timeout and kept the boot
-    sweep off its spill files.
+    Any parent that has not waited on a dead kernel leaves one. Counting it as
+    alive has `repld stop` report a false timeout and keeps the boot sweep off
+    its spill files.
     """
+    import sys
     import time
 
     from repld import state
@@ -93,10 +93,10 @@ def phase_5_zombie(_kernel: Kernel) -> None:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not state._is_zombie(proc.pid):
             time.sleep(0.02)
-        if not state._is_zombie(proc.pid):
-            # No procfs (non-Linux), or it got reaped out from under us.
-            print("  ~ zombie check skipped (could not produce one to test)")
+        if sys.platform not in ("linux", "darwin"):
+            print("  ~ zombie check skipped (no zombie reading on this platform)")
             return
+        assert_true(state._is_zombie(proc.pid), "the unreaped child reads as a zombie")
         assert_true(
             os.kill(proc.pid, 0) is None,
             "os.kill(pid, 0) still succeeds for the zombie (the trap)",
@@ -106,6 +106,37 @@ def phase_5_zombie(_kernel: Kernel) -> None:
         proc.wait()
     assert_eq(state.pid_alive(proc.pid), False, "still dead once reaped")
     print("  ✓ pid_alive: a zombie reads as dead, not alive")
+
+
+def phase_5_spawn_reaps(_kernel: Kernel) -> None:
+    """A directly spawned kernel that exits is reaped while its spawner lives on."""
+    import tempfile
+
+    from repld import spawn
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pidfile = Path(tmp) / "pid"
+        assert_true(
+            spawn._spawn_directly(["sh", "-c", f'echo $$ > "{pidfile}"'], Path(tmp)),
+            "the stand-in kernel spawned",
+        )
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not (
+            pidfile.exists() and pidfile.read_text().strip()
+        ):
+            time.sleep(0.02)
+        pid = int(pidfile.read_text())
+    # A bare `os.kill`, not `pid_alive`: only a reaped child stops answering it.
+    reaped = False
+    while time.monotonic() < deadline and not reaped:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            reaped = True
+        else:
+            time.sleep(0.02)
+    assert_true(reaped, "the exited child left no zombie under its spawner")
+    print("  ✓ spawn: a directly spawned kernel is reaped when it exits")
 
 
 def phase_5_evict(_kernel: Kernel) -> None:
@@ -625,7 +656,7 @@ def phase_5_search_dir(_kernel: Kernel) -> None:
     import tempfile as _tmp
     import time
 
-    tmp = Path(_tmp.mkdtemp(prefix="repld-searchdir-"))
+    tmp = Path(_tmp.mkdtemp(prefix="repld-searchdir-")).resolve()
     extra = Path(_tmp.mkdtemp(prefix="repld-searchdir-extra-"))
     try:
         (extra / "plugin_math.py").write_text("def add(a, b):\n    return a + b\n")

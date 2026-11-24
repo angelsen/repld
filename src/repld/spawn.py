@@ -45,6 +45,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from . import bind, paths
@@ -257,9 +258,13 @@ def _spawn_via_systemd(
 
 
 def _spawn_directly(cmd: list[str], cwd: Path, *, quiet: bool = False) -> bool:
-    """Launch a detached child process as a fallback when systemd is unavailable."""
+    """Launch a detached child process as a fallback when systemd is unavailable.
+
+    The child is reaped when it exits, so a kernel stopped while its spawner
+    (a bridge) lives on leaves no zombie for `state.pid_alive` to see through.
+    """
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
@@ -270,6 +275,7 @@ def _spawn_directly(cmd: list[str], cwd: Path, *, quiet: bool = False) -> bool:
     except OSError as e:
         _note(f"repld: could not spawn kernel: {e}", quiet)
         return False
+    threading.Thread(target=proc.wait, daemon=True, name="repld-kernel-reap").start()
     return True
 
 

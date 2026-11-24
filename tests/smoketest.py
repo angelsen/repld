@@ -148,6 +148,7 @@ from phases.lockfile import (
     phase_5_permissions,
     phase_5_project_sweep,
     phase_5_search_dir,
+    phase_5_spawn_reaps,
     phase_5_sweep,
     phase_5_zombie,
 )
@@ -190,6 +191,7 @@ PHASES = {
         phase_5_boot_failure(k),
         phase_5_permissions(k),
         phase_5_zombie(k),
+        phase_5_spawn_reaps(k),
         phase_5_evict(k),
         phase_5_orphans(k),
         phase_5_sweep(k),

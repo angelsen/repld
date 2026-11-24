@@ -961,8 +961,7 @@ def _rebind_stops_at_own_claude(tmp: Path) -> None:
     other = Bridge(
         tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "other-pane"}
     )
-    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
-    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    fake = fake_claude(Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")))
     hook = None
     sleeper = 0
     try:
@@ -1009,8 +1008,7 @@ def _repeat_rebind_arms_nothing(tmp: Path) -> None:
     """A repeat rebind (stale `old_id`, connection already under that claude)
     refuses without arming a pending id, and `list_claude_connections` names
     the claude above each bridge."""
-    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
-    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    fake = fake_claude(Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")))
     a = Bridge(
         tmp,
         env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "seat-old"},
@@ -1185,8 +1183,7 @@ def _rebind_carries_owed_pushes(tmp: Path, via_cmd: bool = False) -> None:
     registered under the new id by itself: for a push the outbox already
     holds, and for a task that ends after the rebind. `via_cmd` makes the
     rebind the `repld rebind` hook's `sessions/rebind` call, which names no `old_id`."""
-    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
-    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    fake = fake_claude(Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")))
     opened: list[Bridge] = []
 
     def bridge(
@@ -1385,8 +1382,7 @@ def _deferred_rebind(tmp: Path) -> None:
     a = Bridge(
         tmp, env={"CLAUDE_PROJECT_DIR": None, "CLAUDE_CODE_SESSION_ID": "driver"}
     )
-    fake = Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")) / "claude"
-    shutil.copy(shutil.which("sh") or "/bin/sh", fake)
+    fake = fake_claude(Path(tempfile.mkdtemp(prefix="repld-fakeclaude-")))
     hook = None
     sleeper = 0
     try:

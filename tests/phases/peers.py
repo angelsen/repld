@@ -766,7 +766,7 @@ _FAKE_SSH = textwrap.dedent("""\
         kill "$(cat "$pidfile")" 2>/dev/null
         exit 0
       fi
-      setsid python3 "$here/relay.py" "${fwd%%:*}" "${fwd#*:}" "$pidfile" >/dev/null 2>&1 &
+      python3 "$here/relay.py" "${fwd%%:*}" "${fwd#*:}" "$pidfile" >/dev/null 2>&1 &
       for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         [ -S "${fwd%%:*}" ] && exit 0
         sleep 0.1
@@ -782,6 +782,7 @@ _RELAY = textwrap.dedent("""\
     import os, socket, sys, threading
 
     local, remote, pidfile = sys.argv[1:]
+    os.setsid()  # not the `setsid` command: macOS has none
     open(pidfile, "w").write(str(os.getpid()))
     server = socket.socket(socket.AF_UNIX)
     server.bind(local)

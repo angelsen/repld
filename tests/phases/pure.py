@@ -869,6 +869,7 @@ def _missing_import_memo() -> None:
     """
     import builtins
     import importlib
+    import shutil
     import sys
     import tempfile
 
@@ -919,6 +920,7 @@ def _missing_import_memo() -> None:
         sys.path.remove(str(d))
         sys.modules.pop(name, None)
         gists._missing.pop(name, None)
+        shutil.rmtree(d, ignore_errors=True)
     print("  ✓ gists: a failed import is retried only after a sys.path dir changes")
 
 

@@ -413,12 +413,22 @@ class Bridge:
         SIGKILL leaves the kernel holding the connection for tens of seconds.
         """
 
-        def descendants(pid: int) -> list[int]:
+        def children(pid: int) -> list[str]:
+            if sys.platform == "darwin":
+                found = subprocess.run(
+                    ["pgrep", "-P", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                return found.stdout.split()
             try:
-                kids = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+                return Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
             except OSError:
                 return []
-            return [c for k in kids for c in (int(k), *descendants(int(k)))]
+
+        def descendants(pid: int) -> list[int]:
+            return [c for k in children(pid) for c in (int(k), *descendants(int(k)))]
 
         for pid in descendants(self.proc.pid):
             try:

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import IO, Any, Literal, overload
@@ -25,6 +26,10 @@ from typing import IO, Any, Literal, overload
 # `{pid}-...`: the naming convention every per-process runtime file follows,
 # and the whole basis of sweep_dead_pid_files().
 _PID_PREFIX = re.compile(r"^(\d+)-")
+
+# macOS `struct kinfo_proc`: where `kp_proc.p_stat` sits on LP64, and its zombie value (`SZOMB`).
+_KINFO_STAT_OFFSET = 36
+_KINFO_ZOMBIE = 5
 
 
 @overload
@@ -92,9 +97,9 @@ def pid_alive(pid: int) -> bool:
 
     `os.kill(pid, 0)` alone is not enough: it succeeds for a **zombie**, a
     process that has already exited and is only waiting to be reaped. repld
-    creates them routinely: `spawn.spawn_headless` never waits on the kernel
-    it starts, so a kernel that dies before its bridge stays a zombie until the
-    bridge exits. Counting one as alive means `repld stop` reporting "did not
+    meets them: a kernel some other parent started and has not waited on (a
+    test harness, a supervisor) dies and stays a zombie until that parent
+    exits. Counting one as alive means `repld stop` reporting "did not
     exit within 10s" about a process that did, `read_lock` blessing a lockfile
     whose kernel is gone, and `sweep_dead_pid_files` declining to reclaim its
     spill files.
@@ -116,14 +121,16 @@ def pid_alive(pid: int) -> bool:
 def _is_zombie(pid: int) -> bool:
     """True if *pid* has exited but hasn't been reaped by its parent.
 
-    Linux only; on other platforms there is no procfs, so this returns False
-    and `pid_alive` relies on `os.kill` alone.
+    Linux reads procfs and macOS, which has none, asks `sysctl`; anywhere else
+    this returns False and `pid_alive` relies on `os.kill` alone.
 
     Reading `/proc/<pid>/stat` rather than `status` because the process
     name sits in parentheses and may itself contain spaces, newlines, or more
     parentheses; splitting after the *last* `)` is the only parse that
     survives a process called `foo) Z (bar`.
     """
+    if sys.platform == "darwin":
+        return _read_kinfo_stat(pid) == _KINFO_ZOMBIE
     try:
         with open(f"/proc/{pid}/stat", "rb") as f:
             data = f.read()
@@ -134,6 +141,26 @@ def _is_zombie(pid: int) -> bool:
         return False
     fields = data[rparen + 1 :].split()
     return bool(fields) and fields[0] == b"Z"
+
+
+def _read_kinfo_stat(pid: int) -> int | None:
+    """macOS's `p_stat` for *pid*, None when the kernel names no such process or the read fails.
+
+    A `sysctl` read, never a `ps` fork: `pid_alive` is called on the kernel's loop.
+    """
+    # Imported here: every entry point imports this module, and only macOS needs ctypes.
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
+    buf = ctypes.create_string_buffer(1024)
+    size = ctypes.c_size_t(len(buf))
+    # A pid that is gone answers 0 with an empty record, not an error.
+    if libc.sysctl(mib, 4, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+        return None
+    if size.value <= _KINFO_STAT_OFFSET:
+        return None
+    return buf.raw[_KINFO_STAT_OFFSET]
 
 
 def read_lock(lock_path: Path) -> dict | str:

@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **On macOS `repld stop` and `repld restart` reported "did not exit within 10s" about a kernel that had exited** when a bridge that had started it as its own child (one not bound to a project venv; a bound bridge launches through `uv run`, which reaps) was still running. The dead kernel was an unreaped child of that bridge, and `state.pid_alive` could not tell a zombie from a live process without `/proc`. The spawner now reaps the kernel it starts (`spawn._spawn_directly`, the path taken where systemd is absent or fails), and on macOS `pid_alive` reads the process state through `sysctl`, so a stale lockfile and a dead kernel's scratch files are recognised there too.
+
 ### Removed
 
 ## [0.24.2] - 2026-11-24
