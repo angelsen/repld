@@ -1544,14 +1544,14 @@ def _raise_nofile_limit() -> None:
     """Raise this process's soft `RLIMIT_NOFILE` toward `_NOFILE_CAP`; a failure prints one line and boots on."""
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        target = _nofile_target(soft, hard)
+        target = _build_nofile_target(soft, hard)
         if target != soft:
             resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
     except OSError, ValueError:
         print("repld: could not raise the open-file limit", file=sys.stderr)
 
 
-def _nofile_target(soft: int, hard: int, cap: int = _NOFILE_CAP) -> int:
+def _build_nofile_target(soft: int, hard: int, cap: int = _NOFILE_CAP) -> int:
     """The soft `RLIMIT_NOFILE` to ask for: the lower of `hard` and `cap`, never below `soft`."""
     # Never `hard` itself when unlimited: macOS's setrlimit(2) documents RLIM_INFINITY as
     # refused for a soft NOFILE (27.2 accepts it), and children inherit whatever is set.

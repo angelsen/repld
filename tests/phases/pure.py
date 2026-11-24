@@ -3264,12 +3264,16 @@ def _nofile_limit() -> None:
     inf = resource.RLIM_INFINITY
     cap = kernel._NOFILE_CAP
     assert_eq(
-        kernel._nofile_target(256, inf), cap, "cap bounds an unlimited hard limit"
+        kernel._build_nofile_target(256, inf), cap, "cap bounds an unlimited hard limit"
     )
-    assert_eq(kernel._nofile_target(256, 4096), 4096, "hard limit bounds the target")
-    assert_eq(kernel._nofile_target(256, 1 << 30), cap, "cap bounds a huge hard limit")
     assert_eq(
-        kernel._nofile_target(100000, 200000), 100000, "a higher soft limit stays"
+        kernel._build_nofile_target(256, 4096), 4096, "hard limit bounds the target"
+    )
+    assert_eq(
+        kernel._build_nofile_target(256, 1 << 30), cap, "cap bounds a huge hard limit"
+    )
+    assert_eq(
+        kernel._build_nofile_target(100000, 200000), 100000, "a higher soft limit stays"
     )
 
     # A child, so the test's own limit is untouched.
@@ -3286,7 +3290,7 @@ def _nofile_limit() -> None:
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     assert_eq(
         int(out.stdout),
-        kernel._nofile_target(256, hard),
+        kernel._build_nofile_target(256, hard),
         "a boot from a 256 soft limit reads back the target",
     )
     assert_true(int(out.stdout) > 256 or hard <= 256, "the soft limit rose above 256")
