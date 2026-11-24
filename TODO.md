@@ -19,6 +19,9 @@
 - [ ] A hook rebind processed before the old bridge's EOF finds the old id still live, records no succession (`_find_replaced_id_locked` refuses a live holder), and the old id's later pushes sit in `_outbox` until expiry; same as before r51. Shape: record a deferred succession applied when the old connection closes unless the id re-registered.
 - [ ] The known ordering (a rebind arrives before the restarted bridge registers while a background agent's bridge sits under that claude) has no case for the hook's no-`old_id` call, which re-keys the other connection instead of refusing.
 
+- [ ] A rebind's cost on macOS grows with the connections: with 8 bridges `ipc.rebind_claude_session` took 0.30 to 0.35 s and one `ipc._read_ps_table()` about 0.035 s, because `_bridge_chain`, `_caller_chain` and `_find_claudes` each take their own ps snapshot, per walk and per claude check. One snapshot per `rebind_claude_session` / `register_claude_session` call, passed down to the three, would make it one fork. Measured on macOS 27.2 at dc90c061; needs a Mac re-measure after the change.
+- [ ] Phase 15 on macOS is unverified past the `sibling kernel listed` case: it stopped there on a tempdir-vs-realpath comparison (fixed in `tests/phases/headless.py`), so the rebind cases after it have not run on a Mac.
+
 ## Gist deps tooling
 
 - [x] (decided 2026-11-06: no runtime warning, the changelog line stands; the 3.14 floor makes `py3.12`/`py3.13` dead too, same note; measured here: no gist dep re-prompts because httpx, websockets and pillow come from the project venv) **The pre-versioning shared deps dir is orphaned, and only the changelog says so.**

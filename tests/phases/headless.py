@@ -2003,7 +2003,8 @@ def _status_counts(tmp: Path) -> None:
     """`repld status --json --counts` fetches tasks_active/tickers for a
     sibling kernel too — absent (not 0) without the flag, since a reader
     needs to tell "idle" from "didn't ask"."""
-    sibling = Path(tempfile.mkdtemp(prefix="repld-status-counts-"))
+    # Resolved: a kernel reports its realpath, and macOS's tempdir is a symlink (/var -> /private/var).
+    sibling = Path(tempfile.mkdtemp(prefix="repld-status-counts-")).resolve()
     try:
         b = Bridge(sibling)
         try:

@@ -1060,7 +1060,8 @@ def _over_ssh(a: Bridge, a_cwd: Path, tmp: Path, b_path: Path) -> None:
 
 
 def phase_19_peers(kernel: Kernel) -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="repld-peers-"))
+    # Resolved: `peers.list()` and `info()` report the kernel's realpath, which differs from a macOS tempdir path.
+    tmp = Path(tempfile.mkdtemp(prefix="repld-peers-")).resolve()
     b_path = _project(tmp, "svc-peer", {"svc.py": _SVC}, _INIT)
     c_path = _project(tmp, "svc-peer-c", {"svc.py": _SVC})
     kb: Kernel | None = None
