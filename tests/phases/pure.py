@@ -2958,7 +2958,7 @@ def _seat_pid_claims() -> None:
         )
     with (
         mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p, 5]),
-        mock.patch.object(ipc, "_is_claude_process", lambda p: p == 5),
+        mock.patch.object(ipc, "_find_claudes", lambda c: {p for p in c if p == 5}),
     ):
         assert_eq(
             ipc._caller_chain(9, 77),
@@ -2967,7 +2967,7 @@ def _seat_pid_claims() -> None:
         )
     with (
         mock.patch.object(ipc, "_resolve_ancestry", lambda p: [p]),
-        mock.patch.object(ipc, "_is_claude_process", lambda p: False),
+        mock.patch.object(ipc, "_find_claudes", lambda c: set()),
     ):
         assert_eq(
             ipc._caller_chain(9, 77),
@@ -3022,11 +3022,14 @@ def _ps_ancestry() -> None:
             # `echo $!` runs before the child's exec, when its comm is still the fake's.
             deadline = time.monotonic() + 5
             while (
-                os.path.basename(ipc._read_comm_ps(child) or "") != "sleep"
+                os.path.basename(ipc._read_ps_table().get(child, (0, ""))[1]) != "sleep"
                 and time.monotonic() < deadline
             ):
                 time.sleep(0.02)
-            chain = ipc._walk_ancestry(child, ipc._read_parent_ps)
+            table = ipc._read_ps_table()
+            chain = ipc._walk_ancestry(
+                child, lambda p: table[p][0] if p in table else None
+            )
             assert_eq(
                 chain[:2], [child, proc.pid], "ps reads the child, then its parent"
             )
@@ -3034,7 +3037,7 @@ def _ps_ancestry() -> None:
                 len(chain) > 2 and chain[-1] != proc.pid,
                 "and keeps walking past it toward init",
             )
-            comm = ipc._read_comm_ps(proc.pid)
+            comm = table.get(proc.pid, (0, None))[1]
             assert_true(
                 comm is not None and os.path.basename(comm) == "claude",
                 f"comm names the exec'd file (got {comm!r})",
@@ -3043,7 +3046,7 @@ def _ps_ancestry() -> None:
                 next(
                     p
                     for p in chain
-                    if os.path.basename(ipc._read_comm_ps(p) or "") == "claude"
+                    if os.path.basename(table.get(p, (0, ""))[1]) == "claude"
                 ),
                 proc.pid,
                 "the nearest claude above the child is the fake one",
@@ -3075,22 +3078,60 @@ def _ps_ancestry() -> None:
                     and not ipc._is_claude_process(child),
                     "and tells the fake claude from its child",
                 )
-            # A `ps` first on PATH that names init as every parent must not be the one run.
-            (Path(d) / "ps").write_text("#!/bin/sh\necho 1\n")
+            # A `ps` first on PATH that lists only init must not be the one run.
+            (Path(d) / "ps").write_text("#!/bin/sh\necho 1 1 x\n")
             (Path(d) / "ps").chmod(0o755)
             with unittest.mock.patch.dict(
                 os.environ, {"PATH": d + os.pathsep + os.environ["PATH"]}
             ):
                 assert_eq(
-                    ipc._read_parent_ps(child),
+                    ipc._read_ps_table().get(child, (None,))[0],
                     proc.pid,
                     "ps is read at /bin/ps, not PATH",
                 )
-            assert_eq(ipc._read_parent_ps(2**22 + 1), None, "an absent pid reads None")
-            assert_eq(ipc._read_comm_ps(2**22 + 1), None, "and has no comm")
+            assert_true(
+                2**22 + 1 not in ipc._read_ps_table(), "an absent pid has no row"
+            )
+            # The walk and the claude check each fork `ps` once, whatever the depth.
+            real_run = subprocess.run
+            forks: list[object] = []
+
+            def counting_run(*a: object, **k: object) -> object:
+                forks.append(a[0] if a else k.get("args"))
+                return real_run(*a, **k)  # type: ignore[call-overload]
+
+            with (
+                unittest.mock.patch.object(ipc.sys, "platform", "darwin"),
+                unittest.mock.patch.object(ipc.subprocess, "run", counting_run),
+            ):
+                walked = ipc._resolve_ancestry(child)
+                ipc._find_claudes(walked)
+            assert_true(len(walked) >= 3, "the walk covers the child, the fake and above")
+            assert_eq(
+                len(forks), 2, "one ps fork for the walk, one for the claude check"
+            )
         finally:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
+    canned = subprocess.CompletedProcess(
+        [],
+        0,
+        "  1     0 /sbin/launchd\n"
+        " 40     1 /Applications/My App/claude\n"
+        " 41    40 -fish\n"
+        "garbage line\n",
+        "",
+    )
+    with unittest.mock.patch.object(ipc.subprocess, "run", lambda *a, **k: canned):
+        assert_eq(
+            ipc._read_ps_table(),
+            {
+                1: (0, "/sbin/launchd"),
+                40: (1, "/Applications/My App/claude"),
+                41: (40, "-fish"),
+            },
+            "ps rows parse with a spaced comm, and a malformed line is skipped",
+        )
     print("  ✓ ps-based ancestry finds the claude above a process (the macOS reads)")
 
 

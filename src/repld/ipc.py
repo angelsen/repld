@@ -108,10 +108,12 @@ def _resolve_peer_pid(sock: socket.socket) -> int | None:
 def _resolve_ancestry(pid: int) -> list[int]:
     """`pid` and its ancestors, nearest first, via /proc (`ps` on macOS); as far as they read.
 
-    Forks `ps` once per hop on macOS: never call it under `sessions_lock`.
+    Forks `ps` once on macOS: never call it under `sessions_lock`.
     """
-    parent_of = _read_parent_ps if sys.platform == "darwin" else _read_parent_proc
-    return _walk_ancestry(pid, parent_of)
+    if sys.platform != "darwin":
+        return _walk_ancestry(pid, _read_parent_proc)
+    table = _read_ps_table()
+    return _walk_ancestry(pid, lambda p: table[p][0] if p in table else None)
 
 
 def _walk_ancestry(pid: int, parent_of: Callable[[int], int | None]) -> list[int]:
@@ -138,11 +140,7 @@ def _bridge_chain(session: Session) -> list[int]:
 def _caller_chain(pid: int, seat_pid: int | None) -> list[int]:
     """`pid`'s ancestry, plus the caller's claimed `claude` pid when the tree shows no `claude`."""
     chain = _resolve_ancestry(pid)
-    if (
-        seat_pid is not None
-        and seat_pid not in chain
-        and not any(_is_claude_process(p) for p in chain)
-    ):
+    if seat_pid is not None and seat_pid not in chain and not _find_claudes(chain):
         chain.append(seat_pid)
     return chain
 
@@ -150,12 +148,21 @@ def _caller_chain(pid: int, seat_pid: int | None) -> list[int]:
 def _is_claude_process(pid: int) -> bool:
     """True if `pid` is a Claude Code process (`comm`'s basename is `claude`); False if unreadable."""
     if sys.platform == "darwin":
-        comm = _read_comm_ps(pid)
-        return comm is not None and os.path.basename(comm) == "claude"
+        return pid in _find_claudes([pid])
     try:
         return Path(f"/proc/{pid}/comm").read_text().strip() == "claude"
     except OSError:
         return False
+
+
+def _find_claudes(chain: list[int]) -> set[int]:
+    """The pids of `chain` that are Claude Code processes; one `ps` on macOS, not one per pid."""
+    if sys.platform != "darwin":
+        return {p for p in chain if _is_claude_process(p)}
+    table = _read_ps_table()
+    return {
+        p for p in chain if p in table and os.path.basename(table[p][1]) == "claude"
+    }
 
 
 def _read_parent_proc(pid: int) -> int | None:
@@ -168,37 +175,39 @@ def _read_parent_proc(pid: int) -> int | None:
     return int(stat.rsplit(")", 1)[1].split()[1])
 
 
-def _read_parent_ps(pid: int) -> int | None:
-    """`pid`'s parent from `ps`, where there is no /proc (macOS); None if unreadable."""
-    ppid = _read_ps_field(pid, "ppid")
-    return int(ppid) if ppid is not None and ppid.isdigit() else None
+def _read_ps_table() -> dict[int, tuple[int, str]]:
+    """Every process as `pid: (ppid, comm)` from one `ps`; empty when `ps` fails or times out.
 
-
-def _read_comm_ps(pid: int) -> str | None:
-    """`pid`'s `comm` from `ps`: the name it was exec'd as, a path on macOS."""
-    return _read_ps_field(pid, "comm")
-
-
-def _read_ps_field(pid: int, field: str) -> str | None:
-    """One `ps -o <field>=` column for `pid`; None when `ps` fails or finds no such process."""
+    `comm` is the path as invoked on macOS and may hold spaces, so it is the line's remainder;
+    `ww` keeps BSD `ps` from cutting a long path at the terminal width.
+    """
     try:
         out = subprocess.run(
-            ["/bin/ps", "-o", f"{field}=", "-p", str(pid)],
+            ["/bin/ps", "-axwwo", "pid=,ppid=,comm="],
             capture_output=True,
             check=False,
             text=True,
             timeout=2,
         )
     except OSError, subprocess.TimeoutExpired:
-        return None
-    return out.stdout.strip() or None if out.returncode == 0 else None
+        return {}
+    if out.returncode != 0:
+        return {}
+    table: dict[int, tuple[int, str]] = {}
+    for line in out.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            table[int(fields[0])] = (int(fields[1]), fields[2].strip())
+    return table
 
 
 def _resolve_claude_pid(pid: int | None) -> int | None:
     """The nearest `claude` process at or above `pid`, else None."""
     if pid is None:
         return None
-    return next((p for p in _resolve_ancestry(pid) if _is_claude_process(p)), None)
+    chain = _resolve_ancestry(pid)
+    claudes = _find_claudes(chain)
+    return next((p for p in chain if p in claudes), None)
 
 
 def _check_inbox_socket(path: object) -> str | None:
@@ -738,12 +747,13 @@ class Server:
         shows no `claude` above the bridge, it is taken as that `claude`,
         claimed and not verified (`Session.claude_pid_claimed`).
         """
-        # Walked first: on macOS this forks `ps`, and the pending id is popped, assigned and
-        # installed in one hold, so a rebind cannot land between them.
+        # Walked first: on macOS the walk and the claude check fork `ps`, and the pending
+        # id is popped, assigned and installed in one hold, so a rebind cannot land between them.
         chain = (
             _resolve_ancestry(session.peer_pid) if session.peer_pid is not None else []
         )
-        claude_pid = next((p for p in chain if _is_claude_process(p)), None)
+        claudes = _find_claudes(chain)
+        claude_pid = next((p for p in chain if p in claudes), None)
         claimed = False
         if claude_pid is None and type(seat_pid) is int and seat_pid > 1:
             claude_pid, claimed = seat_pid, True
@@ -824,7 +834,9 @@ class Server:
             ]
         candidates = [(s, _bridge_chain(s)) for s in registered]
         connected = False
-        for ancestor in _caller_chain(pid, seat_pid):
+        caller_chain = _caller_chain(pid, seat_pid)
+        claudes = _find_claudes(caller_chain)
+        for ancestor in caller_chain:
             hits = [
                 (s, chain.index(ancestor))
                 for s, chain in candidates
@@ -849,7 +861,7 @@ class Server:
                 break
             # Past the pane's own `claude` the only ancestors left are shared
             # (tmux, the login session): another pane's bridge would match.
-            if ancestor == seat_pid or _is_claude_process(ancestor):
+            if ancestor == seat_pid or ancestor in claudes:
                 # A connection already under this claude that `old_id` filtered
                 # out is a repeat rebind; arming would re-key a later nested bridge.
                 if connected:
