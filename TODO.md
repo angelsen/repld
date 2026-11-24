@@ -20,7 +20,8 @@
 - [ ] The known ordering (a rebind arrives before the restarted bridge registers while a background agent's bridge sits under that claude) has no case for the hook's no-`old_id` call, which re-keys the other connection instead of refusing.
 
 - [x] A rebind's cost on macOS grew with the connections (0.30 to 0.35 s with 8 bridges, one `ps` snapshot per walk and per claude check). `register_claude_session` and `rebind_claude_session` now read one snapshot (`ipc._read_tree`) and pass it down; re-measured on macOS 27.2 with the same 8 bridges: 0.039 to 0.065 s, median 0.052 s.
-- [ ] Phase 15 on macOS is unverified past the `sibling kernel listed` case: it stopped there on a tempdir-vs-realpath comparison (fixed in `tests/phases/headless.py`), so the rebind cases after it have not run on a Mac.
+- [ ] Phase 15 on macOS stops at `--project restart exits 0` in `tests/phases/headless.py`'s `_project_flags` (`repld('--project', str(main), 'restart', cwd=tmp)`): `repld: pid N did not exit within 10s`, exit 1, after 34 checks including `sibling kernel listed`; the same on two runs (macOS 27.2, cc70f2de; logs `phase15.log` and `phase15.run2.log` under the Mac run's scratchpad). Unknown whether the kernel is slow to exit on macOS or the restart's wait is wrong. `phase_15_ephemeral_bridge` and the rebind cases after it have never run on a Mac.
+- [ ] Phase 19 on macOS stops in `tests/phases/peers.py`'s `_over_ssh` after 8 checks: after five calls to `peers.get('fake:svc-peer')`, `p._forward` is None (a TypeError on the cell's print), so the ssh peer never got its socket forward; the same on two runs (macOS 27.2, cc70f2de). Unchecked guess: macOS caps an `AF_UNIX` path at 104 bytes and `peer.forward_path()` builds `<RUNTIME_DIR>/<pid>-fwd-<digest>.sock` under a kernel cwd of `/var/folders/.../T/repld-smoketest-XXXXXXXX`; measure the path's length and where the forward's setup swallows its failure first.
 
 ## Gist deps tooling
 
