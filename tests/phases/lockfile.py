@@ -144,12 +144,16 @@ def phase_5_proc_start(_kernel: Kernel) -> None:
 
 
 def phase_5_pid_strangers(_kernel: Kernel) -> None:
-    """A pid whose start time no longer matches is a stranger: never signalled, never waited on."""
+    """A stranger on the kernel's pid is never signalled, and a zombie owner never holds the owner watch."""
+    import sys
     import tempfile
     import threading
 
     from repld import bridge, kernel, state
 
+    if sys.platform not in ("linux", "darwin"):
+        print("  ~ pid-stranger check skipped (no zombie reading on this platform)")
+        return
     stranger = subprocess.Popen(["sleep", "30"])
     scratch = Path(tempfile.mkdtemp(prefix="repld-teardown-"))
     try:
@@ -169,6 +173,7 @@ def phase_5_pid_strangers(_kernel: Kernel) -> None:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not state._is_zombie(owner.pid):
             time.sleep(0.02)
+        assert_true(state._is_zombie(owner.pid), "the unreaped owner is a zombie")
         kernel._watch_owner(owner.pid, stop)
         assert_true(
             stop.wait(5.0), "the owner watch stops for an owner that is a zombie"

@@ -844,6 +844,7 @@ rather than an architectural one — the exact pattern already exists twice in t
 
 ## Infra
 
+- [ ] House style rule 10 (ASCII only, no em dashes) is not held in the tracked Python files, counted 2026-11-24: 482 em dashes in 29 files (196 in `src`, 275 in `tests`, 10 in `scripts`, 1 in `examples`). Em dashes are not the whole breach: `src` holds 512 non-ASCII characters in 10 files (also 183 `→`, 102 `─`, and `·`, `×`, `✗`, `…`), some of them what `render.py` draws, which the rule has no exception for; `tests` holds 915, 523 of them the pass mark the rule now excepts. A sweep rewords the prose ones and the rule then says what rendering may use; whether a lint can hold it is unchecked.
 - [ ] CI + lint pass — `ruff` and `basedpyright` are trivial to wire; the smoketest is the
   question, since phase 16 needs a usable systemd user manager and skips silently without
   one. A CI run that reports green having skipped it is worse than no CI. Phase 6 is closer
