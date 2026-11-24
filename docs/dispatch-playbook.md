@@ -17,9 +17,8 @@ specific change touches.
 
 - Target repo: `/home/fredrik/Projects/private/repld`
 - Trunk branch: `master`
-- Check suite (`CHECK_ARGV`): `["bash", "-c", "ruff check && git add -A && ruff format && python3 scripts/align-comments.py --fix-all && git diff --exit-code && basedpyright && uv run tests/smoketest.py --phase 5"]` — lint/format/align/type gate plus phases 1–5 (core MCP plumbing, channels, lockfile/flock/bootstrap). **Not the full suite**: phase 6+ needs a real Chrome on `--remote-debugging-port=9222`, which a dispatch worktree won't have running by default. A change touching `src/repld/browser/` needs phase 6 run explicitly against a live Chrome — not part of the default gate, verify by hand.
-  - **Not bare `ruff format --check`**: this repo's `align-comments` pass re-widens trailing-`#` comments that `ruff format` collapses, so a plain `--check` fails on an untouched master. The chain above runs the real fix sequence and diffs against it instead.
-  - **The `git add -A` before the fixers is load-bearing, not `git diff --exit-code` alone**: a dispatch worktree's own fix is itself an uncommitted diff, so an unstaged-only `git diff --exit-code` would fail on that fix regardless of its quality. Staging it first means the post-fixer `git diff --exit-code` (unstaged) only ever catches drift the fixers themselves introduce.
+- Check suite: `uv run python tests/smoketest.py --phase 19`, named by the cairn's routing skill for repld (`~/supervise/.claude/skills/repld/SKILL.md`, `check`) and run by `verdict.verify` and by a land, which passes no `check_argv` of its own. It is the full suite: phase 6 starts its own headless Chrome (`harness.ThrowawayChrome`), so the machine needs a Chrome 140+ binary and nothing already running.
+  - Lint, format and types are not in it: a round runs `make fmt && basedpyright` before it commits. **Never bare `ruff format --check`**: this repo's `align-comments` pass re-widens trailing-`#` comments that `ruff format` collapses, so a plain `--check` fails on an untouched master.
 - Setup step (`SETUP`): none for the default gate. `make injected` (rebuilds the vendored Playwright engine) only matters for `src/repld/browser/injected_source.py`-adjacent work and is never run implicitly — hand-edit is refused (see CLAUDE.md).
 - Review skills (`ALIGN_SINCE`: the branch's base): `trace-align` and `claims-align`, named by `dispatch.align` in `.claude/devstack.json`; CLAUDE.md's "Committing and landing" states the commit and land sequence.
 - Commit conventions:
@@ -41,7 +40,7 @@ kernel: they run in the supervise kernel, reached as a peer
 ## Live verification — the sanctioned path
 
 repld's own test suite already drives real Chrome directly over CDP
-(`tests/phases/browser.py`, requires Chrome 140+ on `:9222`) — that IS
+(`tests/phases/browser.py`, on a headless Chrome 140+ the suite starts itself) — that IS
 this project's live-verification path. No devloop wiring: it would be a
 second, redundant mechanism for the same thing. For non-browser work,
 `uv run repld` / `repld exec` against a throwaway project dir is the
@@ -65,5 +64,5 @@ The release path (`uv version --bump patch` → `uv build` → `git push --tags`
 
 ## repld itself
 
-- The workflow layer lives in supervise. What is left here under the devstack name is `.claude/devstack.json`, which supervise still reads for its `dispatch` block, and nothing else: there is no project `repld_init.py`, and `.claude/hooks/cc-check-hook` is this repo's own copy of the hook wrapper (the cairn's `~/supervise/.claude/hooks/cc-check-hook` is the source).
+- The workflow layer lives in supervise. What is left here under the devstack name is `.claude/devstack.json`, which supervise still reads, and nothing else: there is no project `repld_init.py`, and `.claude/hooks/cc-check-hook` is this repo's own copy of the hook wrapper (the cairn's `~/supervise/.claude/hooks/cc-check-hook` is the source).
 - Narration ratchet (`checks/narration.py`) baselined 2026-09-09 at 41 hits across 26 files — almost entirely legitimate "prior state" design-rationale prose in docstrings (CLAUDE.md and `src/repld/**/*.py` explain *why* by contrasting with what came before, which the project's own Invariant-comments style explicitly permits in design docs). The ratchet only refuses *growth* past that baseline, not the existing prose.
