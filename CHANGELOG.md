@@ -12,6 +12,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A session id taken over by a second connection (a resume of the same conversation in another pane) went unmapped when that connection closed, so targeted pushes to the still-live first one returned False; the id now returns to the newest live connection carrying it, and the outbox is drained to it.
+
 ### Removed
 
 ## [0.24.3] - 2026-11-24

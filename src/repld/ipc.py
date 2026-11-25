@@ -350,6 +350,8 @@ class Session:
         self.claude_session_id: str | None = None
         self.claude_project_dir: str | None = None
         self.claude_session_kind: str | None = None
+        # Order in which connections took their id (`Server._bind_seq`), so a close restores the newest survivor.
+        self.claude_bind_seq = 0
         self.inbox_socket: str | None = None
         # The `claude` above the bridge, resolved at register (peer_pid alone is the bridge).
         self.claude_pid: int | None = None
@@ -629,6 +631,7 @@ class Server:
         # claude_session_id -> Session, same lock as `sessions` since both
         # mutate together on register/disconnect.
         self._claude_sessions: dict[str, Session] = {}
+        self._bind_seq = 0
         # claude_session_id -> pushes owed to whichever connection next
         # carries that id, oldest first. Same lock as `_claude_sessions`, so
         # a register and an enqueue cannot miss each other.
@@ -805,6 +808,8 @@ class Server:
                     f" from live pid {holder.peer_pid}, which loses targeted pushes\n"
                 )
             self._claude_sessions[session_id] = session
+            self._bind_seq += 1
+            session.claude_bind_seq = self._bind_seq
             self._note_claude_id_locked(session, session_id)
         if stale_id != session_id:
             self._drain_outbox(stale_id, session)
@@ -928,6 +933,8 @@ class Server:
                 del self._claude_sessions[old_id]
             session.claude_session_id = new_id
             self._claude_sessions[new_id] = session
+            self._bind_seq += 1
+            session.claude_bind_seq = self._bind_seq
             # Already carrying `new_id` (a restarted bridge): the id it replaced is the record's.
             replaced = (
                 old_id
@@ -1156,12 +1163,25 @@ class Server:
             self.sessions.discard(session)
             # Only if it is still this session; a reconnect can have
             # already replaced the entry via register_claude_session.
-            if (
-                session.claude_session_id is not None
-                and self._claude_sessions.get(session.claude_session_id) is session
-            ):
-                del self._claude_sessions[session.claude_session_id]
+            sid = session.claude_session_id
+            heir = None
+            if sid is not None and self._claude_sessions.get(sid) is session:
+                del self._claude_sessions[sid]
+                # A take-over leaves the loser live but unmapped; hand the id back to the newest one.
+                heir = max(
+                    (
+                        s
+                        for s in self.sessions
+                        if s.claude_session_id == sid and not s.closed and not s.peer
+                    ),
+                    key=lambda s: s.claude_bind_seq,
+                    default=None,
+                )
+                if heir is not None:
+                    self._claude_sessions[sid] = heir
         session.close()
+        if heir is not None and sid is not None:
+            self._drain_outbox(sid, heir)
         self._settle_parked(session)
         for hook in _close_hooks:
             try:

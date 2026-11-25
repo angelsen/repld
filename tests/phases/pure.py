@@ -3189,6 +3189,56 @@ def _one_snapshot_per_call(canned: subprocess.CompletedProcess) -> None:
     print("  ✓ macOS register and rebind take one ps snapshot per call")
 
 
+def _taken_id_returns_when_the_taker_closes() -> None:
+    import socket
+    import tempfile
+
+    from repld import channel, ipc
+
+    with tempfile.TemporaryDirectory() as d:
+        srv = ipc.Server(Path(d) / "k.sock", lambda msg, session: None)
+        pairs = [socket.socketpair() for _ in range(3)]
+        try:
+            old, mid, new = (ipc.Session(ours) for ours, _ in pairs)
+            for s in (old, mid, new):
+                with srv.sessions_lock:
+                    srv.sessions.add(s)
+            srv.register_claude_session(old, "shared", None)
+            srv.register_claude_session(mid, "shared", None)
+            srv.register_claude_session(new, "shared", None)
+            assert_true(srv.find_claude_session("shared") is new, "the newest takes it")
+            srv._on_reader_done(new)
+            assert_true(
+                srv.find_claude_session("shared") is mid,
+                "the newest survivor carries it again when the taker closes",
+            )
+            srv._on_reader_done(mid)
+            assert_true(
+                srv.find_claude_session("shared") is old,
+                "and the older one after that",
+            )
+            seen: list[bool] = []
+            srv._outbox["shared"] = [
+                ipc._Owed(
+                    channel._build_channel_msg("owed", {"kind": "owed"}),
+                    seen.append,
+                    time.monotonic() + 30,
+                )
+            ]
+            srv._on_reader_done(old)
+            assert_true(
+                srv.find_claude_session("shared") is None, "none left, none held"
+            )
+            assert_true(
+                "shared" in srv._outbox, "an unclaimed id keeps its owed pushes"
+            )
+        finally:
+            for ours, theirs in pairs:
+                ours.close()
+                theirs.close()
+    print("  ✓ a taken session id returns to the live connection when the taker closes")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -3438,6 +3488,7 @@ def phase_2_pure() -> None:
     _dialable_ws_url()
     _connect_url()
     _lease_routes()
+    _taken_id_returns_when_the_taker_closes()
     _stop_flushes_inflight_reply()
     _peer_resolution()
     _peer_remote()
