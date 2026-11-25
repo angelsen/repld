@@ -3239,6 +3239,59 @@ def _taken_id_returns_when_the_taker_closes() -> None:
     print("  ✓ a taken session id returns to the live connection when the taker closes")
 
 
+def _taken_id_restored_holder_gets_parked_pushes() -> None:
+    import socket
+    import tempfile
+
+    from repld import channel, ipc
+
+    def read_contents(sock: socket.socket) -> list[str]:
+        sock.settimeout(0.5)
+        out: list[str] = []
+        try:
+            data = sock.recv(65536).decode()
+        except TimeoutError:
+            return out
+        for line in data.splitlines():
+            out.append(json.loads(line)["params"]["content"])
+        return out
+
+    with tempfile.TemporaryDirectory() as d:
+        srv = ipc.Server(Path(d) / "k.sock", lambda msg, session: None)
+        pairs = [socket.socketpair() for _ in range(2)]
+        try:
+            old, taker = (ipc.Session(ours) for ours, _ in pairs)
+            for s in (old, taker):
+                with srv.sessions_lock:
+                    srv.sessions.add(s)
+                s.set_initialized()
+            srv.register_claude_session(old, "shared", None)
+            srv.register_claude_session(taker, "shared", None)
+            taker.park(30)
+            for text in ("first", "second"):
+                owed = ipc._Owed(
+                    channel._build_channel_msg(text, {"kind": "owed"}),
+                    None,
+                    time.monotonic() + 30,
+                )
+                assert_true(
+                    srv._owe("shared", owed) is ipc.Post.HELD,
+                    "a push for the taker's id is held while it is parked",
+                )
+            srv._on_reader_done(taker)
+            assert_eq(
+                read_contents(pairs[0][1]),
+                ["first", "second"],
+                "the restored holder receives what the taker held, in order",
+            )
+            assert_true("shared" not in srv._outbox, "nothing is left owed")
+        finally:
+            for ours, theirs in pairs:
+                ours.close()
+                theirs.close()
+    print("  ✓ pushes held by a taker reach the restored holder, in order")
+
+
 def _stop_flushes_inflight_reply() -> None:
     import json
     import socket
@@ -3489,6 +3542,7 @@ def phase_2_pure() -> None:
     _connect_url()
     _lease_routes()
     _taken_id_returns_when_the_taker_closes()
+    _taken_id_restored_holder_gets_parked_pushes()
     _stop_flushes_inflight_reply()
     _peer_resolution()
     _peer_remote()
