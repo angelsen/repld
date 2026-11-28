@@ -852,8 +852,8 @@ rather than an architectural one — the exact pattern already exists twice in t
   (`harness.ThrowawayChrome`), so a CI image just needs the binary installed, not an
   already-running debug instance — but it still skips silently if that binary is missing,
   same open question as phase 16.
-- [ ] No land gate runs lint, format or types: the cairn's check for repld is the smoketest alone, so fef9a4aa landed with a line `ruff format` rewraps and the next land's own format check went red on it. Either the routing skill's `check` gains `ruff check`, the format-and-align diff and `basedpyright`, or `dispatch.commit_check` in `.claude/devstack.json` carries them.
-- [ ] `.claude/hooks/cc-check-hook` is a byte copy of the cairn's `~/supervise/.claude/hooks/cc-check-hook`, and two findings from the review of 6adabc01 belong to that source first: its comment says the holder's re-run checks the last edit, but an edit that lands during the re-run only writes `$dirty` and is never checked; and its header line has an em dash (House style rule 10). Fix there, then copy again.
+- [ ] No gate runs lint, format or types: the smoketest is the only check, so fef9a4aa landed with a line `ruff format` rewraps and the next round's format check went red on it. `make fmt && basedpyright` is a round's own step, and nothing refuses a commit that skipped it.
+- [ ] `.claude/hooks/cc-check-hook` (forked from supervise's copy; fix here): two findings from the review of 6adabc01: its comment says the holder's re-run checks the last edit, but an edit that lands during the re-run only writes `$dirty` and is never checked; and its header line has an em dash (House style rule 10).
 - [ ] GitHub Actions build pipeline for site — add when docs generation from `help.py` lands
 - [ ] `scripts/gen-reference.py` — import `_TOPICS` + `GUIDE` from `help.py`, emit Starlight markdown at build time
 - [ ] `~/.claude/settings.json` no longer pins Opus, so the `[1m]` context variant is gone. If long sessions hit the context limit, re-add `claude-opus-5-5[1m]` (recap b5f1b364).
@@ -879,7 +879,6 @@ Follow-ups to 0.11.1-0.11.3 (rebind `old_id=`, bridge `kernel_crashed` push, bri
 - [ ] Whether Claude Code runs several SessionStart hooks in sequence or in parallel is unmeasured; it matters to anything that pins `repld rebind`'s order against another hook (recap ffe9e89c).
 - [x] A pending rebind (`_PendingRebind`) did not carry pushes already held in `Server._outbox` under the old id. `register_claude_session` now drains the stale id's outbox before the successor's; phase 15 `_deferred_rebind` covers it.
 - [ ] The boot sweep's flock fix (6be58531) leaves a narrow window: a boot contending for a dead project's `kernel.flock` in the instant `state.sweep_dead_project_dirs` holds it, before the unlink, exits 0 as if an incumbent existed. No kernel results until the next trigger; not reproduced.
-- [ ] Devstack plugin repo, not repld: `session-roster.py` treats `ERR LookupError` as "no predecessor" silently, and the bounded match makes that outcome more common. It should log it (recaps e655a6b6, 3763948b).
 
 ## Channel delivery to `claude --bg` sessions
 

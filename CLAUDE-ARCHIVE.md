@@ -1,6 +1,6 @@
 # CLAUDE-ARCHIVE.md
 
-On-demand detail for `CLAUDE.md`, split out under the devstack `nudge`
+On-demand detail for `CLAUDE.md`, split out under the `nudge`
 growth check: `CLAUDE.md` loads every session regardless of task, so its
 per-case test rationale below — read only when extending the phase in
 question — was pure cost the rest of the time. Nothing here is deleted;

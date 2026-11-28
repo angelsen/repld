@@ -104,7 +104,7 @@ Raises `RuntimeError` outside a running kernel.
 ```python
 from pathlib import Path
 from repld import gists
-gists.add_search_dir(Path("~/plugins/devstack/gists").expanduser())
+gists.add_search_dir(Path("~/my-plugin/gists").expanduser())
 ```
 
 It is searched after the other two, so a project gist of the same name still wins. The call is idempotent across boots, and a missing directory warns instead of failing the boot. `gists.search_dirs()` and `gists.resolve(name)` show the resulting precedence.

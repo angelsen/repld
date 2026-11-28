@@ -1,8 +1,0 @@
-{
-  "dispatch": {
-    "align": [
-      ["trace-align", "PASS", true],
-      ["claims-align", "PASS", true]
-    ]
-  }
-}
