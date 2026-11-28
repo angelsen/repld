@@ -1,0 +1,433 @@
+# Run log
+
+How each row is known: `ran` (a recorded failing run or measurement, cited), `docs`, `source`
+(read, not run), `imagined` (no observed break found). `imagined (review)` marks a fix that
+came from a review or "health pass" with no failing run recorded outside its own test: by the
+method a review finding is not a break. Citations are a path plus a grep literal, or a commit
+hash. `C:` is `CLAUDE.md`, `A:` is `CLAUDE-ARCHIVE.md`, `S2:` is
+`~/Projects/private/supervise2/docs`.
+
+## Plan
+
+Decided, not reopened: the 2026-07-28 server is stdlib; the kernel and bridge split stays and
+the bridge becomes a thin 2026-07-28 front; this plan lives here.
+
+| # | session | what it does |
+| --- | --- | --- |
+| 0 | baseline (this file) | read only: inventory, real use, tags, deletion candidates |
+| 1 | mcp2 probes in `probes/` | a stdlib spike bridge that exposes `exec` as a task against the real kernel. Rows to run: idle wake, `claude -p` inline, double cancel, a gate as `input_required`, a task across `/clear`, across a bridge restart and across a relaunch, `notify()` over the inbox socket for an interactive and a `--bg` session and how the model reads it, where `instructions` ride with no `initialize` |
+| 2 | bridge cutover, clean break | drop handshake, version negotiation and the channel relay; `exec` completion is the task result. The push routing (owed, outbox, park, rebind, successors) is deleted here too, not kept for session 3 |
+| 3 | ambient pushes | `notify()`, `@every` errors and browser pushes over the inbox socket; anything from the old routing is rebuilt only against a session 1 or 2 break |
+| 4 | peers, then gists | one session each, smallest first by use |
+| 5 | browser | the largest subsystem; needs its own run of real pages |
+| 6 | gates over `input_required` | CLI, dashboard and pill routes stay |
+| 7 | `help.py`, dashboard, TUI | docs last, when the surface they describe has stopped moving |
+| last | write `~/.claude/skills/vibe/stacks/repld.md` | toolchain, smallest layout, earned rules |
+
+Changes from the order given, and why:
+
+1. **The push-routing collapse moves into the cutover (2), and session 3 becomes ambient
+   pushes.** The routing exists to get a channel push to the right connection. Channels
+   cannot ride 2026-07-28 (`S2:research-2026-11-26.md:/## Channels and events/`), so on the
+   day of the cutover that code has no caller left to serve; keeping it for one more session
+   means keeping dead code green. What does survive the cutover and needs a session of its
+   own is the ambient half: 6,408 of the 12,562 pushes seen in transcripts are not
+   `task_done` (see Real use), most of them `notify()` kinds a gist chose.
+2. **Gates move from 4 to 6.** They are the least used primitive measured: 49 exec cells out
+   of 69,748 call `ask`/`confirm`/`choose`/`form`, 75 gate pushes in three months, 34 of
+   those inside repld's own development. The `input_required` probe still runs in session 1,
+   because it is cheap there and decides whether the elicitation code can go in session 2.
+3. **`help.py` moves last.** It documents every other subsystem (3,037 lines), so rewriting
+   it before they settle is rework. Its one mcp2 question (where `instructions` go) is a
+   session 1 row.
+4. **Peers before browser.** Peers are 1,703 lines with 93 cells of use and no channel
+   dependence; a short session. The browser is 12,816 lines and 8,600 tool calls and should
+   not share a session with anything.
+
+## Inventory
+
+Counted at `862b01cc` with `wc -l`. `browser/injected_source.py` (generated, 332,825 bytes in
+28 lines) is excluded.
+
+### Source, `src/repld/` (37,122 lines)
+
+| subsystem (CLAUDE.md heading) | lines | files |
+| --- | --- | --- |
+| Browser | 12,816 | `browser/` 12,171 (`tab.py` 2,559, `cdp.py` 1,737, `observe.py` 1,570, `session.py` 1,117, `inject.py` 865, `pool.py` 729, `browser.py` 659, `har.py` 646, 10 smaller), `browser_dispatch.py` 645 |
+| Request flow | 5,757 | `protocol.py` 1,750, `ipc.py` 1,436, `bridge.py` 1,338, `core_schemas.py` 519, `spawn.py` 313, `channel.py` 190, `rebind_cmd.py` 113, `bridge_tools.py` 98 |
+| Threading model and kernel core | 4,034 | `kernel.py` 1,896, `tasks.py` 561, `runtime.py` 293, `events.py` 277, `testing.py` 236, `eventlog.py` 207, `loopguard.py` 166, `__init__.py` 123, `bg.py` 82, `killguard.py` 55, 4 smaller |
+| Gist system | 3,682 | `gists.py` 1,146, `gist_cmd.py` 853, `gist_deps.py` 616, `gist_lint.py` 471, `gist_links.py` 303, `gist_api.py` 293 |
+| Doc system | 3,037 | `help.py` |
+| Peers | 1,703 | `peer.py` 1,046, `peer_host.py` 262, `peer_stub.py` 238, `peer_pipe_cmd.py` 157 |
+| Dashboard | 1,654 | `dashboard.py` 823, `dashboard_html.py` 755, `dashboard_cmd.py` 76 |
+| CLI (Architecture) | 1,362 | `lifecycle_cmd.py` 413, `exec_cmd.py` 367, `tasks_cmd.py` 257, `cli.py` 248, `cli_args.py` 77 |
+| State-file layering | 1,187 | `state.py` 429, `bind.py` 296, `paths.py` 295, `sessions.py` 92, `relaunch.py` 75 |
+| Builtins: gates | 1,047 | `gates.py` 857, `gate_cmd.py` 190 |
+| TUI and log | 843 | `display.py` 448, `log_cmd.py` 201, `render.py` 194 |
+
+### Tests, `tests/` (22,109 lines)
+
+| file | phase | lines | subsystem |
+| --- | --- | --- | --- |
+| `phases/browser.py` | 6 | 6,934 | browser (83 `phase_6_*` cases) |
+| `phases/pure.py` | 2 | 3,554 | mixed, 56 cases (65 private functions with helpers); about a third browser |
+| `phases/headless.py` | 15 | 2,384 | request flow: bridge, lazy spawn, rebind, push routing |
+| `phases/peers.py` | 19 | 1,096 | peers |
+| `phases/links.py` | 12 | 1,083 | gist links |
+| `phases/lockfile.py` | 5 | 896 | kernel core, state files |
+| `phases/gates.py` | 17 | 703 | gates |
+| `phases/core.py` | 3 | 698 | request flow |
+| `phases/channels.py` | 4 | 679 | channel pushes |
+| `phases/gist_tools.py` | 9 | 625 | gists |
+| `phases/venv.py` | 16 | 575 | binding |
+| `phases/resources.py` | 8 | 543 | gists, docs |
+| `harness.py`, `smoketest.py` | | 537, 421 | |
+| `phases/dashboard.py` | 14 | 251 | dashboard |
+| `phases/every.py` | 10 | 244 | kernel core |
+| `phases/defer.py` | 7 | 208 | kernel core |
+| `phases/live_claude.py` | 20 | 206 | gates, live |
+| `phases/tasks_cli.py` | 18 | 198 | CLI |
+| `phases/sessions.py` | 13 | 143 | state files |
+| `phases/shutdown.py` | 11 | 130 | kernel core |
+
+History: 847 commits, 2026-04-16 to 2026-11-25. 88 commit messages name a health pass, a
+review, an audit or "findings", 29 "health pass" (`git log -i -E --grep`); in subjects alone, 42 and 24.
+
+## Real use
+
+ran: a read-only scan of `~/.claude/projects/*/*.jsonl` and the subagent files below them
+(28,641 files, 27 GB) with `rg` and `jq`, 2026-11-28. Tool calls are `tool_use` blocks in
+assistant lines, deduplicated by `tool_use` id. No transcript text is kept here.
+
+| measure | value |
+| --- | --- |
+| `mcp__repld__*` tool calls | 85,002 in 3,140 sessions, 168 working directories |
+| dates covered | 2026-08-24 to 2026-11-28 (45 calls in August, 19,298 in September, 30,315 in October, 35,344 in November) |
+| top directories | `supervise` 35,595; `claude_code_research` 21,878; `partbridge` 6,690; `bulletins-chat` 4,724; `allcraft` 3,720; `repld` 2,541; `education` 1,595 |
+| from subagents (`isSidechain`) | 8,022 |
+
+### Tool calls by name
+
+| tool | calls | share |
+| --- | --- | --- |
+| `exec` | 69,827 | 82.1% |
+| `browser_*` (28 of 31 registered tools seen) | 8,600 | 10.1% |
+| `get_task` | 5,307 | 6.2% |
+| gist `_tool_*` tools (42 names; `tv_*` 431, `desktop_*` 409) | 925 | 1.1% |
+| `cancel` | 293 | 0.3% |
+| `repld_restart` | 50 | 0.1% |
+
+`browser_*`: `js` 2,845, `click` 1,243, `screenshot` 1,089, `cdp` 689, `navigate` 581, `open`
+573, `type` 281, `tabs` 234, `tree` 232, `key` 208, `invoke` 106, `pages` 101, `network` 101,
+`controls` 68, `detach` 48, `console` 39, `request` 28, `fetch` 26, `body` 24, `hover` 20,
+`expect_file_chooser` 18, `watch` 15, `set_files` 13, `release` 6, `dismiss_dialog` 5, `take`
+3, `select` 2, `drag` 2. Never called: `browser_clear`, `browser_expect_auth`,
+`browser_grant_permissions`.
+
+### Inside `exec` code (69,748 cells with code)
+
+A cell counts once per pattern. Builtin patterns are bare names, not attribute calls.
+
+| pattern | cells | share | where most |
+| --- | --- | --- | --- |
+| `await` | 27,823 | 39.9% | everywhere |
+| `import` or `from` | 34,388 | 49.3% | top modules are gists: `roster` 10,927, `verdict` 5,590, `dispatch` 2,240 |
+| `defer(` | 15,376 | 22.0% | `supervise` 10,860, `claude_code_research` 4,015 |
+| `browser.` | 2,920 | 4.2% | `get` 1,278, `open` 509, `connect` 444, `pages` 343, `tabs` 292 |
+| `no_display(` | 743 | 1.1% | |
+| `claude_sessions`, `current_session_id`, `list_claude_connections` | 662 | 0.9% | `supervise` 481 |
+| `help(` | 156 | 0.2% | |
+| `every.list` / `every.cancel_all` | 151 | 0.2% | |
+| `notify(` | 132 | 0.2% | 31 with `session=` |
+| `park_pushes`, `unpark_pushes`, `rebind_claude_session` | 109 | 0.2% | `supervise` 71 |
+| `peers.` | 93 | 0.1% | `voice-api` 46; targets: `supervise` 57, `bulletins-chat` 13; one `host:` target; 3 with `start=True` |
+| tab `.confirm(` / `.choose(` / `.ask(` | 80 | 0.1% | |
+| `@every` / `every(` | 51 | 0.1% | |
+| `ask(` | 22 | | 8 in `repld` |
+| `confirm(` | 19 | | 9 in `repld`, 3 in phase 20's scratch projects |
+| `choose(` | 4 | | all in `repld` |
+| `form(` | 4 | | all in `repld` |
+| `GateDeclined` | 2 | | `repld` |
+| `peer_caller` | 1 | | |
+
+`exec` passed no `timeout` in 57,978 calls (83%). The nudge text
+(`[task <id> still running after`) names 8,300 distinct task ids. Most `notify()` traffic does
+not show in cell code: gists call it (see the push kinds below).
+
+### Channel pushes
+
+Counted as `queue-operation` `enqueue` lines whose content opens with a repld channel tag.
+12,562 lines, 10,323 distinct, 2026-08-24 to 2026-11-27, in 1,278 session files across 34
+project directories (`supervise` 8,139, `klara` 1,675, `repld` 876). Whether each one started a
+turn is not in this count.
+
+| kind | pushes | source |
+| --- | --- | --- |
+| `task_done` | 6,154 (a distinct-id count gave 6,168, more than the lines; not reconciled) | kernel: `exec` past its timeout, `defer()` |
+| `roster_tell`, `pane_route`, `roster`, `continue`, `message`, `dev`, `land_step`, `run_step`, others | about 3,800 (12,562 less the other rows) | `notify()` from gists, kinds the gist chose |
+| `console_error` 753, `tab_closed` 486, `dialog` 187, `controls` 127, `download_*` 71, `filechooser` 26, `captcha` 4, `auth` 2, `pin_lost` 1, `tab_crashed` 5 | about 1,660 | browser, per tab |
+| `kernel_started` 177, `init_loaded` 75 | 252 | kernel boot |
+| `loop_blocked` 87, `loop_unblocked` 73, `loop_kill` 13 | 173 | watchdog; `klara` 35, `supervise` 18, `allcraft` 17 |
+| `browser_reconnected` 79, `browser_disconnected` 22 | 101 | browser, broadcast |
+| `confirm` 61, `ask` 8, `choose` 4, `form` 2 | 75 | gates; `repld` 34, `ultraportalen` 11, `voice-api` 7 |
+| `every` 57, `bg_task_error` 36, `error` 106 | 199 | tickers, background errors |
+| `kernel_crashed` | 3 | bridge; `allcraft` 2026-10-15 and 2026-10-16, `repld` 2026-10-17 |
+| no `kind` | 145 | |
+
+### Other surfaces
+
+| surface | count | how |
+| --- | --- | --- |
+| `repld://` resource reads | 83: `docs/browser` 23, `docs/guide` 22, `gists/<name>` 11, `help/*` 21, `docs/peers` 3, `docs/playbook` 2, `browser/controls` 1; `docs/production` and `docs/browser-internals` 0 | ran |
+| `repld` CLI in Bash calls (not deduplicated) | `exec` 183, `tasks` 148 (`wait` 18), `gist lint` 138, `status` 79, `log` 38, `gist list` 26, `help` 25, `restart` 23, `gate` 23 (`answer` 22), `bridge` 19, `stop` 12, `rebind` 9, `start` 8, `gist stub` 6, `gist add` 2, `dashboard` 2, `peer-pipe` 2, `gist new` 1, `gist fetch` 0 | ran |
+| `REPLD_CODE_MODE` | named in 338 `supervise` session files; whether a bridge ran with it is not visible in transcripts | ran, weak |
+| dashboard page, TUI pane, pill clicks, elicitation modals | not visible in transcripts | not measured |
+
+What this says: repld is an `exec` server with background completion. `exec` and `get_task`
+are 88% of tool calls, `task_done` is half of all pushes, and two orchestration projects are
+two thirds of the calls. The browser is a real second use at a tenth. Gates, `@every`, peers and the
+doc resources are each under 0.3%.
+
+## Facts measured elsewhere
+
+Not rerun here.
+
+| fact | how |
+| --- | --- |
+| a channel push cannot ride a 2026-07-28 connection, and Claude Code 2.1.332 has no Events client | docs and bundle: `S2:research-2026-11-26.md:/## Channels and events/` |
+| an MCP task result wakes an idle interactive session and an idle `--bg` session | ran: `S2:research-2026-11-26.md:/## MCP tasks, measured/` |
+| `claude -p` sends no tasks capability; a tool that can answer inline does | ran: same section, grep `waited 3s inline` |
+| `tasks/cancel` arrives twice in one second | ran: same section, grep `sent twice in one second` |
+| `input_required` shows as a dialog, also on `claude attach` to a `--bg` session; under `-p` the client answers `cancel` | ran: same section |
+| the inbox socket `cc-socks/<pid>.sock` takes a `user` frame that starts a turn on an idle session; a script's frame reads to the model as "Another Claude session sent a message" with no header | ran: `S2:research-2026-11-26.md:/## The inbox socket, measured/` |
+| 2026-07-28 removes `initialize`, `notifications/initialized` and `ping`; server-initiated `elicitation/create` becomes an `input_required` result | docs: `~/.local/share/resources/github.com/modelcontextprotocol/modelcontextprotocol/tree/HEAD/docs/specification/2026-07-28/changelog.mdx`, grep `Make MCP stateless` and `Multi Round-Trip Requests` |
+| a repld task result after a relaunch was not delivered; after `/clear` with the rebind hook it was | ran: `S2:research-2026-11-27.md:/not delivered/` |
+| a stdlib server over stdio at 2026-07-28 with the tasks extension works in a live session | ran: `~/Projects/private/termtap2/RUNLOG.md:/## The new server/` |
+| Claude Code cuts server instructions at 4,096 characters | ran: `~/Projects/private/termtap2/RUNLOG.md:/Claude Code cut off the server instructions/` |
+
+## Tagged invariants
+
+One row per bold rule in `CLAUDE.md` (Key subsystems, Architecture, Key invariants) and per
+bold rule that exists only in `CLAUDE-ARCHIVE.md`. The `mcp2` column names what the move
+removes or changes: `channel` (the rule exists to make or route a channel push), `handshake`
+(`initialize`, version or capability negotiation), `elicitation` (server-initiated
+`elicitation/create`).
+
+### Key subsystems
+
+| # | rule | where | tag and evidence | mcp2 |
+| --- | --- | --- | --- | --- |
+| 1 | Threading model | `C:/Threading model:/` | docs: a description of the shape | |
+| 2 | Nothing repld runs may block the shared loop | `C:/may block the shared loop/` | ran: `A:/measured loop stall across the delta/`; 87 `loop_blocked` pushes in real use | |
+| 3 | `pre_observe` reads `MAX(rowid)`, views go through `to_thread` | `C:/reads its cutoff from/` | ran: `A:/evaluated a whole CTE chain/` | |
+| 4 | The event store ages out by rotation, never `DELETE` | `C:/ages out by rotation/` | ran: `A:/measured 2026-11-21 on duckdb 1.5.2/`, `c919c7fd` | |
+| 5 | A wedged loop is reported, and only its holder is cancelled | `C:/A wedged loop is reported/` | ran for the report (173 watchdog pushes in real use). "Never a bystander, never a `repld-` task": imagined (review), `9fbf9220` | channel: `loop_blocked` is a push |
+| 6 | Request flow | `C:/Request flow:/` | docs | handshake and channel: discovery from `kernel.cache`, the relay |
+| 7 | State-file layering | `C:/State-file layering:/` | docs: a refactor record, `A:/a grab-bag of five modules/` | |
+| 8 | `spawn.py` lands the kernel in a transient service, never a scope | `C:/decides where the kernel lands/` | ran: `d8ec2307` (measured cgroup and parentage). Unit name keyed by socket path: imagined | |
+| 9 | `channel.py` owns the push; `render.py` shared by pane and log | `C:/so pushers import it at module level/` | docs: import structure | channel: `channel.py` is the push |
+| 10 | `bg.py` is `spawn(coro)` and nothing else | `C:/and nothing else/` | imagined (review): `f949dcf7`; no lost task recorded | |
+| 11 | The dispatch must be reachable after a failed store | `C:/The dispatch must be reachable too/` | imagined (review): `A:/a raise from the store must not skip both/` | |
+| 12 | Off-loop callers pass `loop=`, never `loop.create_task` | `C:/it doesn't wake an idle loop/` | ran, weak: `A:/an idle loop is never woken/` describes the masked failure; test `phase_6_offloop_writes`; no failing run cited | |
+| 13 | Builtins; `help` bound to stdout, no pager | `C:/pydoc's default pager forks/` | imagined: present from `cfddebda`, no deadlock run recorded | |
+| 14 | Doc system: four surfaces, instructions under 4,096 characters | `C:/INSTRUCTIONS_BUDGET/` | docs: the audit in `3a98a11f`; the cut itself is ran in termtap2 (above) | handshake: instructions are composed "at MCP init" |
+| 15 | Topic list derived from `_TOPICS`; every topic a resource | `C:/never hand-write one/` | imagined: a drift guard | |
+| 16 | Monkeypatch `Browser` where `pool.py` resolves it | `C:/Monkeypatching:/` | imagined: `A:/silently leaves the real class in play/`, no run cited | |
+| 17 | Selector resolution is engine-only | `C:/Selector resolution is engine-only/` | source: Playwright's engine, vendored in `21533ced`; spellings pinned by phase 6's translation table | |
+| 18 | A `url=` browser retires on a refusal, not on one transient failure | `C:/is retired on a refusal for good/` | ran, against a fake provider: `A:/Measured before the change, against a fake provider/`, `801fa280` | channel: `browser_disconnected` |
+| 19 | A scoped lease's refusal only skips fronting | `C:/SCOPE_REFUSAL_MARKER/` | ran: `54bfa8a3`, `A:/failed before reaching/` | |
+| 20 | Captcha detection is vendor fingerprinting, never solving | `C:/Captcha detection is vendor fingerprinting/` | ran: `A:/Prototyped 2026-10-20 on issues.chromium.org/`; 4 pushes in real use | channel: the `solved` push |
+| 21 | `_ensure_front` does not await its probe; a warm click is six hops | `C:/sends its visibility probe and does not await it/` | ran: `A:/Measured 2026-10-16 with a 50 ms hold/`, `A:/delivered zero clicks/`, `6a1c19e4` | |
+| 22 | Fetch interception on `get()`/`open()`, capture skips assets | `C:/Fetch interception is enabled/` | ran, undated: `A:/Capturing costs a round trip plus/` | |
+| 23 | `since=` is epoch seconds across three clocks | `C:/is epoch seconds/` | ran: `A:/silently matches every row/` | |
+| 24 | Settle counts `inflight_count()`, never `len()` | `C:/Streamed responses leave/` | imagined (review): `2a019d57` | |
+| 25 | Loop-owned state is a `LoopOwned` | `C:/the type carries the rule/` | imagined (review) for the race (`a83b25fa`, `2d3fb0ab`); ran for the guard: `8d997740` (it caught one test writing from the wrong thread) | |
+| 26 | The DuckDB close is loop-owned; `_db_lock` | `C:/The DuckDB close is loop-owned too/` | imagined (review): `81dabc88` | |
+| 27 | Per-session registrations are replayed in `_reattach_core` | `C:/not at its call sites/` | imagined (review): `be307b30`, `A:/calling an undefined function/` | |
+| 28 | `Page.screencastFrame` never reaches `store_event`; handlers serialized | `C:/a frame per repaint would evict/` | ran for serialization: `47f56388` ("handlers ran three at once"). The eviction: imagined | |
+| 29 | A tab is `agent` or `shared`; native prompts follow the action window | `C:/native prompts follow the action window/` | ran: `A:/started agent loops/`, `b013333e`; the dialog and `taken` follow-ups are imagined (review): `A:/The review that followed/`, `525b3a02` | channel: the pushes |
+| 30 | Browser pushes route by `CDPSession.route_to` | `C:/Browser pushes route/` | ran for the original complaint (same); the ordering of the five claims is imagined (review) | channel: a targeted push needs a session to push to |
+| 31 | Pin and gate bridge | `C:/Pin\/gate bridge:/` | docs | |
+| 32 | `pin.py`'s two injection routes differ on `document.body` | `C:/two injection routes differ/` | imagined (review): `A:/masks this during manual testing/` | |
+| 33 | `save_hint()` merges | `C:/rewriting the browser keys only when/` | imagined (review): `A:/would throw away the previous kernel/` | |
+| 34 | `GET /` is authenticated; `POST /api` Bearer-only | `C:/because the page carries the token/` | security, held by the method's rule 6, not by a break: `a4a08b4c` | |
+| 35 | Gist MCP tools from typed `_tool_*` functions | `C:/discovers typed/` | docs; 925 gist tool calls in real use | |
+| 36 | Gist deps install to a shared versioned dir, appended to path | `C:/never the active venv/` | ran: `dfeefc30` (deps broke once the kernel bound to the project) | |
+| 37 | Cross-project links record paths, no copy | `C:/Cross-project links/` | docs; `repld gist add` seen twice | |
+| 38 | `gist fetch` copies, enforces three collision scopes | `C:/sibling, not/` | imagined; never called in transcripts | |
+| 39 | The gist modules share helpers through an import cycle | `C:/call-time-attribute import cycle/` | imagined: `A:/the failure a module split causes silently/` | |
+| 40 | Peers: one connection per call, no `initialize` | `C:/One connection per call/` | source: `ipc.Server._read_loop` serves one request at a time; `0d5684a4` | |
+| 41 | Peers: cancel is a hangup, never retried once written | `C:/Cancel is a hangup/` | imagined: design, phase 19 | |
+| 42 | Peers: JSON-RPC error never ran, `result.error` ran, EOF unknown | `C:/means the target never ran/` | imagined: design; `177a6aa4` fixed a clean disconnect read where `call_error` was due | |
+| 43 | Peers: reach is exec's reach | `C:/Reach is exec's reach/` | docs: a decision | |
+| 44 | A peer connection is never a Claude session | `C:/is never a Claude session/` | imagined: design | channel: half the rule is about pushes that have nowhere to go |
+| 45 | The caller rides per call in `_meta.caller` | `C:/The caller rides per call in/` | imagined: design | |
+| 46 | `start=True` is a subprocess under `clean_env` | `C:/is a subprocess, not/` | imagined: no run of the wrong-project spawn recorded; 3 cells use it | |
+| 47 | Stubs are generated from AST | `C:/never imported on the peer/` | imagined: design; `repld gist stub` seen 6 times | |
+| 48 | A `host:target` peer rides `ssh host repld peer-pipe`; status line first; forwarded calls ping first | `C:/the status line comes first/` | ran for the forward's speed: `ac00fab1` (30 ms against 320 ms, a Mac on the LAN). The dead-forward ping: imagined. One `host:` call in real use | |
+| 49 | Gists reach builtins as `repld.X` | `C:/Gists reach builtins as/` | docs | |
+
+### Architecture
+
+| # | rule | where | tag and evidence | mcp2 |
+| --- | --- | --- | --- | --- |
+| 50 | `gate answer` has a verbatim argv region | `C:/no flag parser may enter/` | imagined (review): `e15ca7b3`, `A:/silently repointed the connection/` | |
+| 51 | `--project` and `--project-git` are global, before the subcommand | `C:/are global options, before the subcommand/` | ran: `27947035` (measured what Claude Code hands a worktree), `3b9019b4` | |
+| 52 | Argument validation lives once, in `cli_args.py` | `C:/Argument validation lives once/` | imagined (review): `A:/started a proxy that blocks on stdin forever/`; the archive files its test under input nobody writes on purpose | |
+
+### Key invariants
+
+| # | rule | where | tag and evidence | mcp2 |
+| --- | --- | --- | --- | --- |
+| 53 | One process, one asyncio loop | `C:/One process, one asyncio loop/` | docs: the product's premise | |
+| 54 | A lock across a CDP command has an unlocked core | `C:/must have an unlocked core/` | ran: `A:/confirms the wrapper version hangs/`; found by review (`a83b25fa`, "four sockets, measured") | |
+| 55 | `exec` returns fast or defers, decided once (`mark_nudged`) | `C:/decided once/` | imagined (review): `A:/got neither: no push/`, `22002703` | channel: the nudge promises a push; a task result replaces both |
+| 56 | The kernel refuses a signal to its own process group | `C:/aimed at its own process group/` | ran: `6a099030` (2026-11-01, a worker's `os.killpg` took every session), `5eb401e5` | |
+| 57 | The kernel raises its soft `RLIMIT_NOFILE` at boot | `C:/RLIMIT_NOFILE/` | ran on macOS 27.2: `63dbe79e`, `0512cf7e` | |
+| 58 | Stdlib only in core | `C:/Stdlib only in core/` | docs: a decision, kept by decision 1 | |
+| 59 | Per-cwd, localhost-only; localhost is not a uid boundary | `C:/localhost is not a uid boundary/` | security, held by the method's rule 6 | |
+| 60 | Runtime state lives under XDG; `kernel.cache` answers the next discovery | `C:/Runtime state lives under XDG/` | docs: `e952930c`; the cache surviving a reboot is imagined | handshake: the cache holds the `initialize` answer |
+| 61 | Scratch cleanup has two rules | `C:/two rules, no third/` | ran: `8133c87d` (an idle kernel never reclaimed spill files) | |
+| 62 | Nothing under `RUNTIME_DIR` is readable by other users | `C:/readable by other users/` | security; found by a cleanup pass, `b6036c65` | |
+| 63 | One kernel per project, by flock on a file never replaced | `C:/enforced by flock/` | imagined for the inode reasoning; `048fe81d` fixed a shutdown race; test `_concurrent_boots` | |
+| 64 | The kernel binds to the project's interpreter | `C:/never spliced across versions/` | ran: `9f4a5c41` (a kernel could not import its project) | |
+| 65 | A rebound process's `sys.executable` is a deleted overlay | `C:/is an overlay its/` | ran: `166c5da4` | |
+| 66 | A venv below `PYTHON_FLOOR` is never re-exec'd into | `C:/is never re-exec'd into/` | ran: `ff34c882` (the MCP server failed to start) | |
+| 67 | Bridge-served tools are a narrow set | `C:/Bridge-served tools are a narrow set/` | docs: a decision; `repld_restart` 50 calls | |
+| 68 | Anything both sides answer lives in `core_schemas.py` | `C:/both sides of the socket answer/` | imagined (review): `A:/cold-start sessions nobody is watching/` | handshake: `PROTOCOL_VERSION`, `negotiate_version`, `CAPABILITIES`, three `initialize` authors |
+| 69 | A connection's Claude Code id can change under it (rebind) | `C:/can change under it/` | ran: `307c0a40`; `A:/probing a logging stdio MCP server under Claude Code 2.1.316/`; `2187751b`, `c7ceb7a3`, `e1c9f5e6` (run on macOS) | channel and handshake: the id routes pushes and is re-stamped on `initialize` |
+| 70 | A rebind makes `new_id` the heir of the old id | `C:/the heir of the id it replaced/` | ran: `2e3d1c39` (red on the base), `b9dc63bb`; a loss still stands at `C:/One ordering still loses the push/` and `S2:research-2026-11-27.md:/not delivered/` | channel |
+| 71 | `park_pushes` holds pushes across a handoff | `C:/holds channel pushes bound for that connection/` | ran: `94c30bbb` (clear gaps of 197 s and 228 s); 109 cells in real use | channel |
+| 72 | The bridge is a stateful proxy, not a byte-pipe | `C:/not a byte-pipe/` | ran for stranded requests: `b7987aa6`. `kernel_crashed`: 3 pushes in real use, `d394d71c`. Client cancel: docs, the audit in `3a98a11f` | handshake: caching and replaying `initialize`; channel: `kernel_crashed` |
+| 73 | Kernel spawn is lazy | `C:/Kernel spawn is lazy/` | imagined (review): `902f55bc`, `A:/paid the full 5 s spawn-and-wait/` | handshake: `notifications/initialized` tracking, `ping` |
+| 74 | The project bootstrap is a file, not a flag | `C:/is a file, not a flag/` | ran, weak: `A:/silently dropped it/`; 75 `init_loaded` pushes | channel: `init_loaded`, `init_error` |
+| 75 | Every lazy-spawn trigger waits on the bootstrap | `C:/waits on the bootstrap/` | ran: `f0e73229` (a `NameError` on the first call after a lazy spawn, in the voice-api build) | |
+| 76 | A human gate stays answerable with no pane; five callers | `C:/must stay answerable on a kernel with no pane/` | ran: phase 20 `_print_mode_leaves_gate_open`; `repld gate answer` 22 times in real use | channel: `awaiting_human`; elicitation: one of the five callers |
+| 77 | A gate is asked over MCP elicitation, un-nested | `C:/never rides the connection that asked/` | ran: `TODO.md:/Probe run 2026-11-06 against Claude Code 2.1.316/`, `e8dc045a` | elicitation: the whole rule |
+| 78 | A gate that ends unanswered is announced | `C:/A gate that ends unanswered is announced/` | imagined (review): `f525c1e2` | |
+| 79 | The pane's stdin has one reader | `C:/has one reader/` | imagined (review): `234593d9` | |
+| 80 | A `bg` session's pushes go to its inbox socket | `C:/go to its inbox socket/` | ran: `e46326a8`, phase 20 `_bg_worker_gets_inbox_push` | channel: this route becomes the only ambient one, for every session kind |
+| 81 | Targeted push for call-scoped output, broadcast for ambient; owed pushes | `C:/Targeted push for call-scoped output/` | ran: `773f2d56` (a push to a departed connection was lost for good), `556d6862` | channel |
+| 82 | `exec` results are shaped for a script under `REPLD_CODE_MODE=1` | `C:/REPLD_CODE_MODE=1/` | ran for the measurement: `C:/receives that as a string (measured)/`, `ccfa1a03`. Use not measured | handshake: stamped on `initialize` |
+| 83 | Anything that outlives its cell clears `tasks._current_task` | `C:/is ambient and must clear/` | ran, weak: `A:/budget and was then dropped by the pane/`, `be307b30` | |
+
+### Only in the archive
+
+| # | rule | where | tag and evidence | mcp2 |
+| --- | --- | --- | --- | --- |
+| 84 | Writing loop-owned state off-thread needs its own path | `A:/ask which callers reach it, not which tool does/` | imagined (review) | |
+| 85 | Version negotiation echoes a supported request | `A:/Version negotiation is echo-what-they-asked-for/` | docs: the 2025-06-18 spec, `21533ced` | handshake: goes |
+| 86 | `CAPABILITIES` must not drift between the two authors | `A:/can't paper over a drift either/` | imagined | handshake: capabilities ride each request |
+| 87 | Only a version-matched venv may be `addsitedir`'d | `A:/splicing a mismatched one half-works/` | imagined: reasoned, phase 16 | |
+| 88 | The pane's claim on stdin releases when its reader ends | `A:/decline for the rest of the process's life/` | imagined (review) | |
+| 89 | The two boot prompts share `yes_by_default` | `A:/declined the browser-restore prompt/` | imagined (review) | |
+| 90 | `_sessions`/`_browsers` walks snapshot with `list(...)` | `A:/One entry is history rather than current practice/` | superseded by row 25 | |
+
+Totals over the 90 rows, by the first tag in each: 37 `ran` (3 weak; several are `ran` for
+one half only and say which), 3 security, 17 `docs` or `source`, 32 `imagined` (18 from a
+review), 1 superseded. 25 rows carry an `mcp2` mark.
+
+## Tagged tests
+
+Per phase, from `tests/phases/CLAUDE.md` and `A:/per-phase rationale/`. "Earned" means the
+case answers a `ran` row above.
+
+| phase | file, lines | covers | tag | mcp2 |
+| --- | --- | --- | --- | --- |
+| 2 | `pure.py` 3,554 | 56 pure cases | mixed. Earned: `_nofile_limit` (row 57), `_own_group_signal` (56), `_seat_pid_claims`, `_ps_ancestry` (69), `_taken_id_returns_when_the_taker_closes` (81), `_instruction_budget` (14), `_captcha_describe` (20). Imagined: `_cli_args`, `_socket_path_length`, `_json_types`, `_envelopes` | `_elicitation_pure`, `_strip_output_schemas`, `_display_as_json`, `_seat_pid_claims`, `_ps_ancestry`, `_one_snapshot_per_call`, the two `_taken_id_*`, `_crash_reason`, `_channel_meta_keys` go or change |
+| 3 | `core.py` 698 | handshake, `exec`, `get_task`, schema checks, JSON-RPC edges, client cancel, Code Mode | `phase_3` (223 lines): docs (spec conformance). `_phase_3_input_validation`, `_phase_3_jsonrpc_edges`, `_phase_3_client_cancel`: docs, from the audit `3a98a11f`. `phase_3_argv_and_registry` (80), `phase_3_patch_targets` (97), `phase_3_task_spawns` (54): imagined, and the archive says so: `A:/guards that only fire on input nobody writes on purpose/`. `phase_3_own_group_signal`: earned (56) | handshake: version negotiation, `initialize`, `ping`, capabilities assertions; `phase_3_code_mode` |
+| 4 | `channels.py` 679 | `task_done` push, `notify()`, pre-`initialized` queue, session lookups, `exclude=`, meta augmenter, channel spill, owed push | `phase_4g_owed_push` (195): earned (81). `phase_4b_pregate`: imagined. The rest: docs of the push surface | channel: the whole file; what `notify()` must still do is re-earned on the inbox socket |
+| 5 | `lockfile.py` 896 | flock, bootstrap, permissions, zombies, sweeps, `add_search_dir` | earned: both bootstrap waiters (75), spill eviction (61), `pid_alive` through a zombie (`16396bdf`, observed tearing down kernels), owner watch (`3e2412f3`). Security: permissions. Imagined: a lock-less directory left alone, `add_search_dir` idempotence | |
+| 6 | `browser.py` 6,934 | 83 cases, most against a real Chrome | mixed, and the best evidenced: the archive records a measurement for click round trips, click arrival, plan-click, renderer busy, claim routing, auth, captcha, url redial, scoped lease (`A:/Checked to fail with the/`). Imagined: `phase_6_like_escaping`, `phase_6_connect_race` (review, row 54's sibling), `phase_6_injected_source_provenance` (a licence guard) | `phase_6_claim_routing`, `phase_6_download_routing`, `phase_6_owned_tab_action_routing`, `phase_6_reconnect_push` assert channel delivery |
+| 7 | `defer.py` 208 | `defer()` push and result recovery | docs of the most used builtin (15,376 cells); `3fdd3c48` records the result being thrown away | channel: the push half |
+| 8 | `resources.py` 543 | gist resources; two AST doc-drift guards | imagined: both guards answer drift nobody hit in a run; 83 resource reads in three months | |
+| 9 | `gist_tools.py` 625 | `_tool_*` discovery, schema, reload, `list_changed` | docs; 925 calls of real use. Stale `__repld_tools__` reading inert: imagined | `tools/list_changed` delivery changes (`subscriptions/listen`) |
+| 10 | `every.py` 244 | tickers | earned: ticker attribution (83). `every(tab=)` refusal: imagined. 51 cells of use | channel: tick errors are pushes |
+| 11 | `shutdown.py` 130 | drain within 2 s | ran, weak: memory `session_2026_04_25` names a shutdown drain; no commit located | |
+| 12 | `links.py` 1,083 | `gist add`, manifest, stale entries, co-link refusal | imagined for the refusal and warning cases (`A:/itself was missing/` is a review find); `gist add` used twice | |
+| 13 | `sessions.py` 143 | session registry file | docs; `117206f7` (one unreadable file crashed `repld status`) | |
+| 14 | `dashboard.py` 251 | header bound, Host allowlist, token, cookie, Bearer | security (rows 34, 59). `node --check` of the page: earned, `A:/shipped broken once/` | |
+| 15 | `headless.py` 2,384 | lazy spawn, heal, cache discovery, rebind, park, owed pushes, `--project`, `start`, ephemeral | earned: `_rebind_carries_owed_pushes` (152, row 70), `_session_rebind` (284, 69), `_deferred_rebind` (83 lines), `_seat_pid_claim` (120 lines), `_inflight_never_stranded` (row 72), `_project_flags` (row 51), `_bg_inbox_fallback` (row 80). Imagined (review): `_cold_jsonrpc_edges`, `_version_mismatch_cache_discarded`, `_new_project_uses_global_cache`, `_bridge_tool_bypass_error`, `_tasks_version_skew`, `_log_renderer_covers_every_event` | about 1,400 lines assert channel routing or the handshake: the eight rebind cases, `_targeted_push`, `_push_state_broadcast`, `_id_collision_warning`, `_lazy_discovery_from_cache`, the three cache cases, `_elicitation_cancelled_on_kernel_death`, `_autospawn_and_heal`'s replay |
+| 16 | `venv.py` 575 | binding, floor, overlay, systemd spawn | earned (64, 65, 66, 8). `REPLD_BOUND` sentinel: imagined | |
+| 17 | `gates.py` 703 | CLI, dashboard, elicitation, secret gate, pane mirror | earned: `_elicitation` (77), the CLI route (76). Imagined (review): `_pane_drops_a_timed_out_gate`, `_tty_prompt_declines_once_display_owns_stdin`, flags-as-answer | elicitation: `_elicitation` (149), `_secret_gate` (91) |
+| 18 | `tasks_cli.py` 198 | `repld tasks wait` / `cancel` | docs; `tasks wait` 18 times in real use | |
+| 19 | `peers.py` 1,096 | two to five kernels, a stand-in `ssh` | imagined for most: the typed-error split, cycles, payload limits and the dead forward were designed, not hit. Earned: a graceful stop reading as a clean disconnect (`177a6aa4`). 93 cells of use, one over ssh | |
+| 20 | `live_claude.py` 206 | gates under a real `claude -p` and `--bg` | ran by construction: the only phase that runs the real client | channel and elicitation: both assertions (`queued`, inbox `written`) are about push delivery |
+
+## Deletion candidates
+
+Ranked by lines removed against evidence that the code is needed after the move. Nothing was
+deleted in this session. Line counts are rough, from function spans.
+
+| # | what | files and symbols | lines (src + tests) | tag | evidence |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Push routing by session id: rebind, pending rebind, successors, `_claude_ids`, outbox, park, process-tree ancestry, seat pid | `ipc.py`: `Server.rebind_claude_session` (138), `register_claude_session` (74), `_owe`, `_drain_outbox`, `expire_outbox`, `deliver`, `_succeed_locked`, `_settle_parked`, `Session.park`, `_unpark_and_flush`, `_read_ps_table`, `_bridge_chain`, `_caller_chain`, `park_pushes`, `unpark_pushes`; `rebind_cmd.py` (113); `channel.push_owed`; `bridge._seat_pid`, `_stamp_identity` | about 800 + 1,500 | ran, each for a channel break; mcp2 removes the channel | rows 69, 70, 71, 81. A task result is polled by the client that called. What a task does across `/clear` and a relaunch is session 1's row. Keep out of the cut: `Session.claude_pid` and the ancestry that fills it back `ipc.list_claude_connections()` (662 cells with its siblings, `supervise` 481), and `park_pushes`/`unpark_pushes`/`rebind_claude_session` are called from cells (109, `supervise` 71). Session 2 records what supervise uses instead before deleting either |
+| 2 | Bridge handshake and channel relay: cached `initialize`, replay onto a fresh kernel, version negotiation, capability constants, `notifications/initialized` tracking, the relay of `notifications/claude/channel` | `bridge.py`: `_try_bridge_intercept` (117), `_replay_handshake`, `_load_cache`, `_track_kernel_message`, parts of `_attach` and `_read_kernel`; `core_schemas.py`: `negotiate_version`, `SUPPORTED_VERSIONS`, `CAPABILITIES`; `protocol.py`'s `initialize` | about 500 + 450 | docs and imagined (review) | rows 6, 68, 72, 73, 85, 86; `changelog.mdx:/Make MCP stateless/` |
+| 3 | The nudge and its paired claim | `tasks.mark_nudged`, `claim_done_push`, `record_push`, `push_state`/`push_delivered` fields, `kernel._maybe_push_done`, the nudge sentence in `protocol._exec` | about 150 + 250 | imagined (review) | row 55. 8,300 nudges in real use is the traffic a task result takes over. `get_task` stays for `claude -p` (5,307 calls) |
+| 4 | Elicitation over `elicitation/create` | `gates.py`: `_send_elicitation`, `_cancel_elicitation`, `parse_elicit_result`, `handle_elicit_result`, `_secret_hint`; `ipc._is_elicitable`; `bridge._relay_client_response`, `_kernel_requests`; `gates/elicit_result` in `protocol.py` | about 200 + 300 | ran (row 77); mcp2 removes server-initiated requests | `changelog.mdx:/Multi Round-Trip Requests/`. Replaced only if session 1's `input_required` row holds for a gate inside a task |
+| 5 | Crash push, goodbye frame, reattach watch | `bridge.py`: `_on_kernel_gone` (79), `_push_crash`, `_resolve_crash_reason`, `_reason_from_journal`, `_reattach_watch`, `_start_reattach_watch`; `Session.say_goodbye` | about 220 + 150 | ran, low use | 3 `kernel_crashed` pushes in three months. A crash under tasks is a failed task; `-31001` for an in-flight request stays (row 72) |
+| 6 | Code Mode result shaping | `Session.code_mode`, `core_schemas.strip_output_schemas`, `_format_spill_pointer`, `runtime.print_display(as_json=)`, `BRIDGE_CODE_MODE_KEY`; `phase_3_code_mode` | about 150 + 150 | ran for the measurement, use not measured | row 82. Decide after asking the owner whether any session runs with it |
+| 7 | Phase 3's three guards, and the pure cases with no break | `phase_3_argv_and_registry`, `phase_3_patch_targets`, `phase_3_task_spawns`; `pure.py`: `_cli_args`, `_socket_path_length`, `_json_types`, `_envelopes` | 0 + about 400 | imagined | `A:/guards that only fire on input nobody writes on purpose/` |
+| 8 | `gist fetch`, and the less used half of links | `gist_cmd.py` fetch verb, `_GIST_HOSTS`; `gist_links.py` (303); `links.py` (1,083) | about 450 + 1,083 | imagined | rows 37, 38: `gist fetch` 0 calls, `gist add` 2, `gist new` 1 |
+| 9 | Peers over ssh: `peer-pipe`, forwards, the probe | `peer_pipe_cmd.py` (157); `peer.py`: `_connect_ssh`, `_ensure_forward`, `_probe_forward`, `request_sync_ssh`, `close_forwards`; the stand-in `ssh` cases of phase 19 | about 450 + 400 | ran for speed only; one real call | row 48. The owner's memory names "another machine is a `host:` peer" as intended use, so ask before cutting |
+| 10 | Browser tools and paths with no calls | `browser_clear`, `browser_expect_auth`, `browser_grant_permissions` (0 calls); `browser_select`, `browser_drag` (2 each); `browser_take` 3, `browser_dismiss_dialog` 5, `browser_release` 6; `captcha.py` (249, 4 pushes) | about 500 + 600 | mixed: `drag`, `select` and captcha were measured on real pages, then barely used | Real use, `browser_*` row. The tab methods behind them are still reachable from `exec`; the cut is the MCP tool, not the method |
+| 11 | Dashboard | `dashboard.py`, `dashboard_html.py`, `dashboard_cmd.py`; `phases/dashboard.py`; the dashboard caller of gates | 1,654 + about 350 | not measured | `repld dashboard` twice in Bash calls. `repld tasks` and `status --counts` ride its `/api`, so the API may outlive the page |
+| 12 | `form()` and the secret gate | `gates.form`, `build_form_schema`, `_field_property`, `_check_field_dict`, `parse_form`, `validate_form`, `_check_field`; `_secret_gate` test | about 130 + 150 | imagined | 4 `form(` cells, all in repld's own development |
+| 13 | Discovery cache copies | `paths.state_cache_for`, `GLOBAL_CACHE`, the three cache cases in phase 15 | about 80 + 110 | imagined | row 60. Whether a kernel-less bridge still needs a cache at all depends on what `server/discover` must answer |
+| 14 | Doc resources nobody reads | `help.PRODUCTION`, `help.BROWSER_INTERNALS`; the per-topic `repld://help/*` resources | part of 3,037 | not measured as text length | 0 reads of two docs, 21 reads of all help topics together |
+| 15 | `--ephemeral` bridge and owner watch | `bridge._ephemeral_socket_path`, `_teardown_ephemeral`, `kernel._watch_owner`; `phase_15_ephemeral_bridge` (121) | about 120 + 150 | ran (`3e2412f3`), use not measured | which `.mcp.json` files pass `--ephemeral` was not read |
+
+Not candidates, by use: `exec`, `defer()`, `get_task`, `no_display`, gist import and reload,
+`browser.get/open/connect`, `tab.js/click/screenshot/navigate`, `repld exec`, `repld tasks`,
+`repld gist lint`, the watchdog, the bootstrap wait, binding.
+
+## Unmeasured
+
+For session 1, each as a probe row:
+
+1. A task returned by `exec`, then `/clear`: does the client keep polling `tasks/get`, and
+   does the new conversation get the result? The channel form of this was measured
+   (`S2:research-2026-11-27.md:/The repld binding/`); the task form was not.
+2. The same across a bridge restart (Claude Code restarts a stale MCP server on `/clear` in a
+   worktree, `C:/restarts an MCP server it marks stale/`) and across a relaunch. Task ids live
+   in the kernel, so a fresh bridge could answer `tasks/get`; whether a fresh client asks is
+   unknown.
+3. Whether every session kind sets `CLAUDE_CODE_MESSAGING_SOCKET`. The bridge already stamps
+   whatever that env gives (`src/repld/bridge.py:/CLAUDE_CODE_MESSAGING_SOCKET/`); only the
+   kernel's `Session._emit` routes to it for kind `bg` alone (`C:/go to its inbox socket/`).
+4. How a `notify()` reads to the model over the inbox socket. The channel tag carries `kind`
+   and meta as attributes; a script's `user` frame shows no header. About 3,800 of the pushes
+   seen are gist `notify()` kinds whose receivers may key on the tag.
+5. A broadcast with no session named: which sockets it goes to.
+6. A cell that finishes in 0 s as a task costs the model a turn
+   (`S2:research-2026-11-26.md:/never inline/`). 83% of `exec` calls pass no timeout and most
+   return inline today; the spike must wait briefly and answer inline, and the wait that
+   keeps today's feel is unmeasured.
+7. `claude -p`: inline up to what limit, and what `exec` returns past it with no tasks
+   capability (today: the nudge text and `get_task`).
+8. `tasks/cancel` twice against a kernel task, and a cancel for a task that already finished.
+9. A gate inside a task as `input_required`: `confirm`, `choose`, `ask`, and a secret; a
+   second gate in the same cell; a gate raised by `defer()` with no request to hang on.
+10. Where `instructions` ride with no `initialize`, and whether Claude Code still reads them
+    from a 2026-07-28 server.
+11. `tools/list_changed` after a gist adds a tool, with no handshake to declare it.
+12. A subagent's bridge and a nested `claude -p`: which bridge polls whose task.
+13. Kernel death mid-task: what the client shows when `tasks/get` fails or the bridge answers
+    for a kernel that is gone.
+14. Whether a sync `exec` reply and a task can share one bridge connection to the kernel, or
+    the bridge needs a connection per call as peers do (`C:/One connection per call/`).
+
+Could not be determined in this session:
+
+- Human use of the dashboard page, the TUI pane, the pill and elicitation modals. Transcripts
+  do not show them.
+- Whether any real session runs with `REPLD_CODE_MODE=1`, and which projects register the
+  bridge with `--ephemeral` or `--project-git`.
+- How many of the 12,562 pushes started a turn, and how many arrived in a session that had
+  already moved on.
+- The commit behind three archive entries (the `mark_nudged` window, the off-loop
+  `create_task`, the shutdown drain); they are tagged weak or imagined for that reason.
+- The transcript scan covers 2026-08-24 onward only; older transcripts are not on disk, and
+  repld's first four months of history have no use data here.
+- Tool-call and push counts include repld's own development and test sessions; they were not
+  separated beyond the per-directory figures.
