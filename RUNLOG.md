@@ -16,11 +16,11 @@ the bridge becomes a thin 2026-07-28 front; this plan lives here.
 | --- | --- | --- |
 | 0 | baseline (this file) | read only: inventory, real use, tags, deletion candidates |
 | 1 | mcp2 probes in `probes/` | a stdlib spike bridge that exposes `exec` as a task against the real kernel. Rows to run: idle wake, `claude -p` inline, double cancel, a gate as `input_required`, a task across `/clear`, across a bridge restart and across a relaunch, `notify()` over the inbox socket for an interactive and a `--bg` session and how the model reads it, where `instructions` ride with no `initialize` |
-| 2 | bridge cutover, clean break | drop handshake, version negotiation and the channel relay; `exec` completion is the task result. The push routing (owed, outbox, park, rebind, successors) is deleted here too, not kept for session 3 |
-| 3 | ambient pushes | `notify()`, `@every` errors and browser pushes over the inbox socket; anything from the old routing is rebuilt only against a session 1 or 2 break |
+| 2 | bridge cutover, clean break | drop handshake, version negotiation and the channel relay; `exec` completion is the task result. The push routing (owed, outbox, park, rebind, successors) is deleted here too, not kept for session 3. From session 1: one kernel connection per request, a dead or restarted kernel answered as a `failed` task, `get_task` kept, and the `elicitation/create` code deleted |
+| 3 | ambient pushes | `notify()`, `@every` errors and browser pushes over the inbox socket, for every session kind, keyed on the socket path; anything from the old routing is rebuilt only against a session 1 or 2 break |
 | 4 | peers, then gists | one session each, smallest first by use |
 | 5 | browser | the largest subsystem; needs its own run of real pages |
-| 6 | gates over `input_required` | CLI, dashboard and pill routes stay |
+| 6 | gates over `input_required` | CLI, dashboard and pill routes stay. Needs the asking task on `gates/list`, a decline, and a page URL for a secret gate (session 1, breaks 6 and 7) |
 | 7 | `help.py`, dashboard, TUI | docs last, when the surface they describe has stopped moving |
 | last | write `~/.claude/skills/vibe/stacks/repld.md` | toolchain, smallest layout, earned rules |
 
@@ -43,6 +43,51 @@ Changes from the order given, and why:
 4. **Peers before browser.** Peers are 1,703 lines with 93 cells of use and no channel
    dependence; a short session. The browser is 12,816 lines and 8,600 tool calls and should
    not share a session with anything.
+
+Changes after session 1, and why (rows and breaks are in "Session 1"):
+
+5. **The routing deletion in session 2 stands, with evidence.** A task result reached the
+   conversation across `/clear`, across a bridge restart and across exit and `--resume`,
+   with no rebind, outbox or park (rows 1 and 2). The one loss left is a relaunch as a new
+   conversation (break 5), which the old routing lost too
+   (`S2:research-2026-11-27.md:/not delivered/`); `get_task` stays for it.
+6. **Session 2 gains four requirements, each from a run.** A kernel connection per request
+   (break 8). A task whose kernel died or restarted is answered as `failed`, never as a
+   JSON-RPC error or an unknown id (breaks 2 and 3). The server entry a session resumes with
+   is unchanged, down to one `env` value, or the client refuses to poll (break 4). Neither
+   exit path measured cancelled a cell ("Exit and stop tasks" and SIGTERM, break 1; "Move to
+   background and exit" was not run), so nothing in the cutover may assume exit does; a client's
+   `notifications/cancelled` for a call held open does arrive and has to reach the kernel
+   (row 7b).
+7. **The `elicitation/create` code can go in session 2, for both kinds of client.** In a
+   tasks-capable client `confirm`, `ask` and `choose` showed as dialogs from
+   `input_required` and resolved the kernel gate (row 9). `claude -p` declares elicitation
+   and no tasks: given `input_required` on the call itself it answered `cancel` at once and
+   asked nobody, the gate stayed open, and `repld gate answer` resolved it (row 9e). That is
+   where a `-p` gate ends today (`tests/phases/live_claude.py:/_print_mode_leaves_gate_open/`),
+   so nothing a human could use is lost. What the front owes a `-p` caller is the text
+   naming the gate and the answer command, which the `awaiting_human` push carries today.
+   Session 6 is then three small kernel changes, not a new surface.
+
+   **Open, for the owner: the secret gate.** Deleting `elicitation/create` also deletes
+   URL-mode elicitation, the only in-client route an interactive secret gate has today, and a
+   secret gate has no route through a task until `gates/list` carries its page URL (break
+   7). Three options, none chosen here: keep the URL-mode route until session 6; move the
+   page URL onto `gates/list` into session 2; or accept the gap, in which a secret gate
+   between sessions 2 and 6 is announced with nothing to open. Use: 6 transcript lines in 3
+   session files have an `exec` call with `ask(` or `form(` and `secret`, all in repld's
+   own directory (ran: `rg -c` over `~/.claude/projects`, a regex on the raw line, not a
+   parse).
+8. **Session 3 needs a registration, not a rebind.** The inbox socket path is per process and
+   survived `/clear`; a push sent to the id the connection registered with still arrived
+   after the id changed (row 4c). With no `initialize` the bridge has to tell the kernel its
+   socket some other way; the spike held one kernel connection for it. Gists that key on the
+   channel tag's attributes get the same keys as text on the second line (row 4).
+9. **Session 4 (gists) needs no new kernel signal.** The kernel already pushes
+   `notifications/tools/list_changed` on an initialized connection: the one the spike held
+   for change 8 got it at 10:53:23.430, 0.7 s before the spike's own 2 s poll of
+   `tools/list` noticed (`.live.local/mcp2/a.jsonl`, `kernel-push`). The front relays that
+   push onto the client's `subscriptions/listen`, which works (row 11); the poll goes.
 
 ## Inventory
 
@@ -383,7 +428,8 @@ Not candidates, by use: `exec`, `defer()`, `get_task`, `no_display`, gist import
 
 ## Unmeasured
 
-For session 1, each as a probe row:
+For session 1, each as a probe row. Every item has a row with the same number in
+"Session 1: MCP 2026-07-28 probes".
 
 1. A task returned by `exec`, then `/clear`: does the client keep polling `tasks/get`, and
    does the new conversation get the result? The channel form of this was measured
@@ -431,3 +477,120 @@ Could not be determined in this session:
   repld's first four months of history have no use data here.
 - Tool-call and push counts include repld's own development and test sessions; they were not
   separated beyond the per-directory figures.
+
+## Session 1: MCP 2026-07-28 probes
+
+2026-11-28, Claude Code 2.1.332 (`/usr/bin/claude`, run under `env -i`), Haiku 5.5, repld
+0.24.3 at `f24e6b18`, Linux. Nothing in `src/` or `tests/` changed.
+
+Probes: `probes/mcp2_bridge.py` (a stdlib stdio server at 2026-07-28: `server/discover`,
+`resultType`, the tasks extension; it forwards to a real kernel over its unix socket with the
+kernel's existing JSON-RPC, and the task id it hands out is the kernel's own),
+`probes/mcp2_wire.py` (drives that bridge with no Claude, one function per row),
+`probes/mcp2_live.sh` (a scratch kernel run from this worktree's source, disposable sessions
+on an isolated tmux server, one verb per step). `wire:` below is a row of `mcp2_wire.py`;
+`live:` is a session driven with `mcp2_live.sh`, read from the screen and from the bridge's
+wire log (`.live.local/mcp2/<name>.jsonl`, not in git). 15 sessions were started: 10
+interactive launches, 3 `claude -p`, 2 `claude --bg`. Each live row ran once unless it says
+otherwise. Numbers match "Unmeasured".
+
+| step | result | how |
+| --- | --- | --- |
+| 0. idle interactive session, `exec` of an 8 s cell | the call returned a task after the 2 s wait; the client polled `tasks/get` once a second; the idle session started a turn with `MCP task <id> (repld2/exec) completed` and the cell's value | ran: live, session `a` |
+| 1. a task in flight, then `/clear` | the client kept polling on the same bridge process; the new conversation was woken with the result. `sessionId` changed, the bridge's `CLAUDE_CODE_SESSION_ID` did not, and nothing was rebound | ran: live, `a` |
+| 2a. a task in flight, then `/mcp` Reconnect | the old bridge was replaced by a new process, which got `tasks/get` for the old id 4.2 s after it started and answered from the kernel; the session was woken with the result | ran: live, `a` |
+| 2b. SIGTERM with a task in flight, then `--resume <id>` with the same server entry | the new process polled `tasks/get` for the old id 0.5 s after its bridge started, and the session was woken with the result. Same when the cell finished during a 30 s gap with no client | ran: live, `a`, twice |
+| 2c. the same, relaunched as a new conversation | no `tasks/get`; the result reached no conversation (break 5) | ran: live, `a` |
+| 2d. the same with a server entry that differs in one `env` value (`MCP2_NOTE=1` to `2`), the original process gone | the task is restored and never polled (break 4) | ran: live, `e`; first seen on `a3` with two variables changed and the original still alive |
+| 2e. a second bridge process, no Claude | answers `tasks/get` for a task the first bridge started and left | ran: wire `fresh` |
+| 3. `CLAUDE_CODE_MESSAGING_SOCKET` in the bridge's environment | set in all three kinds: interactive (`CLAUDE_CODE_ENTRYPOINT=cli`), `claude -p` (`sdk-cli`), `--bg` (`cli`, plus `CLAUDE_JOB_DIR`, `CLAUDE_PID`). It is `cc-socks/<claude pid>.sock`, so it survives `/clear` and changes on a relaunch | ran: live, the `start` line of `a`, `p1`, `b` |
+| 4. kernel `notify("...", kind="probe_note", run="42")` to an idle interactive session, through the kernel's own `Session._write_inbox` | started a turn. The model saw `Another Claude session sent a message:`, then `[repld push kind="probe_note" run="42"]`, the content, and the standing peer warning. Asked, it said: sent by another Claude session, kind `probe_note`, run 42, not typed by the user | ran: live, `a`. The bridge registered its socket with the kernel as kind `bg`, since `_emit` routes only that kind |
+| 4b. the same to an idle, unattached `--bg` session | started a turn; same framing; the model named kind and run | ran: live, `b` |
+| 4c. `notify(session=<id>)` after `/clear` changed that id | delivered: the kernel connection still carried the id it registered with, and the socket path had not changed | ran: live, `a` |
+| 5. `notify()` with no session named, two registered sessions | one frame to each socket; the interactive and the `--bg` session each started a turn | ran: live, `a` and `b` |
+| 6. inline wait | with the kernel's own `timeout` as the wait (2.0 s default), cells of 0, 0.5, 1.5 and 1.9 s came back inline in their own time and a 2.1 s cell became a task at 2.00 s. In sessions, calls under the wait cost no extra turn. A longer or shorter wait was not tried | ran: wire `wait`; live, `a` |
+| 7. `claude -p` | no tasks capability on the request; a 4 s and a 95 s cell were held open and answered inline. No client limit was reached at 95 s | ran: live, `p1`, `p2` |
+| 7b. Escape during a call held open (interactive; the prompt asked for `timeout` 90) | the client sent `notifications/cancelled` with `requestId` and `reason: "AbortError: user-cancel"`; the bridge sent the kernel `requests/cancel` and the cell's `finally` ran. On the wire, both phases: cancelled inside the kernel's own wait the bridge sent `requests/cancel`, past it `tasks/cancel`; the cell's `finally` ran each time and no message with the cancelled id was written (ids 1 and 4 in the log). An earlier spike still answered the second case 5 ms after the cancel | ran: live, `e`; wire `client_cancel`, `.live.local/mcp2/wire-check3.jsonl` |
+| 8. `x` in the task view on a running cell | `tasks/cancel` twice, 1 ms apart; the cell's `finally` ran in the kernel. Cancel of a finished task and of an unknown id: acknowledged, the task stays `completed` | ran: live, `a`; wire `cancel` |
+| 8b. exit with a task in flight | a dialog: Exit and stop tasks, Move to background and exit, Stay. Choosing the first sent no `tasks/cancel` (break 1). SIGTERM sent none either | ran: live, `a` |
+| 9. `confirm()` in a cell, interactive | a dialog `MCP server "repld2" requests your input` with the gate's prompt and schema; Accept sent `tasks/update`, the bridge resolved the kernel gate, the task completed with `answer=True` and the model saw only that | ran: live, `a` |
+| 9b. `ask()` then `choose()` in one cell | two dialogs in turn (text field, option list). Declining the second sent `action: decline`. The kernel has no decline over `gates/resolve`: in the live run the spike cancelled the polled task and the model read `cancelled`; the spike now leaves the gate open in the kernel, stops showing it, and the task reads `working` | ran: live, `a` (the cancelling spike); wire `gate` (the current one) |
+| 9c. a gate raised by `defer()` after its cell returned | the spike shows every open gate on every running task that is polled, so it appeared on an unrelated task and that task's `tasks/update` answered it (break 6) | ran: wire `gate` |
+| 9d. a secret gate | cannot be answered through `tasks/update` (break 7) | ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl` |
+| 9e. `confirm()` in a `claude -p` cell | the request declares `elicitation: {form, url}` and no tasks. The spike answered the `tools/call` itself with `resultType: input_required`; the client retried 13 ms later with `inputResponses: {<gate>: {action: cancel}}` and the `requestState`, and asked nobody. The gate stayed open in the kernel and `repld gate answer <id> y` resolved it after the run had ended. The model's `timeout` was 120, so the kernel held the call that long before the spike looked for a gate | ran: live, `p3`; wire `notask_gate` (cancel and accept) |
+| 10. instructions with no `initialize` | the client calls `server/discover` twice at start and reads `instructions` from it: the model quoted the first and last words of the 3,446 characters served (repld's own 3,435 plus the probe's 11-character `MARK-START ` prefix). At 6,000 characters the model's copy ended `MARK-046@4076 MARK-... [truncated]`: the cut is at 4,096 and it is marked | ran: live, `a` and `p1` |
+| 11. a gist adds a `_tool_*` function | the client opens `subscriptions/listen` with `toolsListChanged` at start; on `notifications/tools/list_changed` it asked `tools/list` 3 ms later and the model called the new tool on its next turn | ran: live, `a` |
+| 12. a subagent calls `exec` and gets a task | one bridge process serves parent and subagent. The subagent's call blocked while the client polled 24 times; the result came back as the tool's own result ("completed inline"), and the parent was not woken by a task | ran: live, `c`. A nested `claude -p` was not run: it is row 7 with its own bridge |
+| 13. the kernel is killed with a task in flight | answered as status `failed` with an error: the session was woken with `MCP task ... failed` and the text. Answered as a JSON-RPC error: break 2. After a kernel restart: break 3 | ran: live, `a` and `d` |
+| 14. one kernel connection for every request, replies matched by id | a `get_task` written 0.20 s into a 3 s inline `exec` on the same connection was answered at 3.00 s, in the same millisecond as the `exec`; on a connection of its own, at 0.20 s (break 8) | ran: wire `shared`, kernel-side times in the bridge's log |
+| the model's own `timeout` argument | 14 of 21 `exec` calls carried one (2 nine times, then 5, 20, 60, 90, 120); the prompt asked for it once (90). Three times it covered the cell, which was then held inline where a task was expected: 20 over an 8 s cell, 60 over 25 s, 90 over 60 s. The 120 held a gate cell open for 120 s (row 9e) | ran: live, the wire logs of `a`, `a3`, `b`, `c`, `d`, `e`, `p1`, `p2`, `p3`, retries with `requestState` left out |
+| `--bg` with the prompt after `--mcp-config` | the session reads `state: failed` and no bridge starts: the prompt is taken as a second config. Placed after `-n` it starts | ran: live, the first `b` |
+| trust | no trust prompt in the scratch directory under this worktree, interactive or `--bg`; no dev-channels dialog, since the spike declares no channel | ran: live |
+
+**Breaks**
+
+1. **Exit does not cancel the cell.** `/exit` with a task in flight offered "Exit and stop
+   tasks"; taking it wrote no `tasks/cancel`, and `repld tasks` listed the cell as active 19 s
+   later. The client's own task view says "Runs on the server, and keeps running after you
+   exit this session". ran: live, `a`, task `b2bc7b53f24c`.
+2. **A JSON-RPC error from `tasks/get` is never shown to the model.** With the kernel dead
+   and the bridge answering `-32603` (`MCP2_GONE=rpc_error`), the client polled for 63 s,
+   until the kernel was started again: 79 requests, about 1.25 a second, faster than the
+   `pollIntervalMs` of 1000 it kept to while the task answered. The task view read "working,
+   status requests come back with errors; retrying", and the session stayed idle. The same
+   death answered as a `failed` task (`MCP2_GONE` unset) woke it at once. ran: live, `d`
+   against `a`.
+3. **An id the kernel no longer holds is polled without end.** After the kernel restarted,
+   `tasks/get` answered `-32602 Task not found`; the task view read "the server rejected this
+   task's id; asking again", and polling went on for 77 s (78 answers) until the task was stopped
+   by hand. ran: live, `d`.
+4. **A resumed session refuses a task when the server entry changed.** Resumed with an
+   `--mcp-config` whose only difference was one `env` value, after the original process had
+   exited, the session showed "1 MCP task" and sent no `tasks/get`; the task view read
+   "server 'repld2' was reconfigured to a different transport since this task was created;
+   refusing to re-bind so its task id cannot leak to the wrong server". With an identical
+   entry it polled (row 2b). ran: live, `e`; before that `a3`, with two values changed and
+   the original still alive.
+5. **A relaunch as a new conversation gets no result.** No `tasks/get` in 20 s; the cell
+   finished in the kernel and no session was told. ran: live, `a`.
+6. **`gates/list` does not say which task asked.** A gate opened by `defer()` after its cell
+   had returned came back as `input_required` on an unrelated task, and that task's
+   `tasks/update` answered it. Showing it there was the bridge's own choice: with no tie it
+   can show a gate on every polled task or on none. For the same reason a decline cancels
+   nothing in the spike. To tie them the kernel would record `tasks.current_task_id()` on
+   the `_Gate` when it opens and return it from `open_gates()`; a gate from `defer()` would
+   carry the deferred task's id, which no client polls. source:
+   `src/repld/gates.py:/def open_gates/`. ran: wire `gate`.
+7. **A secret gate has no route through a task.** `gates/list` carries `secret: true` and no
+   page URL; `gates/resolve` answers `-32602 ... takes a secret: answer it on its page`; the
+   task stayed `input_required`. ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl`.
+8. **The kernel answers one request at a time per connection.** With the spike writing
+   both requests on one socket and matching replies by id, a `get_task` sent 0.20 s into a
+   3 s inline `exec` was answered at 3.00 s; on its own connection, at 0.20 s. An earlier
+   run of this row held a lock of the spike's across the read and measured that lock, not
+   the kernel. source: `src/repld/ipc.py:/def _read_loop/` reads a line, dispatches it and
+   writes the reply before it reads the next, and `src/repld/protocol.py:/def _exec/` waits
+   out `timeout` inside that dispatch. ran: wire `shared`.
+9. **A `--bg` session's first turn said it had no `exec` tool.** The bridge answered
+   `tools/list` at 11:04:02.4 UTC and the reply ("there's no exec tool in my toolset") landed
+   at 11:04:12; a later turn in the same session called the tool. ran: live, `b`, once.
+
+Not measured: the restart of a stale MCP server that `/clear` causes in a worktree
+(`C:/restarts an MCP server it marks stale/`; `/mcp` Reconnect stood in for it), `--continue`,
+a frame to a `claude -p` session's socket, "Move to background and exit", a `--bg` session
+woken by a task from this bridge (its one call carried its own `timeout`; the wake is in
+`S2:research-2026-11-26.md:/## MCP tasks, measured/`), any wait but 2.0 s, a `-p` cell longer
+than 95 s, and any version but 2.1.332.
+
+Left behind: nothing running. The scratch kernel, its unit, its state directory and spills,
+the tmux server and both `--bg` rows were removed. The 15 probe transcripts remain under
+`~/.claude/projects/`. The first runs used the owner's config and state homes, and the
+scratch kernel wrote to both: `~/.local/state/repld/last.cache` was rewritten at each boot,
+and `~/.config/repld/gist-registry.json` gained a `probe_hello` entry (since removed by
+hand) and had the `project` of the global gists `finn`, `vitals`, `msft_partners` and
+`gnome_desktop` set to the scratch directory; their earlier values are lost. From the
+rerun on, `mcp2_live.sh` gives the kernel its own `XDG_CONFIG_HOME` and `XDG_STATE_HOME`
+under `.live.local/mcp2`, and both files kept their mtimes across it. `~/.repld/gists` is
+still read, since that path follows `HOME`. Those two scratch homes
+(`.live.local/mcp2/xdg-config/`, `xdg-state/`) and the wire logs beside them remain; the
+directory is gitignored.
