@@ -90,7 +90,7 @@ Changes after session 1, and why (rows and breaks are in "Session 1"):
 9. **Session 4 (gists) needs no new kernel signal.** The kernel already pushes
    `notifications/tools/list_changed` on an initialized connection: the one the spike held
    for change 8 got it at 10:53:23.430, 0.7 s before the spike's own 2 s poll of
-   `tools/list` noticed (`.live.local/mcp2/a.jsonl`, `kernel-push`). The front relays that
+   `tools/list` noticed (`.live.local/mcp2/a.jsonl`, `kernel-push`; log removed 2026-11-28). The front relays that
    push onto the client's `subscriptions/listen`, which works (row 11); the poll goes.
 
 ## Inventory
@@ -494,7 +494,7 @@ kernel's existing JSON-RPC, and the task id it hands out is the kernel's own),
 `probes/mcp2_live.sh` (a scratch kernel run from this worktree's source, disposable sessions
 on an isolated tmux server, one verb per step). `wire:` below is a row of `mcp2_wire.py`;
 `live:` is a session driven with `mcp2_live.sh`, read from the screen and from the bridge's
-wire log (`.live.local/mcp2/<name>.jsonl`, not in git). 15 sessions were started: 10
+wire log (`.live.local/mcp2/<name>.jsonl`, not in git; logs removed 2026-11-28). 15 sessions were started: 10
 interactive launches, 3 `claude -p`, 2 `claude --bg`. Each live row ran once unless it says
 otherwise. Numbers match "Unmeasured".
 
@@ -514,13 +514,13 @@ otherwise. Numbers match "Unmeasured".
 | 5. `notify()` with no session named, two registered sessions | one frame to each socket; the interactive and the `--bg` session each started a turn | ran: live, `a` and `b` |
 | 6. inline wait | with the kernel's own `timeout` as the wait (2.0 s default), cells of 0, 0.5, 1.5 and 1.9 s came back inline in their own time and a 2.1 s cell became a task at 2.00 s. In sessions, calls under the wait cost no extra turn. A longer or shorter wait was not tried | ran: wire `wait`; live, `a` |
 | 7. `claude -p` | no tasks capability on the request; a 4 s and a 95 s cell were held open and answered inline. No client limit was reached at 95 s | ran: live, `p1`, `p2` |
-| 7b. Escape during a call held open (interactive; the prompt asked for `timeout` 90) | the client sent `notifications/cancelled` with `requestId` and `reason: "AbortError: user-cancel"`; the bridge sent the kernel `requests/cancel` and the cell's `finally` ran. On the wire, both phases: cancelled inside the kernel's own wait the bridge sent `requests/cancel`, past it `tasks/cancel`; the cell's `finally` ran each time and no message with the cancelled id was written (ids 1 and 4 in the log). An earlier spike still answered the second case 5 ms after the cancel | ran: live, `e`; wire `client_cancel`, `.live.local/mcp2/wire-check3.jsonl` |
+| 7b. Escape during a call held open (interactive; the prompt asked for `timeout` 90) | the client sent `notifications/cancelled` with `requestId` and `reason: "AbortError: user-cancel"`; the bridge sent the kernel `requests/cancel` and the cell's `finally` ran. On the wire, both phases: cancelled inside the kernel's own wait the bridge sent `requests/cancel`, past it `tasks/cancel`; the cell's `finally` ran each time and no message with the cancelled id was written (ids 1 and 4 in the log). An earlier spike still answered the second case 5 ms after the cancel | ran: live, `e`; wire `client_cancel`, `.live.local/mcp2/wire-check3.jsonl` (log removed 2026-11-28) |
 | 8. `x` in the task view on a running cell | `tasks/cancel` twice, 1 ms apart; the cell's `finally` ran in the kernel. Cancel of a finished task and of an unknown id: acknowledged, the task stays `completed` | ran: live, `a`; wire `cancel` |
 | 8b. exit with a task in flight | a dialog: Exit and stop tasks, Move to background and exit, Stay. Choosing the first sent no `tasks/cancel` (break 1). SIGTERM sent none either | ran: live, `a` |
 | 9. `confirm()` in a cell, interactive | a dialog `MCP server "repld2" requests your input` with the gate's prompt and schema; Accept sent `tasks/update`, the bridge resolved the kernel gate, the task completed with `answer=True` and the model saw only that | ran: live, `a` |
 | 9b. `ask()` then `choose()` in one cell | two dialogs in turn (text field, option list). Declining the second sent `action: decline`. The kernel has no decline over `gates/resolve`: in the live run the spike cancelled the polled task and the model read `cancelled`; the spike now leaves the gate open in the kernel, stops showing it, and the task reads `working` | ran: live, `a` (the cancelling spike); wire `gate` (the current one) |
 | 9c. a gate raised by `defer()` after its cell returned | the spike shows every open gate on every running task that is polled, so it appeared on an unrelated task and that task's `tasks/update` answered it (break 6) | ran: wire `gate` |
-| 9d. a secret gate | cannot be answered through `tasks/update` (break 7) | ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl` |
+| 9d. a secret gate | cannot be answered through `tasks/update` (break 7) | ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl` (log removed 2026-11-28) |
 | 9e. `confirm()` in a `claude -p` cell | the request declares `elicitation: {form, url}` and no tasks. The spike answered the `tools/call` itself with `resultType: input_required`; the client retried 13 ms later with `inputResponses: {<gate>: {action: cancel}}` and the `requestState`, and asked nobody. The gate stayed open in the kernel and `repld gate answer <id> y` resolved it after the run had ended. The model's `timeout` was 120, so the kernel held the call that long before the spike looked for a gate | ran: live, `p3`; wire `notask_gate` (cancel and accept) |
 | 10. instructions with no `initialize` | the client calls `server/discover` twice at start and reads `instructions` from it: the model quoted the first and last words of the 3,446 characters served (repld's own 3,435 plus the probe's 11-character `MARK-START ` prefix). At 6,000 characters the model's copy ended `MARK-046@4076 MARK-... [truncated]`: the cut is at 4,096 and it is marked | ran: live, `a` and `p1` |
 | 11. a gist adds a `_tool_*` function | the client opens `subscriptions/listen` with `toolsListChanged` at start; on `notifications/tools/list_changed` it asked `tools/list` 3 ms later and the model called the new tool on its next turn | ran: live, `a` |
@@ -567,7 +567,8 @@ otherwise. Numbers match "Unmeasured".
    `src/repld/gates.py:/def open_gates/`. ran: wire `gate`.
 7. **A secret gate has no route through a task.** `gates/list` carries `secret: true` and no
    page URL; `gates/resolve` answers `-32602 ... takes a secret: answer it on its page`; the
-   task stayed `input_required`. ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl`.
+   task stayed `input_required`. ran: wire `secret`, `.live.local/mcp2/wire-check3.jsonl`
+   (log removed 2026-11-28).
 8. **The kernel answers one request at a time per connection.** With the spike writing
    both requests on one socket and matching replies by id, a `get_task` sent 0.20 s into a
    3 s inline `exec` was answered at 3.00 s; on its own connection, at 0.20 s. An earlier
@@ -597,4 +598,416 @@ rerun on, `mcp2_live.sh` gives the kernel its own `XDG_CONFIG_HOME` and `XDG_STA
 under `.live.local/mcp2`, and both files kept their mtimes across it. `~/.repld/gists` is
 still read, since that path follows `HOME`. Those two scratch homes
 (`.live.local/mcp2/xdg-config/`, `xdg-state/`) and the wire logs beside them remain; the
-directory is gitignored.
+directory is gitignored. (All of it was removed with that worktree, 2026-11-28.)
+
+## Session 2a: cutover design
+
+2026-11-28, on `agent-cutover-design` off `7330c86a`. A design, not a change: nothing in
+`src/` or `tests/` moved. Claude Code 2.1.332, Haiku 5.5, repld 0.24.3. Two disposable
+interactive sessions (`f`, `g`) on the isolated tmux server of `probes/mcp2_live.sh`, a
+scratch kernel with its own config and state homes, no trust prompt. Line counts are from
+function spans (`ast`), rounded; "net" is the file before less the file after.
+
+### Evidence rerun
+
+The session 1 wire logs are gone (marked `log removed 2026-11-28` where a row cites one).
+The rows the cut leans on were run again; logs are in `probes/logs/` (64 KB in all; the
+driver's own environment rows and repeated polls are left out, each file says so).
+
+| row | result | how |
+| --- | --- | --- |
+| `form()` through `input_required`, interactive (plan change 7, "Session 2 runs one row first") | the call became a task; the dialog `MCP server "repld2" requests your input` showed all four fields, the two required ones starred, the list field as a picker, the bool as a checkbox. `replicas: 9` against `maximum: 5` was refused in the dialog ("Must be an integer between 1 and 5"), so no out-of-range value was sent. Accept sent one `tasks/update` with `{env, replicas, dry_run}` (the optional `note` absent); the kernel gate resolved, the task completed and the idle session was woken with `form={'env': 'prod', 'replicas': 3, 'dry_run': True}`. While the dialog was open the client did not poll: two `tasks/get` in all, 40 s apart, either side of the `tasks/update` | ran: live, `f`, once; `probes/logs/live-form.jsonl` (the two `tasks/get` requests are left out of the file; its note line gives their times, read from the full log before it was removed) |
+| the same on the wire, and an answer the kernel refuses | accepted content resolves the gate when the bridge hands `gates/resolve` the whole object as JSON (the spike sent the first field only; fixed in `probes/mcp2_bridge.py:/takes a form's answer as one JSON object/`). Content over a bound: `gates/resolve` answers `-32602 replicas: at most 5`, the spike passes that on as the `tasks/update` error, and the next `tasks/get` still reads `input_required` | ran: wire `form`, twice (the second run for a log trimmed evenly); `probes/logs/wire-form.jsonl` |
+| Escape on a gate dialog ("Esc to answer later") | no `tasks/update` at all. The client went back to polling `tasks/get` once a second (16 in the run), the footer read `1 MCP task` and `needs your input`, and the dialog did not reopen on its own. `repld gate answer <id> y` from a shell then resolved the gate; the task completed and the session was woken with `confirm=True` | ran: live, `g`, once; `probes/logs/live-gate-later.jsonl` |
+| a gist tool added mid-session | on `notifications/tools/list_changed` the client asked `tools/list` 2 ms later and did not ask `server/discover` again in the 10 s watched: instructions are read at start only | ran: live, `f`, once; `probes/logs/live-list-changed.jsonl` |
+| the client's first message | `server/discover` with id `server-discover-probe-1`, then `subscriptions/listen`, a second `server/discover`, `tools/list`. No `initialize` is tried first. A `tools/call` carries `claudecode/toolUseId` and `progressToken` in `_meta` and no session id | ran: live, `f`; `probes/logs/live-form.jsonl` holds the discover, listen and `tools/call` rows; the `tools/list` row is left out of it and named in its note line |
+| break 8 (one connection, replies matched by id) | shared: the `tasks/get` and the 3 s inline `exec` both answered at 3.00 s. A connection per request: `tasks/get` at 0.20 s | ran: wire `shared`; `probes/logs/wire-shared.jsonl` |
+| row 7b (`notifications/cancelled`, both phases) | no response on the cancelled id in either phase; the cell's `finally` ran both times | ran: wire `client_cancel`; `probes/logs/wire-client_cancel.jsonl` |
+| breaks 2 and 3, the bridge's side | kernel killed with a task in flight: `tasks/get` answers status `failed` with the error; under `MCP2_GONE=rpc_error` it answers `-32603`. A new kernel at the same socket answers the old id `-32602 Task not found`. What the client does with each (polls without end on the two errors, wakes on `failed`) was live in session 1 and not rerun | ran: wire `dead` (new row); `probes/logs/wire-dead.jsonl` |
+
+Machine survey for the decisions below (ran: `rg --hidden --no-ignore`, `~/.claude.json`):
+
+| question | found |
+| --- | --- |
+| how repld is registered | 52 entries in `~/.claude.json`: 46 `repld bridge`, 5 `repld --project-git bridge`, 1 bare `repld`; every `env` is empty. No entry passes `--ephemeral`, `--socket` or a variable. No hook names `repld rebind` |
+| does supervise2 call into repld | no. `~/Projects/private/supervise2/bin` has no reference; its run log uses repld only as a registered MCP server (`S2:../RUNLOG.md:/registers it with/`), and names `repld rebind` once as something a clear needs today (`S2:../RUNLOG.md:/with repld registered, a clear needs/`), which row 1 removes |
+| who calls the session functions, outside repld and supervise | `repld.current_session_id()`: `devstack/.../gists/devserver.py`, `lend/src/lend/lendexec.py`, `bulletins-chat/gists/lendrig.py`. `channel.set_meta_augmenter`: `mymechanic-prod/repld_init.py` (for the supervise roster). `list_claude_connections`, `park_pushes`, `unpark_pushes`, `rebind_claude_session`, `SUPERVISE_SEAT_PID`: supervise and its pin only |
+| `REPLD_CODE_MODE` | set by the owner's `claude` wrapper when a terminal session asks for Code Mode (`~/dotfiles/tests/claude.sh:/code mode:/`), and by supervise's `jobs/dispatch.py`. Whether any session ran with it: still not visible |
+
+### 1. Cut list
+
+"row N" is a Session 1 row, "break N" a Session 1 break, "change N" a plan change, "inv N" a
+Tagged invariants row, "cand N" a Deletion candidates row.
+
+**`src/repld/bridge.py`** (1,338 lines; replaced by the new front, estimated at 650; net about 690)
+
+| what | lines | verdict |
+| --- | --- | --- |
+| cached `initialize`, `_client_init`, `_client_initialized`, `_replay_handshake`, `_stamp_identity`, `BRIDGE_INIT_ID`, the `initialize`/`initialized`/`ping` arms of `_try_bridge_intercept` | about 150 | deleted: `changelog.mdx:/Make MCP stateless/`, cand 2, the client's first message above |
+| one attached socket and its bookkeeping: `_forward_to_kernel`, `_read_kernel`, `_track_kernel_message`, `_inflight`, `_generation`, `_drain_inflight`, `_to_kernel`, `_to_client_raw` | about 190 | deleted: break 8. Each request thread owns its connection, so there is no shared set of in-flight ids and no generation to compare |
+| the relay of `notifications/claude/channel`, the `kernel_started` push in `_attach` | about 25 | deleted: change 1 (channels cannot ride 2026-07-28) |
+| `_on_kernel_gone`, `_push_crash`, `_resolve_crash_reason`, `_reason_from_journal`, `_goodbye_gen` | 165 | deleted: cand 5. A death mid-task is a `failed` task (break 2); 3 `kernel_crashed` pushes in three months |
+| `_start_reattach_watch`, `_reattach_watch`, `_REATTACH_*` | 30 | deleted: its reason was rebind, park and targeted pushes finding no connection in the gap, all of which go. The registration is made again on the next request that reaches a kernel (open question 7) |
+| `_relay_client_response`, `_kernel_requests`, the `notifications/cancelled` loop for open modals | 45 | deleted: change 7 |
+| `_seat_pid`, `PRE_EXEC_PPID` use, the seat and Code Mode arms of `_stamp_identity` | 30 | deleted: supervise1 only (survey). Code Mode: see open question 1 |
+| `_cancel_client_request`, `_send_bare` | 37 | kept, because row 7b: the cancel still goes on a connection of its own |
+| lazy spawn (`_ensure_kernel`, `_reconnect`, `_connect_excluding`, `_spawn_kernel`), `restart_kernel`, bridge tools, `_static_docs`, `_load_cache`, `--ephemeral`, `run_bridge` | about 330 | kept, because inv 73 (a session that calls no repld tool starts no kernel, `S2:../RUNLOG.md:/calls no repld tool starts none/`), inv 67, and `-31001` for a request whose kernel died under it (inv 72, `b7987aa6`) |
+
+**`src/repld/ipc.py`** (1,436 lines; net about 780)
+
+| what | lines | verdict |
+| --- | --- | --- |
+| process-tree ancestry and seat pid: `_resolve_ancestry`, `_walk_ancestry`, `_bridge_chain`, `_caller_chain`, `_is_claude_process`, `_find_claudes`, `_read_parent_proc`, `_read_ps_table`, `_resolve_claude_pid`, `_read_tree`, `Session.claude_pid`, `claude_pid_claimed`, `list_claude_connections` | about 125 | deleted: change 5, rows 1 and 2 (no rebind was needed); the only callers are supervise1 (survey). `_resolve_peer_pid` is kept: `requests/cancel` and the home lookup (section 4) match on it |
+| rebind: `Server.rebind_claude_session` (138), `_PendingRebind`, `_pending_rebinds`, `_pop_pending_rebind_locked`, `_note_claude_id_locked`, `_find_replaced_id_locked`, `_claude_ids`, `Rebind`, the module wrapper, the `BRIDGE_REBIND_METHOD` post | about 215 | deleted: rows 1, 2a, 2b, 4c |
+| successors and outbox: `_succeed`, `_succeed_locked`, `_successors`, `_owe`, `_drain_outbox`, `expire_outbox`, `_outbox`, `_Owed`, `deliver`, `_settle_parked`, `Post.HELD`/`QUEUED` | about 160 | deleted: change 5. A task result is polled by the client that called; the one loss left (break 5) the outbox lost too |
+| park: `Session.park`, `unpark`, `take_parked`, `_unpark_and_flush`, `_park_timer`, `parked_queue`, `park_pushes`, `unpark_pushes`, `_run_callbacks` | about 120 | deleted: row 1 (a result reached the new conversation across `/clear` with nothing parked); supervise1 only |
+| handshake state: `Session.initialized`, `pending`, `set_initialized`, the pre-`initialized` queue in `post_channel` | about 30 | deleted: no `initialize` |
+| `can_elicit`, `can_elicit_url`, `_is_elicitable`, `Session.elicit_form`, `elicit_url` | 25 | deleted: change 7 |
+| `Session.say_goodbye`, its call in `Server.stop` | 12 | deleted: the goodbye frame existed to tell a crash from a stop for the crash push |
+| the taken-id restore (`claude_bind_seq`, the restore in `_on_reader_done`), the id collision warning | about 45 | deleted: it restored a holder for owed and parked pushes (`862b01cc`), which no longer exist. Latest registration of an id wins |
+| `register_claude_session` | 74 to about 20 | kept in reduced form, because rows 4, 4b, 4c, 5: id, project dir, kind and inbox socket of one connection, reached by `sessions/register` (section 4) |
+| `Session._emit`, `_write_inbox`, `_check_inbox_socket`, `broadcast_channel`, `post_to`, `find_claude_session`, `list_claude_sessions`, `find_request_task`, `on_session_closed`, `Server._read_loop`, `connect_to_kernel` | about 200 | kept: rows 4, 4b, 5 (the inbox frame), row 7b, inv 29 (a `taken` tab is released when its session's connection closes) |
+
+**`src/repld/channel.py`** (190; net about 35): `push_owed` deleted (change 5); `push_channel`
+loses `on_parked_flush` and the parked `None`. `push_channel`, `push_kind`,
+`set_meta_augmenter` kept: ambient pushes are session 3's, and 6,408 of the pushes seen are
+not `task_done`.
+
+**`src/repld/tasks.py`** (561; net about 70): `mark_nudged`, `record_push`,
+`mark_push_delivered`, `nudge_cutoff`, `push_delivered`, `push_state` (task fields,
+`snapshot()` and `get_task`'s `outputSchema`) deleted: inv 55, cand 3, row 0 (the task
+result replaces the nudge and its push). `claim_done_push` becomes a read of one flag that
+only `defer()` sets (see `kernel.py`).
+
+**`src/repld/kernel.py`** (1,896; net about 60): `_maybe_push_done` loses its exec-cell half
+and the owed route and keeps the `defer()` completion push (kept, because a deferred task
+has no request for a client to poll, and `defer(` is in 15,376 cells); `_Context.mark_nudged`
+deleted; the durable half of `_write_cache` and `_strip_project_gists` deleted (cand 13,
+open question 4); the `ipc.expire_outbox()` call in the watchdog deleted; the parked
+wording in `_notify` deleted. `_notify`, `_claude_sessions`, `_current_session_id` kept
+(survey: three projects call `current_session_id`).
+
+**`src/repld/protocol.py`** (1,750; net about 125): `Dispatcher._initialize`, the
+`notifications/initialized` arm, `_negotiate_version` use deleted (cand 2; `ping` kept:
+`peer.py:/"method": "ping"/` probes a forward with it). The nudge sentence and the
+`mark_nudged` dance in `_exec` deleted (cand 3). `_gates_elicit_result`, `_gates_answer`
+deleted (change 7). `_sessions_rebind` deleted. `protocolVersion` in
+`build_discovery_cache` deleted. `_exec`, `_get_task`, `_cancel`, `_gist_tool`, the browser
+tools, `_tasks_wait`, `_tasks_cancel`, `_requests_cancel`, the peer methods kept.
+
+**`src/repld/core_schemas.py`** (519; net about 50): `PROTOCOL_VERSION`,
+`SUPPORTED_VERSIONS`, `negotiate_version` deleted for one `VERSION = "2026-07-28"` (inv 68,
+85). `CAPABILITIES` rewritten (no `experimental.claude/channel`; the tasks extension; it
+rides `server/discover`, so inv 86's two authors become one builder). `BRIDGE_SEAT_PID_KEY`,
+`BRIDGE_REBIND_METHOD`, `BRIDGE_GOODBYE_METHOD` deleted. `exec`'s description loses the
+nudge sentence. `BRIDGE_SESSION_ID_KEY`, `_PROJECT_DIR_KEY`, `_SESSION_KIND_KEY`,
+`_INBOX_SOCKET_KEY` kept as the fields of `sessions/register`.
+
+**`src/repld/gates.py`** (857; net about 160): `_send_elicitation`, `_cancel_elicitation`,
+`_elicit_pending`, the `elicit_id` lines of `_gate` deleted (change 7, row 9). The secret
+route deleted: `_secret_url`, `_secret_hint`, `_can_elicit_url`, `secret_prompt`,
+`submit_secret`, `_find_secret`, `_Gate.secret`/`nonce`/`url_session`, the
+`elicitation/complete` write; `ask(secret=True)` and a secret `form()` field raise at once
+(change 7, the owner's decision; break 7). `parse_elicit_result` and `handle_elicit_result`
+kept in reduced form as the typed answer behind `gates/resolve` (section 4), because the
+dialog sends typed content and the kernel's schema is what refuses a bad one (wire `form`).
+`_decline_gate` kept (row 9b).
+
+**Whole files and small ones**
+
+| what | lines | verdict |
+| --- | --- | --- |
+| `src/repld/rebind_cmd.py`, its `cli._SUBCOMMANDS` entry, `help.py:/repld rebind /` | 113 + 6 | deleted: rows 1, 2b; no hook on this machine runs it (survey) |
+| `bind.PRE_EXEC_PPID` and its export | 4 | deleted with the seat pid |
+| `dashboard.py:/async def _handle_secret/`, its route, the body cap constant; the three secret pages in `dashboard_html.py`; `display.py:/if ev.secret/`; `events.HumanPromptOpen.secret`; the secret arm of `gates.answer_gate` | about 90 | deleted: change 7 |
+| `exec_cmd.py`: the handshake in `_connect`, `_handle_notification` | about 25 | deleted: the kernel has no `initialize`; a CLI connection registers nothing, so no push reaches it. That is a loss: `repld exec` prints pushes to stderr today (`src/repld/exec_cmd.py:/def _handle_notification/`), and afterwards only `repld log` shows them; the changelog says so |
+| `paths.state_cache_for`, `GLOBAL_CACHE`, `STATE_PROJECTS_DIR` | 16 | deleted: cand 13, inv 60 (the reboot survival is imagined). `paths.cache_for` kept (open question 4) |
+| Code Mode: `Session.code_mode`, `BRIDGE_CODE_MODE_KEY`, `strip_output_schemas`, `_format_spill_pointer`, `runtime.print_display(as_json=)`, the code-mode arms of `_exec`, `_cancel`, `_tools_list`, `_tools_call`, `_gist_tool` | about 150 | unmeasured; not decided here (open question 1) |
+
+**`src/repld/help.py`** (3,037): only what would now be false to the model, about 60 lines:
+the execution-model paragraph of the instructions and of `static_instructions()` (the nudge
+sentence, "pushes a channel message"), `exec`'s tool text, `help.py:/repld rebind /`,
+`help.py:/must re-key it/`, the `ask(secret=True)` lines, the Code Mode lines if it goes.
+The rest of `help.py` is session 7.
+
+**Tests** (22,109 lines)
+
+| file | deleted | rewritten |
+| --- | --- | --- |
+| `phases/headless.py` (15) | 1,126: `_bridge_reattaches_to_successor`, `_clean_stop_is_not_a_crash`, `_version_mismatch_cache_discarded`, `_cache_survives_reboot`, `_new_project_uses_global_cache`, `_targeted_push`, `_session_rebind` (284), `_rebind_prefers_nearest_bridge`, `_rebind_stops_at_own_claude`, `_repeat_rebind_arms_nothing`, `_seat_pid_claim`, `_rebind_carries_owed_pushes`, `_rebind_cmd`, `_deferred_rebind`, `_elicitation_cancelled_on_kernel_death`, `_id_collision_warning`, `_push_state_broadcast` | about 450: `_autospawn_and_heal` (no replay; a dead kernel under a task is `failed`), `_lazy_discovery_from_cache` (`server/discover`), `_cold_jsonrpc_edges`, `_inflight_never_stranded`, `_bg_inbox_fallback` (becomes the harness's inbox, for every kind), `_bridge_served_tools`, `phase_15_ephemeral_bridge` |
+| `phases/pure.py` (2) | 515: `_elicitation_pure`, `_seat_pid_claims`, `_ps_ancestry`, `_one_snapshot_per_call`, both `_taken_id_*`, `_crash_reason` | `_envelopes` (the `resultType` builders) |
+| `phases/channels.py` (4) | 236: `phase_4g_owed_push`, `phase_4b_pregate` | about 250: `phase_4` (an exec past its wait is a task; `notify()` arrives on the inbox), `phase_4c_claude_sessions` (less `list_claude_connections`); `4d`, `4e`, `4f` pass through the harness |
+| `phases/core.py` (3) | about 80 of `phase_3` (negotiation, `initialize`, capability assertions) | about 150: `server/discover`, a version the front refuses, inline and task `exec`, `_phase_3_client_cancel` |
+| `phases/gates.py` (17) | 109: `_secret_page`, `_secret_gate`, `_elicit_request` | about 165: `_elicitation` becomes `input_required` on `tasks/get` and on a plain call, with accept, decline, a form and a refused value; one case for the secret refusal |
+| `phases/live_claude.py` (20) | 0 | about 80: `_print_mode_leaves_gate_open` asserts the text that names the gate and the command; `_bg_worker_gets_inbox_push`; two new cases (section 5) |
+| `phases/defer.py`, `every.py`, `gist_tools.py`, `browser.py`, `peers.py` | 0 | about 60: the waits on a pushed `kind=` read the inbox through the harness; `_list_changed` and `_cache_lists` use `subscriptions/listen` |
+| `harness.py` | the `initialize` body of `handshake` (the method stays, as `server/discover`: 13 phase files call it) | about 80 added: 2026-07-28 framing in `Bridge.call`, a task wait, an inbox listener behind `wait_notification` |
+| Code Mode: `phase_3_code_mode`, `_display_as_json`, `_strip_output_schemas`, the code-mode lines of phase 9 | about 150 | open question 1 |
+
+**Docs**
+
+| file | what goes or is rewritten |
+| --- | --- |
+| `CLAUDE.md` | deleted: `C:/can change under it/` (the rebind paragraph, the longest in the file), `C:/never rides the connection that asked/`, `C:/REPLD_CODE_MODE=1/` if it goes, the `repld rebind` bullet (`C:/a SessionStart hook command/`). Rewritten: `C:/Request flow:/`, `C:/composed at MCP init/`, `C:/so pushers import it at module level/`, the `repld bridge` bullet, `C:/decided once/`, `C:/both sides of the socket answer/`, `C:/not a byte-pipe/`, `C:/Kernel spawn is lazy/`, `C:/exactly five callers/`, `C:/go to its inbox socket/`, `C:/Targeted push for call-scoped output/`, the cache sentence of `C:/Runtime state lives under XDG/`, "Fifteen CLI subcommands". About 16 of the file's rule paragraphs |
+| `CLAUDE-ARCHIVE.md` | the entries under the same headings (about 40 of 150 lines), `A:/Version negotiation is echo-what-they-asked-for/`, `A:/can't paper over a drift either/`, the phase 2 to 4, 15, 17 and 20 rationale lines |
+| `tests/phases/CLAUDE.md` | the lines of phases 2, 3, 4, 7, 9, 15, 17, 20 (8 of 26) |
+| `README.md`, `site/`, `docs/ARCHITECTURE.md` | 9 lines of `README.md` name channels; the release needs them true. The site is session 7 |
+| `CHANGELOG.md` | one breaking entry: needs an MCP 2026-07-28 client (measured: Claude Code 2.1.332), `repld rebind` gone, secret gates refuse, the session functions that went, `repld exec` no longer prints pushes |
+
+Totals, rough: source about 2,300 lines net (2,450 with Code Mode) of 37,122; tests about
+2,070 deleted and 1,250 rewritten (2,220 deleted with Code Mode) of 22,109; docs about 16
+paragraphs of `CLAUDE.md`, 40 lines of the archive, 8 of the phase list, 60 of `help.py`.
+
+### 2. Kept list
+
+| what | why |
+| --- | --- |
+| `exec`, the kernel's `{task_id, done}` answer, spill preview and path | 82% of calls; the front maps it (rows 0, 6, 7) |
+| `get_task` | break 5 (a relaunch as a new conversation gets no result), `defer()` results, 5,307 calls |
+| `cancel`, `tasks/cancel`, `requests/cancel` | rows 7b and 8; a deferred task is not a client task |
+| gist `_tool_*` tools, `browser_*` tools | unchanged, always inline. A slow one holds its call as it does today |
+| `repld_restart` and the bridge-tool split | inv 67, 50 calls |
+| resources (`repld://docs/*`, `help/*`, `gists/*`, browser) | unchanged in content; their 2026-07-28 shape was not run (section 5) |
+| gates: `ask`, `confirm`, `choose`, `form`, `GateDeclined`; the pane, pill, `repld gate`, dashboard routes; `HumanPromptClosed` | inv 76, 78; the `g` row (a postponed dialog answered from the CLI) |
+| the `awaiting_human` push, for a gate no client task shows | a gate from `defer()` has no task a client polls (break 6) |
+| `defer()` and its completion push, `@every`, `notify()`, browser pushes, `set_meta_augmenter` | ambient; over the inbox frame (rows 4, 4b, 5). Their routing is session 3 |
+| `claude_sessions()`, `current_session_id()`, `notify(session=)` | three non-supervise callers (survey); the id is the one the bridge registered, which row 4c showed still delivers after `/clear` |
+| peers, `ping` | no channel or handshake dependence (inv 40) |
+| lazy spawn, the bootstrap wait, binding, `--project`, `--ephemeral` and the owner watch, `kernel.cache` beside the socket | inv 73, 75, 64, 51; `--ephemeral` has no registration on this machine (cand 15), and is not this cut's |
+| `repld exec`, `tasks`, `gate`, `status`, `log`, `start`, `stop`, `restart`, the dashboard, the TUI | they speak the kernel's own JSON-RPC, which keeps its methods |
+
+### 3. The new bridge
+
+One file, stdlib, about 650 lines, grown from `probes/mcp2_bridge.py`. One thread per client
+message; each kernel request on a connection of its own (break 8); one more connection held
+for the registration (section 4). It keeps no task state: a task id is the kernel's, so any
+bridge process answers for it (rows 2a, 2b, 2e).
+
+| method | answer |
+| --- | --- |
+| any request whose `_meta` version is not `2026-07-28`, and `initialize` | `-32022` with `supported: ["2026-07-28"]`. No fallback to the old handshake |
+| `server/discover` | `supportedVersions`, capabilities (`tools.listChanged`, `resources.listChanged`, the tasks extension), `instructions`. From the kernel when one is up (`discover`, section 4), else `kernel.cache`, else `static_instructions()`. Never spawns. Held to `INSTRUCTIONS_BUDGET` as today (row 10: the cut is at 4,096 and marked) |
+| `tools/list`, `resources/list`, `resources/templates/list` | from the kernel when one is up, else the cache, else the static lists. Never spawns |
+| `resources/read` | static docs from `help.py` with no kernel; a gist or browser URI and the two browser docs spawn one, as today |
+| `subscriptions/listen` | acknowledged with the granted kinds and kept open. `tools/list_changed` and `resources/list_changed` from the registration connection are relayed onto it (change 9, row 11); the bridge sends both itself when a kernel first comes up after a cold discovery |
+| `tools/call` of a bridge tool | answered here, before any kernel is looked for |
+| `tools/call` of a gist or browser tool, `get_task`, `cancel` | connect, or spawn and wait 5 s; write once; the kernel's result as `resultType: complete`. A kernel that cannot be started, or that dies under the request, is `-31001` (inv 72) |
+| `tools/call exec` | see below |
+| `tasks/get` | `get_task`, then `gates/list` while the task runs. `working`; `input_required` with one `inputRequests` entry per open gate whose `task_id` is this task; `completed` with the result (`isError` for a raise); `cancelled` for a `CancelledError`; `failed` when no kernel answers or the kernel does not hold the id, with a message that says which (breaks 2, 3). Never a JSON-RPC error, never a spawn |
+| `tasks/update` | per gate: accept sends the typed content to `gates/resolve`, decline sends `action: decline`, cancel sends nothing. A value the kernel refuses comes back as the `tasks/update` error (wire `form`) |
+| `tasks/cancel` | `tasks/cancel` to the kernel; any id, a finished task and a repeat are acknowledged (row 8: it arrives twice) |
+| `notifications/cancelled` | for a `tools/call` still inside the kernel's wait: `requests/cancel` with that request's id on a new connection, then the request's own socket is closed; no response is written. For a call held open past the wait: `tasks/cancel`. For the `subscriptions/listen` id: the subscription ends (row 7b) |
+| anything else | `-32601`; a line that does not parse `-32700`, a non-object `-32600`, and neither spawns |
+
+**`exec`, inline or a task, decided per call.** The bridge reads the capabilities each
+request declares; nothing is remembered from an earlier one.
+
+1. The cell goes to the kernel with `timeout` (the caller's, else 2.0 s: row 6). Done inside
+   it: the result inline, in the cell's own time.
+2. Not done, and the request declares the tasks extension: `resultType: task` with the
+   kernel's id, `pollIntervalMs` 1000, `ttlMs` from `tasks._EVICT_AGE`, `createdAt` from
+   the kernel's `started_at` (the spike kept a clock per bridge process, which a second
+   process does not have).
+3. Not done, and no tasks capability (`claude -p`, row 7): the call is held open on
+   `tasks/wait` and answered inline when the cell ends, whatever `timeout` said.
+4. A gate opened by the cell ends the kernel's wait at once (section 4). With tasks: step
+   2, and the next `tasks/get` is `input_required`. Without tasks and with `elicitation`
+   declared: `resultType: input_required` on the call itself, `requestState` naming the task
+   and gate. On the retry: accept resolves and the hold goes on; decline declines; cancel
+   (what `-p` sends 13 ms later, row 9e) ends the call with text that names the gate, its
+   prompt, `repld gate answer <gate_id> <value>` and `get_task("<id>")`. A client that
+   declares neither gets that text directly.
+
+**The model's own `timeout` (decided, flagged as open question 2).** It stays in the schema
+and means one thing: how long a tasks-capable call waits for an inline result before it
+becomes a task. It does not bound a call from a client with no tasks, and it no longer
+delays a gate. The row's three "held inline where a task was expected" cells are the caller
+getting what it asked for; the break in that row is the 120 s before a gate was looked
+for, and step 4 is its fix. The tool text tells the model to leave `timeout` out unless it
+wants to wait longer inline.
+
+**Nothing per launch in the server entry (break 4).** The entry stays `repld bridge`, with
+the flags it has today and an empty `env` (survey: all 52 are so). Identity is read from
+the process environment Claude Code sets (`CLAUDE_CODE_SESSION_ID`, `CLAUDE_PROJECT_DIR`,
+`CLAUDE_JOB_DIR`, `CLAUDE_CODE_MESSAGING_SOCKET`), never from an argument or an entry
+variable, and the docs must not suggest one. `serverInfo.name` stays `repld`.
+
+**Exit (break 1).** Nothing in the bridge assumes that its end stops a cell. Stdin EOF
+closes the registration connection and exits; cells keep running.
+
+### 4. Kernel-side changes
+
+About 90 lines. Until the flip (commit 6 of section 5) the old bridge, `repld exec` and the
+unported phases must see no change, so every new behaviour hangs on one of two things the
+old callers never send: the connection sent `sessions/register` ("registered"), or the
+request carries a flag. Found by review of this design against the suite: an unconditional
+version of items 3, 5, 6 and 7 turns phase 17 red and moves an interactive session's pushes
+under the old bridge, which already stamps the inbox socket for every session kind
+(`src/repld/bridge.py:/CLAUDE_CODE_MESSAGING_SOCKET/`). source, not run.
+
+1. **`sessions/register`** (bare JSON-RPC, like the gate methods): `{session_id,
+   project_dir, kind, inbox_socket}` on a connection the bridge then keeps. It is
+   `register_claude_session` without the ancestry, the pending rebind and the outbox. It
+   marks the connection registered and calls `set_initialized()`: a registered connection
+   never sends `notifications/initialized`, and `Session.post_channel` would otherwise hold
+   every push, `tools/list_changed` included, in `pending`
+   (`src/repld/ipc.py:/if not self.initialized/`). The kernel keeps `peer_pid -> Session`
+   for registered connections ("home"). The bridge registers before it forwards its first
+   request to a kernel, and again whenever a request finds the held connection dead.
+2. **A request's session is its bridge's home.** `Dispatcher._tools_call` swaps the
+   per-request connection for the registered connection with the same `peer_pid`
+   (`SO_PEERCRED`, the match `requests/cancel` already uses:
+   `src/repld/protocol.py:/Scoping by/`), and falls back to the connection itself (the old
+   bridge, a CLI, a test). Without this every per-request connection would be the task's
+   `origin` and close at once: `current_session_id()` would read `None`, a `defer()` push
+   would have nowhere to go, and a `taken` tab would be released when its `browser_take`
+   call returned (`C:/does not outlive its session/`). source, not run.
+3. **Pushes, for a registered connection only.** `Session._emit` sends a channel message
+   to the inbox socket for every kind (today `bg` only:
+   `src/repld/ipc.py:/claude_session_kind == "bg"/`) and drops it when no inbox was
+   registered; rows 4 and 4b ran exactly this frame for an interactive and a `--bg`
+   session. An unregistered connection keeps today's rule, channel on the wire and inbox
+   for `bg`. `tools/list_changed` and `resources/list_changed` go on the wire of the
+   registered connection (change 9).
+4. **Per-request connections are not sessions.** A connection whose `peer_pid` has a home
+   and which is not that home is skipped by `broadcast_channel` (a notification must not
+   land on a per-request socket ahead of its reply) and by `list_claude_sessions` (or
+   `claude_sessions()` gains a `(None, None, None)` row per call in flight). Old-bridge
+   and `repld exec` connections have no home and stay in both. At the flip both walk
+   registered connections only.
+5. **`discover`** (bare): `{version, instructions}`, what `initialize` returned less the
+   negotiation. `initialize` and `notifications/initialized` stay until commit 6.
+6. **The asking task on a gate (break 6; cheap, 4 lines).** `_Gate.task_id =
+   tasks.current_task_id()` when it opens, returned by `open_gates()`. The front shows a
+   gate only on its own task. The `awaiting_human` push is unchanged for every gate except
+   one: a gate opened in an exec cell whose origin is registered sends none, since the
+   dialog or the call's text carries it. A gate from `defer()` carries the deferred task's
+   id, shows on no client task and keeps the push with the answer command, registered or
+   not.
+7. **No nudge for a registered origin.** `_exec` takes no `mark_nudged` promise when the
+   call's origin is registered: the client polls the task, and a `task_done` frame on the
+   inbox as well would wake the session twice. The old bridge keeps the nudge until
+   commit 6 deletes it. `defer()` completion pushes either way.
+8. **A gate ends the inline wait, when the caller asks (the `timeout` row).** One event per
+   task, set by `finalize` and by `_gate` on open. `exec` with `until_gate: true` in its
+   arguments' `_meta`, and `tasks/wait` with the same flag, return on it with `{task_id,
+   done: false, gate_id}`. Only the front sends the flag; without it a gate answered inside
+   `timeout` still comes back inline, as today. About 15 lines.
+9. **`gates/resolve` takes a typed answer and a decline (row 9b).** `{gate_id, action,
+   content}` beside today's `{gate_id, value}`: accept validates `content` against the
+   gate's schema (`validate_form`, unwrapping the one field of a wrapper gate), decline is
+   `False` for `confirm` and `GateDeclined` for the rest, as elicitation did. This is
+   `handle_elicit_result` keyed by gate id. Session 6 loses items 6 and 9.
+10. **`snapshot()` gains `started_at`**, in `get_task`'s `outputSchema` too
+    (`C:/add a field to both/`).
+
+What `ipc.Session` loses at commit 6: `initialized`, `pending`, `parked`, `parked_queue`,
+`_park_timer`, `claude_bind_seq`, `claude_pid`, `claude_pid_claimed`, `elicit_form`,
+`elicit_url` (`code_mode` with open question 1). What it keeps: `peer_pid`,
+`claude_session_id`, `claude_project_dir`, `claude_session_kind`, `inbox_socket`, `peer`,
+`request_tasks`, `cancelled_requests`; the registered mark goes too, once every session is
+one.
+
+### 5. Order for 2b
+
+Each commit leaves `uv run python tests/smoketest.py --phase 19` green. The old bridge
+stays the default, and unchanged in behaviour, until commit 6; the new one is reachable
+only by the harness until then.
+
+| # | commit | suite |
+| --- | --- | --- |
+| 1 | kernel, additive: section 4 items 1 to 10, each behind the registered mark or the caller's flag | new small cases in phases 3 and 17 against the kernel socket (a registered connection gets `list_changed` at once, a per-request connection is in no listing, decline over `gates/resolve`); every existing case runs unchanged |
+| 2 | `ask(secret=True)` and a secret field raise; the secret page and its tests go (change 7) | phase 17: `_secret_gate` replaced by the refusal |
+| 3 | the new front as `src/repld/front.py`, started by the harness only. `harness.Bridge` gains 2026-07-28 framing, a task wait and an inbox listener behind `wait_notification`, chosen by a `smoketest.py` switch. `Bridge.handshake()` stays as the harness's name for opening a session: `initialize` under the old framing, `server/discover` under the new | phase 3's and phase 15's cold cases run under both |
+| 4 | phases ported under the switch, one commit each: 3, 4, 7 and 10, 9, 15, 17, then the four routing cases of 6 and the two waits of 19 | each phase green under both; its old-only cases are marked for commit 6 |
+| 5 | the phases that only open a session and call tools, under the switch: 5, 8, 11, 12, 13, 18 (each calls `handshake()`: `lockfile.py`, `resources.py`, `shutdown.py`, `links.py`, `sessions.py`, `tasks_cli.py`), and the rest of 6. Whatever a case reads from the `initialize` answer is fixed here | `--phase 19` green under both, every phase |
+| 6 | the flip: `front.py` becomes `bridge.py`; the switch and the harness's old framing go; the cases section 1 lists as deleted go. In the same commit, because the old bridge was their last caller and leaving them would be a second behaviour: the nudge (`mark_nudged`, the sentence, `push_state`), the unregistered arms of section 4 items 3, 4, 6 and 7, and the `until_gate` flag becomes the only behaviour | all phases on the new front |
+| 7 | kernel deletions, one commit each, nothing calls them now: elicitation; rebind, ancestry, seat pid, `rebind_cmd.py`; park, outbox, successors, `push_owed`; `initialize`, negotiation, `exec_cmd`'s handshake; goodbye; the durable cache copies | phase 2's pure cases go with their subject |
+| 8 | Code Mode, by the answer to open question 1 | `phase_3_code_mode` and two pure cases, either way |
+| 9 | docs: `CLAUDE.md`, `CLAUDE-ARCHIVE.md`, `tests/phases/CLAUDE.md`, the `help.py` lines of section 1, `CHANGELOG.md` | phase 8's doc guards, phase 2's budget |
+| 10 | phase 20 rewritten, then the live check below | phase 20 |
+
+Phases rewritten: 3, 4, 15, 17, 20. Touched by a few cases: 2 (515 lines deleted), 6 (four
+routing cases), 7, 9, 10, 19. Run through the harness with no or little change to the
+file, but ported and checked under the switch in commit 5, since each opens a session
+with `handshake()`: 5, 8, 11, 12, 13, 18. Deleted: none whole. Untouched, no `Bridge` in
+them: 14, 16.
+
+**The live check 2b runs**, with `probes/mcp2_live.sh` pointed at the real `repld bridge`
+from the worktree (scratch kernel, isolated tmux, own config and state homes, Haiku, the
+session 1 safety rules). One interactive session:
+
+1. Started with no kernel: the model quotes the first and last words of the instructions,
+   and no kernel has spawned.
+2. `1+1` inline; an 8 s cell becomes a task and wakes the idle session with its value,
+   once (no second `task_done` frame).
+3. `confirm()`: dialog, Accept, result. Again with Decline: the cell raises `GateDeclined`
+   and the model reads it.
+4. `defer()` of a 5 s coroutine, then idle: the inbox frame with `kind="task_done"` starts
+   a turn.
+5. The kernel killed with a task in flight: the session is woken with `failed`; the next
+   `exec` starts a fresh kernel and answers.
+6. A cell with `timeout` 60, then Escape: the cell's `finally` ran.
+7. A gist tool added: callable on the next turn. A read of `repld://docs/guide`, a
+   `get_task` call and a `browser_*` or image-returning tool, since resources,
+   `structuredContent` and image content were never run at 2026-07-28 (the spike forwarded
+   `content` and `isError` only).
+
+Then one `claude -p`: a 4 s cell inline; `confirm()` returns the text that names the gate
+and the command, and `repld gate answer` resolves it. Phase 20 holds the `-p` and `--bg`
+halves as cases.
+
+### 6. Open questions for the owner
+
+1. **Code Mode.** Unmeasured twice: whether any session runs with it, and what a Code Mode
+   script receives at 2026-07-28 (a `resultType: task`, `structuredContent`). The dotfiles
+   wrapper can set it, so it is not supervise1's alone. Recommendation: if you no longer
+   use Code Mode, delete it in commit 8 (about 150 source and 150 test lines) and drop the
+   wrapper's variable. Otherwise 2b runs one row first, a session with
+   `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` against the new front, and keeps the shaping only
+   if a script still gets the JSON text parsed; the flag then rides `sessions/register`.
+2. **`timeout` on `exec`.** Decided as in section 3: kept, it only chooses when a
+   tasks-capable call becomes a task. The alternative is to drop it from the schema (a
+   fixed 2 s), which costs a wake turn on every cell the caller knew would take 10 s; 17%
+   of real calls pass one. Not run: a `-p` cell that never ends now holds its call open,
+   where today it returned the nudge after `timeout`. Recommendation: keep as decided, and
+   bound the `-p` hold only when a run shows it.
+3. **Decline and the asking task move from session 6 into 2b** (section 4, items 6 and 9).
+   Without them a declined dialog leaves the cell blocked, where today it raises
+   `GateDeclined`. Recommendation: yes; about 20 lines, both from runs (row 9b, break 6).
+4. **The discovery cache.** Instructions are read once per session (the `f` row), so a
+   bridge with no kernel has to have them at `server/discover` or the session never sees
+   the gist list. Recommendation: keep the one `kernel.cache` beside the socket, delete the
+   two durable copies under `$XDG_STATE_HOME` (inv 60: imagined). The smaller choice,
+   static instructions whenever no kernel is up, loses the gist signatures for every
+   session opened before a kernel.
+5. **The inbox route for every session kind lands in 2b, not session 3** (section 4, item
+   3). `defer()` completion has no client task to ride and is in 22% of cells; the day the
+   channel relay goes it needs the inbox or it is silent. Recommendation: yes, as the one
+   condition in `Session._emit`; session 3 keeps the keying on the socket path, what a
+   broadcast means, and re-earning the tests.
+6. **supervise1 breaks at this release.** `list_claude_connections`, `park_pushes`,
+   `unpark_pushes`, `rebind_claude_session`, `claude_pid`, `SUPERVISE_SEAT_PID` and `repld
+   rebind` go; `claude_sessions()`, `current_session_id()`, `notify(session=)` and
+   `set_meta_augmenter` stay. Recommendation: delete as listed; a supervise1 kernel stays
+   on the last 0.24 release (a `supervise-pin` checkout exists).
+7. **An idle session after someone else restarts the kernel** has no registration until its
+   next call, so pushes from the new kernel miss it in that gap; `_reattach_watch` covered
+   30 s of it. And a kernel that dies while no task is polled is now silent until the next
+   call (`kernel_crashed`: 3 pushes in three months). Recommendation: accept both; rebuild
+   against a run.
+8. **Older clients.** A client that opens with `initialize` gets `-32022`. Only 2.1.332 was
+   measured. Recommendation: the clean break as decided; the changelog names the version
+   measured, not a floor nobody ran.
+
+### Left behind
+
+Nothing running: the scratch kernel (four pids over the run, the last for a second wire run of `form`), its unit, its state
+directory, its spill files and the tmux server are gone, and `.live.local/` in this
+worktree was removed. Two probe transcripts remain under `~/.claude/projects/` (`f`, `g`).
+`~/.config/repld/gist-registry.json` kept its mtime. `~/.local/state/repld/last.cache`
+did not: it was rewritten at 15:21:03 local, together with the cache of every kernel the
+owner had running, one second after `~/.repld/gists/gnome_desktop.py` and
+`gnome_desktop_helper.py` changed on disk (not by this session; the scratch kernel's own
+copy, in its scratch state home, was written at 15:22:21). The worktree has a `.venv`
+(gitignored) from `uv run`.

@@ -4,7 +4,7 @@
     MCP2_KERNEL_SOCKET=/run/user/.../kernel.sock python3 probes/mcp2_wire.py [row ...]
 
 Each row prints what was sent and what came back; nothing is asserted. With no
-argument every row runs.
+argument every row but `dead` runs.
 """
 
 from __future__ import annotations
@@ -364,7 +364,53 @@ def row_secret() -> None:
     b.close()
 
 
+def row_dead() -> None:
+    """Breaks 2 and 3: `tasks/get` for a kernel that died, both answers, then for its successor.
+
+    Kills the kernel `MCP2_KERNEL_SOCKET` names. `MCP2_RESTART_CMD` is a shell
+    command that starts a kernel at the same socket again.
+    """
+    lock = json.loads(Path(KERNEL).with_suffix(".lock").read_text())
+    a, b = Bridge(), Bridge(MCP2_GONE="rpc_error")
+    t = a.exec("import asyncio; await asyncio.sleep(60); 'never'")
+    os.kill(lock["pid"], 9)
+    time.sleep(1)
+    print(f"  kernel pid {lock['pid']} killed; answered as a task:")
+    a.get(t["taskId"])
+    print("  the same death with MCP2_GONE=rpc_error:")
+    b.get(t["taskId"])
+    subprocess.run(os.environ["MCP2_RESTART_CMD"], shell=True, check=True)
+    print("  a new kernel at the same socket, the old id:")
+    a.get(t["taskId"])
+    a.close()
+    b.close()
+
+
+def row_form() -> None:
+    """Plan change 7: `form()` inside a task; an answer that fits, then one the kernel refuses."""
+    b = Bridge()
+    code = (
+        "r = await form('wire: deploy?', {'env': ['staging', 'prod'], 'replicas': "
+        "{'type': 'integer', 'minimum': 1, 'maximum': 5}, 'note': str, 'dry_run': bool}, "
+        "required=['env', 'replicas']); f'form={r}'"
+    )
+    good = {"env": "prod", "replicas": 3, "dry_run": True}
+    over = {**good, "replicas": 9}
+    for label, content in (("fits", good), ("replicas over the maximum", over)):
+        print(f"  {label}:")
+        t = b.exec(code)
+        out = b.until(t["taskId"], "input_required")
+        gate_id = next(iter(out["inputRequests"]))
+        responses = {gate_id: {"action": "accept", "content": content}}
+        b.call("tasks/update", {"taskId": t["taskId"], "inputResponses": responses})
+        b.until(t["taskId"], "completed", "failed", limit=2)
+        b.call("tasks/cancel", {"taskId": t["taskId"]}, show=False)
+    b.close()
+
+
 ROWS = {
+    "dead": row_dead,
+    "form": row_form,
     "discover": row_discover,
     "inline": row_inline,
     "task": row_task,
@@ -379,6 +425,7 @@ ROWS = {
 }
 
 if __name__ == "__main__":
-    for name in sys.argv[1:] or list(ROWS):
+    # `dead` kills the kernel, so it runs only when named.
+    for name in sys.argv[1:] or [n for n in ROWS if n != "dead"]:
         print(f"== {name}")
         ROWS[name]()

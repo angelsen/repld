@@ -318,8 +318,12 @@ def answer_gates(responses: dict) -> list[str]:
             _declined.add(gate_id)
             left.append(gate_id)
             continue
-        value = next(iter((response.get("content") or {}).values()), "")
-        if isinstance(value, bool):
+        content = response.get("content") or {}
+        value = next(iter(content.values()), "")
+        if gates[gate_id]["kind"] == "form":
+            # `gates/resolve` takes a form's answer as one JSON object in a string.
+            value = json.dumps(content)
+        elif isinstance(value, bool):
             value = "y" if value else "n"
         kernel("gates/resolve", {"gate_id": gate_id, "value": str(value)})
     return left
