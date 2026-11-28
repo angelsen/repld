@@ -20,7 +20,7 @@ the bridge becomes a thin 2026-07-28 front; this plan lives here.
 | 3 | ambient pushes | `notify()`, `@every` errors and browser pushes over the inbox socket, for every session kind, keyed on the socket path; anything from the old routing is rebuilt only against a session 1 or 2 break |
 | 4 | peers, then gists | one session each, smallest first by use |
 | 5 | browser | the largest subsystem; needs its own run of real pages |
-| 6 | gates over `input_required` | CLI, dashboard and pill routes stay. Needs the asking task on `gates/list`, a decline, and a page URL for a secret gate (session 1, breaks 6 and 7) |
+| 6 | gates over `input_required` | CLI, dashboard and pill routes stay. Needs the asking task on `gates/list` and a decline (session 1, break 6); a secret gate refuses (plan change 7) |
 | 7 | `help.py`, dashboard, TUI | docs last, when the surface they describe has stopped moving |
 | last | write `~/.claude/skills/vibe/stacks/repld.md` | toolchain, smallest layout, earned rules |
 
@@ -69,15 +69,19 @@ Changes after session 1, and why (rows and breaks are in "Session 1"):
    naming the gate and the answer command, which the `awaiting_human` push carries today.
    Session 6 is then three small kernel changes, not a new surface.
 
-   **Open, for the owner: the secret gate.** Deleting `elicitation/create` also deletes
-   URL-mode elicitation, the only in-client route an interactive secret gate has today, and a
-   secret gate has no route through a task until `gates/list` carries its page URL (break
-   7). Three options, none chosen here: keep the URL-mode route until session 6; move the
-   page URL onto `gates/list` into session 2; or accept the gap, in which a secret gate
-   between sessions 2 and 6 is announced with nothing to open. Use: 6 transcript lines in 3
-   session files have an `exec` call with `ask(` or `form(` and `secret`, all in repld's
-   own directory (ran: `rg -c` over `~/.claude/projects`, a regex on the raw line, not a
-   parse).
+   **Decided by the owner (2026-11-28): the secret gate refuses until a real use asks.**
+   From session 2 `ask(..., secret=True)` and a secret `form()` field raise at once, naming
+   the missing route; no URL-mode route is kept and session 6 builds no page URL. Nothing
+   is collected, so no secret passes the client, which is what the spec requires of a
+   sensitive input (`client/elicitation.mdx:/MUST\*\* use \[URL mode\]/` in the 2026-07-28
+   spec). Use: 6 transcript lines in 3 session files have an `exec` call with `ask(` or
+   `form(` and `secret`, all in repld's own directory (ran: `rg -c` over
+   `~/.claude/projects`, a regex on the raw line, not a parse). When a use arrives the
+   route is the kernel handing the page URL to `gates/list` (break 7) and a URL-mode
+   `inputRequest`, which Claude Code has not been seen to render (not run).
+
+   **Session 2 runs one row first:** `form()` through `input_required` (form mode, like
+   `ask`; not run in session 1).
 8. **Session 3 needs a registration, not a rebind.** The inbox socket path is per process and
    survived `/clear`; a push sent to the id the connection registered with still arrived
    after the id changed (row 4c). With no `initialize` the bridge has to tell the kernel its
